@@ -30,6 +30,8 @@ from enum import Enum
 from typing import Dict, List, Optional, Tuple, Any
 import math
 import random
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -595,7 +597,7 @@ class Prospect:
                 if w <= 0 or abs(w - realistic) > 16:
                     weight_kg = realistic
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
         identity = ProspectIdentity(
             name=name,
@@ -1582,7 +1584,7 @@ class Prospect:
                 # ease toward the floor rather than snapping, so growth still reads naturally
                 self.identity.weight_kg = int(min(125, max(self.identity.weight_kg + 2, frame_floor)))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     def _size_projection_score(self) -> float:
         """

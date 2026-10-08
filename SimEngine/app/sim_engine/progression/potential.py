@@ -7,6 +7,8 @@ All drift must go through apply_potential_drift so seasons cannot compound.
 """
 
 from typing import Any, Dict, Optional
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 
 def _age(player: Any) -> int:
@@ -29,7 +31,7 @@ def _ovr(player: Any) -> float:
 
                 return float(normalize_rating(ovr_fn()))
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         return 0.5
 
 
@@ -72,7 +74,7 @@ def ensure_development_ledger(player: Any, season_id: Any) -> Dict[str, Any]:
             try:
                 hist.append(dict(ledger))
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         ledger = {
             "season": sid,
             "development_applied": False,
@@ -88,7 +90,7 @@ def ensure_development_ledger(player: Any, season_id: Any) -> Dict[str, Any]:
     try:
         setattr(player, "development_ledger", ledger)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return ledger
 
 
@@ -191,7 +193,7 @@ def apply_potential_drift(
     try:
         setattr(player, "potential", after)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     ratings = getattr(player, "ratings", None)
     if isinstance(ratings, dict):
         ratings["dev_potential"] = float(display_rating(after))
@@ -204,7 +206,7 @@ def apply_potential_drift(
     try:
         setattr(player, "development_profile", profile)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     if reason in ("breakout", "bust", "bust_pressure"):
         ledger["breakout_or_bust_applied"] = True
@@ -255,7 +257,7 @@ def read_player_potential99(player: Any) -> float:
         if pot is not None and float(pot) > 0:
             return float(pot)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     from app.sim_engine.entities.player import display_rating
 
     return float(display_rating(_potential(player)))
@@ -272,11 +274,11 @@ def write_player_potential99(player: Any, pot99: float) -> float:
         if isinstance(ap, dict) and isinstance(ap.get("chapters"), dict):
             ap["chapters"]["potential"] = int(round(pot99))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         setattr(player, "potential", pot01)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     ratings = getattr(player, "ratings", None)
     if isinstance(ratings, dict):
         ratings["dev_potential"] = float(display_rating(pot01))
@@ -309,24 +311,32 @@ def lift_potential_with_growth(player: Any, ovr_before_01: float, ovr_after_01: 
         after99 = float(ovr_after_01) * 99.0
         gain = (float(ovr_after_01) - float(ovr_before_01)) * 99.0
         pot = read_player_potential99(player)
-        if age <= 20:
-            headroom, share = 4.0, 0.55
-        elif age <= 23:
-            headroom, share = 3.0, 0.45
-        elif age <= 26:
-            headroom, share = 1.5, 0.30
-        elif age <= 29:
-            headroom, share = 0.0, 0.15
-        else:
-            headroom, share = 0.0, 0.0
-        target = pot
-        if gain > 0:
-            target = pot + gain * share
-        target = max(target, after99 + headroom)
+        # Potential is a CEILING. It used to trail OVR (up to 55% of every gain plus
+        # 3-4 points of headroom), so 2/3 of the league outgrew their potential in a
+        # season and the gap to POT never predicted anything. Now growth only keeps
+        # POT from sitting below current OVR; real ceiling moves come from evidence
+        # (potential reviews, breakout/bust drift).
+        _ = (age, gain)
+        target = max(pot, after99)
         target = min(99.0, target)
         if target > pot + 0.05:
             write_player_potential99(player, target)
             return target
+    except Exception:
+        return None
+    return None
+
+
+def ensure_potential_floor(player: Any) -> Optional[float]:
+    """Potential can never sit below current OVR (74% of generated NHL players did)."""
+    try:
+        from app.sim_engine.entities.player import player_current_ovr_01
+
+        ovr99 = float(player_current_ovr_01(player)) * 99.0
+        pot = read_player_potential99(player)
+        if pot is None or float(pot) + 0.05 < ovr99:
+            write_player_potential99(player, min(99.0, ovr99))
+            return ovr99
     except Exception:
         return None
     return None

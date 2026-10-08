@@ -4,6 +4,8 @@ Career-ending logic: age thresholds (35/37/39/41+) and modifiers (OVR, injuries,
 """
 
 from typing import Any
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 
 def _age(player: Any) -> int:
@@ -19,7 +21,7 @@ def _ovr(player: Any) -> float:
         try:
             return float(ovr_fn())
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     return getattr(player, "ovr", 0.5)
 
 

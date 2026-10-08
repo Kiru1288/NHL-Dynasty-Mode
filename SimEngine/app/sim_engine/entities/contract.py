@@ -430,8 +430,7 @@ def _financial_satisfaction(player: PlayerProfile, team: TeamProfile, offer: Con
     bonus_total = offer.signing_bonus + offer.performance_bonuses
     bonus_sat = sigmoid((bonus_total / max(1.0, offer.salary_aav * offer.term_years)) * 8.0 - 0.5)
     # weight signing bonus more if risk_tolerance is low
-    bonus_weight = lerp(0.6, 0.2, p.risk_tolerance)
-    perf_weight = 1.0 - bonus_weight
+    lerp(0.6, 0.2, p.risk_tolerance)
 
     # Loading: front-load preference increases with age and injury concern
     front_pref = clamp(0.35 + 0.02 * (age - 25) + 0.4 * (player.career.wear_and_tear), 0.0, 1.0)
@@ -690,7 +689,7 @@ class TeamNegotiationPlan:
     notes: List[str] = field(default_factory=list)
 
 def build_team_plan(rng: random.Random, team: TeamProfile, player: PlayerProfile, league: Dict[str, Any]) -> TeamNegotiationPlan:
-    cap = float(league.get("cap", team.cap_total))
+    float(league.get("cap", team.cap_total))
     expected_aav = float(league.get("expected_aav", max(800_000.0, player.career.ovr * 10_000_000.0)))
 
     # base ceiling from cap space and willingness
@@ -854,7 +853,7 @@ def _generate_clause_package(
     # decide clause type
     nmc_p = clamp(0.02 + 0.08 * (leverage - 0.7) + 0.10 * (p.stability_need - 0.7), 0.0, 0.18)
     ntc_p = clamp(0.08 + 0.22 * clause_hunger, 0.0, 0.55)
-    mntc_p = clamp(0.18 + 0.25 * clause_hunger, 0.0, 0.65)
+    clamp(0.18 + 0.25 * clause_hunger, 0.0, 0.65)
 
     r = rng.random()
     if r < nmc_p:

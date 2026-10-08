@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 RIGHTS_STATUS = (
     "drafted_unsigned",
@@ -289,7 +291,7 @@ def available_rights_actions(player: Any) -> List[Dict[str, Any]]:
     status = str(getattr(player, "rights_status", "") or "").lower()
     path = str(getattr(player, "development_path", "") or getattr(player, "post_draft_league", "") or "").upper()
     rights_type = str(getattr(player, "rights_type", "") or "").lower()
-    age = _safe_player_age(player)
+    _safe_player_age(player)
     env = development_environment_assessment(player)
     actions: List[Dict[str, Any]] = []
     if signed == "signed" or status == "signed":
@@ -449,7 +451,7 @@ def _rights_profile_extras(player: Any, ovr: float) -> Dict[str, Any]:
         if pot and pot > 0:
             extra["potential"] = int(round(pot))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     for key, attr in (("height", "height"), ("weight", "weight"), ("shoots", "shoots"), ("nationality", "nationality"), ("birthplace", "birthplace")):
         v = getattr(ident, attr, None) if ident is not None else None
         if v is None:
@@ -467,7 +469,7 @@ def _rights_profile_extras(player: Any, ovr: float) -> Dict[str, Any]:
 
         merge_headshot_into_row(extra, player)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return extra
 
 
@@ -585,7 +587,7 @@ def rights_card_payload(player: Any, *, team: Any = None, season_year: Optional[
                     "agent_wants": acc.get("agent_wants"),
                 }
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     return out
 
 
@@ -627,13 +629,13 @@ def move_prospect_to_ahl(league: Any, player: Any, team: Any) -> bool:
         try:
             setattr(player, attr, val)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         from services.draft_player_registry import register_player
 
         register_player(league, player)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return True
 
 
@@ -650,7 +652,7 @@ def remove_prospect_from_ahl(team: Any, player: Any) -> None:
             setattr(player, "roster_location", None)
             setattr(player, "in_minors", False)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def apply_prospect_rights_decision(
@@ -691,7 +693,7 @@ def apply_prospect_rights_decision(
                 setattr(player, "rights_decision_status", "signed_elc")
                 setattr(player, "rights_decision_action", aid)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         return result
 
     # Non-signing path decisions — mutate existing development / rights fields only.
@@ -727,7 +729,7 @@ def apply_prospect_rights_decision(
         try:
             setattr(player, "training_camp_invite", True)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     elif aid == "allow_expire":
         setattr(player, "rights_status", "rights_relinquished")
         setattr(player, "organizational_status", "rights_relinquished")
@@ -736,7 +738,7 @@ def apply_prospect_rights_decision(
             setattr(player, "rights_team_id", None)
             setattr(player, "rights_is_exclusive", False)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         # Drop from reserve / pool when relinquishing claim.
         try:
             from services.contract_economy import remove_from_reserve_list, _player_id
@@ -747,7 +749,7 @@ def apply_prospect_rights_decision(
                 pool.remove(player)
                 team.prospect_pool = pool
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         remove_prospect_from_ahl(team, player)
     elif aid in ("keep_unsigned", "delay"):
         pass  # explicit no-op path decision
@@ -759,7 +761,7 @@ def apply_prospect_rights_decision(
         setattr(player, "rights_decision_action", aid)
         setattr(player, "rights_decision_season", int(season_year))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     # Mirror decision onto reserve list row when present.
     try:
@@ -781,7 +783,7 @@ def apply_prospect_rights_decision(
         if changed:
             team.reserve_list = reserve
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     _ = league  # reserved for future league-wide sync
     return {
@@ -807,7 +809,7 @@ def _safe_player_ovr(player: Any) -> float:
         if v > 0:
             return v
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     for key in ("overall", "ovr", "current_ovr", "true_ovr"):
         raw = getattr(player, key, None)
         if raw is None:
@@ -988,12 +990,12 @@ def process_draft_rights_deadlines(
                 pool.remove(player)
                 team.prospect_pool = pool
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             if pid in reserve_by_id:
                 try:
                     team.reserve_list = [e for e in reserve if str(e.get("player_id")) != pid]
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
 
             expired.append({
                 "player_id": pid,
@@ -1027,7 +1029,7 @@ def process_draft_rights_deadlines(
     try:
         session.draft_rights_review_payload = payload
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return payload
 
 
@@ -1088,6 +1090,6 @@ def should_cpu_auto_sign_elc(
         if not slots.get("ok"):
             return False, "contract_slots_full"
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     return False, "no_clear_reason"

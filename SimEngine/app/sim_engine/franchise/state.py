@@ -4,21 +4,12 @@ from __future__ import annotations
 
 from app.sim_engine.franchise._shared import *  # noqa: F401,F403
 from app.sim_engine.franchise.serialization import _normalize_storyline_payload  # noqa: E402
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 
-def invalidate_session_payload_caches(session: FranchiseSession, reason: str = "") -> None:
-    """Drop cached read-model payloads after mutating session state."""
-    session._cached_draft_class_rankings = None
-    session._cached_trade_assets_payload = None
 
 
-def get_cached_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str, Any]:
-    cached = getattr(session, "_cached_draft_class_rankings", None)
-    if isinstance(cached, dict) and cached:
-        return cached
-    payload = build_draft_class_rankings(session, sim)
-    session._cached_draft_class_rankings = payload
-    return payload
 
 
 def _storyline_dedupe_key(ev: Dict[str, Any]) -> str:
@@ -75,14 +66,14 @@ def _record_storyline(session: FranchiseSession, event: Dict[str, Any]) -> None:
         if not claim_league_story_slot(session, ev, user_club=bool(utid and tid == utid)):
             return
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         from app.sim_engine.franchise.storyline_engine import enrich_storyline_for_narrative_universe  # noqa: WPS433
 
         raw = enrich_storyline_for_narrative_universe(session, raw)
         ev = _normalize_storyline_payload(raw)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     dq = getattr(session, "_storyline_dedupe", None)
     if dq is None:
         dq = []
@@ -197,7 +188,7 @@ def _record_trade_package_notifications(
         )
         resolve_culprit_traded_storylines(session, moved_players)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     headline = str(exec_result.get("headline") or "")
     if not headline:
@@ -397,7 +388,7 @@ def build_state_payload(session: FranchiseSession) -> Dict[str, Any]:
     try:
         _merge_simengine_league_news_into_storylines(session)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     notifications_raw = list(session.notifications[-56:])
     notifications_norm = [_normalize_notification_payload(n, i) for i, n in enumerate(notifications_raw)]
@@ -494,5 +485,5 @@ def build_state_payload(session: FranchiseSession) -> Dict[str, Any]:
         payload["next_important_event"] = str(getattr(session, "next_important_event", "") or "")
         payload["playoff_payload"] = dict(getattr(session, "playoff_payload", None) or {})
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return payload

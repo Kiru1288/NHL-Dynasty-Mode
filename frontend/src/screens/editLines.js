@@ -1,3 +1,4 @@
+import { gameConfirm } from "../components/common/gameConfirm";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useGameUI } from "../game/GameUIContext";
 import { SCREENS, teamNameToNhlAbbr } from "../game/constants";
@@ -5,6 +6,7 @@ import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
 import { CHEMISTRY_HIGH, CHEMISTRY_MID, chemistryLabel } from "../utils/chemistryScale";
 import { getAhlLines, getFranchiseChemistry, saveAhlLines, saveFranchiseLines } from "../services/franchiseService";
 import { getFranchiseSessionId, readSessionLineupCache, writeSessionLineupCache } from "../services/api";
+import TeamLinesViewer from "../components/franchise/lines/TeamLinesViewer";
 import PlayerHeadshot from "../components/PlayerHeadshot";
 import { ensurePlayerHeadshotFields } from "../utils/playerHeadshots";
 import { getBaseOverall, getOverallDrop, getOverallTooltip, getUniversalOverall } from "../utils/playerOverall";
@@ -507,7 +509,6 @@ function candidateScore(player, slot, mode, linePlayers = []) {
   const overall = Number(player?.overall) || 0;
   const position = idealScore(player, slot);
   const fit = chemistryFitScore(player, slot);
-  const morale = profileValue(player, "morale", 50) ?? 50;
   const role = String(player?.role || "").toLowerCase();
   const duplicateRole = linePlayers.some((other) => String(other?.role || "").toLowerCase() === role);
   if (mode === "chemistry") {
@@ -1017,9 +1018,6 @@ function buildLinks(pairs, geo, slotPlayers, chemReport) {
     };
   });
 }
-function pipsForSlot(links, slot) {
-  return links.filter((link) => link.slotA === slot || link.slotB === slot).map((link) => link.tier);
-}
 function scoreTone(score) {
   if (score == null) return "";
   if (score >= LINK_STRONG) return "";
@@ -1248,7 +1246,7 @@ function FormationUnit({
 }) {
   const selected = selectedUnit?.group === group && selectedUnit?.lineId === line.id;
   const unitNumber = String(line.name || "").replace(/\D+/g, "") || String(line.id).toUpperCase();
-  return <div className={`fm-unit ${sizeClass} ${selected ? "selected" : ""} ${isolated ? "isolated" : ""}`} onClick={() => onSelectUnit(group, line.id)}>
+  return <div role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.currentTarget.click(); } }} className={`fm-unit ${sizeClass} ${selected ? "selected" : ""} ${isolated ? "isolated" : ""}`} onClick={() => onSelectUnit(group, line.id)}>
     {isolated && isolatedNote ? <span className="fm-isolated-note">{isolatedNote}</span> : null}
     {links.length ? <LinkLayer links={links} /> : null}
     {links.length ? <LinkBadges links={links} /> : null}
@@ -1839,7 +1837,7 @@ export function EvenStrengthLines(props) {
     if (!player.availability?.placeable) { setToast({ type: "error", message: player.availability?.reason || "Player unavailable." }); setAnnouncement("Invalid move."); return false; }
     if (!posFit(player, target.slot)) { setToast({ type: "error", message: `${player.name} cannot play ${target.slot}.` }); setAnnouncement("Invalid position."); return false; }
     if (locks[target.key]) { setToast({ type: "warning", message: "Unlock this slot first." }); return false; }
-    if (player.fatigue != null && player.fatigue >= 85 && !window.confirm("Place severely fatigued player?")) return false;
+    if (player.fatigue != null && player.fatigue >= 85) setToast({ type: "warning", message: `${player.name} is severely fatigued (${Math.round(player.fatigue)}).` });
     const source = findAssignment(lineState, player.id);
     if (source && locks[source.key]) { setToast({ type: "warning", message: "Unlock the player slot first." }); return false; }
     if (source?.key === target.key) return false;
@@ -1939,11 +1937,11 @@ export function EvenStrengthLines(props) {
 
   const openWarnings = useCallback((group, lineId) => { setSelectedUnit({ group, lineId }); setTab("warnings"); setInspectorOpen(true); setComparing(false); }, []);
 
-  const clearUnit = useCallback((group, lineId) => {
+  const clearUnit = useCallback(async (group, lineId) => {
     const line = lineState[group]?.find((item) => item.id === lineId);
     if (!line) return;
     const hasLocks = Object.keys(line.slots).some((slot) => locks[slotKey(group, lineId, slot)]);
-    if (hasLocks && !window.confirm("Clear locked unit?")) return;
+    if (hasLocks && !(await gameConfirm("This unit has locked slots. Clear it anyway?", { confirmLabel: "Clear unit", danger: true }))) return;
     let next = lineState;
     const nextLocks = { ...locks };
     for (const slot of Object.keys(line.slots)) { next = setSlot(next, group, lineId, slot, ""); delete nextLocks[slotKey(group, lineId, slot)]; }
@@ -2012,8 +2010,8 @@ export function EvenStrengthLines(props) {
     close: () => setMenuKey(""),
   }), [clearUnit, lockUnit, copyUnit, pasteUnit, resetUnit]);
 
-  const resetSaved = useCallback(() => {
-    if (unsaved && !window.confirm("Reset unsaved changes?")) return;
+  const resetSaved = useCallback(async () => {
+    if (unsaved && !(await gameConfirm("Discard your unsaved line changes?", { confirmLabel: "Discard", danger: true }))) return;
     setHistory((current) => [...current, snapshot(lineState, locks)].slice(-HISTORY_LIMIT));
     setFuture([]);
     setLineState(cloneLines(savedSnapshot.lineState));
@@ -2022,8 +2020,8 @@ export function EvenStrengthLines(props) {
     setSelectedPlayerId("");
     setToast({ type: "success", message: "Saved lineup restored." });
   }, [unsaved, lineState, locks, savedSnapshot]);
-  const clearAll = useCallback(() => {
-    if (!window.confirm("Clear every lineup slot?")) return;
+  const clearAll = useCallback(async () => {
+    if (!(await gameConfirm("Clear every lineup slot?", { confirmLabel: "Clear all", danger: true }))) return;
     commit(emptyLines(showThird), {}, "All lineup slots cleared.");
   }, [showThird, commit]);
   const applyAutoBuild = useCallback(() => {
@@ -2356,7 +2354,7 @@ function SpecialTeamsUnit({ kind, line, index, playerMap, chemReport, chemistry,
   }
   const unitNumber = String(line.name || "").replace(/\D+/g, "") || String(index + 1);
   const selectedPlayer = playerMap[selectedPlayerId] || null;
-  return <div className={`fm-unit ${isPP ? "ppf" : "pkbox"} ${selected ? "selected" : ""}`} style={isPP ? { height: 300 } : undefined} onClick={() => onSelectUnit(line.id)}>
+  return <div role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.currentTarget.click(); } }} className={`fm-unit ${isPP ? "ppf" : "pkbox"} ${selected ? "selected" : ""}`} style={isPP ? { height: 300 } : undefined} onClick={() => onSelectUnit(line.id)}>
     <LinkLayer links={links} />
     <LinkBadges links={badgeLinks} />
     <div className="fm-unit-tag">
@@ -2646,8 +2644,8 @@ function SpecialTeamsLines({ kind, ...props }) {
     setInspectorOpen(true);
   }, [selectedPlayerId, selectedLineId, placePlayer]);
 
-  const clearAll = useCallback(() => {
-    if (!window.confirm(`Clear all ${isPP ? "power play" : "penalty kill"} slots?`)) return;
+  const clearAll = useCallback(async () => {
+    if (!(await gameConfirm(`Clear all ${isPP ? "power play" : "penalty kill"} slots?`, { confirmLabel: "Clear all", danger: true }))) return;
     rememberLines();
     setLines(emptySpecialTeamsLines(kind));
     setUnsaved(true);
@@ -2838,9 +2836,48 @@ function SpecialTeamsLines({ kind, ...props }) {
 export function PowerPlay(props) { return <SpecialTeamsLines kind="power_play" {...props} />; }
 export function PenaltyKill(props) { return <SpecialTeamsLines kind="penalty_kill" {...props} />; }
 
+/** Wraps a lines editor with a "view another team" picker (read-only scouting view). */
+export function LinesScope({ level = "nhl", children }) {
+  const { franchiseState } = useGameUI();
+  const [viewTeamId, setViewTeamId] = useState("");
+  const userTeamId = String(franchiseState?.user_team_id ?? "");
+  const teams = useMemo(() => {
+    const orgs = franchiseState?.roster_browser?.organizations || [];
+    return orgs
+      .map((o) => ({ team_id: String(o?.team_id ?? ""), name: o?.name || o?.abbr || "Team", abbr: o?.abbr || "", is_user: String(o?.team_id ?? "") === userTeamId }))
+      .filter((t) => t.team_id)
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [franchiseState?.roster_browser?.organizations, userTeamId]);
+  if (viewTeamId && viewTeamId !== userTeamId) {
+    return (
+      <TeamLinesViewer
+        teamId={viewTeamId}
+        level={level}
+        teams={teams}
+        onChangeTeam={(tid) => setViewTeamId(String(tid) === userTeamId ? "" : String(tid))}
+        onBack={() => setViewTeamId("")}
+      />
+    );
+  }
+  return (
+    <>
+      {children}
+      <label className="tlv-peek" title="See how another club dresses its lineup (read only)">
+        <span>👁 View lines:</span>
+        <select value="" onChange={(e) => setViewTeamId(e.target.value)}>
+          <option value="">Pick a team…</option>
+          {teams.filter((t) => !t.is_user).map((t) => (
+            <option key={t.team_id} value={t.team_id}>{t.name}</option>
+          ))}
+        </select>
+      </label>
+    </>
+  );
+}
+
 export default function EditLines(props) {
   const { screen } = useGameUI();
-  if (screen === SCREENS.POWER_PLAY) return <SpecialTeamsLines kind="power_play" {...props} />;
-  if (screen === SCREENS.PENALTY_KILL) return <SpecialTeamsLines kind="penalty_kill" {...props} />;
-  return <EvenStrengthLines {...props} />;
+  if (screen === SCREENS.POWER_PLAY) return <LinesScope level="nhl"><SpecialTeamsLines kind="power_play" {...props} /></LinesScope>;
+  if (screen === SCREENS.PENALTY_KILL) return <LinesScope level="nhl"><SpecialTeamsLines kind="penalty_kill" {...props} /></LinesScope>;
+  return <LinesScope level="nhl"><EvenStrengthLines {...props} /></LinesScope>;
 }

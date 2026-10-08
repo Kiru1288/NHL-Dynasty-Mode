@@ -2,9 +2,16 @@
 from __future__ import annotations
 
 import random
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
-from app.sim_engine.entities.player import Position, clamp_rating
+from app.sim_engine.entities.player import clamp_rating
+
+
+def _stable_hash(value):
+    """Process-stable replacement for built-in hash() (salted per process via PYTHONHASHSEED)."""
+    import hashlib as _hl
+
+    return int.from_bytes(_hl.sha256(str(value).encode("utf-8")).digest()[:8], "big", signed=True)
 
 
 def _pos_key(position: Any) -> str:
@@ -118,7 +125,7 @@ def generate_realistic_weight_kg(
 def apply_body_tradeoffs_to_ratings(player: Any, rng: Optional[random.Random] = None) -> None:
     """Adjust ratings for size — skill can offset penalties for small elite players."""
     if rng is None:
-        rng = random.Random(abs(hash(str(getattr(player, "id", "")))) & 0xFFFFFFFF)
+        rng = random.Random(abs(_stable_hash(str(getattr(player, "id", "")))) & 0xFFFFFFFF)
 
     ident = getattr(player, "identity", None)
     if ident is None:

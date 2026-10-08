@@ -11,38 +11,9 @@ import { ensurePlayerHeadshotFields } from "../utils/playerHeadshots";
 import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
 import "./freeAgency/FreeAgencyBoard.css";
 import NegotiationMeetingPanel from "../components/contracts/NegotiationMeetingPanel";
-import {
-  getContractOffice,
-  reSignContract,
-  qualifyRfa,
-  releaseRfaRights,
-  evaluateContractOffer,
-  prospectRightsDecision,
-  signElcContract,
-  previewElcOffer,
-  submitElcOffer,
-  fileArbitration,
-  settleArbitration,
-  matchOfferSheet,
-  declineOfferSheet,
-  advanceFreeAgencyDay,
-  advanceContractNegotiationDay,
-  signFreeAgent,
-  getFreeAgentDetail,
-  getFreeAgencyDesk,
-} from "../services/franchiseService";
+import { getContractOffice, reSignContract, qualifyRfa, releaseRfaRights, evaluateContractOffer, prospectRightsDecision, previewElcOffer, submitElcOffer, fileArbitration, settleArbitration, matchOfferSheet, declineOfferSheet, advanceFreeAgencyDay, advanceContractNegotiationDay, signFreeAgent, getFreeAgentDetail, getFreeAgencyDesk } from "../services/franchiseService";
 import { estimateOfferInterestM } from "../utils/contractNegotiation";
-import {
-  firstDefined,
-  formatMoney,
-  formatPick,
-  getPlayerName,
-  getPlayerOverall,
-  getPlayerPosition,
-  getTeamName,
-  pickFranchiseData,
-  safeArray,
-} from "./shared/eventHelpers";
+import { formatMoney, formatPick, getPlayerName, getPlayerOverall, getPlayerPosition, pickFranchiseData, safeArray } from "./shared/eventHelpers";
 
 function computeOfferCapHitM(aav, years, signingBonus = 0) {
   const y = Math.max(1, Number(years) || 1);
@@ -198,7 +169,7 @@ export function DraftEventMenu({ franchiseState = {}, eventData = {}, onContinue
   ]);
   const prospects = safeArray(raw?.prospects || raw?.board || raw);
   const userPick = raw?.current_pick || raw?.user_picks?.[0];
-  const uid = String(franchiseState?.user_team_id || "");
+  String(franchiseState?.user_team_id || "");
 
   return (
     <CinematicEventShell
@@ -1710,22 +1681,6 @@ function resignArchetype(row) {
   return "Organizational Depth";
 }
 
-function resignSeasonBits(row) {
-  if (!row) return [];
-  const stats = row.season_stats || row.seasonStats || row.stats || {};
-  const bits = [];
-  const gp = stats.gp ?? stats.games ?? row.games_played;
-  const pts = stats.points ?? stats.pts ?? row.points;
-  const g = stats.goals ?? stats.g ?? row.goals;
-  const a = stats.assists ?? stats.a ?? row.assists;
-  if (gp != null) bits.push({ label: "GP", value: String(gp) });
-  if (g != null) bits.push({ label: "G", value: String(g) });
-  if (a != null) bits.push({ label: "A", value: String(a) });
-  if (pts != null) bits.push({ label: "PTS", value: String(pts) });
-  if (row.potential != null) bits.push({ label: "POT", value: String(row.potential) });
-  if (row.contract_value_score) bits.push({ label: "Deal", value: String(row.contract_value_score) });
-  return bits.slice(0, 6);
-}
 
 function resignAgentBits(row, askAav, askYears) {
   if (!row) return [];
@@ -1821,7 +1776,7 @@ export function FreeAgencyEventMenu({
   const [offerAav, setOfferAav] = React.useState("");
   const [offerYears, setOfferYears] = React.useState("2");
   const [offerNtc, setOfferNtc] = React.useState(false);
-  const [offerNtcMode, setOfferNtcMode] = React.useState("NONE");
+  const [offerNtcMode, ] = React.useState("NONE");
   const [offerNmc, setOfferNmc] = React.useState(false);
   const [offerBonus, setOfferBonus] = React.useState("0");
   const [contractCategory, setContractCategory] = React.useState("nhl_one_way");
@@ -4020,7 +3975,6 @@ export function ProspectRightsEventMenu({ franchiseState = {}, eventData = {}, o
 
   const focus =
     prospects.find((p) => String(p?.player_id) === String(selectedId)) || prospects[0] || null;
-  const env = focus?.development_environment || {};
   const packages = React.useMemo(() => buildDecisionPackages(focus), [focus]);
   const selectedPackage =
     packages.find((p) => p.packageId === selectedPackageId) ||
@@ -4096,7 +4050,6 @@ export function ProspectRightsEventMenu({ franchiseState = {}, eventData = {}, o
         : focus?.pot != null
           ? focus.pot
           : null;
-  const urgentCount = priority.length;
 
   const onRailKeyDown = (e, id) => {
     if (!sortedProspects.length) return;

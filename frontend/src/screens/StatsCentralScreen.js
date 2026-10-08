@@ -24,16 +24,12 @@ import {
   getTeamLogoSrc,
 } from "../utils/teamLogos";
 import PlayerHeadshot from "../components/PlayerHeadshot";
+import { TeamIdentityTag } from "../components/teamIdentity/TeamIdentity";
 import {
   mergePlayerHeadshotIdentity,
   pickHeadshotIdentityFields,
 } from "../utils/playerHeadshots";
-import {
-  getAverageTOIMinutes as deriveAverageTOIMinutes,
-  formatAverageTOI,
-  formatClockFromMinutes,
-  getTotalTOISeconds,
-} from "../utils/toiFormat";
+import { getAverageTOIMinutes as deriveAverageTOIMinutes, formatAverageTOI, formatClockFromMinutes } from "../utils/toiFormat";
 
 /*
 ===========================================================
@@ -93,9 +89,6 @@ function cleanText(value, fallback = "—") {
   return s || fallback;
 }
 
-function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, value));
-}
 
 function firstPresent(...values) {
   for (const value of values) {
@@ -133,9 +126,6 @@ function pct(a, b, fallback = 0) {
   return numerator / denominator;
 }
 
-function pct100(a, b, fallback = 0) {
-  return pct(a, b, fallback) * 100;
-}
 
 function normalizePct(value, fallback = 0) {
   const n = Number(value);
@@ -162,9 +152,6 @@ function fmtPct(value, digits = 1) {
   return `${(n * 100).toFixed(digits)}%`;
 }
 
-function fmtDecimal(value, digits = 3) {
-  return safe(value, 0).toFixed(digits);
-}
 
 function fmtOne(value) {
   return safe(value, 0).toFixed(1);
@@ -196,11 +183,6 @@ function per82(value, gp) {
   return (safe(value, 0) / games) * 82;
 }
 
-function roundTo(value, digits = 2) {
-  const n = safe(value, 0);
-  const mult = Math.pow(10, digits);
-  return Math.round(n * mult) / mult;
-}
 
 function formatSigned(value, digits = 0) {
   const n = safe(value, 0);
@@ -288,28 +270,12 @@ function teamNameFromInfo(teamInfo, fallback = "Franchise") {
   );
 }
 
-function fmtScore(game) {
-  const home = pickStat(game?.home_goals, 0);
-  const away = pickStat(game?.away_goals, 0);
-  const ot = game?.overtime ? " OT" : "";
-  const so = game?.shootout ? " SO" : "";
-  return `${home}-${away}${ot}${so}`;
-}
 
-function getTotalTOIMinutes(row) {
-  const toiSec = getTotalTOISeconds(row);
-  if (toiSec > 0) return toiSec / 60;
-
-  return pickStat(row?.toi, row?.toi_min, row?.time_on_ice, 0);
-}
 
 function getAverageTOIMinutes(row) {
   return deriveAverageTOIMinutes(row);
 }
 
-function formatTOI(row) {
-  return formatClockFromMinutes(getTotalTOIMinutes(row));
-}
 
 function formatSmallTOI(row) {
   return formatAverageTOI(row);
@@ -325,12 +291,6 @@ function formatTOISplit(secondsValue, gpValue) {
   return formatClockFromMinutes(avgMinutes);
 }
 
-function compactNumber(value) {
-  const n = safe(value, 0);
-  if (Math.abs(n) >= 1000000) return `${(n / 1000000).toFixed(1)}M`;
-  if (Math.abs(n) >= 1000) return `${(n / 1000).toFixed(1)}K`;
-  return String(Math.round(n));
-}
 
 function trendTone(value, goodThreshold = 0, badThreshold = 0) {
   const n = safe(value, 0);
@@ -389,10 +349,6 @@ function fmtRelPct(value) {
   return `${sign}${n.toFixed(1)}`;
 }
 
-function fmtMaybeDecimal(value, digits = 3) {
-  if (!hasRealNumber(value)) return "—";
-  return fmtDecimal(value, digits);
-}
 
 function fmtMaybeOne(value) {
   if (!hasRealNumber(value)) return "—";
@@ -543,29 +499,6 @@ function topBy(rows, fn) {
   return [...arr].sort((a, b) => safe(fn(b), 0) - safe(fn(a), 0))[0] || null;
 }
 
-function filterRows(rows, search) {
-  const q = safeString(search, "").trim().toLowerCase();
-  if (!q) return rows || [];
-
-  return (rows || []).filter((row) => {
-    const haystack = [
-      row?.name,
-      row?.player_name,
-      row?.team,
-      row?.team_id,
-      row?.position,
-      row?.pos,
-      row?.role_label,
-      row?.analytics_archetype,
-      row?.archetype,
-      row?.player_type,
-    ]
-      .join(" ")
-      .toLowerCase();
-
-    return haystack.includes(q);
-  });
-}
 
 
 /* =========================================================
@@ -1432,52 +1365,8 @@ function normalizeTeam(row, index = 0) {
    FRONTEND IMPACT FALLBACKS
 ========================================================= */
 
-function calculateFrontendImpactProxy(player) {
-  const gp = Math.max(1, safe(player?.gp, 0));
-  const pts = safe(player?.pts, 0);
-  const toi = safe(player?.toi, 0);
-  const cfPct = normalizePct(player?.cf_pct, 0);
-  const xgfPct = normalizePct(player?.xgf_pct, 0);
-  const gfPct = normalizePct(player?.gf_pct, 0);
 
-  const ppg = pts / gp;
-  const usage = toi > 0 ? clamp(toi / gp, 8, 28) : 15;
 
-  const score =
-    ppg * 22 +
-    cfPct * 26 +
-    xgfPct * 26 +
-    gfPct * 16 +
-    usage * 0.65;
-
-  return roundTo(score, 2);
-}
-
-function calculateFrontendGoalieImpactProxy(goalie) {
-  const svPct = normalizePct(goalie?.sv_pct, 0);
-  const gaa = safe(goalie?.gaa, 0);
-  const gsax = safe(goalie?.gsax, 0);
-  const starts = Math.max(1, safe(goalie?.starts, goalie?.gp || 1));
-
-  const saveComponent = (svPct - 0.88) * 480;
-  const gaaComponent = (3.3 - gaa) * 12;
-  const gsaxComponent = (gsax / starts) * 8;
-  const workloadComponent = Math.min(12, starts * 0.18);
-
-  return roundTo(saveComponent + gaaComponent + gsaxComponent + workloadComponent, 2);
-}
-
-function getPlayerImpactLabel(value) {
-  const n = safe(value, 0);
-
-  if (n >= 82) return "Franchise Driver";
-  if (n >= 74) return "Elite Driver";
-  if (n >= 66) return "Star Impact";
-  if (n >= 56) return "Core Contributor";
-  if (n >= 46) return "Middle Line Value";
-  if (n >= 36) return "Depth Value";
-  return "Replacement Level";
-}
 
 function getAnalyticsTone(value) {
   const n = safe(value, 0);
@@ -3441,322 +3330,8 @@ function getOverviewPlayoffLine(team = {}) {
   return String(value);
 }
 
-function buildOverviewFrontOfficeRead(team = {}, players = [], goalies = []) {
-  const reads = [];
-  const skaters = Array.isArray(players) ? players : [];
-  const totalTeams = team.total_league_teams || 32;
 
-  if (team.gf_league_rank > 0 && team.gf_league_rank <= 8) {
-    reads.push({
-      label: "Strength",
-      text: `Offense ranks ${formatLeagueRank(team.gf_league_rank, totalTeams)}.`,
-    });
-  } else if (hasRealPct(team.pp_pct) && normalizePct(team.pp_pct) >= 0.24) {
-    reads.push({
-      label: "Strength",
-      text: `Power play converts at ${fmtMaybePct(team.pp_pct)}.`,
-    });
-  } else if (hasRealPct(team.xgf_pct) && normalizePct(team.xgf_pct) >= 0.52) {
-    reads.push({
-      label: "Strength",
-      text: `Chance share holds at ${fmtMaybePct(team.xgf_pct)}.`,
-    });
-  } else if (hasRealPct(team.cf_pct) && normalizePct(team.cf_pct) >= 0.52) {
-    reads.push({
-      label: "Strength",
-      text: `Shot share leads at ${fmtMaybePct(team.cf_pct)}.`,
-    });
-  }
 
-  if (team.ga_league_rank > 0 && team.ga_league_rank >= 24) {
-    reads.push({
-      label: "Concern",
-      text: `Goals against sit ${formatLeagueRank(team.ga_league_rank, totalTeams)}.`,
-    });
-  } else if (hasRealPct(team.pk_pct) && normalizePct(team.pk_pct) < 0.78) {
-    reads.push({
-      label: "Concern",
-      text: `Penalty kill lagging at ${fmtMaybePct(team.pk_pct)}.`,
-    });
-  } else if (hasRealPct(team.sv_pct) && normalizePct(team.sv_pct) < 0.9) {
-    reads.push({
-      label: "Concern",
-      text: `Team save rate is ${fmtOverviewSavePct(team.sv_pct)}.`,
-    });
-  } else if (hasRealPct(team.xgf_pct) && normalizePct(team.xgf_pct) < 0.47) {
-    reads.push({
-      label: "Concern",
-      text: `Expected goals share only ${fmtMaybePct(team.xgf_pct)}.`,
-    });
-  }
-
-  const inspectCandidate =
-    [...skaters]
-      .filter(
-        (player) =>
-          safe(player?.gp, 0) >= 8 &&
-          hasRealPct(player?.xgf_pct) &&
-          normalizePct(player.xgf_pct) >= 0.54 &&
-          hasRealNumber(player?.finishing) &&
-          safe(player.finishing, 0) < -1
-      )
-      .sort(
-        (a, b) =>
-          normalizePct(b?.xgf_pct, 0) - normalizePct(a?.xgf_pct, 0)
-      )[0] ||
-    [...skaters]
-      .filter((player) => safe(player?.gp, 0) >= 8)
-      .sort(
-        (a, b) =>
-          getAverageTOIMinutes(b) - getAverageTOIMinutes(a)
-      )
-      .find(
-        (player) =>
-          getAverageTOIMinutes(player) >= 18 &&
-          perGame(player?.pts, player?.gp) < 0.45
-      ) ||
-    topBy(goalies, (goalie) =>
-      hasRealNumber(goalie?.gsax) ? -Math.abs(safe(goalie.gsax, 0)) : 0
-    );
-
-  if (inspectCandidate?.name) {
-    reads.push({
-      label: "Inspect",
-      text: `Check ${String(inspectCandidate.name).split(" ").slice(-1)[0]} usage next.`,
-      player: inspectCandidate,
-    });
-  }
-
-  return reads.slice(0, 3);
-}
-
-function buildOverviewRosterContribution(players = []) {
-  const skaters = Array.isArray(players) ? players : [];
-  const metrics = [];
-  const teamPts = skaters.reduce((sum, row) => sum + safe(row?.pts, 0), 0);
-  if (teamPts > 0) {
-    const ranked = [...skaters].sort(
-      (a, b) => safe(b?.pts, 0) - safe(a?.pts, 0)
-    );
-    const top = ranked[0];
-    if (top && safe(top.pts, 0) > 0) {
-      metrics.push({
-        label: "Top scorer share",
-        value: fmtPct(safe(top.pts, 0) / teamPts, 0),
-        detail: `${top.name} · ${fmtZero(top.pts)} PTS`,
-      });
-    }
-    const topThreePts = ranked
-      .slice(0, 3)
-      .reduce((sum, row) => sum + safe(row?.pts, 0), 0);
-    if (topThreePts > 0) {
-      metrics.push({
-        label: "Top-three share",
-        value: fmtPct(topThreePts / teamPts, 0),
-        detail: `${fmtZero(topThreePts)} of ${fmtZero(teamPts)} PTS`,
-      });
-    }
-    const defencePts = skaters
-      .filter((row) => isDefenseRow(row))
-      .reduce((sum, row) => sum + safe(row?.pts, 0), 0);
-    metrics.push({
-      label: "Defence scoring",
-      value: fmtPct(defencePts / teamPts, 0),
-      detail: `${fmtZero(defencePts)} PTS from D`,
-    });
-    const ppPts = skaters.reduce(
-      (sum, row) =>
-        sum +
-        safe(
-          firstPresent(row?.pp_points, safe(row?.ppg, 0) + safe(row?.ppa, 0)),
-          0
-        ),
-      0
-    );
-    if (ppPts > 0) {
-      metrics.push({
-        label: "Power-play share",
-        value: fmtPct(ppPts / teamPts, 0),
-        detail: `${fmtZero(ppPts)} PP PTS`,
-      });
-    }
-  }
-
-  const positiveXgf = skaters.filter(
-    (row) => hasRealPct(row?.xgf_pct) && normalizePct(row.xgf_pct) >= 0.52
-  );
-  if (skaters.some((row) => hasRealPct(row?.xgf_pct))) {
-    metrics.push({
-      label: "Above 52% xGF",
-      value: String(positiveXgf.length),
-      detail: `${positiveXgf.length} of ${skaters.filter((row) => hasRealPct(row?.xgf_pct)).length} with sample`,
-    });
-  }
-
-  return metrics;
-}
-
-function buildOverviewTeamMetrics(team = {}, totalTeams = 32) {
-  const metrics = [];
-  const push = (entry) => {
-    if (!entry || entry.value === null || entry.value === undefined || entry.value === "") {
-      return;
-    }
-    metrics.push(entry);
-  };
-
-  const rankTone = (rank, asc = false) => {
-    if (!rank) return "neutral";
-    if ((!asc && rank <= 10) || (asc && rank <= 10)) return "good";
-    if ((!asc && rank >= 24) || (asc && rank >= 24)) return "bad";
-    return "neutral";
-  };
-
-  if (hasRealNumber(team.points_pct)) {
-    push({
-      label: "Points %",
-      value: fmtPct(team.points_pct, 1),
-      description: "Standings points earned",
-      rank: formatLeagueRank(team.league_rank, totalTeams),
-      tone: rankTone(team.league_rank),
-    });
-  }
-  if (hasRealNumber(team.gf_per_game)) {
-    push({
-      label: "GF/GP",
-      value: fmtMaybeOne(team.gf_per_game),
-      description: "Goals for per game",
-      rank: formatLeagueRank(team.gf_league_rank, totalTeams),
-      tone: rankTone(team.gf_league_rank),
-    });
-  }
-  if (hasRealNumber(team.ga_per_game)) {
-    push({
-      label: "GA/GP",
-      value: fmtMaybeOne(team.ga_per_game),
-      description: "Goals against per game",
-      rank: formatLeagueRank(team.ga_league_rank, totalTeams),
-      tone: rankTone(team.ga_league_rank, true),
-    });
-  }
-  if (hasRealNumber(team.goal_diff)) {
-    push({
-      label: "Goal Diff",
-      value: formatSigned(team.goal_diff),
-      description: "Goals for minus against",
-      rank: formatLeagueRank(team.goal_diff_league_rank, totalTeams),
-      tone:
-        team.goal_diff > 0 ? "good" : team.goal_diff < 0 ? "bad" : "neutral",
-    });
-  }
-  if (hasRealNumber(team.sf_per_game) && safe(team.sf, 0) > 0) {
-    push({
-      label: "SF/GP",
-      value: fmtMaybeOne(team.sf_per_game),
-      description: "Shots for per game",
-      rank: "",
-      tone: "neutral",
-    });
-  }
-  if (hasRealNumber(team.sa_per_game) && safe(team.sa, 0) > 0) {
-    push({
-      label: "SA/GP",
-      value: fmtMaybeOne(team.sa_per_game),
-      description: "Shots against per game",
-      rank: "",
-      tone: "neutral",
-    });
-  }
-  if (hasRealPct(team.pp_pct) && !team.analytics_missing?.pp_pct) {
-    push({
-      label: "PP%",
-      value: fmtMaybePct(team.pp_pct),
-      description:
-        safe(team.ppo, 0) > 0
-          ? `${fmtZero(team.ppg)} PPG / ${fmtZero(team.ppo)} PPO`
-          : "Power-play conversion",
-      rank: formatLeagueRank(team.pp_pct_league_rank, totalTeams),
-      tone: rankTone(team.pp_pct_league_rank),
-    });
-  }
-  if (hasRealPct(team.pk_pct) && !team.analytics_missing?.pk_pct) {
-    const tsh = safe(team.opp_ppo, 0);
-    push({
-      label: "PK%",
-      value: fmtMaybePct(team.pk_pct),
-      description:
-        tsh > 0
-          ? `${fmtZero(team.ppga)} PPGA / ${fmtZero(tsh)} TSH`
-          : "Penalty-kill rate",
-      rank: formatLeagueRank(team.pk_pct_league_rank, totalTeams),
-      tone: rankTone(team.pk_pct_league_rank),
-    });
-  }
-  if (hasRealPct(team.cf_pct) && !team.analytics_missing?.cf_pct) {
-    push({
-      label: "CF%",
-      value: fmtMaybePct(team.cf_pct),
-      description: "Corsi share",
-      rank: formatLeagueRank(team.cf_pct_league_rank, totalTeams),
-      tone:
-        normalizePct(team.cf_pct) >= 0.52
-          ? "good"
-          : normalizePct(team.cf_pct) <= 0.47
-            ? "bad"
-            : "neutral",
-      refPct: normalizePct(team.cf_pct),
-    });
-  }
-  if (hasRealPct(team.xgf_pct) && !team.analytics_missing?.xgf_pct) {
-    push({
-      label: "xGF%",
-      value: fmtMaybePct(team.xgf_pct),
-      description: "Expected goals share",
-      rank: formatLeagueRank(team.xgf_pct_league_rank, totalTeams),
-      tone:
-        normalizePct(team.xgf_pct) >= 0.52
-          ? "good"
-          : normalizePct(team.xgf_pct) <= 0.47
-            ? "bad"
-            : "neutral",
-      refPct: normalizePct(team.xgf_pct),
-    });
-  }
-  if (hasRealPct(team.sh_pct)) {
-    push({
-      label: "SH%",
-      value: fmtOverviewShPct(team.sh_pct),
-      description: "Team shooting percentage",
-      rank: "",
-      tone: "neutral",
-    });
-  }
-  if (hasRealPct(team.sv_pct)) {
-    push({
-      label: "SV%",
-      value: fmtOverviewSavePct(team.sv_pct),
-      description: "Team save percentage",
-      rank: formatLeagueRank(team.ga_league_rank, totalTeams),
-      tone:
-        normalizePct(team.sv_pct) >= 0.91
-          ? "good"
-          : normalizePct(team.sv_pct) < 0.89
-            ? "bad"
-            : "neutral",
-    });
-  }
-  if (hasRealNumber(team.pdo) && !team.analytics_missing?.pdo) {
-    push({
-      label: "PDO",
-      value: fmtPdo(team.pdo),
-      description: "SH% + SV%",
-      rank: formatLeagueRank(team.pdo_league_rank, totalTeams),
-      tone: "neutral",
-    });
-  }
-
-  return metrics;
-}
 
 function useOverviewFillLayout(mainGridRef) {
   const [mainGridHeight, setMainGridHeight] = useState(null);
@@ -4261,33 +3836,6 @@ function OverviewFeaturedLeaderCard({
   );
 }
 
-function OverviewTablePlayerCell({
-  player,
-  teams = [],
-  franchiseState = null,
-}) {
-  const ovr = getUniversalOverall(player);
-  const position = normalizePosition(
-    firstPresent(player?.position, player?.pos, "F")
-  );
-
-  return (
-    <div className="sc-overview-table-player">
-      <PlayerAvatar
-        player={player}
-        teams={teams}
-        franchiseState={franchiseState}
-      />
-      <span>
-        <strong>{player?.name || "—"}</strong>
-        <em>
-          {position}
-          {ovr > 0 ? ` · ${ovr}` : ""}
-        </em>
-      </span>
-    </div>
-  );
-}
 
 function StatsChipGroup({ label, value, onChange, options }) {
   return (
@@ -4369,110 +3917,8 @@ function OverviewScoringLeadersPanel({
   );
 }
 
-function OverviewTeamPerformancePanel({ metrics = [] }) {
-  return (
-    <section className="sc-overview-module sc-overview-team-performance">
-      <header className="sc-player-table-header">
-        <div>
-          <span>TEAM PERFORMANCE</span>
-          <strong>Scoring Context</strong>
-        </div>
-      </header>
 
-      {metrics.length ? (
-        <div className="sc-overview-metric-grid">
-          {metrics.map((metric) => (
-            <article
-              key={metric.label}
-              className={`sc-overview-metric-card is-${metric.tone || "neutral"}`}
-            >
-              <span>{metric.label}</span>
-              <strong>{metric.value}</strong>
-              <em>{metric.description}</em>
-              {metric.rank ? <b>{metric.rank}</b> : null}
-              {typeof metric.refPct === "number" ? (
-                <div
-                  className="sc-overview-ref-bar"
-                  aria-hidden="true"
-                >
-                  <i style={{ width: `${clamp(metric.refPct * 100, 0, 100)}%` }} />
-                  <em />
-                </div>
-              ) : null}
-            </article>
-          ))}
-        </div>
-      ) : (
-        <div className="sc-empty">Team performance fields are unavailable.</div>
-      )}
-    </section>
-  );
-}
 
-function OverviewRosterContributionPanel({ metrics = [] }) {
-  if (!metrics.length) return null;
-
-  return (
-    <section className="sc-overview-module sc-overview-roster-contribution">
-      <header className="sc-player-table-header">
-        <div>
-          <span>ROSTER CONTRIBUTION</span>
-          <strong>Where Scoring Comes From</strong>
-        </div>
-      </header>
-
-      <div className="sc-overview-contribution-list">
-        {metrics.map((metric) => (
-          <div key={metric.label}>
-            <span>{metric.label}</span>
-            <strong>{metric.value}</strong>
-            <em>{metric.detail}</em>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function OverviewFrontOfficeReadPanel({ reads = [], onSelectPlayer }) {
-  if (!reads.length) return null;
-
-  return (
-    <section className="sc-overview-module sc-overview-front-office">
-      <header className="sc-player-table-header">
-        <div>
-          <span>FRONT OFFICE READ</span>
-          <strong>Quick Notes</strong>
-        </div>
-      </header>
-
-      <div className="sc-overview-read-list">
-        {reads.map((read) => {
-          const content = (
-            <>
-              <span>{read.label}</span>
-              <strong>{read.text}</strong>
-            </>
-          );
-
-          if (read.player) {
-            return (
-              <button
-                key={read.label}
-                type="button"
-                onClick={() => onSelectPlayer(read.player)}
-              >
-                {content}
-              </button>
-            );
-          }
-
-          return <div key={read.label}>{content}</div>;
-        })}
-      </div>
-    </section>
-  );
-}
 
 function PlayerDetailDrawer({
   player,
@@ -5139,6 +4585,13 @@ function TeamNameCell({
           ) : null}
         </div>
 
+        <TeamIdentityTag
+          teamId={team?.team_id ?? team?.id}
+          abbr={team?.team_abbrev || team?.abbrev}
+          name={label}
+          compact
+        />
+
         {overallLeagueRank > 0 ? (
           <small
             className="sc-team-overall-rank"
@@ -5154,79 +4607,7 @@ function TeamNameCell({
   );
 }
 
-function PlayerMiniCard({ player, metric = "pts", label = "PTS", formatter, teams = [], franchiseState = null }) {
-  if (!player) {
-    return (
-      <div className="sc-mini-player is-empty">
-        <div className="sc-avatar is-small">—</div>
-        <div>
-          <strong>—</strong>
-          <span>No player data yet</span>
-        </div>
-        <b>—<small>{label}</small></b>
-      </div>
-    );
-  }
 
-  const value = formatter ? formatter(player?.[metric], player) : formatMetricValue(metric, player?.[metric]);
-
-  return (
-    <div className="sc-mini-player">
-      <PlayerAvatar player={player} small teams={teams} franchiseState={franchiseState} />
-      <div>
-        <strong>{player.name}</strong>
-        <span>
-          {player.team_abbrev || player.team_name || player.team_id || player.team || "—"} ·{" "}
-          {player.position || "F"} · {player.role_label || player.analytics_archetype || "Regular"}
-        </span>
-      </div>
-      <b>
-        {value}
-        <small>{label}</small>
-      </b>
-    </div>
-  );
-}
-
-function formatMetricValue(metric, value) {
-  if (metric === "sv_pct") return fmtSavePct(value);
-  if (metric === "gaa") return fmtTwo(value);
-
-  if (
-    metric === "war" ||
-    metric === "watr" ||
-    metric === "total_impact"
-  ) {
-    return fmtMaybeTwo(value);
-  }
-
-  if (
-    metric === "analytics_rating" ||
-    metric === "impact_score"
-  ) {
-    return fmtMaybeOne(value);
-  }
-
-  if (metric === "gsax") return fmtMaybeOne(value);
-
-  if (
-    metric === "xgf" ||
-    metric === "xga" ||
-    metric === "ixg" ||
-    metric === "xa"
-  ) {
-    return fmtOne(value);
-  }
-
-  if (
-    metric.includes("pct") ||
-    metric.includes("_pct")
-  ) {
-    return fmtMaybePct(value);
-  }
-
-  return fmtZero(value);
-}
 
 const COLUMN_FULL_NAMES = Object.freeze({
   RK: "Rank",
@@ -5296,6 +4677,194 @@ const COLUMN_FULL_NAMES = Object.freeze({
   xA: "Expected Assists",
 });
 
+/* Plain-English definitions shown in the hover bar under stat ledgers.
+   Looked up by column key first, then by header label, then built from tokens. */
+const STAT_DESCRIPTIONS = Object.freeze({
+  // record
+  GP: "Games played.",
+  GS: "Games started in net.",
+  W: "Wins, in any fashion (regulation, OT or shootout).",
+  L: "Regulation losses.",
+  OTL: "Overtime or shootout losses — worth one standings point.",
+  T: "Ties (legacy eras only).",
+  PTS: "Standings points for teams (2 per win, 1 per OT loss); goals + assists for players.",
+  Points: "Goals plus assists.",
+  "PTS%": "Share of available standings points earned (points ÷ (GP × 2)).",
+  "Points %": "Share of available standings points earned (points ÷ (GP × 2)).",
+  DIFF: "Goal differential: goals for minus goals against.",
+  "Goal Diff": "Goal differential: goals for minus goals against.",
+  RW: "Regulation wins — the first standings tiebreaker.",
+  RL: "Regulation losses.",
+  OTW: "Wins that needed overtime or a shootout.",
+  "OT GP": "Games that went past regulation.",
+  // scoring
+  G: "Goals scored.",
+  A: "Assists — primary plus secondary.",
+  Goals: "Goals scored.",
+  Assists: "Assists — primary plus secondary.",
+  "P/GP": "Points per game played.",
+  "+/-": "Even-strength and shorthanded goals for minus against while on the ice.",
+  PPG: "Power-play goals.",
+  PPA: "Power-play assists.",
+  "PP PTS": "Power-play points (goals + assists).",
+  PP: "Power-play points (goals + assists).",
+  SHP: "Shorthanded points.",
+  "G share": "Share of the team's goals this player scored.",
+  "P share": "Share of the team's goals this player had a point on.",
+  // shots
+  SOG: "Shots on goal.",
+  "SH%": "Shooting percentage: goals ÷ shots on goal.",
+  SF: "Shots on goal for.",
+  SA: "Shots on goal against.",
+  "SF/GP": "Shots on goal per game.",
+  "SA/GP": "Shots on goal allowed per game.",
+  GF: "Goals for.",
+  GA: "Goals against.",
+  "GF/GP": "Goals scored per game.",
+  "GA/GP": "Goals allowed per game.",
+  MISS: "Shot attempts that missed the net.",
+  "Miss%": "Share of unblocked attempts that missed the net.",
+  "Blk%": "Share of shot attempts that were blocked before reaching the net.",
+  BLK: "Shots blocked.",
+  HIT: "Body checks delivered.",
+  TAK: "Takeaways — pucks won off an opponent.",
+  GIV: "Giveaways — pucks surrendered under no pressure.",
+  "TAK/GIV": "Takeaways vs. giveaways.",
+  PIM: "Penalty minutes.",
+  "FO%": "Faceoff win percentage.",
+  // ice time
+  "TOI/GP": "Average ice time per game (minutes).",
+  "PP TOI": "Total power-play ice time.",
+  "PP TOI/GP": "Power-play ice time per game.",
+  "PK TOI": "Total penalty-kill ice time.",
+  "PK TOI/GP": "Penalty-kill ice time per game.",
+  PK: "Penalty-kill ice time.",
+  "Ice sec": "Total ice time in seconds.",
+  // goalies
+  "SV%": "Save percentage: saves ÷ shots against.",
+  "Save %": "Save percentage: saves ÷ shots against.",
+  SV: "Saves.",
+  GAA: "Goals-against average: goals allowed per 60 minutes.",
+  SO: "Shutouts.",
+  GSAx: "Goals saved above expected: expected goals against minus actual goals allowed. Positive = stealing goals.",
+  "QS%": "Quality-start rate: starts with SV% above league average (or ≥ .885 on low-shot nights).",
+  // special teams
+  "PP%": "Power-play conversion: PP goals ÷ PP opportunities.",
+  PPO: "Power-play opportunities.",
+  "PK%": "Penalty-kill success: share of opponent power plays killed.",
+  PPGA: "Power-play goals allowed.",
+  TSH: "Times shorthanded (opponent power plays).",
+  // possession
+  "CF%": "Corsi For %: share of all shot attempts (on goal, missed, blocked) taken by your side. 50% = even.",
+  "FF%": "Fenwick For %: like CF% but ignoring blocked shots.",
+  "GF%": "Share of goals scored by your side while on the ice.",
+  "Rel CF": "On-ice CF% minus the team's CF% without this player.",
+  "Rel FF": "On-ice FF% minus the team's FF% without this player.",
+  "Rel GF": "On-ice GF% minus the team's GF% without this player.",
+  "Rel xGF": "On-ice xGF% minus the team's xGF% without this player.",
+  PDO: "On-ice SH% + SV% (×100). Around 100 is normal; far above or below usually regresses (luck indicator).",
+  // expected
+  xGF: "Expected goals for — the sum of each shot's scoring probability (distance, angle, type, rebound, rush).",
+  xGA: "Expected goals against.",
+  "xGF%": "Share of expected goals created by your side. Best single measure of chance control.",
+  xGD: "Expected goal differential (xGF − xGA).",
+  "GF−xGF": "Goals scored above expectation — finishing talent or luck.",
+  "GA−xGA": "Goals allowed above expectation — negative means goaltending is outperforming.",
+  iXG: "Individual expected goals from this player's own shots.",
+  xA: "Expected assists: expected-goal value of shots this player set up.",
+  "xSH%": "Expected shooting % given shot quality.",
+  "xSV%": "Expected save % given shot quality faced.",
+  "SH% Ax": "Shooting % above expected.",
+  "SV% Ax": "Save % above expected.",
+  "PDO Ax": "PDO above expected.",
+  "SH% FF": "Goals ÷ unblocked shot attempts.",
+  "SV% FF": "Saves ÷ unblocked shot attempts against.",
+  "SH% CF": "Goals ÷ all shot attempts.",
+  "Score xGF%": "xGF% adjusted for score state (trailing teams naturally push play).",
+  "Score CF%": "CF% adjusted for score state.",
+  "Score FF%": "FF% adjusted for score state.",
+  "F+S xGF%": "xGF% adjusted for both flurries and score state.",
+  "Flurry xGF": "xGF discounted for rapid-fire rebound flurries so one sequence isn't over-counted.",
+  "Flurry xGA": "xGA discounted for rapid-fire rebound flurries.",
+  "Flurry xGF%": "Flurry-adjusted xGF share.",
+  xMiss: "Expected missed shots for the attempt mix taken.",
+  "Miss Ax": "Missed shots above expected.",
+  "xReb F": "Expected rebounds generated.",
+  "xReb A": "Expected rebounds allowed.",
+  "Reb xGF": "Expected goals from rebound shots.",
+  "Reb GF": "Goals scored on rebounds.",
+  "Reb GA": "Goals allowed on rebounds.",
+  xFreeze: "Expected goalie freezes generated by your shots.",
+  "xIn zone": "Expected shots that stay in the offensive zone after the save.",
+  xClear: "Expected shots that lead to a defensive clear.",
+  // player value
+  WAR: "Wins above replacement — total value vs. a replacement-level call-up.",
+  OVR: "Current overall rating.",
+  Age: "Player age.",
+  "Cap Hit": "Average annual value of the current contract.",
+  // situations
+  "Comeback W": "Wins after trailing at some point.",
+  "Multi CB W": "Wins after trailing by 2+.",
+  "CB%": "Share of games trailed that were won.",
+  "Hold%": "Share of games leading after two periods that ended in a win.",
+  "Blow%": "Share of games leading after two periods that were not won.",
+  "Blown P2": "Leads after two periods that were lost.",
+  "Blown 2+": "Multi-goal leads that were lost.",
+  "Scored 1st": "Games where this team scored the opening goal.",
+  "1G W": "One-goal wins.",
+  "1G L": "One-goal losses.",
+  "1G GP": "One-goal games.",
+  "Blow W": "Wins by 4+ goals.",
+  "Blow L": "Losses by 4+ goals.",
+  "SO W": "Shutout wins.",
+  "SO L": "Shutout losses.",
+  "W outshot": "Wins while being outshot.",
+  "L outshoot": "Losses despite outshooting the opponent.",
+  "W low xG": "Wins despite losing the expected-goals battle.",
+  "L high xG": "Losses despite winning the expected-goals battle.",
+  "W w/ PPG": "Wins in games with at least one power-play goal.",
+  "L w/ PPGA": "Losses in games where a power-play goal was allowed.",
+  "EN GF": "Empty-net goals scored.",
+  "EN GA": "Empty-net goals allowed.",
+  "Per W": "Periods outscored the opponent.",
+  "Per L": "Periods outscored by the opponent.",
+  "Per T": "Periods tied.",
+});
+
+const STAT_TOKEN_WORDS = Object.freeze({
+  HD: "high-danger", MD: "medium-danger", LD: "low-danger",
+  P1: "after the 1st period", P2: "after the 2nd period", P3: "3rd period",
+  H: "home", R: "road", W: "wins", L: "losses",
+});
+
+function describeStatColumn(column) {
+  if (!column) return "";
+  if (column.description) return column.description;
+  const label = String(column.label || "");
+  const key = String(column.key || "");
+  if (STAT_DESCRIPTIONS[label]) return STAT_DESCRIPTIONS[label];
+  if (STAT_DESCRIPTIONS[key]) return STAT_DESCRIPTIONS[key];
+  const rate = label.match(/^(.*)\/60$/);
+  if (rate) {
+    const base = rate[1];
+    const baseDesc = STAT_DESCRIPTIONS[base] || COLUMN_FULL_NAMES[base] || base;
+    return `${String(baseDesc).replace(/\.$/, "")} — per 60 minutes of ice time.`;
+  }
+  const danger = label.match(/^(HD|MD|LD)\s+(.*)$/);
+  if (danger) {
+    const rest = STAT_DESCRIPTIONS[danger[2]] || COLUMN_FULL_NAMES[danger[2]] || danger[2];
+    return `${String(rest).replace(/\.$/, "")} — ${STAT_TOKEN_WORDS[danger[1]]} chances only.`;
+  }
+  if (key) {
+    const words = key
+      .split("_")
+      .map((t) => (t === "pct" ? "%" : t === "xg" ? "expected goals" : t === "gf" ? "goals for" : t === "ga" ? "goals against" : t))
+      .join(" ");
+    return words.charAt(0).toUpperCase() + words.slice(1) + ".";
+  }
+  return "";
+}
+
 function getColumnFullName(column) {
   return (
     column?.fullLabel ||
@@ -5337,6 +4906,8 @@ function DataTable({
   rowAriaLabel = null,
   density = "compact",
 }) {
+  const [hoverColumn, setHoverColumn] = useState(null);
+  const showLegendBar = (columns?.length || 0) >= 6;
   const resolveRowId = (row, rowIndex) => {
     if (typeof getRowId === "function") {
       return String(getRowId(row, rowIndex));
@@ -5386,6 +4957,10 @@ function DataTable({
                   key={column.key || column.label}
                   title={fullColumnName}
                   aria-label={fullColumnName}
+                  onMouseEnter={showLegendBar ? () => setHoverColumn(column) : undefined}
+                  onMouseLeave={showLegendBar ? () => setHoverColumn(null) : undefined}
+                  onFocus={showLegendBar ? () => setHoverColumn(column) : undefined}
+                  onBlur={showLegendBar ? () => setHoverColumn(null) : undefined}
                   aria-sort={
                     column.sortKey === sortKey
                       ? sortDir === "desc"
@@ -5549,6 +5124,19 @@ function DataTable({
           )}
         </tbody>
       </table>
+      {showLegendBar ? (
+        <div className={`sc-legend-bar ${hoverColumn ? "is-active" : ""}`} aria-live="polite">
+          {hoverColumn ? (
+            <>
+              <b>{hoverColumn.label}</b>
+              <span className="sc-legend-bar__name">{getColumnFullName(hoverColumn)}</span>
+              <span className="sc-legend-bar__desc">{describeStatColumn(hoverColumn)}</span>
+            </>
+          ) : (
+            <span className="sc-legend-bar__hint">Hover a column header to see what it measures.</span>
+          )}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -5556,309 +5144,7 @@ function DataTable({
    OVERVIEW TAB
 ========================================================= */
 
-function OverviewTab({
-  data,
-  topScorer,
-  topGoalScorer,
-  topPlaymaker,
-  topImpact,
-  topXg,
-  topGoalie,
-  topGsaxGoalie,
-  selectedDay,
-  setSelectedDay,
-  gamesForSelectedDay,
-}) {
-  const team = data.team || {};
-  const totalTeams = team.total_league_teams || data.teams.length || 32;
 
-  const ppMissing = team.analytics_missing?.pp_pct;
-  const pkMissing = team.analytics_missing?.pk_pct;
-  const cfMissing = team.analytics_missing?.cf_pct;
-  const xgfMissing = team.analytics_missing?.xgf_pct;
-
-  const teamName = team.name || team.team_id || "Franchise";
-  const recordText = `${team.wins || 0}-${team.losses || 0}-${team.otl || 0}`;
-  const pointsText = `${team.points || 0} points`;
-
-  const leagueRankText = team.league_rank
-    ? `League #${team.league_rank} of ${totalTeams}`
-    : "League rank unavailable";
-
-  const divisionText = team.division_rank
-    ? `Division #${team.division_rank}`
-    : "Division rank unavailable";
-
-  const conferenceText = team.conference_rank
-    ? `Conference #${team.conference_rank}`
-    : "Conference rank unavailable";
-
-  const formTone =
-    team.league_rank && team.league_rank <= 8
-      ? "good"
-      : team.league_rank && team.league_rank >= 24
-        ? "bad"
-        : "";
-
-  const offenseTone =
-    team.gf_league_rank && team.gf_league_rank <= 10
-      ? "good"
-      : team.gf_league_rank && team.gf_league_rank >= 24
-        ? "bad"
-        : "";
-
-  const defenseTone =
-    team.ga_league_rank && team.ga_league_rank <= 10
-      ? "good"
-      : team.ga_league_rank && team.ga_league_rank >= 24
-        ? "bad"
-        : "";
-
-  const diffTone = team.goal_diff > 0 ? "good" : team.goal_diff < 0 ? "bad" : "";
-
-  const possessionTone =
-    team.cf_pct >= 0.52 || team.xgf_pct >= 0.52
-      ? "good"
-      : team.cf_pct && team.cf_pct <= 0.47
-        ? "bad"
-        : "";
-
-  const goalieTone =
-    team.sv_pct >= 0.91
-      ? "good"
-      : team.sv_pct && team.sv_pct < 0.89
-        ? "bad"
-        : "";
-
-  const latestCalendarDays = Array.isArray(data.calendar)
-    ? data.calendar.slice(-6).reverse()
-    : [];
-
-  return (
-    <div className="sc-overview-fixed">
-      <section className="sc-overview-fixed-hero">
-        <div className="sc-overview-fixed-title">
-          <p>FRANCHISE SNAPSHOT</p>
-          <h2>{teamName}</h2>
-          <span>
-            {recordText} · {pointsText} · {divisionText} · {conferenceText}
-          </span>
-        </div>
-
-        <div className={`sc-overview-fixed-points ${formTone ? `is-${formTone}` : ""}`}>
-          <strong>{team.points || 0}</strong>
-          <span>PTS</span>
-          <em>{leagueRankText}</em>
-        </div>
-      </section>
-
-      <section className="sc-overview-fixed-story">
-        <OverviewStoryCard
-          label="Offense"
-          value={fmtMaybeNumber(team.gf)}
-          sub="Goals For"
-          rank={formatLeagueRank(team.gf_league_rank, totalTeams)}
-          tone={offenseTone}
-        />
-
-        <OverviewStoryCard
-          label="Defense"
-          value={fmtMaybeNumber(team.ga)}
-          sub="Goals Against"
-          rank={formatLeagueRank(team.ga_league_rank, totalTeams)}
-          tone={defenseTone}
-        />
-
-        <OverviewStoryCard
-          label="Goal Diff"
-          value={formatSigned(team.goal_diff)}
-          sub="GF minus GA"
-          rank={formatLeagueRank(team.goal_diff_league_rank, totalTeams)}
-          tone={diffTone}
-        />
-
-        <OverviewStoryCard
-          label="Puck Control"
-          value={fmtMaybePct(team.cf_pct)}
-          sub="CF%"
-          rank={cfMissing ? "Needs CF/CA ledger" : formatLeagueRank(team.cf_pct_league_rank, totalTeams)}
-          tone={possessionTone}
-          warning={cfMissing}
-        />
-
-        <OverviewStoryCard
-          label="Chance Quality"
-          value={fmtMaybePct(team.xgf_pct)}
-          sub="xGF%"
-          rank={xgfMissing ? "Needs xGF/xGA ledger" : formatLeagueRank(team.xgf_pct_league_rank, totalTeams)}
-          tone={possessionTone}
-          warning={xgfMissing}
-        />
-
-        <OverviewStoryCard
-          label="Goaltending"
-          value={fmtMaybePct(team.sv_pct, 3)}
-          sub="Team SV%"
-          rank={formatLeagueRank(team.ga_league_rank, totalTeams)}
-          tone={goalieTone}
-        />
-      </section>
-
-      <section className="sc-overview-fixed-main">
-        <div className="sc-overview-fixed-panel is-leaders">
-          <header>
-            <p>TEAM LEADERS</p>
-            <h3>Main Drivers</h3>
-          </header>
-
-          <div className="sc-overview-fixed-driver-grid">
-            <PlayerMiniCard player={topScorer} metric="pts" label="PTS" teams={data.teams} franchiseState={data.franchiseState} />
-            <PlayerMiniCard player={topGoalScorer} metric="g" label="G" teams={data.teams} franchiseState={data.franchiseState} />
-            <PlayerMiniCard player={topPlaymaker} metric="a" label="A" teams={data.teams} franchiseState={data.franchiseState} />
-            <PlayerMiniCard player={topImpact} metric="war" label="WAR" teams={data.teams} franchiseState={data.franchiseState} />
-            <PlayerMiniCard player={topXg} metric="ixg" label="iXG" teams={data.teams} franchiseState={data.franchiseState} />
-          </div>
-        </div>
-
-        <div className="sc-overview-fixed-panel is-goalie">
-          <header>
-            <p>CREASE REPORT</p>
-            <h3>Goalie Snapshot</h3>
-          </header>
-
-          <div className="sc-overview-fixed-driver-grid">
-            <PlayerMiniCard player={topGoalie} metric="sv_pct" label="SV%" teams={data.teams} franchiseState={data.franchiseState} />
-            <PlayerMiniCard player={topGsaxGoalie} metric="gsax" label="GSAx" teams={data.teams} franchiseState={data.franchiseState} />
-
-            <div className="sc-overview-fixed-mini-metric">
-              <span>Goals Against</span>
-              <strong>{fmtMaybeNumber(team.ga)}</strong>
-              <em>{formatLeagueRank(team.ga_league_rank, totalTeams)}</em>
-            </div>
-
-            <div className="sc-overview-fixed-mini-metric">
-              <span>PDO</span>
-              <strong>{fmtPdo(team.pdo)}</strong>
-              <em>{team.analytics_missing?.pdo ? "Needs shots/saves ledger" : "SH% + SV%"}</em>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section className="sc-overview-fixed-bottom">
-        <div className="sc-overview-fixed-panel is-special">
-          <header>
-            <p>SPECIAL TEAMS</p>
-            <h3>PP / PK</h3>
-          </header>
-
-          <div className="sc-overview-fixed-special-grid">
-            <div>
-              <span>Power Play</span>
-              <strong>{fmtMaybePct(team.pp_pct)}</strong>
-              <em>{ppMissing ? "Needs PP opportunities" : formatLeagueRank(team.pp_pct_league_rank, totalTeams)}</em>
-            </div>
-
-            <div>
-              <span>Penalty Kill</span>
-              <strong>{fmtMaybePct(team.pk_pct)}</strong>
-              <em>{pkMissing ? "Needs PK chances" : formatLeagueRank(team.pk_pct_league_rank, totalTeams)}</em>
-            </div>
-          </div>
-        </div>
-
-        <div className="sc-overview-fixed-panel is-calendar">
-          <header>
-            <p>CALENDAR</p>
-            <h3>Recent Game Nights</h3>
-          </header>
-
-          <div className="sc-overview-fixed-calendar">
-            <button
-              type="button"
-              className={selectedDay === null ? "is-active" : ""}
-              onClick={() => setSelectedDay(null)}
-            >
-              <span>Latest</span>
-              <em>{data.recentGames.length}</em>
-            </button>
-
-            {latestCalendarDays.map((day) => (
-              <button
-                key={`day-${day.day}`}
-                type="button"
-                className={Number(selectedDay) === Number(day.day) ? "is-active" : ""}
-                onClick={() => setSelectedDay(day.day)}
-              >
-                <span>
-                  Day {day.day}
-                  {day.segment ? <small>{day.segment}</small> : null}
-                </span>
-                <em>{(day.games || []).length}</em>
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="sc-overview-fixed-panel is-scores">
-          <header>
-            <p>SCORES</p>
-            <h3>{selectedDay === null ? "Latest Finals" : `Day ${selectedDay} Finals`}</h3>
-          </header>
-
-          <GameScoreList games={gamesForSelectedDay} />
-        </div>
-      </section>
-    </div>
-  );
-}
-
-function OverviewStoryCard({ label, value, sub, rank, tone = "", warning = false }) {
-  return (
-    <article className={`sc-overview-fixed-card ${tone ? `is-${tone}` : ""} ${warning ? "has-warning" : ""}`}>
-      <span>{label}</span>
-      <strong>{value}</strong>
-      <em>{sub}</em>
-      <b>{rank}</b>
-    </article>
-  );
-}
-function GameScoreList({ games }) {
-  const rows = Array.isArray(games) ? games : [];
-
-  if (!rows.length) {
-    return (
-      <div className="sc-empty">
-        No game results yet. Advance the calendar and games will appear here.
-      </div>
-    );
-  }
-
-  return (
-    <div className="sc-score-list">
-      {rows.map((game, index) => (
-        <article key={game.game_id || index} className="sc-score-card">
-          <div className="sc-score-line">
-            <span className="sc-score-team">{game.home_name || game.home_id}</span>
-            <strong>{game.home_goals}</strong>
-            <em>—</em>
-            <strong>{game.away_goals}</strong>
-            <span className="sc-score-team is-away">{game.away_name || game.away_id}</span>
-          </div>
-
-          <div className="sc-score-meta">
-            Day {game.day} · {fmtScore(game)}
-          </div>
-
-          <div className="sc-score-micro">
-            <span>Shots {game.home_shots}-{game.away_shots}</span>
-            <span>xG {fmtTwo(game.home_xg)}-{fmtTwo(game.away_xg)}</span>
-          </div>
-        </article>
-      ))}
-    </div>
-  );
-}
 
 function getSortArrow(sortKey, sortDir, key) {
   if (sortKey !== key) return "";
@@ -5987,80 +5273,21 @@ function SkaterStatCell({ value, sub = "", tone = "", title = "" }) {
   );
 }
 
-function SkaterIdentityChip({ player }) {
-  const label = getSkaterIdentityLabel(player);
-  const tone = getAnalyticsTone(player.analytics_rating);
 
-  return (
-    <span className={`sc-skater-role-chip is-${tone}`}>
-      {label}
-    </span>
-  );
-}
-
-function SkaterQuickCard({ label, value, sub, tone = "" }) {
-  return (
-    <article className={`sc-skater-quick-card ${tone ? `is-${tone}` : ""}`}>
-      <span>{label}</span>
-      <strong>{value}</strong>
-      <em>{sub}</em>
-    </article>
-  );
-}
 
 function hasUsefulColumnData(players, key, minPositiveRows = 1) {
   const rows = Array.isArray(players) ? players : [];
   return rows.filter((row) => safe(row?.[key], 0) > 0).length >= minPositiveRows;
 }
 
-function hasUsefulPctData(players, key, minRows = 1) {
-  const rows = Array.isArray(players) ? players : [];
-  return rows.filter((row) => hasRealPct(row?.[key]) && normalizePct(row?.[key], 0) > 0).length >= minRows;
-}
 
 function hasFaceoffData(players) {
   return (players || []).some((p) => safe(p.fow, 0) + safe(p.fol, 0) > 0);
 }
 
-function hasTakeGiveData(players) {
-  return (players || []).some((p) => safe(p.takeaways, 0) > 0 || safe(p.giveaways, 0) > 0);
-}
 
-function hasSpecialTeamsData(players) {
-  return (players || []).some(
-    (p) =>
-      safe(p.pp_points, 0) > 0 ||
-      safe(p.pp_toi_sec, 0) > 0 ||
-      safe(p.pk_toi_sec, 0) > 0 ||
-      safe(p.sh_points, 0) > 0
-  );
-}
 
-function getActiveColumnPresetLabel(view) {
-  if (view === "core") return "Core";
-  if (view === "scoring") return "Scoring";
-  if (view === "analytics") return "Analytics";
-  if (view === "usage") return "Usage";
-  if (view === "relative") return "Vs team";
-  if (view === "model") return "Shot model";
-  return "All";
-}
 
-function shouldShowSkaterColumn(column, view, players) {
-  if (!column.viewGroups || column.viewGroups.includes("always")) return true;
-  if (!column.viewGroups.includes(view) && view !== "all") return false;
-
-  if (column.requiredData === "age" && !hasUsefulColumnData(players, "age", 1)) return false;
-  if (column.requiredData === "overall" && !hasUsefulColumnData(players, "overall", 1)) return false;
-  if (column.requiredData === "faceoffs" && !hasFaceoffData(players)) return false;
-  if (column.requiredData === "takegive" && !hasTakeGiveData(players)) return false;
-  if (column.requiredData === "specialTeams" && !hasSpecialTeamsData(players)) return false;
-  if (column.requiredData === "cf_pct" && !hasUsefulPctData(players, "cf_pct", 1)) return false;
-  if (column.requiredData === "xgf_pct" && !hasUsefulPctData(players, "xgf_pct", 1)) return false;
-  if (column.requiredData === "gf_pct" && !hasUsefulPctData(players, "gf_pct", 1)) return false;
-
-  return true;
-}
 
 function getStablePctTone(metric, pctValue, sampleSize = 0) {
   const pctValueNorm = normalizePct(pctValue, 0);
@@ -6080,85 +5307,9 @@ function getGFPercentSample(row) {
   return safe(row?.gf_on, 0) + safe(row?.ga_on, 0);
 }
 
-function formatGFPercentSub(row) {
-  const sample = getGFPercentSample(row);
-  if (sample <= 0) return "No GF sample";
-  if (sample < 5) return `Tiny sample ${fmtZero(row.gf_on)}-${fmtZero(row.ga_on)}`;
-  return `${fmtZero(row.gf_on)}-${fmtZero(row.ga_on)}`;
-}
 
-function getSkaterIdentityLabelV2(row, context = {}) {
-  const backendLabel = pickString(row?.role_label, row?.analytics_archetype, row?.impact_tier, "");
-  if (backendLabel) return backendLabel;
 
-  const rank = context.rank || 99;
-  const totalPlayers = context.totalPlayers || 18;
-  const position = normalizePosition(row?.position || row?.pos);
 
-  const ppg = perGame(row?.pts, row?.gp);
-  const g82 = per82(row?.g, row?.gp);
-  const pts82 = per82(row?.pts, row?.gp);
-  const avgToi = getAverageTOIMinutes(row);
-  const xgfPct = normalizePct(row?.xgf_pct, 0);
-  const cfPct = normalizePct(row?.cf_pct, 0);
-  const impact = safe(row?.analytics_rating, 0);
-  const hits = safe(row?.hit, 0);
-  const blocks = safe(row?.blk, 0);
-  const takeaways = safe(row?.takeaways, 0);
-  const ppPoints = safe(row?.pp_points, 0);
-  const pkToi = safe(row?.pk_toi_sec, 0);
-
-  /*
-    Franchise Driver must be rare.
-    Earlier logic made half the roster Franchise Drivers, which killed meaning.
-  */
-  if (rank <= 2 && impact >= 86 && ppg >= 0.9) return "Franchise Driver";
-  if (rank <= 3 && pts82 >= 85) return "Elite Scoring Star";
-  if (g82 >= 38) return "Pure Goal Scorer";
-  if (ppPoints >= 10 && ppg >= 0.6) return "Power-Play Weapon";
-
-  if (position === "D" && avgToi >= 21 && xgfPct >= 0.5) return "Top-Pair Driver";
-  if (position === "D" && blocks + hits >= 75) return "Shutdown Defender";
-
-  if (xgfPct >= 0.54 && cfPct >= 0.52 && ppg >= 0.5) return "Two-Way Driver";
-  if (takeaways >= 20 && xgfPct >= 0.5) return "Puck-Hound Creator";
-  if (pkToi > 0 && avgToi >= 13) return "PK Regular";
-  if (hits >= 65) return "Physical Forechecker";
-  if (ppg >= 0.55) return "Middle-Six Producer";
-  if (avgToi >= 14) return "Reliable Regular";
-  if (rank <= Math.ceil(totalPlayers * 0.75)) return "Depth Contributor";
-  return "Replacement Level";
-}
-
-function SkaterIdentityChipV2({ player, rank, totalPlayers }) {
-  const label = getSkaterIdentityLabelV2(player, { rank, totalPlayers });
-  const tone =
-    label === "Franchise Driver" || label === "Elite Scoring Star"
-      ? "elite"
-      : label.includes("Driver") || label.includes("Weapon") || label.includes("Two-Way")
-        ? "good"
-        : label.includes("Replacement")
-          ? "bad"
-          : label.includes("Depth")
-            ? "warn"
-            : "neutral";
-
-  return (
-    <span className={`sc-skater-role-chip is-${tone}`}>
-      {label}
-    </span>
-  );
-}
-
-function SkaterSummaryChip({ label, value, sub, tone = "" }) {
-  return (
-    <article className={`sc-skater-summary-chip ${tone ? `is-${tone}` : ""}`}>
-      <span>{label}</span>
-      <strong>{value}</strong>
-      <em>{sub}</em>
-    </article>
-  );
-}
 
 /* =========================================================
    PLAYERS TAB
@@ -10619,197 +9770,7 @@ function dedupeAwardRows(rows) {
   });
 }
 
-function buildFallbackAwardsRows(data) {
-  const rows = [];
 
-  const skaters = Array.isArray(data.skaters) ? data.skaters : [];
-  const goalies = Array.isArray(data.goalies) ? data.goalies : [];
-  const teams = Array.isArray(data.teams) ? data.teams : [];
-
-  rows.push(
-    ...buildAwardCandidateRows("art_ross", rankRows(skaters, "pts").slice(0, 5), (p) => p.pts),
-    ...buildAwardCandidateRows("rocket", rankRows(skaters, "g").slice(0, 5), (p) => p.g),
-    ...buildAwardCandidateRows(
-      "hart",
-      [...skaters]
-        .map((p) => ({
-          ...p,
-          _award_score: safe(p.analytics_rating, 0) + safe(p.pts, 0) * 0.45,
-        }))
-        .sort((a, b) => b._award_score - a._award_score)
-        .slice(0, 5),
-      (p) => p._award_score
-    ),
-    ...buildAwardCandidateRows(
-      "norris",
-      skaters
-        .filter((p) => p.position === "D")
-        .map((p) => ({
-          ...p,
-          _award_score: safe(p.analytics_rating, 0) + safe(p.pts, 0) * 0.35,
-        }))
-        .sort((a, b) => b._award_score - a._award_score)
-        .slice(0, 5),
-      (p) => p._award_score
-    ),
-    ...buildAwardCandidateRows(
-      "selke",
-      skaters
-        .filter((p) => p.position !== "D" && p.position !== "G")
-        .map((p) => ({
-          ...p,
-          _award_score:
-            safe(p.defensive_impact, 0) +
-            normalizePct(p.cf_pct, 0) * 40 +
-            safe(p.blk, 0) * 0.1 +
-            safe(p.sh_points, 0),
-        }))
-        .sort((a, b) => b._award_score - a._award_score)
-        .slice(0, 5),
-      (p) => p._award_score
-    ),
-    ...buildAwardCandidateRows(
-      "calder",
-      skaters
-        .filter((p) => p.rookie)
-        .map((p) => ({
-          ...p,
-          _award_score: safe(p.pts, 0) + safe(p.analytics_rating, 0),
-        }))
-        .sort((a, b) => b._award_score - a._award_score)
-        .slice(0, 5),
-      (p) => p._award_score
-    ),
-    ...buildAwardCandidateRows(
-      "vezina",
-      goalies
-        .map((g) => ({
-          ...g,
-          _award_score:
-            normalizePct(g.sv_pct, 0) * 100 +
-            safe(g.gsax, 0) -
-            safe(g.gaa, 0),
-        }))
-        .sort((a, b) => b._award_score - a._award_score)
-        .slice(0, 5),
-      (g) => g._award_score
-    ),
-    ...buildAwardCandidateRows(
-      "jennings",
-      [...teams]
-        .sort((a, b) => safe(a.ga, 9999) - safe(b.ga, 9999))
-        .slice(0, 5),
-      (t) => -safe(t.ga, 0)
-    ),
-    ...buildAwardCandidateRows(
-      "presidents",
-      rankRows(teams, "points").slice(0, 5),
-      (t) => t.points
-    ),
-    ...buildAwardCandidateRows(
-      "gretzky_offense",
-      skaters
-        .map((p) => ({
-          ...p,
-          _award_score:
-            safe(p.pts, 0) * 2 +
-            safe(p.g, 0) * 1.25 +
-            safe(p.ixg, 0) +
-            safe(p.xa, 0) +
-            safe(p.offensive_impact, 0),
-        }))
-        .sort((a, b) => b._award_score - a._award_score)
-        .slice(0, 5),
-      (p) => p._award_score
-    ),
-    ...buildAwardCandidateRows(
-      "mcdavid_transition",
-      skaters
-        .map((p) => ({
-          ...p,
-          _award_score:
-            safe(p.points_per_60, p.pts_per_60 || 0) * 18 +
-            safe(p.xa, 0) * 1.2 +
-            normalizePct(p.xgf_pct, 0) * 45 +
-            safe(p.offensive_impact, 0) * 0.6,
-        }))
-        .sort((a, b) => b._award_score - a._award_score)
-        .slice(0, 5),
-      (p) => p._award_score
-    ),
-    ...buildAwardCandidateRows(
-      "datsyuk_two_way",
-      skaters
-        .filter((p) => p.position !== "D" && p.position !== "G")
-        .map((p) => ({
-          ...p,
-          _award_score:
-            safe(p.takeaways, 0) * 1.5 +
-            safe(p.defensive_impact, 0) +
-            normalizePct(p.xgf_pct, 0) * 50 +
-            safe(p.pts, 0) * 0.35,
-        }))
-        .sort((a, b) => b._award_score - a._award_score)
-        .slice(0, 5),
-      (p) => p._award_score
-    ),
-    ...buildAwardCandidateRows(
-      "chara_shutdown",
-      skaters
-        .filter((p) => p.position === "D")
-        .map((p) => ({
-          ...p,
-          _award_score:
-            safe(p.blk, 0) +
-            safe(p.hit, 0) * 0.4 +
-            safe(p.defensive_impact, 0),
-        }))
-        .sort((a, b) => b._award_score - a._award_score)
-        .slice(0, 5),
-      (p) => p._award_score
-    ),
-    ...buildAwardCandidateRows(
-      "hasek_goalie",
-      goalies
-        .map((g) => ({
-          ...g,
-          _award_score:
-            safe(g.gsax, 0) * 2 +
-            normalizePct(g.sv_pct, 0) * 100 +
-            normalizePct(g.hd_sv_pct, 0) * 35,
-        }))
-        .sort((a, b) => b._award_score - a._award_score)
-        .slice(0, 5),
-      (g) => g._award_score
-    )
-  );
-
-  return dedupeAwardRows(rows);
-}
-
-function buildAwardCandidateRows(awardKey, candidates, scoreFn) {
-  const definition = findStrictAwardDefinition(awardKey, awardKey);
-
-  if (!definition) return [];
-
-  return (candidates || []).map((candidate, index) => {
-    const rank = index + 1;
-    const score = safe(scoreFn(candidate), 0);
-
-    return {
-      ...candidate,
-      award_key: definition.key,
-      award_group: definition.group,
-      award_type: definition.type,
-      award_label: definition.label.toUpperCase(),
-      award_short_label: definition.shortLabel.toUpperCase(),
-      award_description: definition.description,
-      rank,
-      score,
-      reason: definition.description,
-    };
-  });
-}
 /* =========================================================
    TRENDS TAB
 ========================================================= */
@@ -11199,15 +10160,6 @@ function TrendsTab({
   );
 }
 
-function TrendCard({ label, player, value, tone = "neutral" }) {
-  return (
-    <div className={`sc-list-card is-${tone}`}>
-      <span>{label}</span>
-      <strong>{player?.name || "—"}</strong>
-      <em>{value || "—"}</em>
-    </div>
-  );
-}
 
 
 /* =========================================================
@@ -11892,284 +10844,26 @@ function ComparePlayerCard({
   );
 }
 
-function CompareRow({
-  label,
-  left,
-  right,
-  lowerIsBetter = false,
-  digits = 0,
-  hidden = false,
-}) {
-  if (hidden) return null;
-
-  const format = (value) =>
-    digits > 0
-      ? safe(value, 0).toFixed(digits)
-      : String(Math.round(safe(value, 0)));
-
-  return (
-    <CompareMetricBar
-      label={label}
-      left={left}
-      right={right}
-      lowerIsBetter={lowerIsBetter}
-      formatter={format}
-    />
-  );
-}
 
 
 /* =========================================================
    LOGS TAB
 ========================================================= */
 
-function LogsTab({ data, games }) {
-  const logRows = Array.isArray(data.logs) ? data.logs.slice(-180).reverse() : [];
-  const gameRows = Array.isArray(games) ? games.slice(-80).reverse() : [];
 
-  return (
-    <div className="sc-tab-page">
-      <div className="sc-bottom-grid is-logs">
-        <Section eyebrow="Timeline" title="Analytics / Storyline Logs">
-          <div className="sc-log-list">
-            {logRows.length ? (
-              logRows.map((row, index) => (
-                <LogCard key={`log-${row.id || index}`} row={row} />
-              ))
-            ) : (
-              <div className="sc-empty">No analytics logs yet.</div>
-            )}
-          </div>
-        </Section>
-
-        <Section eyebrow="Game Ledger" title="Recent Games">
-          <GameScoreList games={gameRows} />
-        </Section>
-      </div>
-    </div>
-  );
-}
-
-function LogCard({ row }) {
-  const title = pickString(row?.headline, row?.title, row?.type, row?.event_type, "Event");
-  const text = pickString(row?.text, row?.description, row?.message, "");
-  const date = pickString(row?.calendar_iso, row?.date, row?.calendar_day, "");
-
-  return (
-    <article className="sc-log-card">
-      <strong>{title}</strong>
-      {text ? <span>{text}</span> : <span>{JSON.stringify(row)}</span>}
-      {date ? <em>{date}</em> : null}
-    </article>
-  );
-}
 
 
 /* =========================================================
    FORMULAS TAB
 ========================================================= */
 
-const FORMULA_SECTIONS = [
-  {
-    title: "Basic Counting Stats",
-    tone: "green",
-    items: [
-      ["Goals", "Total goals scored", "G = total goals scored"],
-      ["Assists", "Total assists", "A = total assists"],
-      ["Points", "Goals plus assists", "P = G + A"],
-      ["Games Played", "Total games played", "GP = games appeared in"],
-      ["Shots on Goal", "Shots that reached the net", "SOG = shots on goal"],
-      ["Hits", "Credited body checks", "HIT = total hits"],
-      ["Blocks", "Opponent attempts blocked", "BLK = blocked shots"],
-      ["PIM", "Penalty minutes", "PIM = penalty minutes taken"],
-      ["PP Goals", "Power-play goals", "PPG = goals scored on PP"],
-      ["PP Assists", "Power-play assists", "PPA = assists on PP goals"],
-      ["SH Goals", "Short-handed goals", "SHG = goals while shorthanded"],
-      ["SH Assists", "Short-handed assists", "SHA = assists while shorthanded"],
-      ["GWG", "Game-winning goals", "GWG = winning-margin goals"],
-      ["OT Goals", "Overtime goals", "OTG = overtime goals"],
-      ["Faceoff Wins", "Draws won", "FOW = total faceoffs won"],
-      ["Faceoff Losses", "Draws lost", "FOL = total faceoffs lost"],
-      ["Takeaways", "Puck steals", "TAK = credited takeaways"],
-      ["Giveaways", "Puck turnovers", "GIV = credited giveaways"],
-      ["Plus Minus", "EV goal margin", "+/- = EV GF on ice − EV GA on ice"],
-      ["TOI", "Time on ice", "TOI = total minutes played"],
-    ],
-  },
-  {
-    title: "Rate Stats",
-    tone: "blue",
-    items: [
-      ["Goals/Game", "Goals per appearance", "G/GP = G ÷ GP"],
-      ["Assists/Game", "Assists per appearance", "A/GP = A ÷ GP"],
-      ["Points/Game", "Points per appearance", "P/GP = P ÷ GP"],
-      ["Shots/Game", "Shots per appearance", "SOG/GP = SOG ÷ GP"],
-      ["Hits/Game", "Hits per appearance", "HIT/GP = HIT ÷ GP"],
-      ["Blocks/Game", "Blocks per appearance", "BLK/GP = BLK ÷ GP"],
-      ["PIM/Game", "PIM per appearance", "PIM/GP = PIM ÷ GP"],
-      ["Faceoff %", "Draw win rate", "FO% = FOW ÷ (FOW + FOL)"],
-      ["Shooting %", "Goal conversion", "SH% = G ÷ SOG"],
-      ["TOI/Game", "Usage per game", "TOI/GP = TOI ÷ GP"],
-      ["Goals/60", "Goals scaled to 60 minutes", "G/60 = G × 60 ÷ TOI"],
-      ["Assists/60", "Assists scaled to 60 minutes", "A/60 = A × 60 ÷ TOI"],
-      ["Points/60", "Points scaled to 60 minutes", "P/60 = P × 60 ÷ TOI"],
-      ["Shots/60", "Shots scaled to 60 minutes", "SOG/60 = SOG × 60 ÷ TOI"],
-      ["Hits/60", "Hits scaled to 60 minutes", "HIT/60 = HIT × 60 ÷ TOI"],
-      ["Blocks/60", "Blocks scaled to 60 minutes", "BLK/60 = BLK × 60 ÷ TOI"],
-      ["Takeaways/60", "Steals scaled by ice time", "TAK/60 = TAK × 60 ÷ TOI"],
-      ["Giveaways/60", "Turnovers scaled by ice time", "GIV/60 = GIV × 60 ÷ TOI"],
-      ["PIM/60", "Penalty rate", "PIM/60 = PIM × 60 ÷ TOI"],
-      ["EV Points/60", "Even-strength scoring rate", "EVP/60 = EVP × 60 ÷ EV TOI"],
-    ],
-  },
-  {
-    title: "Team Stats",
-    tone: "gold",
-    items: [
-      ["Goals For", "Team goals scored", "GF = team goals"],
-      ["Goals Against", "Goals allowed", "GA = opponent goals"],
-      ["Goal Differential", "GF minus GA", "GD = GF − GA"],
-      ["Win %", "Win rate", "Win% = W ÷ GP"],
-      ["Points %", "Standings efficiency", "Pts% = points ÷ max points"],
-      ["Shots For", "Team shots", "SF = shots for"],
-      ["Shots Against", "Shots allowed", "SA = shots against"],
-      ["Shot Differential", "SF minus SA", "Shot Diff = SF − SA"],
-      ["Power Play %", "PP scoring rate", "PP% = PPG ÷ PPO"],
-      ["Penalty Kill %", "PK prevention", "PK% = 1 − PPGA ÷ Opp PPO"],
-      ["Team Save %", "Team goalie save rate", "SV% = (SA − GA) ÷ SA"],
-      ["PDO", "Shooting plus save percentage", "PDO = SH% + SV%"],
-      ["Team FO%", "Team draw win rate", "Team FO% = FOW ÷ (FOW + FOL)"],
-      ["GF/Game", "Goals per game", "GF/GP = GF ÷ GP"],
-      ["GA/Game", "Goals against per game", "GA/GP = GA ÷ GP"],
-    ],
-  },
-  {
-    title: "Possession",
-    tone: "purple",
-    items: [
-      ["Corsi For", "All shot attempts for", "CF = SOG + missed + blocked attempts"],
-      ["Corsi Against", "All attempts against", "CA = opponent shot attempts"],
-      ["Corsi %", "Shot-attempt share", "CF% = CF ÷ (CF + CA)"],
-      ["Fenwick For", "Unblocked attempts for", "FF = SOG + missed shots"],
-      ["Fenwick Against", "Unblocked attempts against", "FA = opponent unblocked attempts"],
-      ["Fenwick %", "Unblocked attempt share", "FF% = FF ÷ (FF + FA)"],
-      ["Relative Corsi", "On-ice vs off-ice", "Rel CF% = on-ice CF% − off-ice CF%"],
-      ["Attempt Differential", "CF minus CA", "CF Diff = CF − CA"],
-      ["Shots For %", "Shot share", "SF% = SF ÷ (SF + SA)"],
-      ["Zone Start %", "Offensive zone deployment", "ZS% = OZ starts ÷ OZ + DZ starts"],
-      ["OZ Start Ratio", "O-zone share of shifts", "OZS ratio = OZ starts ÷ total shifts"],
-      ["DZ Start Ratio", "D-zone share of shifts", "DZS ratio = DZ starts ÷ total shifts"],
-      ["NZ Start %", "Neutral-zone start share", "NZS% = NZ starts ÷ total starts"],
-      ["Possession Time %", "Puck time share", "Poss% = team possession time ÷ total time"],
-      ["Controlled Entry %", "Entry quality", "Controlled Entry% = controlled entries ÷ total entries"],
-    ],
-  },
-  {
-    title: "Expected Goals",
-    tone: "red",
-    items: [
-      ["Expected Goals", "Probability-weighted shot value", "xG = sum of shot goal probabilities"],
-      ["xGF", "Expected goals for", "xGF = sum of team/player xG for"],
-      ["xGA", "Expected goals against", "xGA = sum of opponent xG"],
-      ["xG Differential", "Expected goal margin", "xG Diff = xGF − xGA"],
-      ["xGF%", "Expected goal share (game avg)", "xGF% = average of each game's on-ice xGF%"],
-      ["Goals Above Expected", "Finishing above chance quality", "Gax = Goals − xG"],
-      ["Slot Shot %", "Slot chance share", "Slot Shot% = slot shots ÷ total shots"],
-      ["High Danger Chances", "High-danger attempts", "HDCF = high-danger chances for"],
-      ["High Danger %", "High-danger share", "HDCF% = HDCF ÷ (HDCF + HDCA)"],
-      ["Medium Danger %", "Medium-danger share", "MDCF% = MDCF ÷ (MDCF + MDCA)"],
-      ["Low Danger %", "Low-danger share", "LDCF% = LDCF ÷ (LDCF + LDCA)"],
-      ["Rebound Shot %", "Rebound shot share", "Rebound% = rebound shots ÷ total shots"],
-      ["Rush Chance %", "Rush shot share", "Rush% = rush shots ÷ total shots"],
-      ["Finishing", "Goals minus individual xG", "Finishing = Goals − iXG"],
-      ["Expected Shooting %", "xG per shot", "xSH% = xG ÷ SOG"],
-    ],
-  },
-  {
-    title: "Goalies",
-    tone: "cyan",
-    items: [
-      ["Save %", "Saves divided by shots against", "SV% = saves ÷ shots against"],
-      ["GAA", "Goals allowed per 60 minutes", "GAA = GA × 60 ÷ TOI"],
-      ["Shutouts", "Games with zero GA", "SO = shutout games"],
-      ["GSAx", "Goals saved above expected", "GSAx = xGA − GA"],
-      ["HD Save %", "High-danger save rate", "HDSV% = HD saves ÷ HD shots"],
-      ["MD Save %", "Medium-danger save rate", "MDSV% = MD saves ÷ MD shots"],
-      ["LD Save %", "Low-danger save rate", "LDSV% = LD saves ÷ LD shots"],
-      ["Rebound Control %", "Saves without rebound", "RC% = no-rebound saves ÷ total saves"],
-      ["Rush Save %", "Rush chance save rate", "Rush SV% = rush saves ÷ rush shots"],
-      ["Quality Start %", "Quality starts per start", "QS% = quality starts ÷ starts"],
-    ],
-  },
-  {
-    title: "WAR Value",
-    tone: "orange",
-    items: [
-      ["WAR", "Wins above replacement", "WAR = total impact GAR ÷ goals per win"],
-      ["Base WAR", "Core wins above replacement", "Base WAR = base GAR ÷ goals per win"],
-      ["GAR", "Goals above replacement", "GAR = offensive GAR + defensive GAR + special teams GAR"],
-      ["PAR", "Points above replacement", "PAR = player points − replacement points at usage"],
-      ["GF%", "On-ice goal share", "GF% = GF_on ÷ (GF_on + GA_on)"],
-      ["Skater WAR", "Total skater value", "WAR = (offensive GAR + defensive GAR + penalty GAR + faceoff GAR + possession GAR + playmaking GAR + special teams GAR) ÷ goals per win"],
-      ["Goalie WAR", "Total goalie value", "Goalie WAR = (saved-goals value + quality-start value - bad-start drag) ÷ goals per win"],
-      ["Offensive GAR", "Attack contribution", "Off GAR = production and individual xG above replacement at usage"],
-      ["Defensive GAR", "Suppression contribution", "Def GAR = xGA suppression above replacement at usage"],
-      ["Special Teams GAR", "PP/PK value", "ST GAR = special-teams production above replacement at usage"],
-      ["Transition Value", "Entry/exit value", "Transition = controlled entries + exits − failed attempts"],
-      ["Clutch Score", "Late/close game value", "Clutch = late goals + late assists + comeback points"],
-    ],
-  },
-];
 
-function FormulasTab() {
-  return (
-    <div className="sc-tab-page">
-      <Section eyebrow="Reference" title="Hockey Analytics Formula Library">
-        <div className="sc-formula-sections">
-          {FORMULA_SECTIONS.map((section) => (
-            <div key={section.title} className={`sc-formula-section is-${section.tone}`}>
-              <header>
-                <h3>{section.title}</h3>
-                <span>{section.items.length} formulas</span>
-              </header>
-
-              <div className="sc-formula-list">
-                {section.items.map(([name, desc, formula]) => (
-                  <article key={`${section.title}-${name}`} className="sc-formula-card">
-                    <strong>{name}</strong>
-                    <span>{desc}</span>
-                    <em>{formula}</em>
-                  </article>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      </Section>
-    </div>
-  );
-}
 
 
 /* =========================================================
    GENERIC TIER LIST
 ========================================================= */
 
-function TierList({ rows }) {
-  return (
-    <div className="sc-tier-list">
-      {(rows || []).map((row) => (
-        <div key={row.label} className={`sc-tier-row is-${row.tone || "neutral"}`}>
-          <div>
-            <strong>{row.label}</strong>
-            <span>{row.sub}</span>
-          </div>
-          <b>{row.value}</b>
-        </div>
-      ))}
-    </div>
-  );
-}
 /* =========================================================
    STYLES
    Background system is matched to RosterScreen.js:
@@ -13430,6 +12124,33 @@ function StatsCentralRedesignStyles() {
         font-weight: 950;
         letter-spacing: 0.12em;
       }
+
+      .sc-legend-bar {
+        position: sticky;
+        left: 0;
+        bottom: 0;
+        z-index: 4;
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        width: 100%;
+        box-sizing: border-box;
+        min-height: 30px;
+        padding: 7px 12px;
+        border-top: 1px solid rgba(104, 170, 198, 0.18);
+        background: rgba(5, 16, 25, 0.97);
+        font-size: 12px;
+        line-height: 1.35;
+        color: #8fb3c4;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .sc-legend-bar.is-active { color: #d7ecf5; border-top-color: rgba(0, 202, 214, 0.45); }
+      .sc-legend-bar b { color: #00cad6; font-weight: 900; letter-spacing: 0.04em; }
+      .sc-legend-bar__name { font-weight: 700; }
+      .sc-legend-bar__desc { color: #a9c6d3; overflow: hidden; text-overflow: ellipsis; }
+      .sc-legend-bar__hint { opacity: 0.7; font-style: italic; }
 
       .sc-table-wrap {
         min-width: 0;

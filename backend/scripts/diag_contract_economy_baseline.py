@@ -14,16 +14,7 @@ for p in (str(BACKEND), str(ROOT / "SimEngine"), str(ROOT / "SimEngine" / "app")
         sys.path.insert(0, p)
 
 from services import franchise_sim  # noqa: E402
-from services.contract_economy import (  # noqa: E402
-    LEAGUE_MINIMUM_AAV_M,
-    _player_id,
-    _player_name,
-    _player_ovr,
-    compute_market_value,
-    compute_player_demand,
-    sign_player_to_team,
-    sync_all_team_cap_fields,
-)
+from services.contract_economy import LEAGUE_MINIMUM_AAV_M, _player_name, _player_ovr, compute_market_value, compute_player_demand, sign_player_to_team, sync_all_team_cap_fields
 from services.fa_market_engine import (  # noqa: E402
     _ask_for_player,
     ensure_fa_market_book,

@@ -1,0 +1,80 @@
+/* Player social: posts, replies, quotes, burner watch */
+.psx-post { text-align: left; width: 100%; cursor: default; }
+.psx-post.is-clickable { cursor: pointer; }
+.psx-post.is-player { border-left: 3px solid var(--gold, #d8b45a); }
+.psx-post.is-rant { border-left-color: #e05a4f; background: linear-gradient(90deg, rgba(224, 90, 79, 0.08), transparent 40%); }
+.psx-post.is-burner { border-left: 3px dashed rgba(156, 218, 236, 0.5); }
+.psx-post.is-burner .sl-post__head strong { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.02em; }
+.psx-avatar { display: inline-flex; flex: 0 0 auto; }
+.psx-avatar .player-headshot { border-radius: 50%; overflow: hidden; }
+.psx-sub { font-size: 11px; opacity: 0.6; margin: -2px 0 6px 0; }
+.psx-sub--burner { color: #9cdaec; opacity: 0.8; }
+.psx-chip { font-size: 10px; padding: 1px 7px; border-radius: 999px; border: 1px solid currentColor; text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap; }
+.psx-chip--hot { color: #ff7a6b; }
+.psx-chip--hype { color: #ffb347; }
+.psx-chip--cool { color: #8fc3ff; }
+.psx-chip--warm { color: #f3c98b; }
+.psx-chip--dim { color: rgba(220, 230, 240, 0.55); }
+.psx-chip--del { color: #ff7a6b; }
+.psx-ghost { opacity: 0.75; text-decoration: line-through; text-decoration-color: rgba(255, 122, 107, 0.6); }
+.psx-deleted { display: flex; gap: 10px; align-items: center; justify-content: space-between; padding: 10px 12px; margin: 6px 0; border-radius: 8px; background: rgba(255, 255, 255, 0.04); border: 1px dashed rgba(255, 255, 255, 0.18); font-style: italic; opacity: 0.85; }
+.psx-linkbtn { background: none; border: 0; color: var(--gold, #d8b45a); cursor: pointer; padding: 0; font: inherit; font-size: 12px; text-decoration: underline; }
+.psx-quote { margin: 8px 0; padding: 10px 12px; border-radius: 10px; border: 1px solid rgba(255, 255, 255, 0.14); background: rgba(0, 0, 0, 0.18); }
+.psx-quote.is-deleted { border-color: rgba(255, 122, 107, 0.45); box-shadow: inset 0 0 0 1px rgba(255, 122, 107, 0.12); }
+.psx-quote__head, .psx-quote__liked { display: flex; gap: 6px; align-items: center; font-size: 12px; flex-wrap: wrap; }
+.psx-quote__liked { color: #ff8fa3; margin-bottom: 6px; }
+.psx-quote__head span, .psx-quote__head em { opacity: 0.6; }
+.psx-quote p { margin: 6px 0 0; }
+.psx-bio { display: flex; gap: 10px; align-items: center; margin: 8px 0; padding: 10px 12px; border-radius: 10px; background: rgba(0, 0, 0, 0.2); border: 1px solid rgba(255, 255, 255, 0.12); }
+.psx-bio p { margin: 2px 0; }
+.psx-bio__after { font-size: 20px; }
+.psx-beef { font-size: 12px; color: #ffb347; margin: 4px 0; }
+.psx-replies { margin-top: 8px; padding-left: 10px; border-left: 2px solid rgba(255, 255, 255, 0.1); display: grid; gap: 8px; }
+.psx-reply { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; }
+.psx-reply p { margin: 2px 0; }
+.psx-reply small { opacity: 0.5; font-size: 11px; }
+.psx-reply.is-player .psx-reply__head strong { color: var(--gold, #d8b45a); }
+.psx-reply__head { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; }
+.psx-reply__head span { opacity: 0.55; font-size: 12px; }
+.psx-rail { display: grid; gap: 10px; }
+.psx-tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+.psx-tabs button { flex: 1; font-size: 12px; padding: 6px 8px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.12); background: transparent; color: inherit; cursor: pointer; }
+.psx-tabs button.is-active { background: rgba(216, 180, 90, 0.16); border-color: var(--gold, #d8b45a); }
+.psx-list { display: grid; gap: 8px; max-height: 640px; overflow-y: auto; padding-right: 2px; }
+.psx-note { font-size: 12px; opacity: 0.6; margin: 0; }
+.psx-acct { border-radius: 10px; padding: 8px; background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); }
+.psx-acct.has-incident { border-color: rgba(255, 122, 107, 0.55); }
+.psx-acct.is-active { border-color: var(--gold, #d8b45a); }
+.psx-acct__main { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: center; width: 100%; background: none; border: 0; color: inherit; text-align: left; cursor: pointer; padding: 0; }
+.psx-acct__main strong { display: block; font-size: 13px; }
+.psx-acct__main small { font-size: 11px; opacity: 0.6; }
+.psx-acct__bars { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 6px; font-size: 10px; opacity: 0.8; }
+.psx-acct__bars label { display: grid; gap: 3px; }
+.psx-meter { display: block; height: 5px; border-radius: 3px; background: rgba(255, 255, 255, 0.1); overflow: hidden; }
+.psx-meter i { display: block; height: 100%; border-radius: 3px; transition: width 0.4s ease; }
+.psx-meter--gold i { background: var(--gold, #d8b45a); }
+.psx-meter--red i { background: #e05a4f; }
+.psx-meter--green i { background: #4fbf85; }
+.psx-ban { font-size: 11px; margin-top: 6px; opacity: 0.8; }
+.psx-incident { margin-top: 8px; display: grid; gap: 4px; font-size: 12px; color: #ffb3a8; }
+.psx-incident q { font-style: italic; opacity: 0.85; color: inherit; }
+.psx-meet { justify-self: start; margin-top: 2px; font-size: 12px; padding: 4px 10px; border-radius: 999px; border: 1px solid #ff7a6b; background: rgba(255, 122, 107, 0.12); color: #ffd0c9; cursor: pointer; }
+.psx-meet:hover { background: rgba(255, 122, 107, 0.25); }
+.psx-burner { border-radius: 10px; padding: 10px; border: 1px dashed rgba(156, 218, 236, 0.35); background: rgba(156, 218, 236, 0.04); font-size: 12px; }
+.psx-burner.is-mine { border-color: rgba(255, 122, 107, 0.6); }
+.psx-burner.is-unmasked { border-style: solid; border-color: #e05a4f; background: rgba(224, 90, 79, 0.1); }
+.psx-burner__head { display: flex; gap: 6px; align-items: center; }
+.psx-burner__head strong { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.psx-burner__head em { margin-left: auto; opacity: 0.55; }
+.psx-burner__meter { display: grid; grid-template-columns: auto 1fr auto; gap: 6px; align-items: center; margin: 6px 0; }
+.psx-burner__suspect { display: flex; gap: 6px; align-items: center; }
+.psx-burner__verdict { margin: 6px 0; color: #ff7a6b; letter-spacing: 0.06em; }
+.psx-burner ul { margin: 6px 0 0; padding-left: 16px; opacity: 0.8; }
+.psx-burner li { margin: 2px 0; }
+.psx-log { display: flex; gap: 8px; align-items: center; padding: 6px 8px; border-radius: 8px; background: rgba(255, 255, 255, 0.03); font-size: 12px; }
+.psx-log.is-mine { border: 1px solid rgba(216, 180, 90, 0.5); }
+.psx-log strong { display: block; }
+.psx-log small { opacity: 0.6; }
+.psx-sev { color: #ff7a6b; margin-left: 6px; font-size: 9px; letter-spacing: 2px; }
+.psx-author-bar { display: flex; align-items: center; gap: 8px; font-size: 12px; margin: 4px 0 8px; opacity: 0.85; }
+@media (prefers-reduced-motion: reduce) { .psx-meter i { transition: none; } }

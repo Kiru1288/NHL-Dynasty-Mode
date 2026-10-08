@@ -8,13 +8,13 @@ from __future__ import annotations
 import bisect
 import hashlib
 import logging
-import math
 import os
 import random
 import threading
 import time
 import types
 import uuid
+import zlib
 from dataclasses import is_dataclass, replace
 from collections import Counter, defaultdict
 from datetime import date, timedelta
@@ -24,6 +24,8 @@ from services.franchise_paths import ensure_simengine_path
 
 ensure_simengine_path()
 import run_sim as rs  # noqa: E402
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 _startup_log = logging.getLogger("uvicorn.error")
 _TEAM_SUMMARY_CACHE: Optional[List[Dict[str, str]]] = None
@@ -32,6 +34,13 @@ _DRAFT_RANKINGS_LOCKS: Dict[str, threading.Lock] = {}
 _DRAFT_RANKINGS_LOCKS_GUARD = threading.Lock()
 _ROSTER_BROWSER_LOCKS: Dict[str, threading.Lock] = {}
 _ROSTER_BROWSER_LOCKS_GUARD = threading.Lock()
+
+
+def _stable_hash(value):
+    """Process-stable replacement for built-in hash() (salted per process via PYTHONHASHSEED)."""
+    import hashlib as _hl
+
+    return int.from_bytes(_hl.sha256(str(value).encode("utf-8")).digest()[:8], "big", signed=True)
 
 
 def _franchise_startup_stage(msg: str) -> None:
@@ -54,11 +63,7 @@ from app.sim_engine.entities.player import (  # noqa: E402
     height_cm_to_imperial,
     clamp_height_cm_for_position,
 )
-from app.sim_engine.league import (
-    compute_awards,
-    generate_regular_season_schedule,
-    simulate_playoffs,
-)
+from app.sim_engine.league import generate_regular_season_schedule
 from app.sim_engine.league.schedule_generator import GameSlot, _safe_team_id, _safe_id_str, _safe_slot_team_id
 from app.sim_engine.league.standings import StandingsTable
 
@@ -241,14 +246,14 @@ def _slot_team_ids_cached(slot: Any) -> Tuple[str, str]:
         if isinstance(h, str) and isinstance(a, str):
             return h, a
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     h = _safe_slot_team_id(slot, "home_id")
     a = _safe_slot_team_id(slot, "away_id")
     try:
         setattr(slot, "_norm_home_id", h)
         setattr(slot, "_norm_away_id", a)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return h, a
 
 
@@ -1993,7 +1998,7 @@ def apply_coach_archetype(coach: Any, archetype: str, rng: random.Random) -> Non
             # balanced: small random identity nudge
             coach.tactics.risk_tolerance = _clamp(float(coach.tactics.risk_tolerance) + rng.uniform(-0.03, 0.03))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _chaos_index(sim: Any, league: Any) -> float:
@@ -2040,7 +2045,7 @@ def start_franchise(
     try:
         setattr(league, "_runner_sim_engine", sim)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     teams = list(getattr(league, "teams", None) or [])
     if not teams:
@@ -2057,7 +2062,7 @@ def start_franchise(
 
         apply_nhl_salary_cap_for_season(league, season_y)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     if universe == "real_nhl":
         _franchise_startup_stage("preparing real NHL roster universe")
@@ -2162,6 +2167,10 @@ def start_franchise(
         team_by_id[tid] = t
 
     sim._preseason_line_synergy_refresh(teams, sim.rng)
+    try:
+        _cpu_choose_deployment_styles(sim, teams, uid)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     strength_map = sim._build_strength_map(teams)
     try:
         from app.sim_engine.league.awards import assign_team_season_expectations
@@ -2270,10 +2279,7 @@ def start_franchise(
             fast_depth=(universe == "real_nhl"),
         )
         if universe == "real_nhl":
-            from services.real_nhl_roster_importer import (
-                enforce_opening_night_cap_compliance,
-                trim_team_roster_to_nhl_limit,
-            )
+            from services.real_nhl_roster_importer import trim_team_roster_to_nhl_limit
 
             for tm in teams:
                 trim_team_roster_to_nhl_limit(tm)
@@ -2329,14 +2335,14 @@ def start_franchise(
         # This avoids paying draft ranking compute cost during franchise creation.
         session.draft_rank_prev = {}
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     # Warm rankings/HUD off the request thread so the first Draft Class open is a
     # cache hit. Ranking formulas are unchanged — this only precomputes the board.
     if warm_draft_cache:
         try:
             _schedule_draft_class_cache_warm(session)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         from app.sim_engine.systems.chemistry import materialize_roster_chemistry_profiles  # noqa: WPS433
 
@@ -2344,7 +2350,7 @@ def start_franchise(
         if user_team is not None:
             materialize_roster_chemistry_profiles(user_team)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     _franchise_startup_stage("start_franchise complete; returning session")
     return session
 
@@ -2356,7 +2362,7 @@ def _schedule_draft_class_cache_warm(session: FranchiseSession) -> None:
     try:
         session._draft_class_warm_scheduled = True
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     def _warm() -> None:
         try:
@@ -2371,7 +2377,7 @@ def _schedule_draft_class_cache_warm(session: FranchiseSession) -> None:
                     str(getattr(session, "user_team_id", "") or ""),
                 )
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             user_team = None
             try:
                 user_team = (getattr(session, "team_by_id", None) or {}).get(
@@ -2387,7 +2393,7 @@ def _schedule_draft_class_cache_warm(session: FranchiseSession) -> None:
                 (board or {}).get("entries"),
             )
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     threading.Thread(target=_warm, name="draft-class-warm", daemon=True).start()
 
@@ -2401,7 +2407,7 @@ def _name_str(p: Any) -> str:
         if is_brady_tkachuk(p):
             return display_name_with_cancer_tag(raw, p)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return raw
 
 
@@ -2473,7 +2479,7 @@ def _resolve_league_salary_cap_m(league: Any, season_year: int | None = None) ->
             # league.salary_cap_m (commonly still $88 on 2025+ saves).
             return float(nhl_upper_limit_millions(int(sy), league))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     if league is not None:
         try:
             from app.sim_engine.economy.cap_engine import _league_cap_bounds_millions
@@ -2483,7 +2489,7 @@ def _resolve_league_salary_cap_m(league: Any, season_year: int | None = None) ->
             if upper > 0:
                 return upper
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         try:
             ctx = league.get_league_context() if hasattr(league, "get_league_context") else {}
             econ = (ctx or {}).get("economics") or {}
@@ -2491,7 +2497,7 @@ def _resolve_league_salary_cap_m(league: Any, season_year: int | None = None) ->
             if raw > 0:
                 return raw / 1_000_000.0 if raw > 250 else raw
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     raw = float(getattr(league, "salary_cap_m", 0) or getattr(league, "salary_cap", 0) or 0) if league is not None else 0.0
     if raw <= 0:
         try:
@@ -2562,7 +2568,7 @@ def _set_player_contract_aav(player: Any, aav_m: float, season_year: int) -> Non
         age = _player_age_int(player)
         ovr = _player_ovr99(player)
         pos = _pos_str(player)
-        seed = abs(hash(str(getattr(player, "id", "") or _name_str(player)))) & 0xFFFFFFFF
+        seed = abs(_stable_hash(str(getattr(player, "id", "") or _name_str(player)))) & 0xFFFFFFFF
         _, years = _generate_contract_terms(ovr, age, pos, random.Random(seed))
         if age <= 23 and ovr < 82:
             contract_type = "RFA_BRIDGE"
@@ -2584,18 +2590,18 @@ def _set_player_contract_aav(player: Any, aav_m: float, season_year: int) -> Non
         try:
             player.contract = contract
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     else:
         try:
             contract.cap_hit_m = aav
             contract.aav_m = aav
             contract.salary_m = aav
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         player.cap_hit_m = aav
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _sync_team_cap_fields(team: Any, league: Any) -> None:
@@ -2720,7 +2726,7 @@ def _ensure_team_roster_contracts_cap_safe(
     try:
         team._bootstrap_league_ref = league
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     # Leave in-season cap headroom — NHL clubs rarely open at a hard $0 ceiling.
     headroom_target = rng.uniform(BOOTSTRAP_CAP_HEADROOM_MIN_M, BOOTSTRAP_CAP_HEADROOM_MAX_M)
@@ -2745,7 +2751,7 @@ def _ensure_team_roster_contracts_cap_safe(
             "pos_ovrs_desc": pos_ovrs,
         }
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     for idx, p in enumerate(ordered):
         existing_hit = _player_cap_hit_millions(p)
@@ -2757,7 +2763,7 @@ def _ensure_team_roster_contracts_cap_safe(
         min_reserve = LEAGUE_MINIMUM_AAV_M * max(0, slots_left - 1)
         max_aav = max(LEAGUE_MINIMUM_AAV_M, remaining_budget - min_reserve)
 
-        seed = abs(hash(f"contract|{getattr(p, 'id', '') or _name_str(p)}|{season_year}")) & 0xFFFFFFFF
+        seed = abs(_stable_hash(f"contract|{getattr(p, 'id', '') or _name_str(p)}|{season_year}")) & 0xFFFFFFFF
         if _ensure_player_contract(
             p, season_year, random.Random(seed), max_aav_m=max_aav,
             team=team, league=league, allow_bad=True,
@@ -2775,7 +2781,7 @@ def _ensure_team_roster_contracts_cap_safe(
     try:
         team._bootstrap_contract_ovr_cache = None
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     _validate_team_cap_non_negative(team, league, season_year, rng)
     return generated
 
@@ -2813,7 +2819,7 @@ def _player_birth_ymd(player: Any) -> Optional[Tuple[int, int, int]]:
             y, m, d = [int(x) for x in raw.split("-")[:3]]
             return y, m, d
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     ident = getattr(player, "identity", None)
     if ident is None:
         return None
@@ -2861,11 +2867,11 @@ def sync_player_age_to_season(player: Any, season_year: int, *, as_of_month: int
         try:
             ident.age = age
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         setattr(player, "age", age)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return age
 
 
@@ -2895,7 +2901,7 @@ def session_age_as_of(session: Optional[FranchiseSession]) -> Tuple[int, int, in
                 if 1900 <= y <= 2100 and 1 <= m <= 12 and 1 <= d <= 31:
                     return y, m, d
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     return sy, 9, 15
 
 
@@ -2985,7 +2991,7 @@ def _player_display_ovr99(player: Any) -> float:
         if v > 0:
             return v
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return _player_ovr99(player)
 
 
@@ -3037,7 +3043,7 @@ def _ensure_player_contract(
     if _player_cap_hit_millions(player) > 0 and getattr(player, "contract", None) is not None:
         return False
     if rng is None:
-        seed = abs(hash(str(getattr(player, "id", "") or _name_str(player)))) & 0xFFFFFFFF
+        seed = abs(_stable_hash(str(getattr(player, "id", "") or _name_str(player)))) & 0xFFFFFFFF
         rng = random.Random(seed)
 
     lg = league or getattr(team, "_bootstrap_league_ref", None)
@@ -3049,7 +3055,7 @@ def _ensure_player_contract(
     try:
         player.cap_hit_m = float(contract["cap_hit_m"])
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return True
 
 
@@ -3058,7 +3064,7 @@ def _ensure_league_roster_contracts(league: Any, season_year: int) -> int:
     generated = 0
     for team in getattr(league, "teams", None) or []:
         tid = str(getattr(team, "team_id", "") or getattr(team, "id", "") or "")
-        seed = abs(hash(f"cap_bootstrap|{tid}|{season_year}")) & 0xFFFFFFFF
+        seed = abs(_stable_hash(f"cap_bootstrap|{tid}|{season_year}")) & 0xFFFFFFFF
         team_rng = random.Random(seed)
         if getattr(team, "_contracts_bootstrapped", False):
             _validate_team_cap_non_negative(team, league, season_year, team_rng)
@@ -3069,7 +3075,7 @@ def _ensure_league_roster_contracts(league: Any, season_year: int) -> int:
         try:
             team._contracts_bootstrapped = True
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     from services.contract_economy import fix_league_contract_truth
     fix_league_contract_truth(league)
     return generated
@@ -3117,7 +3123,7 @@ def _ensure_team_affiliate_nhl_spcs(
         for p in unsigned[:need]:
             aav = LEAGUE_MINIMUM_AAV_M
             years = 2 if _player_age_int(p) <= 24 else 1
-            seed = abs(hash(f"aff_spc|{getattr(p, 'id', '')}|{season_year}")) & 0xFFFFFFFF
+            seed = abs(_stable_hash(f"aff_spc|{getattr(p, 'id', '')}|{season_year}")) & 0xFFFFFFFF
             _ = random.Random(seed)  # deterministic per player; keep for future jitter
             _set_player_contract_aav(p, aav, season_year)
             c = getattr(p, "contract", None)
@@ -3152,7 +3158,7 @@ def _ensure_team_affiliate_nhl_spcs(
                         c.nhl_spc = True
                         c.standard_player_contract = True
                     except Exception:
-                        pass
+                        _swallowed_log.debug("suppressed exception", exc_info=True)
                 else:
                     p.contract = {
                         "type": "STANDARD",
@@ -3176,7 +3182,7 @@ def _ensure_team_affiliate_nhl_spcs(
                 try:
                     p.is_nhl_spc = True
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
             except Exception:
                 continue
             made += 1
@@ -3346,7 +3352,7 @@ def _reactivate_misflagged_nhl_goalie(team: Any) -> Optional[Any]:
         try:
             setattr(pick, attr, val)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     return pick
 
 
@@ -3987,7 +3993,7 @@ def _accumulate_franchise_game_stats(
     try:
         stamp_game_period_lines(box, rng)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     if not light_stats:
         for row in list((getattr(session, "player_season_stats", None) or {}).values()):
             if isinstance(row, dict):
@@ -4002,7 +4008,7 @@ def _accumulate_franchise_game_stats(
 
             ingest_game_box_storylines(session, box)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     if len(session.game_results) > 2400:
         session.game_results = session.game_results[-1800:]
@@ -4445,7 +4451,7 @@ def _purge_synthetic_universe_artifacts(session: FranchiseSession) -> bool:
         setattr(session, "_synthetic_universe_purged_v1", True)
         setattr(session, "_universe_repair_v2", False)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     if cleared_games:
         _bump_stats_revision(session)
@@ -4466,7 +4472,7 @@ def _backfill_missing_toi_from_game_boxes(session: FranchiseSession) -> bool:
         try:
             setattr(session, "_toi_backfill_v1", True)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         return False
 
     skater_rows = [
@@ -4481,7 +4487,7 @@ def _backfill_missing_toi_from_game_boxes(session: FranchiseSession) -> bool:
         try:
             setattr(session, "_toi_backfill_v1", True)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         return False
 
     missing = [
@@ -4494,7 +4500,7 @@ def _backfill_missing_toi_from_game_boxes(session: FranchiseSession) -> bool:
         try:
             setattr(session, "_toi_backfill_v1", True)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         return False
 
     games = [
@@ -4534,7 +4540,7 @@ def _backfill_missing_toi_from_game_boxes(session: FranchiseSession) -> bool:
     try:
         setattr(session, "_toi_backfill_v1", True)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     if repaired:
         _bump_stats_revision(session)
         return True
@@ -4557,7 +4563,7 @@ def _backfill_player_analytics_from_game_boxes(session: FranchiseSession) -> boo
         try:
             setattr(session, "_analytics_backfill_v2", True)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         return False
 
     sample = [
@@ -4577,7 +4583,7 @@ def _backfill_player_analytics_from_game_boxes(session: FranchiseSession) -> boo
         try:
             setattr(session, "_analytics_backfill_v2", True)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         return False
 
     def _num(row: Dict[str, Any], *keys: str) -> float:
@@ -4606,7 +4612,7 @@ def _backfill_player_analytics_from_game_boxes(session: FranchiseSession) -> boo
         try:
             setattr(session, "_analytics_backfill_v2", True)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         return False
 
     # Reset possession ledgers before rebuild (keep G/A/SOG/SA).
@@ -4741,7 +4747,7 @@ def _backfill_player_analytics_from_game_boxes(session: FranchiseSession) -> boo
     try:
         setattr(session, "_analytics_backfill_v2", True)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     _bump_stats_revision(session)
     return True
 
@@ -4848,7 +4854,7 @@ def _repair_on_ice_share_to_team_box(session: FranchiseSession) -> bool:
         try:
             setattr(session, "_on_ice_share_repair_v2", True)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         return False
 
     repaired = 0
@@ -4899,7 +4905,7 @@ def _repair_on_ice_share_to_team_box(session: FranchiseSession) -> bool:
         setattr(session, "_on_ice_share_repair_v2", True)
         setattr(session, "_on_ice_share_repair_v1", True)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     if repaired or mutated_boxes:
         _bump_stats_revision(session)
         return True
@@ -5850,7 +5856,7 @@ def _build_stats_central_payload(session: FranchiseSession) -> Dict[str, Any]:
                     try:
                         ovr_by_player_id[pid] = float(career_ovr_0_100(pl))
                     except Exception:
-                        pass
+                        _swallowed_log.debug("suppressed exception", exc_info=True)
                 else:
                     try:
                         ovr_by_player_id[pid] = float(
@@ -5860,7 +5866,7 @@ def _build_stats_central_payload(session: FranchiseSession) -> Dict[str, Any]:
                             or 0
                         )
                     except Exception:
-                        pass
+                        _swallowed_log.debug("suppressed exception", exc_info=True)
 
         rows: List[Dict[str, Any]] = []
         for src in list((getattr(session, "player_season_stats", None) or {}).values()):
@@ -5878,7 +5884,7 @@ def _build_stats_central_payload(session: FranchiseSession) -> Dict[str, Any]:
 
                     row = merge_headshot_into_row(row, player)
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
                 try:
                     from app.sim_engine.entities.chapter_attributes import serialize_chapter_profile_for_api  # noqa: WPS433
 
@@ -5886,7 +5892,7 @@ def _build_stats_central_payload(session: FranchiseSession) -> Dict[str, Any]:
                     if chapter_payload:
                         row["chapter_profile"] = chapter_payload
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
             live_tid = team_by_player_id.get(pid)
             if live_tid:
                 row["current_team_id"] = live_tid
@@ -6009,7 +6015,7 @@ def _build_stats_central_payload(session: FranchiseSession) -> Dict[str, Any]:
                 ah["source"] = "mixed_light_boxes"
             integrity["assist_health"] = ah
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         integrity["league_shooting"] = _league_weighted_shooting_metrics(session)
         enriched["integrity"] = integrity
         enriched["team_analytics"] = team_rows
@@ -7281,7 +7287,7 @@ def _serialize_player_row(
         try:
             sync_player_age_to_session(p, session)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     ovr_f = getattr(p, "ovr", None)
     try:
         ov = float(ovr_f() if callable(ovr_f) else ovr_f)
@@ -7312,7 +7318,7 @@ def _serialize_player_row(
             display_name = display_name_with_cancer_tag(display_name, p)
             name_tags = ["CANCER"]
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     row: Dict[str, Any] = {
         "player_id": pid,
         "id": pid,
@@ -7351,7 +7357,7 @@ def _serialize_player_row(
             # metadata. Optional fields keep older saves and API consumers valid.
             row = merge_headshot_into_row(row, p)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     if name_tags:
         row["name_tags"] = list(name_tags)
         row["locker_room_cancer"] = True
@@ -7481,7 +7487,7 @@ def _serialize_player_row(
                 if isinstance(inc, dict):
                     row["conduct_incident"] = serialize_incident_for_ui(inc)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         dynasty_tagged = bool(
             getattr(p, "dynasty_ratings_import", False)
             or str(getattr(p, "real_nhl_rating_note", "") or "") == "dynasty_txt"
@@ -7496,7 +7502,7 @@ def _serialize_player_row(
                     roster_kind=roster_kind,
                 )
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         try:
             from app.sim_engine.entities.chapter_attributes import serialize_chapter_profile_for_api  # noqa: WPS433
 
@@ -7504,7 +7510,7 @@ def _serialize_player_row(
             if chapter_payload:
                 row["chapter_profile"] = chapter_payload
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         if include_ratings:
             row["rating_groups"] = _rating_groups_for_player(p)
         try:
@@ -7527,7 +7533,7 @@ def _serialize_player_row(
             row["ovr_modifiers"] = mods
             row["overall_drop"] = max(0, base_ovr - eff_ovr)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     def _plain_draft(v: Any) -> Any:
         if v is None or isinstance(v, (bool, int, float, str)):
             return v
@@ -7577,7 +7583,7 @@ def _serialize_player_row(
             if is_growth_prospect(p):
                 row.update(prospect_growth_fields(p))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     # Rights / org status always (prospects + veterans).
     try:
         row["rights_type"] = str(getattr(p, "rights_type", "") or "") or None
@@ -7596,7 +7602,7 @@ def _serialize_player_row(
         if jersey is not None:
             row["jersey_number"] = int(jersey) if str(jersey).isdigit() else jersey
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     # Potential (0–100 display) from chapter profile / engine fields — never invent.
     # Light rows use the stored potential only. Opening chapters for every junior
     # was part of the roster-browser stall.
@@ -7627,7 +7633,7 @@ def _serialize_player_row(
             row["potential_score"] = pot99
             row["dev_potential"] = pot99
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     # Fatigue from health state when present.
     try:
         health = getattr(p, "health", None)
@@ -7636,7 +7642,7 @@ def _serialize_player_row(
             fat_f = float(fat)
             row["fatigue"] = int(round(fat_f * 100.0)) if fat_f <= 1.5 else int(round(fat_f))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     # Full contract summary for dossier Contract tab.
     try:
         from services.contract_economy import (
@@ -7693,13 +7699,13 @@ def _serialize_player_row(
 
             row["contract"]["agent"] = agent_public_view(p, session)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         try:
             row["waiver_exempt"] = bool(is_waiver_exempt(p, _team, getattr(getattr(session, "sim", None), "league", None) if session else None))
         except Exception:
             row["waiver_exempt"] = None
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     # Development snapshots — only real ledger / history entries.
     try:
         hist_raw = getattr(p, "development_history", None)
@@ -7748,7 +7754,7 @@ def _serialize_player_row(
                 "maximum_ceiling": profile.get("maximum_ceiling"),
             }
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     # Awards / career stats when stored on the player.
     try:
         awards = getattr(p, "career_awards", None) or getattr(p, "awards_won", None)
@@ -7766,7 +7772,7 @@ def _serialize_player_row(
             if isinstance(totals, dict):
                 row["career_totals"] = dict(totals)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     if session is not None:
         try:
             nhl_compact = _compact_season_stats_for_player(session, pid)
@@ -7833,7 +7839,7 @@ def _serialize_player_row(
             if isinstance(_hist, list) and _hist:
                 row["prospect_stat_history"] = [dict(h) for h in _hist if isinstance(h, dict)]
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         try:
             start = getattr(p, "season_start_ovr", None)
             if start is None:
@@ -7852,7 +7858,7 @@ def _serialize_player_row(
                     row["growth_delta"] = round(float(accum), 1)
                     row["overall_delta"] = row["growth_delta"]
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         # Resolve draft team display name when possible.
         try:
             tid = str(row.get("drafted_by_team_id") or row.get("draft_team_id") or "")
@@ -7873,7 +7879,7 @@ def _serialize_player_row(
                 if tm is not None:
                     row["drafted_by_team_name"] = _display_team(tm)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     if session is not None:
         wjc_map = getattr(session, "wjc_prospect_tournament_results", None) or {}
         wjc_res = wjc_map.get(pid)
@@ -7990,7 +7996,7 @@ def _ahl_light_season_stats(
             try:
                 out["war"] = round(float(war), 2)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
     return out
 
 
@@ -8107,7 +8113,7 @@ def _compact_season_stats_for_player(session: FranchiseSession, player_id: str) 
                 out["war"] = round(float(war_raw), 2)
                 out["war_valid"] = bool(enriched.get("war_valid"))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return out
 
 
@@ -8467,7 +8473,7 @@ def _raw_draft_potential99(p: Any, ovr99: float) -> float:
         )
         return float(display_rating(profile.get("expected_ceiling")))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     # Controlled fallback — no large tier-based OVR bumps.
     r = getattr(p, "ratings", None) or {}
     for k in ("dev_potential", "potential", "dev_ceiling"):
@@ -8478,7 +8484,7 @@ def _raw_draft_potential99(p: Any, ovr99: float) -> float:
 
                 return float(display_rating(normalize_rating(v)))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         from app.sim_engine.entities.player import display_rating, normalize_rating
 
@@ -8916,7 +8922,7 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
                 session._draft_class_detail_cache = None
                 session._prospect_revision = int(getattr(session, "_prospect_revision", 0) or 0) + 1
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     # One-time repair: older franchises shaped #1 overalls into the low-50s while
     # "nhl_floor" depth sat higher. Bring pipeline stars up to realistic draft OVRs.
     try:
@@ -8929,7 +8935,7 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
             )
             setattr(session, "_draft_pipeline_ovr_repaired", True)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         if not getattr(session, "_draft_age_reanchored", False):
             from app.sim_engine.league_hierarchy_bootstrap import (
@@ -8944,7 +8950,7 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
             reanchor_generated_junior_dobs(league, anchor)
             setattr(session, "_draft_age_reanchored", True)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         from app.sim_engine.generation.prospect_league_scoring import (
             prospect_stats_for_api,
@@ -9029,7 +9035,7 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
                 ovr99 = round(_player_display_ovr99(p), 1)
                 pot99 = round(_draft_potential99(p, ovr99), 1)
                 pos = _pos_str(p)
-                h = abs(hash(pk)) % 997
+                h = abs(_stable_hash(pk)) % 997
 
                 # Scout confidence: grows with GP sample; lower early in the year.
                 eu = code.startswith("EU_")
@@ -9182,7 +9188,7 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
             try:
                 normalize_league_leader_board(group, code, rng=rng)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
 
     from services.draft_ranking_logic import (
         apply_goalie_class_rank_caps,
@@ -9264,7 +9270,7 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
                     if stats.get(sk) is not None:
                         row[sk] = stats[sk]
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
     apply_goalie_class_rank_caps(
         board_prospects,
         goalie_class_strength=goalie_class_strength,
@@ -9282,26 +9288,25 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
         # Reshaping is a one-time class-shaping step. Re-running it on every board
         # rebuild would silently rewrite the ratings of a prospect the user has
         # already scouted (or fully revealed), changing his overall after the fact.
-        unlocked = [r for r in board_prospects if not getattr(r.get("_player"), "_ovr_floor_locked", False)]
-        if unlocked:
-            ensure_board_prospect_ovr_floors(
-                unlocked,
-                rng=rng if rng is not None else random.Random(42),
-            )
+        # Disabled: the floors rewrote a prospect's ratings (OVR 78-86%, POT 90-98)
+        # whenever the board ranked him top-32, so ranking drove rating (49 -> 91 OVR
+        # in one season). The natural class already has 70-85 OVR / 86-94 POT at the
+        # top, so the board now ranks players as they are.
+        _ = ensure_board_prospect_ovr_floors
         for row in board_prospects:
             p = row.get("_player")
             if p is not None:
                 try:
                     p._ovr_floor_locked = True
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
         for row in board_prospects:
             p = row.get("_player")
             if p is not None and row.get("_ovr_floor_repaired"):
                 try:
                     enrich_prospect_row_from_player(p, row)
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
             # Never leak live player objects into the API payload / cache.
             row.pop("_player", None)
             row.pop("_ovr_floor_repaired", None)
@@ -9349,7 +9354,7 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
         try:
             _brow.update(compute_prospect_outcome_band(_brow))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     # --- Class-relative tier grades (1st overall can never be C-grade) ---
     total = len(prospects)
@@ -9496,7 +9501,7 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
         row["stock_delta"] = signed_delta
         row["stock_change"] = signed_delta
 
-        goalie_penalized = bool(row.get("_goalie_penalized"))
+        bool(row.get("_goalie_penalized"))
         base_conf = float(row.get("scouting_confidence") or 50)
         conf = scouting_confidence_for_entry(row, session, base_conf=base_conf)
         # Public ceiling intel is fogged from observable consensus only — never
@@ -9703,7 +9708,7 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
                     seed_key=key,
                 )
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         if ceiling_hidden:
             # Late/low-attention: strip every graded ceiling/floor number from the public
             # board. The user projects upside from production, age, size and attributes.
@@ -9738,7 +9743,7 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
                     if entry.get(k) is None and merged.get(k) is not None:
                         entry[k] = merged[k]
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         entries.append(entry)
 
     transcendent_rows = [e for e in entries if e.get("is_transcendent")]
@@ -9764,7 +9769,7 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
             )
         entries = cleaned_entries
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     audit = log_draft_class_audit(entries, label=str(getattr(league, "draft_class_strength", "")))
 
@@ -9846,9 +9851,9 @@ def snapshot_draft_rank_prev(session: FranchiseSession, sim: Any, *, force: bool
                         session, season_year=sy
                     )
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     for e in entries[:200]:
         append_stock_history_snapshot(session, e, event_source=ui_phase, date_label=date_label)
     session.draft_rank_prev = ranks
@@ -10304,7 +10309,7 @@ def _storyline_is_expired(ev: Dict[str, Any], session: FranchiseSession, calenda
                 cur = date.fromisoformat(cur_iso[:10])
                 return (cur - start).days >= ttl
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     return False
 
 
@@ -10390,7 +10395,7 @@ def _record_storyline(session: FranchiseSession, event: Dict[str, Any]) -> None:
 
             raw = enrich_storyline_for_narrative_universe(session, raw)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     ev = _normalize_storyline_payload(raw)
     if not ev.get("headline"):
         return
@@ -10566,7 +10571,7 @@ def _refresh_cpu_franchise_profiles(session: FranchiseSession, *, calendar_idx: 
     if not force and (calendar_idx - last_strategic_day) < 7:
         return
 
-    max_d = max(40, int(getattr(session, "nhl_regular_season_last_index", 0) or 0))
+    max(40, int(getattr(session, "nhl_regular_season_last_index", 0) or 0))
     deadline_phase = float(publish_trade_deadline_state(session)["deadline_phase"])
     league = getattr(getattr(session, "sim", None), "league", None)
     hist = list(getattr(league, "trade_history", None) or [])
@@ -10614,13 +10619,27 @@ def _refresh_cpu_franchise_profiles(session: FranchiseSession, *, calendar_idx: 
         elif direction_upper in ("CONTENDER", "PLAYOFF_BUYER", "ALL_IN_CONTENDER"):
             comp_window = "contender"
         else:
-            win_raw = str(getattr(tm, "gm_window", getattr(tm, "window", "balanced")) or "balanced").lower()
-            if win_raw in ("rebuild", "tank", "declining"):
-                comp_window = "rebuild"
-            elif win_raw == "contender":
-                comp_window = "contender"
+            # HOLDING / neutral directions: read the club's actual record once it means
+            # something. The old fallback re-read gm_window, which the CPU trade planner
+            # itself rewrites from this profile, so a label could never change (1st-place
+            # Utah stayed a "rebuild" all season).
+            gp_rec = float(rec.get("gp", 0.0) or 0.0)
+            pct_rec = float(rec.get("pts_pct", 0.0) or 0.0)
+            if gp_rec >= 10:
+                if pct_rec >= 0.56:
+                    comp_window = "contender"
+                elif pct_rec <= 0.44:
+                    comp_window = "rebuild"
+                else:
+                    comp_window = "emerging"
             else:
-                comp_window = "emerging"
+                win_raw = str(getattr(tm, "window", None) or getattr(tm, "gm_window", "balanced") or "balanced").lower()
+                if win_raw in ("rebuild", "tank", "declining"):
+                    comp_window = "rebuild"
+                elif win_raw == "contender":
+                    comp_window = "contender"
+                else:
+                    comp_window = "emerging"
         profile = {
             "team_id": tid_s,
             "team_direction": direction,
@@ -10653,7 +10672,7 @@ def _refresh_cpu_franchise_profiles(session: FranchiseSession, *, calendar_idx: 
             else:
                 setattr(tm, "gm_window", "emerging")
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         if ideo_story and changed:
             _record_storyline(
                 session,
@@ -10773,7 +10792,7 @@ def _trade_popup_ovr(player: Any) -> Optional[int]:
 
         return int(get_effective_ovr_display(player))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     ovr_f = getattr(player, "ovr", None)
     try:
         ov = float(ovr_f() if callable(ovr_f) else ovr_f)
@@ -10891,7 +10910,7 @@ def _trade_popup_season_stats(
                 if row.get("war") is not None:
                     out["war"] = round(float(row.get("war")), 1)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         return out
 
     # 2) Minor-league / junior model line for the current stint (prospects and AHL/ECHL players).
@@ -10966,7 +10985,7 @@ def _resolve_session_team(session: Optional[FranchiseSession], team_id: Any) -> 
             if tm is not None:
                 return tm
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     # Last-resort scan: numeric vs string id mismatches in older saves.
     for key, team in by_id.items():
         if str(key) == tid:
@@ -11024,7 +11043,7 @@ def _trade_popup_team_value(ex: Dict[str, Any], team_id: str) -> Optional[float]
         try:
             return round(float(side.get("incoming_total")), 1)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     scores = dict(ex.get("history_record") or {}).get("value_scores") or {}
     raw = scores.get(str(team_id), scores.get(team_id))
     if raw is None and str(team_id).isdigit():
@@ -11050,7 +11069,7 @@ def _trade_popup_pot_and_face(player: Any) -> Dict[str, Any]:
         o = player_ovr_display(player)
         out["pot"] = int(round(max(o, player_potential_display(player, ovr_display=o))))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         from app.sim_engine.generation.player_headshots import merge_headshot_into_row
 
@@ -11060,7 +11079,7 @@ def _trade_popup_pot_and_face(player: Any) -> Dict[str, Any]:
         if nid:
             out["nhl_id"] = nid
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return out
 
 
@@ -11705,7 +11724,7 @@ def _enqueue_cpu_trade_popup(session: FranchiseSession, ev: Dict[str, Any], *, c
             arch.append(dict(popup))
             session.showcase_archive = arch[-64:]
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         return
     if not popup.get("assets_resolved", True):
         # Bulk sim built a names-only payload for speed. This trade earned a modal, so resolve the
@@ -11720,57 +11739,17 @@ def _enqueue_cpu_trade_popup(session: FranchiseSession, ev: Dict[str, Any], *, c
                 resolve_players=True,
             )
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         popup["max_player_trade_value"] = round(float(max_player_value), 1)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     _append_unique_dict_event(session.pending_ui_popups, popup)
     # Never drop undismissed trade popups; hard ceiling only for pathological growth.
     if len(session.pending_ui_popups) > 500:
         session.pending_ui_popups = session.pending_ui_popups[:500]
 
 
-def _storyline_choices_payload(session: FranchiseSession) -> List[Dict[str, Any]]:
-    rows: List[Dict[str, Any]] = []
-    for d in list(getattr(session, "pending_decisions", None) or []):
-        kind = str(d.get("kind") or "")
-        if kind in ("franchise_critical_notice",):
-            continue
-        opts = list(d.get("options") or [])
-        if not opts:
-            continue
-        meta = dict(d.get("meta") or {})
-        storyline_id = str(meta.get("storyline_id") or d.get("storyline_id") or d.get("id") or "")
-        if not storyline_id:
-            storyline_id = str(d.get("id") or "")
-        action_options: List[Dict[str, Any]] = []
-        for idx, opt in enumerate(opts):
-            oid = str(opt.get("id") or f"opt_{idx}")
-            action_options.append(
-                {
-                    "id": oid,
-                    "label": str(opt.get("label") or oid.replace("_", " ").title()),
-                    "effects": dict(opt.get("effects") or {}),
-                    "effect_summary": str(opt.get("effect_summary") or "").strip(),
-                }
-            )
-        rows.append(
-            {
-                "storyline_id": storyline_id,
-                "decision_id": str(d.get("id") or ""),
-                "kind": kind,
-                "priority": str(d.get("priority") or "MEDIUM").upper(),
-                "title": str(d.get("title") or "Storyline choice"),
-                "description": str(d.get("description") or ""),
-                "team_id": str(meta.get("team_id") or meta.get("team") or ""),
-                "player_id": str(meta.get("player_id") or ""),
-                "player_name": str(meta.get("player_name") or ""),
-                "cause": str(meta.get("cause") or ""),
-                "action_options": action_options,
-            }
-        )
-    return rows
 
 
 def _franchise_enqueue_critical_notice(
@@ -11796,6 +11775,25 @@ def _franchise_enqueue_critical_notice(
     )
 
 
+def _cpu_choose_deployment_styles(sim: Any, teams: List[Any], user_team_id: str) -> None:
+    """CPU coaches pick the bench strategy that suits their roster: roll four lines when
+    the bottom six can play, shorten the bench only when it truly can't."""
+    for t in teams:
+        tid = str(getattr(t, "team_id", getattr(t, "id", "")))
+        if tid == str(user_team_id):
+            continue
+        best_style, best_val = "balanced", -1.0
+        for style in ("balanced", "rolling_four", "top_heavy"):
+            setattr(t, "deployment_style", style)
+            try:
+                v = float(sim._roster_depth_strength(t))
+            except Exception:
+                v = -1.0
+            if v > best_val + (0.0005 if style != "balanced" else 0.0):
+                best_style, best_val = style, v
+        setattr(t, "deployment_style", best_style)
+
+
 def _franchise_refresh_strength_map(session: FranchiseSession) -> None:
     """Rebuild team strength from current rosters/lines (trades otherwise use stale preseason map)."""
     sim = getattr(session, "sim", None)
@@ -11804,9 +11802,13 @@ def _franchise_refresh_strength_map(session: FranchiseSession) -> None:
     if sim is None or not teams:
         return
     try:
+        _cpu_choose_deployment_styles(sim, teams, str(getattr(session, "user_team_id", "") or ""))
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    try:
         session.strength_map = sim._build_strength_map(teams)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _franchise_bootstrap_scoring_gravity(session: FranchiseSession, *, force: bool = False) -> None:
@@ -11835,7 +11837,7 @@ def _franchise_bootstrap_scoring_gravity(session: FranchiseSession, *, force: bo
         sim._roll_historic_scoring_seasons(teams, sim.rng, sy)
         session._scoring_gravity_bootstrap_year = sy
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _franchise_refresh_scoring_elite_pool(session: FranchiseSession) -> None:
@@ -11848,7 +11850,7 @@ def _franchise_refresh_scoring_elite_pool(session: FranchiseSession) -> None:
     try:
         sim._refresh_league_scoring_elite_set(teams)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     _franchise_refresh_strength_map(session)
 
 
@@ -11867,6 +11869,8 @@ def _franchise_daily_league_tick(session: FranchiseSession, calendar_idx: int) -
     bulk = bool(getattr(session, "_bulk_calendar_advance", False))
     light_bulk = bulk and bool(getattr(session, "_light_game_stat_accumulation", False))
     socio_gap = 4 if light_bulk else 8
+    # C8: jitter the bulk cadence (3–5 / 7–9 days) so the market isn't a fixed every-4th-day beat.
+    socio_gap = max(2, socio_gap - 1 + (zlib.crc32(f"socio|{int(calendar_idx)}".encode()) % 3))
     # Never throttle the deadline week — the trade market must run every one of those days.
     _dl_idx = _calendar_trade_deadline_index(session)
     if _dl_idx is not None and 0 <= int(_dl_idx) - int(calendar_idx) <= 7:
@@ -11906,13 +11910,13 @@ def _franchise_daily_league_tick(session: FranchiseSession, calendar_idx: int) -
         setattr(league, "draft_year", upcoming_draft_year(sy))
         setattr(league, "season_is_calendar", True)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     rng = sim.rng
     utid = str(session.user_team_id)
     try:
         setattr(league, "_franchise_user_team_id", utid)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     max_d = max(40, int(getattr(session, "nhl_regular_season_last_index", 0) or 0))
     news_tmp: List[Dict[str, Any]] = []
     ctr: Dict[str, int] = {"trade_executions": 0, "waiver_claims": 0, "major_injuries": 0}
@@ -11925,15 +11929,23 @@ def _franchise_daily_league_tick(session: FranchiseSession, calendar_idx: int) -
         # Trade volume from governance already flows through league modifiers / CPU proposer.
         # Don't multiply bulk_comp here — it squares trade work and slows week/month sims.
         try:
+            _elapsed = int(calendar_idx) - int(getattr(session, "_bulk_socio_prev_idx", int(calendar_idx) - 1) or 0)
             setattr(
                 league,
                 "_franchise_bulk_trade_day_multiplier",
-                max(1, int(socio_gap) if bulk else 1),
+                max(1, min(9, _elapsed) if bulk else 1),
             )
+            setattr(session, "_bulk_socio_prev_idx", int(calendar_idx))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         sim._season_daily_socio_economics(rng, int(calendar_idx), max_d, st, teams, news_tmp, ctr)
         socio_ok = True
+        try:
+            from services.cpu_inbound_offers import maybe_generate_inbound_offer
+
+            maybe_generate_inbound_offer(session, int(calendar_idx))
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     except Exception:
         socio_ok = False
     iso = ""
@@ -11977,7 +11989,7 @@ def _franchise_daily_league_tick(session: FranchiseSession, calendar_idx: int) -
             light_bulk=light_bulk,
         )
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     if not socio_ok:
         logger = logging.getLogger(__name__)
         logger.warning("Daily socio-economics tick failed at calendar day %s", int(calendar_idx))
@@ -11989,7 +12001,7 @@ def _franchise_daily_league_tick(session: FranchiseSession, calendar_idx: int) -
         if user_team is not None:
             apply_daily_chemistry_tick(user_team, session=session, rng=rng)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     _prune_expired_storylines(session, int(calendar_idx))
     setattr(session, "_last_socio_tick_idx", int(calendar_idx))
 
@@ -12244,7 +12256,7 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
                 },
             )
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     if session.use_world and world_momentum is not None:
         if cpu_only_bulk:
@@ -12312,7 +12324,7 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
                     {"game_id": f"{hid}_{aid}_{d}", "is_playoff": is_playoff_slot},
                 )
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
 
             base_noise = 1.0 + 0.22 * (session.chaos_index - 0.5)
             nh = world_chemistry.chemistry_chaos_dampen(home, base_noise)
@@ -12407,7 +12419,7 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
 
                                 tick_conduct_games_missed(pl)
                             except Exception:
-                                pass
+                                _swallowed_log.debug("suppressed exception", exc_info=True)
 
             if getattr(session, "injuries_enabled", True):
                 for tm in (home, away):
@@ -12450,7 +12462,7 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
                 {"game_id": f"{hid}_{aid}_{d}", "is_playoff": is_playoff_slot},
             )
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         _attach_franchise_saved_lineups(
             session, home, away, home_id=hid, away_id=aid, user_tid=user_tid
         )
@@ -12499,7 +12511,7 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
 
                                 tick_conduct_games_missed(pl)
                             except Exception:
-                                pass
+                                _swallowed_log.debug("suppressed exception", exc_info=True)
             if getattr(session, "injuries_enabled", True):
                 for tm in (home, away):
                     ev = world_injuries.maybe_injure_roster_subset(
@@ -12577,7 +12589,7 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
 
             clear_franchise_game_stat_modifiers(sim)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         return None, None
 
     hn = (_display_team(home) or "?")[:24]
@@ -12601,7 +12613,7 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
 
         clear_franchise_game_stat_modifiers(sim)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     return user_line, league_line
 
@@ -12707,7 +12719,7 @@ def _purge_retired_from_extra_pools(session: FranchiseSession, player: Any) -> N
             if player in lst:
                 lst.remove(player)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     for block in getattr(league, "development_leagues", None) or []:
         for tm in block.get("teams") or []:
             pls = tm.get("players")
@@ -12715,7 +12727,7 @@ def _purge_retired_from_extra_pools(session: FranchiseSession, player: Any) -> N
                 try:
                     pls.remove(player)
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
     for tm in getattr(league, "teams", None) or []:
         for attr in ("ahl_roster", "echl_roster"):
             lst = getattr(tm, attr, None)
@@ -12725,7 +12737,7 @@ def _purge_retired_from_extra_pools(session: FranchiseSession, player: Any) -> N
                 if player in lst:
                     lst.remove(player)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 PROSPECT_SYNC_THROTTLE_DAYS = 1
@@ -12882,7 +12894,7 @@ def _sync_prospect_stats_to_calendar(session: FranchiseSession, *, force: bool =
             session._prospect_stale_gp_repair_v1 = True
             force = True
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     # Existing franchises that already generated Y2 without the draft-class roll
     # still need junior aging + undrafted depth (inject-only left ages stuck at 16
     # with NHL-starter OVRs).
@@ -12894,27 +12906,27 @@ def _sync_prospect_stats_to_calendar(session: FranchiseSession, *, force: bool =
             _roll_development_league_draft_class(session, sy)
             session._draft_class_roll_year = sy
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     # One-shot heal for saves that already injected 16yos at ~0.72–0.86 OVR.
     try:
         from services.franchise_offseason import _retune_inflated_underage_prospects
 
         _retune_inflated_underage_prospects(session)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     # AHL league games (standings + player ledger, lines-driven ice time) up to today.
     try:
         from services.ahl_league import sync_ahl_to_date
 
         sync_ahl_to_date(session, _scouting_calendar_iso(session))
     except Exception:
-        log.exception("AHL league sync failed") if "log" in globals() else None
+        _startup_log.exception("AHL league sync failed")
     try:
         from services.social_feed_engine import ensure_social_feed_current
 
         ensure_social_feed_current(session)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     if not _prospect_sync_should_run(session, force=force):
         return 0
     iso = _scouting_calendar_iso(session)
@@ -13022,7 +13034,7 @@ def _depth_pool_progression_tick(session: FranchiseSession) -> None:
         _gradual = {id(p) for p in iter_growth_prospects(league) if getattr(p, "ratings", None)}
         pool = [p for p in pool if id(p) not in _gradual]
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     rng.shuffle(pool)
     for p in pool[: min(72, len(pool))]:
         try:
@@ -13040,7 +13052,7 @@ def _depth_pool_progression_tick(session: FranchiseSession) -> None:
                 # Progression may have moved OVR — refresh market stock/asking at this checkpoint.
                 _recompute_free_agent_stock(p, session)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 # Late-career "craft" attributes that can still sharpen after age 32 (mental game,
@@ -13083,7 +13095,7 @@ def _maybe_free_agent_late_career_gain(p: Any, rng: random.Random, season_id: in
 
         persist_recomputed_ovr(p)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _run_franchise_narrative_passes(
@@ -13099,32 +13111,32 @@ def _run_franchise_narrative_passes(
 
         franchise_record_data_storylines(session, just_idx, day_meta, rng=session.sim.rng)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         from app.sim_engine.franchise.storyline_engine import franchise_cause_storyline_daily_pass  # noqa: WPS433
 
         franchise_cause_storyline_daily_pass(session, just_idx, day_meta, rng=session.sim.rng)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     if not full:
         return
     try:
         _decay_all_fan_heat(session, just_idx)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     _franchise_fanout_player_storylines(session, just_idx, day_meta)
     try:
         from services.trade_demand_engine import process_trade_demand_day
 
         process_trade_demand_day(session, just_idx, day_meta)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         from app.sim_engine.franchise.common import _franchise_tick_conduct_and_resolve  # noqa: WPS433
 
         _franchise_tick_conduct_and_resolve(session, just_idx, day_meta)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _franchise_narrative_should_run(
@@ -13204,13 +13216,13 @@ def publish_trade_deadline_state(session: FranchiseSession) -> Dict[str, Any]:
             setattr(holder, "_trade_deadline_day_idx", int(idx))
         setattr(holder, "_franchise_phase", phase)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     left = days_to_deadline(holder, cursor, max_d)
-    freeze = (left < 0 and freeze_applies_to_phase(phase)) or phase.lower() in ("playoffs", "postseason")
+    freeze = (left < 0 and freeze_applies_to_phase(phase)) or phase.lower() in ("playoff_ready", "playoffs", "postseason")
     try:
         setattr(holder, "_trade_deadline_passed", bool(freeze))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return {
         "deadline_day_idx": idx,
         "days_to_deadline": int(left),
@@ -13249,39 +13261,39 @@ def _run_bulk_incremental_catchup(session: FranchiseSession, *, steps_n: int) ->
     try:
         _bulk_trade_demand_catchup(session)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         for _ in range(max(1, steps_n // 8)):
             try:
                 _nhl_in_season_development_tick(session)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             try:
                 _prospect_in_season_development_tick(session)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         for _ in range(max(1, steps_n // 5)):
             _depth_pool_progression_tick(session)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     try:
         _franchise_bulk_narrative_catchup(session, days_advanced=steps_n, incremental=True)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     try:
         if steps_n >= BULK_INCREMENTAL_CATCHUP_EVERY_STEPS:
             _sync_prospect_stats_to_calendar(session, force=False)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     try:
         from services.franchise_scouting import apply_passive_scouting_progress
 
         apply_passive_scouting_progress(session, days=max(1, steps_n))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _run_bulk_finalize_season_extras(session: FranchiseSession, *, narrative_days: int) -> None:
@@ -13291,7 +13303,7 @@ def _run_bulk_finalize_season_extras(session: FranchiseSession, *, narrative_day
 
         tick_extra_league_development(session.sim, session.sim.rng)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         pending_fa = int(getattr(session, "_bulk_fa_days_pending", 0) or 0)
         if pending_fa > 0 and bool(getattr(session, "free_agency_open", False)):
@@ -13307,17 +13319,17 @@ def _run_bulk_finalize_season_extras(session: FranchiseSession, *, narrative_day
     try:
         _sync_prospect_stats_to_calendar(session, force=True)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         _franchise_bulk_narrative_catchup(session, days_advanced=max(1, int(narrative_days)), incremental=False)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         from services.franchise_scouting import apply_passive_scouting_progress
 
         apply_passive_scouting_progress(session, days=max(1, int(narrative_days)))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     session._bulk_finalize_deferred_days = 0
 
 
@@ -13349,7 +13361,7 @@ def _run_bulk_finalize_catchup(
                 row.setdefault("stat_scope", stat_scope)
                 row["stat_authority"] = "session.player_season_stats"
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     if bool(getattr(session, "_pending_prospect_revision_bump", False)):
         session._pending_prospect_revision_bump = False
@@ -13391,6 +13403,16 @@ def _franchise_bulk_narrative_catchup(
         session._bulk_narrative_last_finished_days = end_finished
 
     try:
+        from app.sim_engine.franchise.storyline_engine import bulk_universe_catchup  # noqa: WPS433
+
+        _cidx = max(0, int(session.calendar_cursor) - 1)
+        _cmeta: Dict[str, Any] = dict(cal[_cidx]) if 0 <= _cidx < len(cal) and isinstance(cal[_cidx], dict) else {}
+        if not _cmeta.get("iso"):
+            _cmeta["iso"] = _calendar_iso_for_day(session, _cidx)
+        bulk_universe_catchup(session, _cidx, _cmeta, force=not incremental)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    try:
         from app.sim_engine.franchise.storyline_engine import (  # noqa: WPS433
             _u_generate_daily_interactions,
             _u_generate_minor_life_events,
@@ -13415,7 +13437,7 @@ def _franchise_bulk_narrative_catchup(
                 setattr(session, "_bulk_narrative_life_burst", False)
             _u_generate_daily_interactions(session, rng)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         from app.sim_engine.franchise.storyline_coverage import ingest_game_box_storylines  # noqa: WPS433
 
@@ -13430,11 +13452,11 @@ def _franchise_bulk_narrative_catchup(
                 ingest_game_box_storylines(session, box)
             session._bulk_narrative_box_cursor = box_cursor + len(sample)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         _bridge_universe_events_to_story_wire(session, limit=max(8, min(20, int(days_advanced) // 2)))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     _bump_narrative_revision(session)
 
 
@@ -13671,7 +13693,7 @@ def _maybe_player_death(session: FranchiseSession) -> None:
             session._death_season_year = year
             session._deaths_this_season = 0
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     if int(getattr(session, "_deaths_this_season", 0) or 0) >= 1:
         return
     cursor = int(getattr(session, "calendar_cursor", 0) or 0)
@@ -13718,20 +13740,20 @@ def _maybe_player_death(session: FranchiseSession) -> None:
             "terminated": "deceased",
         }
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         from services.contract_economy import sync_team_cap_fields
 
         sync_team_cap_fields(team, league)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     team_name = str(getattr(team, "name", None) or getattr(team, "abbreviation", None) or "A club")
     user_tid = str(getattr(session, "user_team_id", "") or "")
     team_tid = str(getattr(team, "team_id", None) or getattr(team, "id", "") or "")
     try:
         session._deaths_this_season = int(getattr(session, "_deaths_this_season", 0) or 0) + 1
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     who = f"{bio['name']}, {bio['age']}, {bio['position']}"
     if bio.get("country"):
         who += f", {bio['country']}"
@@ -13762,7 +13784,7 @@ def _maybe_player_death(session: FranchiseSession) -> None:
     try:
         session.timeline.append(f"{name} ({team_name}) has died — {cause}. Cap hit and roster spot removed.")
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _actionable_interrupt_ids(session: FranchiseSession):
@@ -13873,17 +13895,24 @@ def _finalize_regular_calendar_day(
     try:
         _resolve_in_season_fa_offers(session, iso)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         from services.waivers import process_waiver_wire
 
         process_waiver_wire(session)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    try:
+        # CPU clubs recall AHL players who'd improve the lineup and send someone down.
+        from services.cpu_roster_moves import run_cpu_roster_moves
+
+        run_cpu_roster_moves(session)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         _maybe_player_death(session)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     if _franchise_narrative_should_run(session, just_idx=just_idx, light_bulk=light_bulk, bulk=bulk):
         _run_franchise_narrative_passes(
             session,
@@ -13902,13 +13931,13 @@ def _finalize_regular_calendar_day(
         if not bulk:
             tick_extra_league_development(session.sim, session.sim.rng)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         # Prospect stats catch up once at bulk end (see advance_franchise_bulk finally).
         if not bulk:
             _sync_prospect_stats_to_calendar(session)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     if not bulk and int(session.calendar_days_finished) % 5 == 0:
         _depth_pool_progression_tick(session)
 
@@ -13916,11 +13945,11 @@ def _finalize_regular_calendar_day(
         try:
             _nhl_in_season_development_tick(session)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         try:
             _prospect_in_season_development_tick(session)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     if not bulk and int(session.calendar_days_finished) % 30 == 0:
         try:
@@ -13928,7 +13957,7 @@ def _finalize_regular_calendar_day(
 
             run_cpu_in_season_free_agency(session)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     # Living FA market: during bulk, accumulate days and tick once at bulk end (see advance_franchise_bulk).
     try:
@@ -13958,7 +13987,7 @@ def _finalize_regular_calendar_day(
                         max_offers_per_day=4,
                     )
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     _maybe_enqueue_wjc_loan_decisions(session, day_meta)
     _maybe_enqueue_showcase_popups(session, day_meta)
@@ -13982,7 +14011,7 @@ def _split_preseason_from_regular_if_needed(session: FranchiseSession, day_meta:
         # Keep preseason snapshots available for UI or later diagnostics.
         session.preseason_standings_snapshot = session.standings
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         session.preseason_player_stats_snapshot = dict(getattr(session, "player_season_stats", None) or {})
     except Exception:
@@ -13997,7 +14026,7 @@ def _split_preseason_from_regular_if_needed(session: FranchiseSession, day_meta:
         teams = list(getattr(getattr(session, "sim", None), "league", None).teams)
         session.standings = StandingsTable(teams)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     session.player_season_stats = {}
     session.game_results = []
     session.processed_game_ids = set()
@@ -14006,15 +14035,42 @@ def _split_preseason_from_regular_if_needed(session: FranchiseSession, day_meta:
     try:
         _snapshot_season_start_ovrs(session)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         _franchise_bootstrap_scoring_gravity(session, force=True)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+
+
+def _purge_ghost_prospects(session: FranchiseSession) -> int:
+    """Drop legacy SimEngine ``Prospect`` stubs (no ratings, 0 OVR) from team prospect
+    pools. The generic engine backfills pools with them at bootstrap; in franchise mode
+    they never develop and show as 0-OVR ghosts in org/prospect lists."""
+    league = getattr(getattr(session, "sim", None), "league", None)
+    removed = 0
+    for tm in list(getattr(league, "teams", None) or []):
+        pool = getattr(tm, "prospect_pool", None)
+        if not isinstance(pool, list) or not pool:
+            continue
+        keep = [p for p in pool if isinstance(getattr(p, "ratings", None), dict) and getattr(p, "ratings", None)]
+        removed += len(pool) - len(keep)
+        if len(keep) != len(pool):
+            tm.prospect_pool = keep
+    return removed
 
 
 def _snapshot_season_start_ovrs(session: FranchiseSession) -> None:
     """Freeze display OVR at regular-season open for cumulative growth / roster +/-."""
+    try:
+        from services.team_identity_service import refresh_team_identities as _rti
+
+        _rti(session)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    try:
+        _purge_ghost_prospects(session)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         from app.sim_engine.franchise.storyline_conduct import get_base_ovr_display
     except Exception:
@@ -14025,7 +14081,7 @@ def _snapshot_season_start_ovrs(session: FranchiseSession) -> None:
 
         snapshot_prospect_season_start(session)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     league = getattr(getattr(session, "sim", None), "league", None)
     for tm in list(getattr(league, "teams", None) or []):
         pools = (
@@ -14045,7 +14101,15 @@ def _snapshot_season_start_ovrs(session: FranchiseSession) -> None:
                     setattr(p, "season_start_ovr", ov)
                     setattr(p, "_season_start_ovr", ov)
                     setattr(p, "_in_season_growth_spent_01", 0.0)
+                    setattr(p, "_in_season_growth_net_01", 0.0)
+                    setattr(p, "_nhl_season_plan", None)
                     setattr(p, "_in_season_ovr_delta_accum", 0.0)
+                    try:
+                        from app.sim_engine.progression.potential import ensure_potential_floor
+
+                        ensure_potential_floor(p)
+                    except Exception:
+                        _swallowed_log.debug("suppressed exception", exc_info=True)
                 except Exception:
                     continue
 
@@ -14109,12 +14173,12 @@ def _nhl_in_season_development_tick(session: FranchiseSession) -> int:
                     setattr(p, "season_start_ovr", start)
                     setattr(p, "_season_start_ovr", start)
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
             try:
                 if _dev_stamp_season_production is not None:
                     _dev_stamp_season_production(session, p)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             try:
                 d = apply_in_season_development_pulse(p, rng)
                 if abs(float(d or 0)) >= 0.15:
@@ -14126,7 +14190,7 @@ def _nhl_in_season_development_tick(session: FranchiseSession) -> int:
         try:
             session._cached_roster_browser_payload = None
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     return moved
 
 
@@ -14152,7 +14216,7 @@ def _append_showcase_popup(session: FranchiseSession, dedupe_key: str, payload: 
 
 
 def _rng_for_event(session: FranchiseSession, label: str) -> random.Random:
-    base = abs(hash(f"{session.session_id}|{label}|{int(session.season_calendar_year)}")) % (2**31 - 1)
+    base = abs(_stable_hash(f"{session.session_id}|{label}|{int(session.season_calendar_year)}")) % (2**31 - 1)
     return random.Random(int(base) or 1)
 
 
@@ -14245,7 +14309,7 @@ def _wjc_country_for_birth(rng: random.Random, birth_country: str) -> str:
         if code:
             return code
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     bc = str(birth_country or "").strip().lower()
     pairs = [
         (("canada", "can"), "CAN"),
@@ -14665,7 +14729,7 @@ def _apply_wjc_development_to_prospects(
                 pot01 = normalize_rating(pot_after)
                 setattr(player, "potential", pot01)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
 
         if not touched and abs(pot_bump) < 0.05:
             continue
@@ -14963,7 +15027,7 @@ def _wjc_candidate_ovr01(p: Any) -> float:
         try:
             return max(0.40, min(0.72, 0.35 + 0.40 * float(sig())))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     return 0.5
 
 
@@ -15558,7 +15622,6 @@ def _collect_wjc_tournament_prospects(
     released NHL teens), the draft-eligible board, and every other U20 junior. Each nation
     takes its best goalies (up to 3) and best skaters by current ability.
     """
-    from services.player_bio_parser import WJC_ROSTER_MAX
 
     by_code: Dict[str, List[Dict[str, Any]]] = {c: [] for c in codes}
     all_rows: List[Dict[str, Any]] = []
@@ -16526,7 +16589,7 @@ def _build_wjc_client_payload(session: FranchiseSession) -> Optional[Dict[str, A
                 evaluated.discard(int(sy))
                 session.wjc_stock_evaluated_seasons = evaluated
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             has_bundle = False
         else:
             # Bundle pre-built before first calendar day — nations + prospect pool only.
@@ -16608,7 +16671,7 @@ def _maybe_enqueue_wjc_loan_decisions(session: FranchiseSession, day_meta: Dict[
             continue
         pid = str(getattr(p, "id", "") or "")
         nm = str(getattr(ident, "name", None) or "?")
-        bc = str(getattr(ident, "birth_country", "") or "")
+        str(getattr(ident, "birth_country", "") or "")
         nat = _wjc_resolve_country(p, session.sim.rng)
         if not _country_in_wjc_pool(nat):
             continue
@@ -17041,14 +17104,14 @@ def _franchise_nhl_age_and_phase_tick(session: FranchiseSession, teams: List[Any
         try:
             setattr(player, "_active_dev_season", season_id)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         ledger = ensure_development_ledger(player, season_id)
         if ledger.get("aging_applied"):
             # Still re-sync DOB age in case a prior tick used integer-only +1 and drifted.
             try:
                 sync_player_age_to_season(player, age_as_of_year)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             continue
 
         age_before = _player_age_int(player)
@@ -17060,7 +17123,7 @@ def _franchise_nhl_age_and_phase_tick(session: FranchiseSession, teams: List[Any
                 try:
                     advance_fn(apply_peak_decline=False)
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
             else:
                 # Last resort — prefer DOB sync via session pin when possible.
                 try:
@@ -17079,7 +17142,7 @@ def _franchise_nhl_age_and_phase_tick(session: FranchiseSession, teams: List[Any
 
             apply_yearly_body_maturation(player, getattr(getattr(session, "sim", None), "rng", None))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         # Soft aging decline: older players sometimes lose a touch of overall.
         try:
             if age_after >= 29 and age_after > age_before:
@@ -17108,26 +17171,26 @@ def _franchise_nhl_age_and_phase_tick(session: FranchiseSession, teams: List[Any
                             try:
                                 ratings[k] = max(35.0, float(v) - haircut)
                             except Exception:
-                                pass
+                                _swallowed_log.debug("suppressed exception", exc_info=True)
                         try:
                             persist_recomputed_ovr(player)
                         except Exception:
-                            pass
+                            _swallowed_log.debug("suppressed exception", exc_info=True)
                     _ = sys_dev  # reserved for future team-context dampening
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
         ledger["aging_applied"] = True
         try:
             assign_career_phase_from_age(player)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         try:
             from app.sim_engine.entities.player import persist_recomputed_ovr
 
             persist_recomputed_ovr(player)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _run_franchise_season_end_progression(session: FranchiseSession) -> Dict[str, Any]:
@@ -17157,7 +17220,7 @@ def _run_franchise_season_end_progression(session: FranchiseSession) -> Dict[str
             },
         )
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     # Usage-driven growth from this season's NHL and AHL ice time (before aging/progression).
     try:
@@ -17165,7 +17228,7 @@ def _run_franchise_season_end_progression(session: FranchiseSession) -> Dict[str
 
         out["ice_time_development"] = apply_season_ice_time_development(session)
     except Exception:
-        log.exception("ice-time development failed") if "log" in globals() else None
+        _startup_log.exception("ice-time development failed")
     _franchise_nhl_age_and_phase_tick(session, teams)
     # Pin ages to next Sept 15 BEFORE any session_age_as_of / serialize path can
     # read the still-live April–June calendar (flag is normally set by the caller
@@ -17173,7 +17236,7 @@ def _run_franchise_season_end_progression(session: FranchiseSession) -> Dict[str
     try:
         setattr(session, "_year_end_progression_done", True)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         out["age_resync"] = resync_league_ages_to_session(session)
     except Exception:
@@ -17187,7 +17250,7 @@ def _run_franchise_season_end_progression(session: FranchiseSession) -> Dict[str
             for pl in getattr(tm, "roster", None) or []:
                 _dev_stamp_season_production(session, pl)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     # ELC Schedule A/B payouts + development-promise morale from season stats.
     try:
@@ -17201,7 +17264,7 @@ def _run_franchise_season_end_progression(session: FranchiseSession) -> Dict[str
         try:
             rs._run_player_progression_pass(teams, rng, None)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     if getattr(rs, "_run_career_lifecycle_pass", None):
         try:
@@ -17222,7 +17285,7 @@ def _run_franchise_season_end_progression(session: FranchiseSession) -> Dict[str
         # 74.5 was permanently "on" and clawed back fresh development years.
         apply_league_ovr_soft_regression_if_needed(teams, rng, avg_trigger=78.0)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     out["retired_removed"] = int(_strip_retired_from_nhl_rosters(teams))
     # Season calendar year advances only in generate_next_season (authoritative transition).
@@ -17341,7 +17404,7 @@ def _apply_injury_decision_effect(
                     "vacated": lineup.get("vacated") or [],
                 }
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         setattr(user_team, "_depth_pressure", float(getattr(user_team, "_depth_pressure", 0.0) or 0.0) - 0.02)
         changed = _nudge_team_room(user_team, morale=0.004, confidence=0.004)
         effects.update({
@@ -17379,7 +17442,21 @@ def _apply_injury_decision_effect(
     return effects
 
 
-def _call_up_best_ahl_spc(team: Any, prefer_pos: Optional[str] = None) -> Dict[str, Any]:
+def _gdf_bucket(bucket: str, want: str) -> str:
+    """Compare position buckets at G/D/F granularity when the caller asks for G, D or F."""
+    b = str(bucket or "").upper()
+    if want in ("G", "D", "F"):
+        if b == "G":
+            return "G"
+        if b in ("D", "LD", "RD"):
+            return "D"
+        return "F"
+    return b
+
+
+def _call_up_best_ahl_spc(
+    team: Any, prefer_pos: Optional[str] = None, demote_pos: Optional[str] = None
+) -> Dict[str, Any]:
     """Validate-then-commit AHL→NHL call-up (23-man aware). Rolls back on failure."""
     from services.contract_economy import has_ntc, uses_nhl_contract_slot, _position_bucket
 
@@ -17402,7 +17479,12 @@ def _call_up_best_ahl_spc(team: Any, prefer_pos: Optional[str] = None) -> Dict[s
                 continue
             if has_ntc(p):
                 continue
-            if want and _position_bucket(p) != want:
+            # Demote from the surplus position. A goalie call-up must never send a
+            # goalie down (that just swaps netminders and keeps the club at one).
+            d_want = str(demote_pos or "").upper() or ("F" if want == "G" else want)
+            if d_want and _gdf_bucket(_position_bucket(p), d_want) != d_want:
+                continue
+            if want == "G" and _position_bucket(p) == "G":
                 continue
             score = float(_player_ovr99(p))
             if score < demote_score:
@@ -17415,9 +17497,11 @@ def _call_up_best_ahl_spc(team: Any, prefer_pos: Optional[str] = None) -> Dict[s
 
     eligible = [p for p in ahl if uses_nhl_contract_slot(p)]
     if want:
-        preferred = [p for p in eligible if _position_bucket(p) == want]
+        preferred = [p for p in eligible if _gdf_bucket(_position_bucket(p), want) == want]
         if preferred:
             eligible = preferred
+        elif want in ("G", "D"):
+            return {"ok": False, "reason": f"no_affiliate_{want.lower()}"}
     if demoted is not None:
         # Demoted player is temporarily on AHL list; do not call them back up.
         eligible = [
@@ -17456,6 +17540,92 @@ def _call_up_best_ahl_spc(team: Any, prefer_pos: Optional[str] = None) -> Dict[s
         "headline": f"Called up {_name_str(pick)} from AHL",
         "demoted_player_id": str(getattr(demoted, "id", "")) if demoted is not None else "",
     }
+
+
+def _league_roster_integrity_pass(session: FranchiseSession) -> Dict[str, Any]:
+    """Daily guard: one roster per player, and CPU clubs keep 2 G / 6 D on the NHL roster.
+
+    - A player id found on more than one club keeps the club matching ``player.team_id``
+      (else the first club seen) and is removed everywhere else.
+    - CPU clubs short of goalies or defencemen recall the best affiliate player at that
+      position, sending down a forward when the 23-man roster is full.
+    """
+    out: Dict[str, Any] = {"deduped": [], "recalled": []}
+    league = getattr(getattr(session, "sim", None), "league", None)
+    teams = list(getattr(league, "teams", None) or [])
+    if not teams:
+        return out
+    try:
+        from services.trade_service import process_pending_trade_waivers
+
+        out["trade_waivers"] = process_pending_trade_waivers(session)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    owner: Dict[str, Any] = {}
+    for t in teams:
+        tid = str(getattr(t, "team_id", ""))
+        for attr in ("roster", "ahl_roster"):
+            for p in list(getattr(t, attr, None) or []):
+                pid = str(getattr(p, "id", "") or "")
+                if pid and str(getattr(p, "team_id", "") or "") == tid:
+                    owner.setdefault(pid, t)
+    seen: set = set()
+    for t in teams:
+        for attr in ("roster", "ahl_roster"):
+            lst = list(getattr(t, attr, None) or [])
+            keep = []
+            for p in lst:
+                pid = str(getattr(p, "id", "") or "")
+                if not pid:
+                    keep.append(p)
+                    continue
+                own = owner.get(pid)
+                if (own is not None and own is not t) or pid in seen:
+                    out["deduped"].append({"player_id": pid, "team_id": str(getattr(t, "team_id", ""))})
+                    continue
+                seen.add(pid)
+                keep.append(p)
+            if len(keep) != len(lst):
+                setattr(t, attr, keep)
+    user_tid = str(getattr(session, "user_team_id", ""))
+    from services.contract_economy import _position_bucket
+
+    # NHL roster players must carry a contract (else they count $0 and never expire).
+    try:
+        from services.contract_economy import build_contract_for_player, league_minimum_aav
+
+        sy = int(getattr(session, "season_calendar_year", 0) or getattr(league, "season_year", 2025) or 2025)
+        for t in teams:
+            for p in list(getattr(t, "roster", None) or []):
+                if getattr(p, "retired", False) or getattr(p, "contract", None):
+                    continue
+                seed = int(hashlib.sha256(f"fix_contract|{getattr(p, 'id', '')}".encode()).hexdigest()[:8], 16)
+                c = build_contract_for_player(
+                    p, t, league, sy, random.Random(seed),
+                    override_aav=league_minimum_aav(league), override_years=1,
+                )
+                setattr(p, "contract", c)
+                out.setdefault("contracts_repaired", []).append(str(getattr(p, "id", "")))
+    except Exception:
+        _startup_log.exception("missing-contract repair failed")
+
+    for t in teams:
+        if str(getattr(t, "team_id", "")) == user_tid:
+            continue
+        for pos, need in (("G", 2), ("D", 6)):
+            for _ in range(3):
+                have = sum(
+                    1
+                    for p in (getattr(t, "roster", None) or [])
+                    if not getattr(p, "retired", False) and _gdf_bucket(_position_bucket(p), pos) == pos
+                )
+                if have >= need:
+                    break
+                res = _call_up_best_ahl_spc(t, prefer_pos=pos, demote_pos="F")
+                if not res.get("ok"):
+                    break
+                out["recalled"].append({"team_id": str(getattr(t, "team_id", "")), **res})
+    return out
 
 
 def _apply_ice_time_decision_effect(
@@ -17560,7 +17730,7 @@ def _apply_legal_conduct_decision_effect(
             if player is not None:
                 setattr(player, "_conduct_trade_restricted", True)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     return out
 
 
@@ -17739,7 +17909,7 @@ def _apply_generic_storyline_choice_effect(
         if chem:
             applied["chemistry"] = chem
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     for k, v in raw_effects.items():
         applied[k] = v
@@ -17847,7 +18017,7 @@ def _enter_postseason(session: FranchiseSession) -> Dict[str, Any]:
         # Force a season-end board trail point so value trajectory reaches "Current".
         snapshot_draft_rank_prev(session, session.sim, force=True)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return _transition_to_playoff_ready(session)
 
 
@@ -17864,6 +18034,16 @@ def advance_franchise_day(session: FranchiseSession) -> Dict[str, Any]:
     - Clear only the current day after successful simulation.
     - Move cursor exactly once after successful simulation.
     """
+    try:
+        from services.team_identity_service import refresh_team_identities as _rti
+
+        _rti(session)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    try:
+        _league_roster_integrity_pass(session)
+    except Exception:
+        _startup_log.exception("roster integrity pass failed")
     _ensure_session_event_lists(session)
     _sync_session_phase_from_calendar(session)
     bulk_light = bool(getattr(session, "_bulk_calendar_advance", False)) and bool(
@@ -18064,11 +18244,18 @@ def advance_franchise_day(session: FranchiseSession) -> Dict[str, Any]:
         day_ordinal=day_ordinal,
     )
     try:
+        # The feed keeps pace with the sim: this day's finals, lines and player posts.
+        from services.social_feed_engine import social_feed_after_day
+
+        social_feed_after_day(session, idx)
+    except Exception:
+        _startup_log.exception("social feed day pass failed")
+    try:
         if not bool(getattr(session, "_defer_payload_invalidation", False)):
             from services.franchise_scouting import apply_passive_scouting_progress
             apply_passive_scouting_progress(session)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     if not bool(getattr(session, "_defer_payload_invalidation", False)):
         invalidate_session_payload_caches(session, reason="advance_day")
 
@@ -18279,7 +18466,7 @@ def advance_franchise_bulk(
             try:
                 _drop_resolved_waiver_popups(session)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
     finally:
         steps_n = int(len(steps))
         full_finalize = False
@@ -18391,7 +18578,7 @@ def _log_lineup_integrity(session: FranchiseSession, report: Dict[str, Any], *, 
     try:
         session.timeline.append(line)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _user_lineup_pregame_guard(
@@ -18425,7 +18612,7 @@ def _user_lineup_pregame_guard(
             _invalidate_lean_sections(session, "core")
             session._cached_state_roster_rows = None
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         from services.lineup_integrity import ensure_two_goalies
 
@@ -18577,7 +18764,7 @@ def _apply_press_storyline_choice(session: FranchiseSession, storyline_id: str, 
     try:
         _bump_interaction_revision(session)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     session.timeline.append(f"Press response: {sid} -> {choice_id}")
     return True
 
@@ -18620,6 +18807,7 @@ def _apply_storyline_event_choice(
     }
 
     effects: Dict[str, Any] = {}
+    applied_base = False
     try:
         from app.sim_engine.franchise.storyline_engine import _apply_storyline_effects  # noqa: WPS433
 
@@ -18629,16 +18817,21 @@ def _apply_storyline_event_choice(
             str(ev.get("player_id") or ""),
             dict(chosen.get("effects") or {}),
         )
+        applied_base = True
         effects.update(dict(chosen.get("effects") or {}))
         effects.update(_apply_storyline_choice_action(session, decision, chosen))
     except Exception:
-        effects.update(_apply_generic_storyline_choice_effect(session, decision, chosen))
+        # R3: only fall back when nothing was applied yet — never stack both.
+        if not applied_base:
+            effects.update(_apply_generic_storyline_choice_effect(session, decision, chosen))
+        else:
+            _swallowed_log.debug("storyline choice action failed after effects applied", exc_info=True)
 
     if isinstance(chosen.get("promise"), dict):
         try:
             effects.update(_attach_decision_promise(session, decision, chosen))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     label = str(chosen.get("label") or choice_id)
     eff = dict(chosen.get("effects") or {})
     press_id = str(ev.get("press_conference_id") or "")
@@ -18657,7 +18850,7 @@ def _apply_storyline_event_choice(
             headline = str(press_result.get("headline") or headline)
             summary = f"Press conference response: {label}."
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     if chosen.get("effect_summary"):
         summary += f" {chosen.get('effect_summary')}"
 
@@ -18885,7 +19078,7 @@ def apply_decision(session: FranchiseSession, decision_id: str, choice_id: str) 
             try:
                 effects.update(_attach_decision_promise(session, d, chosen))
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
 
         # Merge visible declared effects with actual applied effects.
         declared = dict(chosen.get("effects") or {})
@@ -18999,7 +19192,7 @@ def _nudge_player_psych(
             if attr == "confidence" and hasattr(psych, "confidence_level"):
                 psych.confidence_level = nxt
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _nudge_team_room(
@@ -19590,7 +19783,7 @@ def _standings_playoff_component(
         elif league_rank >= 28:
             score = min(score, 18.0)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     return max(0.0, min(99.0, score)), context
 
@@ -19860,7 +20053,7 @@ def _event_days_payload(
                 event_day = date.fromisoformat(next_date[:10])
                 raw_date = next_date
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     if not now_day or not event_day:
         return {"label": label, "date": raw_date or "", "days_until": None, "display": "—"}
@@ -19892,6 +20085,9 @@ def _build_draft_class_hud_payload(
     try:
         from services.draft_prospect_profile import build_prospect_profiles_by_id
 
+        team_status = payload.get("team_status")
+        if not isinstance(team_status, dict):
+            team_status = _team_status_payload(session, user_team, cal_record, roster_rows)
         payload["prospect_profiles_by_id"] = build_prospect_profiles_by_id(
             draft_entries,
             roster_rows=roster_rows,
@@ -19975,7 +20171,7 @@ def get_draft_prospect_profile_payload(
     try:
         ensure_prospect_stats_current_for_scouting(session)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     rev = int(getattr(session, "_prospect_revision", 0) or 0)
     cache = getattr(session, "_prospect_profile_by_id_cache", None)
     if not isinstance(cache, dict):
@@ -20890,7 +21086,7 @@ def _tr_gm_interest_block(evaluation: Dict[str, Any], partner_team_id: str) -> D
     strengthens = safe_list_tr(needs.get("strengthens"))
     if strengthens:
         reasons.append(str(strengthens[0])[:18])
-    user_bd = dict((evaluation.get("asset_breakdown") or {}).get("user") or {})
+    dict((evaluation.get("asset_breakdown") or {}).get("user") or {})
     offered_players = _tr_player_labels_from_breakdown(evaluation, side="user", direction="outgoing", limit=1)
     if offered_players:
         reasons.insert(0, offered_players[0])
@@ -21251,7 +21447,7 @@ def _fan_build_team_context_snapshot(session: FranchiseSession, team_id: str) ->
         outlook = {}
     cal_rec = _team_cal_record_for_id(session, tid)
     gp = int(cal_rec.get("gp") or 0)
-    pts = int(cal_rec.get("pts") or 0)
+    int(cal_rec.get("pts") or 0)
     gd = int(outlook.get("goal_differential") or 0)
     if gp > 0 and not gd:
         gd = int(outlook.get("goals_for", 0) or 0) - int(outlook.get("goals_against", 0) or 0)
@@ -22030,7 +22226,7 @@ def _apply_completed_trade_fan_effects(
             try:
                 st.clamp()
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
 
     storyline_type = fan_result.get("fan_storyline_type")
     if storyline_type:
@@ -22102,7 +22298,7 @@ def _decay_fan_heat_for_team(session: FranchiseSession, team_id: str, calendar_i
         elif form < 0.38:
             profile["recent_trade_heat"] = float(_clamp_fan_score(float(profile["recent_trade_heat"]) + 1.0))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     conf = float(profile.get("fan_confidence", 55))
     trust = float(profile.get("fan_trust_in_gm", 58))
@@ -22163,7 +22359,7 @@ def _decay_all_fan_heat(session: FranchiseSession, calendar_idx: int) -> None:
     if utid:
         _decay_fan_heat_for_team(session, utid, calendar_idx)
         _process_trade_fan_legacy_reviews(session, calendar_idx)
-    season = int(getattr(session, "season_calendar_year", 2025) or 2025)
+    int(getattr(session, "season_calendar_year", 2025) or 2025)
     if int(calendar_idx) == int(getattr(session, "nhl_regular_season_last_index", 192) or 192):
         for tid, prof in dict(getattr(session, "fan_profiles", None) or {}).items():
             if isinstance(prof, dict):
@@ -22216,7 +22412,7 @@ def _record_legacy_trade_hub_notifications(
         )
         resolve_culprit_traded_storylines(session, moved_players)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     history = dict(exec_result.get("history_record") or {})
     assets_by_team = dict(history.get("assets_by_team") or {})
@@ -22521,7 +22717,7 @@ def _assemble_lean_state_payload(session: FranchiseSession, *, crisis_tick: bool
 
                 payload["awards"] = slim_awards_payload_for_client(payload.get("awards"))
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
     return payload
 
 
@@ -22731,11 +22927,11 @@ def _build_lean_narrative_section(session: FranchiseSession, *, crisis_tick: boo
     try:
         _merge_simengine_league_news_into_storylines(session)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         _maybe_backfill_sparse_storylines(session)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     notifications_raw = list(session.notifications[-56:])
     notifications_norm = [_normalize_notification_payload(n, i) for i, n in enumerate(notifications_raw)]
@@ -22745,7 +22941,7 @@ def _build_lean_narrative_section(session: FranchiseSession, *, crisis_tick: boo
         _prune_expired_storylines(session, cur_idx)
         storylines_raw = list(getattr(session, "storyline_events", None) or [])
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     storylines_active = [
         ev for ev in storylines_raw
         if isinstance(ev, dict) and not _storyline_is_expired(ev, session, cur_idx)
@@ -22842,7 +23038,7 @@ def _build_lean_extras_section(
                 except Exception:
                     payload["playoff_live"] = dict(session.playoff_live)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         from services.franchise_scouting import _ensure_scouting_state, DEFAULT_SCOUTING_BUDGET
 
@@ -22863,7 +23059,7 @@ def _build_lean_extras_section(
         if os.environ.get("NODE_ENV", "") == "development" or os.environ.get("NHL_FRANCHISE_DEBUG", "0") == "1":
             payload["storyline_debug"] = build_storyline_debug_payload(session)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         from services.transcendent_tank_behavior import check_dev_league_generation_version
 
@@ -22878,7 +23074,7 @@ def _build_lean_extras_section(
                     payload["warnings"].append(warn)
                 _startup_log.warning("DEV_LEAGUE_REBOOTSTRAP_NEEDED: %s", gen_check)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     _ = stats  # roster rows available for heavy HUD only
     return payload
 
@@ -22975,12 +23171,12 @@ def _build_state_payload_impl(session: FranchiseSession, *, include_heavy: bool 
     try:
         _merge_simengine_league_news_into_storylines(session)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     try:
         _maybe_backfill_sparse_storylines(session)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     notifications_raw = list(session.notifications[-56:])
     notifications_norm = [_normalize_notification_payload(n, i) for i, n in enumerate(notifications_raw)]
@@ -22990,7 +23186,7 @@ def _build_state_payload_impl(session: FranchiseSession, *, include_heavy: bool 
         _prune_expired_storylines(session, cur_idx)
         storylines_raw = list(getattr(session, "storyline_events", None) or [])
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     storylines_active = [
         ev for ev in storylines_raw
         if isinstance(ev, dict) and not _storyline_is_expired(ev, session, cur_idx)
@@ -23223,7 +23419,7 @@ def _build_state_payload_impl(session: FranchiseSession, *, include_heavy: bool 
                 except Exception:
                     payload["playoff_live"] = dict(session.playoff_live)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         from services.franchise_scouting import _ensure_scouting_state, DEFAULT_SCOUTING_BUDGET
 
@@ -23253,7 +23449,7 @@ def _build_state_payload_impl(session: FranchiseSession, *, include_heavy: bool 
         if os.environ.get("NODE_ENV", "") == "development" or os.environ.get("NHL_FRANCHISE_DEBUG", "0") == "1":
             payload["storyline_debug"] = build_storyline_debug_payload(session)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         from services.transcendent_tank_behavior import check_dev_league_generation_version
 
@@ -23268,7 +23464,7 @@ def _build_state_payload_impl(session: FranchiseSession, *, include_heavy: bool 
                     payload["warnings"].append(warn)
                 _startup_log.warning("DEV_LEAGUE_REBOOTSTRAP_NEEDED: %s", gen_check)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     # Postseason UI does not need the full NHL calendar — drops ~300KB+ per response.
     phase_now = str(payload.get("phase") or session.phase or "")
@@ -23285,7 +23481,7 @@ def _build_state_payload_impl(session: FranchiseSession, *, include_heavy: bool 
 
                 payload["awards"] = slim_awards_payload_for_client(payload.get("awards"))
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
     return payload
 
 
@@ -23300,7 +23496,7 @@ def build_state_payload_safe(session: FranchiseSession, *, include_heavy: bool =
             if boost_rights_prospect_potential(session):
                 invalidate_session_payload_caches(session, reason="prospect_potential")
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         try:
             # Lean builders emit JSON-safe primitives; skip expensive deep-walk.
             return build_state_payload(session, include_heavy=include_heavy, crisis_tick=crisis_tick)
@@ -23469,7 +23665,7 @@ def save_franchise_lines(session: FranchiseSession, payload: Dict[str, Any]) -> 
             # and the lean `lineup_gaps` flag must stop describing the old sheet.
             note_lines_saved(session)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     if unit_type == "even_strength" and user_team is not None:
         for row in _lineup_toi_consistency_audit(session)[:8]:
             warnings.append(
@@ -23490,7 +23686,7 @@ def save_franchise_lines(session: FranchiseSession, payload: Dict[str, Any]) -> 
 
         credit_line_promises(session)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return {
         "ok": True,
         "unit_type": unit_type,
@@ -23507,7 +23703,7 @@ def _today_iso(session: FranchiseSession) -> str:
         if 0 <= cur < len(cal):
             return str(cal[cur].get("iso") or cal[cur].get("date") or "")
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return ""
 
 
@@ -23678,7 +23874,7 @@ def get_cached_draft_class_detail_payload(session: FranchiseSession, sim: Any) -
     try:
         ensure_prospect_stats_current_for_scouting(session)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     rev = int(getattr(session, "_prospect_revision", 0) or 0)
     cur_cursor = int(getattr(session, "calendar_cursor", 0) or 0)
     cached = getattr(session, "_draft_class_detail_cache", None)
@@ -23847,7 +24043,7 @@ def get_cached_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict
     try:
         ensure_prospect_stats_current_for_scouting(session)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     rev = int(getattr(session, "_prospect_revision", 0) or 0)
     cur_cursor = int(getattr(session, "calendar_cursor", 0) or 0)
@@ -24477,7 +24673,7 @@ def get_franchise_chemistry_report(session: FranchiseSession) -> Dict[str, Any]:
 
     stats_rev = int(getattr(session, "_stats_revision", 0) or 0)
     lines_blob = getattr(session, "lines", None) or {}
-    lines_key = str(hash(repr(lines_blob)))
+    lines_key = str(_stable_hash(repr(lines_blob)))
     cache_key = f"{stats_rev}|{lines_key}|chem_v4"
     cached = getattr(session, "_cached_chemistry_report", None)
     if isinstance(cached, dict) and str(cached.get("key") or "") == cache_key:
@@ -24535,7 +24731,7 @@ def get_cached_trade_assets_payload(session: FranchiseSession, *, force: bool = 
 
             importlib.reload(tv_mod)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         payload = build_trade_assets_payload(session)
         if not isinstance(payload, dict):
             payload = {"teams": {}}
@@ -24667,7 +24863,7 @@ def _fa_season_progress(session: Any) -> float:
 
 
 def _fa_seed(pid: str, season_year: int, salt: str = "") -> int:
-    return abs(hash(f"fa|{salt}|{pid}|{season_year}")) & 0xFFFFFFFF
+    return abs(_stable_hash(f"fa|{salt}|{pid}|{season_year}")) & 0xFFFFFFFF
 
 
 def _fa_current_assignment(p: Any, season_year: int) -> Dict[str, Any]:
@@ -25040,11 +25236,11 @@ def _build_free_agent_row(p: Any, season_year: int, session: Any = None, *, deta
 
         row = merge_headshot_into_row(row, p)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     if session is None:
         # Legacy path (no session): deterministic asking terms only.
-        rng = random.Random(abs(hash(f"fa-ask|{pid}|{season_year}")) & 0xFFFFFFFF)
+        rng = random.Random(abs(_stable_hash(f"fa-ask|{pid}|{season_year}")) & 0xFFFFFFFF)
         ask, term = _free_agent_asking_terms(float(ovr), age, rng, pos)
         row.update({
             "previous_team": str(meta.get("club") or meta.get("overseas_league") or "Unsigned"),
@@ -25167,9 +25363,13 @@ def start_player_meeting(session: FranchiseSession, player_id: str, interaction_
 
 
 def advance_player_meeting(session: FranchiseSession, meeting_id: str, choice_id: str) -> Dict[str, Any]:
-    """Resolve an in-progress GM-initiated meeting."""
+    """Resolve an in-progress meeting. Player-requested meetings continue in the same room,
+    so their ids arrive here too — route them to the request resolver (they used to fail
+    with 'Active GM meeting not found')."""
     from app.sim_engine.franchise.storyline_engine import resolve_gm_player_meeting
 
+    if str(meeting_id) not in (getattr(session, "gm_active_meetings", None) or {}):
+        return resolve_player_meeting(session, str(meeting_id), str(choice_id))
     result = resolve_gm_player_meeting(session, str(meeting_id), str(choice_id))
     session.last_gm_result = {
         "kind": "meeting",

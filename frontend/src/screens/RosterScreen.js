@@ -9,15 +9,10 @@ import { formatAverageTOI, getAverageTOIMinutes } from "../utils/toiFormat";
 import { chapterAttributeRows } from "../utils/chapterAttributes";
 import { formatProspectLeague, formatProspectTeam } from "../events/prospectDevelopment/prospectDevelopmentHelpers";
 import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
-import { lookupHumanDossier, playerRoomLine, playerCharacterChips } from "../utils/lockerRoomPulse";
+import { lookupHumanDossier, playerRoomLine } from "../utils/lockerRoomPulse";
 import { nationalityCode, ensurePlayerHeadshotFields } from "../utils/playerHeadshots";
 import { nearestFlagApiSize } from "../utils/countryFlags";
-import {
-  getBaseOverall,
-  getOverallDrop,
-  getOverallTooltip,
-  getUniversalOverall,
-} from "../utils/playerOverall";
+import { getBaseOverall, getOverallDrop, getUniversalOverall } from "../utils/playerOverall";
 import { getRosterMoves, moveRosterPlayer, getStatsCentral, previewElcOffer, submitElcOffer } from "../services/franchiseService";
 import { resolveWjcDossierBlock } from "./prospectDossierHelpers";
 import "../components/dossier/PlayerDossier.css";
@@ -44,7 +39,6 @@ const EMPTY_OBJECT = Object.freeze({});
 
 const TABLE_PAGE_SIZE = 16;
 
-const DEFAULT_CAP_LIMIT = 83.5;
 const NHL_ACTIVE_ROSTER_LIMIT = 23;
 const NHL_CONTRACT_RESERVE_LIMIT = 50;
 
@@ -75,13 +69,6 @@ const VIEW_MODES = {
   RATINGS: "ratings",
 };
 
-const VIEW_MODE_OPTIONS = [
-  { value: VIEW_MODES.BOARD, label: "Board" },
-  { value: VIEW_MODES.TABLE, label: "Table" },
-  { value: VIEW_MODES.CARDS, label: "Cards" },
-  { value: VIEW_MODES.LINES, label: "Lines" },
-  { value: VIEW_MODES.RATINGS, label: "Ratings" },
-];
 
 const PANEL_TABS = [
   { value: "overview", label: "Overview" },
@@ -115,123 +102,8 @@ const SORT_KEYS = [
 ];
 
 const POSITION_FILTERS = ["ALL", "F", "C", "LW", "RW", "D", "LD", "RD", "G"];
-const LEAGUE_FILTERS = ["ALL", "NHL", "AHL", "ECHL", "CHL", "NCAA", "EU", "INTL"];
-const STATUS_FILTERS = [
-  "All",
-  "Active",
-  "Injured",
-  "Suspended",
-  "Leave",
-  "Scratched",
-  "Assigned",
-  "Unsigned",
-  "Draft Eligible",
-];
 
-const PLAYER_TYPE_FILTERS = [
-  "ALL",
-  "SNIPER",
-  "PLAYMAKER",
-  "POWER",
-  "TWO-WAY",
-  "DEFENSIVE",
-  "ENFORCER",
-  "GRINDER",
-  "OFFENSIVE D",
-  "DEFENSIVE D",
-  "TWO-WAY D",
-  "HYBRID",
-  "BUTTERFLY",
-  "STANDUP",
-  "BALANCED",
-];
 
-const POTENTIAL_TIERS = {
-  FRANCHISE: {
-    label: "Franchise",
-    score: 100,
-    skaterMin: 92,
-    goalieMin: 91,
-  },
-  ELITE: {
-    label: "Elite",
-    score: 92,
-    skaterMin: 86,
-    goalieMin: 85,
-  },
-  TOP_PAIR_D: {
-    label: "Top Pair D",
-    score: 87,
-    skaterMin: 84,
-    goalieMin: 0,
-  },
-  TOP_LINE: {
-    label: "Top Line",
-    score: 86,
-    skaterMin: 84,
-    goalieMin: 0,
-  },
-  STARTER: {
-    label: "Starter",
-    score: 86,
-    skaterMin: 0,
-    goalieMin: 83,
-  },
-  TOP_4_D: {
-    label: "Top 4 D",
-    score: 80,
-    skaterMin: 78,
-    goalieMin: 0,
-  },
-  TOP_6: {
-    label: "Top 6",
-    score: 80,
-    skaterMin: 78,
-    goalieMin: 0,
-  },
-  TANDEM: {
-    label: "Tandem",
-    score: 78,
-    skaterMin: 0,
-    goalieMin: 78,
-  },
-  MIDDLE_6: {
-    label: "Middle 6",
-    score: 70,
-    skaterMin: 73,
-    goalieMin: 0,
-  },
-  THIRD_PAIR_D: {
-    label: "Third Pair D",
-    score: 68,
-    skaterMin: 72,
-    goalieMin: 0,
-  },
-  BACKUP: {
-    label: "Backup",
-    score: 68,
-    skaterMin: 0,
-    goalieMin: 72,
-  },
-  BOTTOM_6: {
-    label: "Bottom 6",
-    score: 61,
-    skaterMin: 68,
-    goalieMin: 0,
-  },
-  DEPTH: {
-    label: "Depth",
-    score: 50,
-    skaterMin: 0,
-    goalieMin: 0,
-  },
-  AHL: {
-    label: "AHL",
-    score: 38,
-    skaterMin: 0,
-    goalieMin: 0,
-  },
-};
 
 const POTENTIAL_ORDER = {
   Franchise: 100,
@@ -422,16 +294,6 @@ const POSITION_WEIGHTS = {
   },
 };
 
-const RATING_GROUP_LABELS = {
-  offense: "Offense",
-  defense: "Defense",
-  skating: "Skating",
-  physical: "Physical",
-  mental: "Mental",
-  technical: "Technical",
-  athletic: "Athletic",
-  puck: "Puck Play",
-};
 
 function safeNum(value, fallback = 0) {
   const n = Number(value);
@@ -503,12 +365,6 @@ function formatSignedNumber(value, decimals = 1) {
   return Number(0).toFixed(decimals);
 }
 
-function formatPercent(value, empty = "—") {
-  const n = safeNumOrNull(value);
-  if (n === null) return empty;
-  if (Math.abs(n) <= 1) return `${(n * 100).toFixed(1)}%`;
-  return `${n.toFixed(1)}%`;
-}
 
 function formatDecimal(value, digits = 3, empty = "—") {
   const n = safeNumOrNull(value);
@@ -604,15 +460,6 @@ function getPositionDisplay(position) {
   return p || "—";
 }
 
-function initialsFromName(name) {
-  const raw = safeStr(name, "").trim();
-  if (!raw || raw === "—") return "—";
-
-  const parts = raw.split(/\s+/).filter(Boolean);
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-
-  return `${parts[0][0] || ""}${parts[parts.length - 1][0] || ""}`.toUpperCase();
-}
 
 function getPlayerName(player) {
   return safeStr(
@@ -744,15 +591,17 @@ function mergeFranchiseStatsIntoPlayer(player, statsLookup) {
   };
 }
 
-function isUserOwnedProspect(raw, userTeamId) {
+function isUserOwnedProspect(raw, userTeamId, { honorUserFlags = true } = {}) {
   const uid = safeStr(userTeamId, "").toLowerCase();
   if (!uid) return false;
 
-  if (raw?.is_user_prospect || raw?.isUserProspect || raw?.user_prospect || raw?.userProspect) {
+  // "Is the user's prospect" flags only answer the question for the user's own club;
+  // when browsing another team's rights we go by the rights team id alone.
+  if (honorUserFlags && (raw?.is_user_prospect || raw?.isUserProspect || raw?.user_prospect || raw?.userProspect)) {
     return true;
   }
 
-  if (raw?.owned_by_user || raw?.ownedByUser || raw?.is_user || raw?.isUser) {
+  if (honorUserFlags && (raw?.owned_by_user || raw?.ownedByUser || raw?.is_user || raw?.isUser)) {
     return true;
   }
 
@@ -782,9 +631,13 @@ function isUserOwnedProspect(raw, userTeamId) {
   return rightsFields.some((field) => safeStr(field, "").toLowerCase() === uid);
 }
 
-function collectMyProspectRawPlayers(rb, franchiseState, userTeamId, userOrganization) {
+function collectMyProspectRawPlayers(rb, franchiseState, userTeamId, userOrganization, { isUserTeam = true } = {}) {
   const rows = [];
   const seen = new Set();
+  const ownerOpts = { honorUserFlags: isUserTeam };
+  // Another club's rights list is read-only: tag rows as organization rows so the
+  // dossier doesn't offer user actions on them.
+  const rowSource = isUserTeam ? PLAYER_POOLS.MY_PROSPECTS : PLAYER_POOLS.ORGANIZATION;
 
   const push = (player, meta = EMPTY_OBJECT) => {
     if (!player) return;
@@ -799,7 +652,8 @@ function collectMyProspectRawPlayers(rb, franchiseState, userTeamId, userOrganiz
     rows.push({
       ...player,
       ...meta,
-      _source: PLAYER_POOLS.MY_PROSPECTS,
+      _source: rowSource,
+      _rights_view: true,
     });
   };
 
@@ -822,7 +676,7 @@ function collectMyProspectRawPlayers(rb, franchiseState, userTeamId, userOrganiz
 
     (league?.teams || EMPTY_ARRAY).forEach((team) => {
       (team?.players || EMPTY_ARRAY).forEach((player) => {
-        if (uid && !isUserOwnedProspect(player, userTeamId)) return;
+        if (uid && !isUserOwnedProspect(player, userTeamId, ownerOpts)) return;
 
         const ctx = {
           ...player,
@@ -847,7 +701,7 @@ function collectMyProspectRawPlayers(rb, franchiseState, userTeamId, userOrganiz
     });
   });
 
-  const extraPools = [
+  const extraPools = !isUserTeam ? [] : [
     franchiseState?.prospect_pool,
     franchiseState?.prospectPool,
     franchiseState?.prospects,
@@ -868,7 +722,7 @@ function collectMyProspectRawPlayers(rb, franchiseState, userTeamId, userOrganiz
     if (!Array.isArray(pool)) return;
 
     pool.forEach((player) => {
-      if (userTeamId && !isUserOwnedProspect(player, userTeamId)) return;
+      if (userTeamId && !isUserOwnedProspect(player, userTeamId, ownerOpts)) return;
 
       push(player, {
         league: player.league || player.dev_league || player.league_code || "PROSPECT",
@@ -939,21 +793,6 @@ function normalizeArchetype(player) {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
-function getArchetypeColor(archetype) {
-  const key = normalizeKey(archetype);
-
-  if (key.includes("sniper")) return "#ff6868";
-  if (key.includes("playmaker")) return "#5fc7ff";
-  if (key.includes("power")) return "#ffa94d";
-  if (key.includes("two_way")) return "#81f0a4";
-  if (key.includes("offensive_d")) return "#8dc6ff";
-  if (key.includes("defensive_d") || key.includes("defensive")) return "#6ee7b7";
-  if (key.includes("grinder")) return "#d6b36a";
-  if (key.includes("enforcer")) return "#ef7d7d";
-  if (key.includes("butterfly") || key.includes("hybrid") || key.includes("standup")) return "#c4a7ff";
-
-  return "#9aa7bd";
-}
 
 function normalizeContract(player) {
   const contract = player?.contract || EMPTY_OBJECT;
@@ -1782,19 +1621,6 @@ function getDevelopmentStage(player) {
   return "Late Career";
 }
 
-function getDevelopmentBand(player) {
-  const growth = safeNum(player?.growth, 0);
-  const age = safeNum(player?.age, 0);
-  const potentialScore = safeNum(player?.potentialScore, 0);
-
-  if (growth >= 1.5) return { label: "Surging", tone: "good" };
-  if (growth >= 0.4) return { label: "Trending Up", tone: "good" };
-  if (growth <= -1.2) return { label: "Regression Risk", tone: "bad" };
-  if (growth <= -0.4) return { label: "Slight Decline", tone: "warn" };
-  if (age <= 23 && potentialScore >= 80) return { label: "Patience Required", tone: "good" };
-
-  return { label: "Stable", tone: "neutral" };
-}
 
 function inferGrowth(player) {
   return safeNum(
@@ -2773,17 +2599,6 @@ function calculateAssetValue(player) {
   };
 }
 
-function getOVRColor(ovr) {
-  const n = safeNum(ovr, 0);
-
-  if (n >= 92) return "#f8d26a";
-  if (n >= 88) return "#8fd3ff";
-  if (n >= 84) return "#b9f6ca";
-  if (n >= 80) return "#eef4ff";
-  if (n >= 74) return "#a8b4c8";
-
-  return "#7c879a";
-}
 
 function toneClass(tone) {
   if (tone === "good") return "is-good";
@@ -2794,20 +2609,6 @@ function toneClass(tone) {
   return "is-neutral";
 }
 
-function gradeFromOverall(ovr) {
-  const n = safeNum(ovr, 0);
-
-  if (n >= 94) return "A+";
-  if (n >= 90) return "A";
-  if (n >= 86) return "A-";
-  if (n >= 82) return "B+";
-  if (n >= 78) return "B";
-  if (n >= 74) return "B-";
-  if (n >= 70) return "C+";
-  if (n >= 66) return "C";
-
-  return "D";
-}
 
 function buildPlayerNote(player) {
   const pieces = [];
@@ -3365,9 +3166,6 @@ function comparePlayerSortFields(a, b, sortKey) {
   }
 }
 
-function comparePlayers(a, b, sortKey) {
-  return comparePlayerSortFields(buildPlayerSortFields(a), buildPlayerSortFields(b), sortKey);
-}
 
 function sortPlayersByKey(rows, sortKey) {
   if (!rows || rows.length <= 1) return rows || EMPTY_ARRAY;
@@ -3376,33 +3174,6 @@ function sortPlayersByKey(rows, sortKey) {
   return keyed.map((entry) => entry.player);
 }
 
-function statLineForPlayer(player) {
-  if (!player) return "—";
-
-  const stats = player.season_stats || EMPTY_OBJECT;
-  const pos = normalizePosition(player.position);
-
-  if (pos === "G") {
-    const wins = safeNum(stats.wins, 0);
-    const losses = safeNum(stats.losses, 0);
-    const otl = safeNum(stats.otl, 0);
-    const sv = safeNum(stats.svPct, 0);
-    const gaa = safeNum(stats.gaa, 0);
-
-    if (!wins && !losses && !otl && !sv && !gaa) return "Stats unavailable";
-
-    return `${wins}-${losses}-${otl} · ${formatDecimal(sv, 3)} SV% · ${gaa ? gaa.toFixed(2) : "—"} GAA`;
-  }
-
-  const gp = safeNum(stats.gp, 0);
-  const goals = safeNum(stats.g, 0);
-  const assists = safeNum(stats.a, 0);
-  const points = safeNum(stats.pts, 0);
-
-  if (!gp && !goals && !assists && !points) return "Stats unavailable";
-
-  return `${gp} GP · ${goals} G · ${assists} A · ${points} PTS · ${stats.ppg ? stats.ppg.toFixed(2) : "0.00"} P/GP`;
-}
 
 function buildRosterWarnings(players, capInfo) {
   const nhlPlayers = (players || EMPTY_ARRAY).filter((p) => p.league === "NHL");
@@ -3496,54 +3267,6 @@ function buildRosterWarnings(players, capInfo) {
   return warnings;
 }
 
-function buildLineGroups(players) {
-  const nhl = (players || EMPTY_ARRAY)
-    .filter((p) => p.league === "NHL")
-    .filter((p) => p.status !== "Injured")
-    .sort((a, b) => safeNum(b.trueOverall, b.ovr) - safeNum(a.trueOverall, a.ovr));
-
-  const centers = nhl.filter((p) => normalizePosition(p.position) === "C");
-  const leftWings = nhl.filter((p) => normalizePosition(p.position) === "LW");
-  const rightWings = nhl.filter((p) => normalizePosition(p.position) === "RW");
-  const flexibleForwards = nhl.filter((p) => normalizePosition(p.position) === "F");
-  const defense = nhl.filter((p) => isDefensePosition(p.position));
-  const leftD = defense.filter((p) => normalizePosition(p.position) === "LD");
-  const rightD = defense.filter((p) => normalizePosition(p.position) === "RD");
-  const genericD = defense.filter((p) => normalizePosition(p.position) === "D");
-  const goalies = nhl.filter((p) => isGoaliePosition(p.position));
-
-  const take = (list) => list.shift() || null;
-
-  const forwardLines = [];
-
-  for (let i = 0; i < 4; i += 1) {
-    const lw = take(leftWings) || take(flexibleForwards) || take(centers) || take(rightWings);
-    const c = take(centers) || take(flexibleForwards) || take(leftWings) || take(rightWings);
-    const rw = take(rightWings) || take(flexibleForwards) || take(centers) || take(leftWings);
-
-    forwardLines.push([lw, c, rw].filter(Boolean));
-  }
-
-  const defensePairs = [];
-
-  for (let i = 0; i < 3; i += 1) {
-    const ld = take(leftD) || take(genericD) || take(rightD);
-    const rd = take(rightD) || take(genericD) || take(leftD);
-
-    defensePairs.push([ld, rd].filter(Boolean));
-  }
-
-  return {
-    forwards: forwardLines,
-    defense: defensePairs,
-    goalies: goalies.slice(0, 2),
-    extras: {
-      forwards: [...leftWings, ...centers, ...rightWings, ...flexibleForwards],
-      defense: [...leftD, ...rightD, ...genericD],
-      goalies: goalies.slice(2),
-    },
-  };
-}
 function MiniBadge({ text, tone = "neutral", title = "" }) {
   return (
     <span className={`nhlrost-mini-badge ${toneClass(tone)}`} title={title || text}>
@@ -3565,45 +3288,8 @@ function TradeStabilityConcernBadge({ player, franchiseState, compact = false })
   );
 }
 
-function RatingPill({ label, value, tone = "neutral" }) {
-  const numeric = safeNum(value, 0);
 
-  return (
-    <article className={`nhlrost-rating-pill ${toneClass(tone)}`}>
-      <span>{label}</span>
-      <strong>{numeric ? round0(numeric) : "—"}</strong>
-    </article>
-  );
-}
 
-function ProgressBar({ label, value, max = 100, tone = "neutral", suffix = "" }) {
-  const numeric = safeNum(value, 0);
-  const pct = clamp((numeric / max) * 100, 0, 100);
-
-  return (
-    <div className={`nhlrost-progress ${toneClass(tone)}`}>
-      <div className="nhlrost-progress__top">
-        <span>{label}</span>
-        <strong>
-          {numeric ? round1(numeric) : "—"}
-          {suffix}
-        </strong>
-      </div>
-      <div className="nhlrost-progress__track">
-        <span style={{ width: `${pct}%` }} />
-      </div>
-    </div>
-  );
-}
-
-function InfoPair({ label, value, tone = "neutral" }) {
-  return (
-    <div className={`nhlrost-info-pair ${toneClass(tone)}`}>
-      <span>{label}</span>
-      <strong>{value ?? "—"}</strong>
-    </div>
-  );
-}
 
 function ToolbarSelect({ id, label, value, onChange, options, disabled = false, compact = false }) {
   return (
@@ -3646,14 +3332,6 @@ function ToolbarInput({ id, label, value, onChange, placeholder, compact = false
   );
 }
 
-function ConnectedActionNotice({ title, body, tone = "neutral" }) {
-  return (
-    <article className={`nhlrost-action-notice ${toneClass(tone)}`}>
-      <strong>{title}</strong>
-      <p>{body}</p>
-    </article>
-  );
-}
 
 function EmptyPanel({ title = "NO SIGNAL", body = "Board channel empty — adjust filters or reload roster feed.", compact = false }) {
   return (
@@ -3689,63 +3367,7 @@ function PlayerAvatar({ player, size = "lg" }) {
   );
 }
 
-function PlayerIconPlate({ player }) {
-  const posClass = player?.positionClass || getPositionClass(player?.position) || "unknown";
-  const archColor = getArchetypeColor(player?.archetype);
-  const potScore = safeNum(player?.potentialScore, 0);
-  const accentOpacity = potScore > 0 ? Math.min(1, 0.4 + potScore / 220) : 0.55;
-  const ovr = getUniversalOverall(player);
-  const ovrColor = getOVRColor(ovr);
-  const posLabel = player?.position || "—";
 
-  return (
-    <div
-      className={`nhlrost-player-icon-plate pos-${posClass}`}
-      style={{
-        "--arch-color": archColor,
-        "--arch-accent-opacity": accentOpacity,
-      }}
-      aria-hidden="true"
-    >
-      <div className="nhlrost-player-icon-plate__number" title={getOverallTooltip(player)}>
-        <span style={{ color: ovrColor }}>{ovr > 0 ? ovr : "—"}</span>
-      </div>
-      <div className="nhlrost-player-icon-plate__portrait">
-        <PlayerAvatar player={player} size="lg" />
-        <span className="nhlrost-player-icon-plate__pos">{posLabel}</span>
-      </div>
-    </div>
-  );
-}
-
-function OvrStack({ player }) {
-  const ovr = getUniversalOverall(player);
-  const base = getBaseOverall(player) || ovr;
-  const drop = getOverallDrop(player);
-  const confidence = safeStr(player?.overallConfidence, "Low");
-  const growth = inferGrowth(player);
-  const growthRounded = Math.round(growth);
-
-  return (
-    <div className="nhlrost-ovr-stack" title={getOverallTooltip(player)}>
-      <strong style={{ color: getOVRColor(ovr) }}>{ovr || "—"}</strong>
-      {growthRounded !== 0 ? (
-        <em
-          className={`nhlrost-ovr-growth ${growthRounded > 0 ? "is-up" : "is-down"}`}
-          title={`Season OVR ${growthRounded > 0 ? "+" : ""}${growthRounded} from start`}
-        >
-          {growthRounded > 0 ? `+${growthRounded}` : `${growthRounded}`}
-        </em>
-      ) : null}
-      <span>{confidence}</span>
-      {drop >= 1 ? (
-        <em className="nhlrost-ovr-drop" title={`Down ${drop} from base ${base}`}>
-          ↓{drop}
-        </em>
-      ) : null}
-    </div>
-  );
-}
 
 function PotentialStack({ player }) {
   const score = safeNum(player?.potentialScore, 0);
@@ -3760,60 +3382,8 @@ function PotentialStack({ player }) {
   );
 }
 
-function PlayerStatusStrip({ player, franchiseState }) {
-  const moraleBand = getMoraleBand(player?.morale);
-  const fatigueBand = getFatigueBand(player?.fatigue);
-  const healthBand = getHealthBand(player);
 
-  return (
-    <div className="nhlrost-status-strip">
-      <MiniBadge text={`Morale ${round0(player?.morale)}`} tone={moraleBand.tone} title={moraleBand.label} />
-      <MiniBadge text={`Fatigue ${round0(player?.fatigue)}`} tone={fatigueBand.tone} title={fatigueBand.label} />
-      <MiniBadge text={healthBand.label} tone={healthBand.tone} />
-      <TradeStabilityConcernBadge player={player} franchiseState={franchiseState} compact />
-    </div>
-  );
-}
 
-function compactStatLine(player) {
-  const line = statLineForPlayer(player);
-  return line === "Stats unavailable" ? "—" : line;
-}
-
-function groupPlayersForBoard(players) {
-  const forwards = [];
-  const defense = [];
-  const goalies = [];
-  const injured = [];
-  const other = [];
-
-  (players || EMPTY_ARRAY).forEach((player) => {
-    const health = normalizeHealth(player);
-    const isOut =
-      player.status === "Injured" ||
-      player.status === "Suspended" ||
-      player.status === "Leave" ||
-      health.isInjured ||
-      health.isConductLeave;
-
-    if (isOut) {
-      injured.push(player);
-      return;
-    }
-
-    if (isGoaliePosition(player.position)) {
-      goalies.push(player);
-    } else if (isDefensePosition(player.position)) {
-      defense.push(player);
-    } else if (isForwardPosition(player.position)) {
-      forwards.push(player);
-    } else {
-      other.push(player);
-    }
-  });
-
-  return { forwards, defense, goalies, injured, other };
-}
 
 function PlayerFlagBadge({ player, size = "sm" }) {
   const enriched = ensurePlayerHeadshotFields(player || {});
@@ -3995,25 +3565,6 @@ function RosterBoardView({ players, selectedPlayerKey, onSelectPlayer, showTeam 
   );
 }
 
-function ViewModeSegmented({ value, onChange }) {
-  return (
-    <div className="nhlrost-view-modes">
-      <span className="nhlrost-view-modes__label">View</span>
-      <div className="nhlrost-view-modes__buttons" role="group" aria-label="View mode">
-        {VIEW_MODE_OPTIONS.map((option) => (
-          <button
-            key={option.value}
-            type="button"
-            className={value === option.value ? "is-active" : ""}
-            onClick={() => onChange(option.value)}
-          >
-            {option.label}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 const LEAGUE_POOL_OPTIONS = [
   { value: "nhl", label: "NHL" },
@@ -4056,176 +3607,8 @@ function LeaguePoolSegmented({ value, onChange }) {
   );
 }
 
-function PlayerInspectorStrip({ player, onExpand, onClose }) {
-  return (
-    <div className="nhlrost-inspector-strip">
-      <PlayerAvatar player={player} size="sm" />
 
-      <div className="nhlrost-inspector-strip__meta">
-        <strong>{player.name}</strong>
-        <span>
-          {player.position} · OVR {player.ovr ? round0(player.ovr) : "—"} · {player.potential}
-        </span>
-      </div>
 
-      <button type="button" className="nhlrost-chip-button" onClick={onExpand}>
-        Expand Details
-      </button>
-
-      <button type="button" className="nhlrost-inspector-close" onClick={onClose} aria-label="Clear selection">
-        ×
-      </button>
-    </div>
-  );
-}
-
-function RosterWarnings({ warnings }) {
-  if (!Array.isArray(warnings) || !warnings.length) {
-    return (
-      <div className="nhlrost-warning-clean">
-        <span>✓</span>
-        <strong>Roster check clean</strong>
-        <p>No active roster warnings from the currently loaded data.</p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="nhlrost-warning-list">
-      {warnings.map((warning) => (
-        <article key={warning.key} className={`nhlrost-warning-card ${toneClass(warning.tone)}`}>
-          <strong>{warning.title}</strong>
-          <p>{warning.body}</p>
-        </article>
-      ))}
-    </div>
-  );
-}
-
-function RosterTable({
-  players,
-  selectedPlayerKey,
-  onSelectPlayer,
-  pageOffset = 0,
-  showPoolColumn = false,
-}) {
-  if (!players.length) {
-    return <EmptyPanel title="No players match these filters" body="Adjust search, position, or advanced filters." />;
-  }
-
-  return (
-    <div className="nhlrost-table">
-      <div className={`nhlrost-table__head ${showPoolColumn ? "has-pool" : ""}`}>
-        <span>Name</span>
-        <span>Pos</span>
-        <span>OVR</span>
-        <span>Potential</span>
-        <span>Age</span>
-        <span>Role</span>
-        <span>Type</span>
-        <span>Stats</span>
-        <span>Status</span>
-        {showPoolColumn ? <span>League</span> : null}
-      </div>
-
-      <div className="nhlrost-table__body">
-        {players.map((player, index) => {
-          const selected = player.key === selectedPlayerKey;
-          const posGroup = String(player.positionClass || player.position || "").toUpperCase();
-          const prev = players[index - 1];
-          const prevGroup = String(prev?.positionClass || prev?.position || "").toUpperCase();
-          const groupLabel = posGroup.startsWith("G")
-            ? "Goalies"
-            : posGroup === "D" || posGroup.startsWith("LD") || posGroup.startsWith("RD")
-              ? "Defence"
-              : "Forwards";
-          const prevLabel = prev
-            ? (prevGroup.startsWith("G")
-              ? "Goalies"
-              : prevGroup === "D" || prevGroup.startsWith("LD") || prevGroup.startsWith("RD")
-                ? "Defence"
-                : "Forwards")
-            : null;
-          const showGroup = groupLabel !== prevLabel;
-          const globalIndex = pageOffset + index;
-          const scratched = Boolean(player.scratched || player.is_scratch || player.line === "scratch");
-          const archetypeColor = getArchetypeColor(player.archetype);
-          const healthBand = getHealthBand(player);
-          const concernLevel = Number(player?.tradeStabilityConcern?.escalationLevel ?? 0);
-          const concernClass =
-            concernLevel >= 3 ? "has-trade-concern is-critical" : concernLevel > 0 ? "has-trade-concern" : "";
-
-          return (
-            <React.Fragment key={player.key || `${player.name}-${globalIndex}`}>
-              {showGroup ? <div className="nhlrost-group-head">{groupLabel}</div> : null}
-            <button
-              type="button"
-              className={`nhlrost-row ${selected ? "is-selected" : ""} ${scratched ? "is-scratch" : ""} ${concernClass}`.trim()}
-              onClick={() => onSelectPlayer(player)}
-            >
-              <span className="nhlrost-row__name">
-                <PlayerAvatar player={player} size="sm" />
-                <span>
-                  <strong>{player.jersey_number || player.jerseyNumber || player.number ? `#${player.jersey_number || player.jerseyNumber || player.number} ` : ""}{player.name}</strong>
-                  {(player.locker_room_cancer || player.brady_tkachuk_chaos || (player.name_tags || []).includes("CANCER")) ? (
-                    <em className="nhlrost-cancer-tag" title="Locker-room cancer">CANCER</em>
-                  ) : null}
-                  {player.tradeStabilityConcern ? (
-                    <TradeStabilityConcernBadge player={player} compact />
-                  ) : null}
-                  {playerRoomLine(player.humanDossier) ? (
-                    <em className="nhlrost-row__life">{playerRoomLine(player.humanDossier)}</em>
-                  ) : (
-                    <em>{player.teamName}</em>
-                  )}
-                </span>
-              </span>
-
-              <span className={`nhlrost-row__pos pos-${player.positionClass}`}>{player.position}</span>
-
-              <span>
-                <OvrStack player={player} />
-              </span>
-
-              <span>
-                <PotentialStack player={player} />
-              </span>
-
-              <span className="nhlrost-row__age">{player.age}</span>
-
-              <span className="nhlrost-row__role">
-                {player.roleLabel || player.role}
-                {playerCharacterChips(player.humanDossier)[0] ? (
-                  <em className="nhlrost-row__persona">{playerCharacterChips(player.humanDossier)[0]}</em>
-                ) : null}
-              </span>
-
-              <span>
-                <em
-                  className="nhlrost-archetype-tag"
-                  style={{
-                    "--arch-color": archetypeColor,
-                  }}
-                >
-                  {player.archetype}
-                </em>
-              </span>
-
-              <span className="nhlrost-row__stats">{compactStatLine(player)}</span>
-
-              <span>
-                <MiniBadge text={player.status} tone={healthBand.tone} />
-              </span>
-
-              {showPoolColumn ? <span className="nhlrost-row__pool">{player.league || player._source || "—"}</span> : null}
-            </button>
-            </React.Fragment>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
 
 function DraftBoardTable({ players, selectedPlayerKey, onSelectPlayer, pageOffset = 0 }) {
   if (!players.length) {
@@ -4281,222 +3664,8 @@ function DraftBoardTable({ players, selectedPlayerKey, onSelectPlayer, pageOffse
   );
 }
 
-function RosterCards({ players, selectedPlayerKey, onSelectPlayer }) {
-  if (!players.length) {
-    return <EmptyPanel title="No cards to show" body="No players match the current filters." />;
-  }
 
-  return (
-    <div className="nhlrost-card-grid">
-      {players.map((player) => {
-        const selected = player.key === selectedPlayerKey;
-        const healthBand = getHealthBand(player);
-        const moraleBand = getMoraleBand(player.morale);
-        const fatigueBand = getFatigueBand(player.fatigue);
 
-        return (
-          <button
-            type="button"
-            key={player.key}
-            className={`nhlrost-player-card ${selected ? "is-selected" : ""}`}
-            onClick={() => onSelectPlayer(player)}
-          >
-            <div className="nhlrost-player-card__top">
-              <PlayerAvatar player={player} size="lg" />
-
-              <div className="nhlrost-player-card__identity">
-                <strong>{player.name}</strong>
-                <span>
-                  {player.position} · {player.age} · {player.teamName}
-                </span>
-              </div>
-
-              <div className="nhlrost-player-card__ovr">
-                <strong style={{ color: getOVRColor(player.ovr) }}>{player.ovr ? round0(player.ovr) : "—"}</strong>
-                <span>{gradeFromOverall(player.ovr)}</span>
-              </div>
-            </div>
-
-            <div className="nhlrost-player-card__badges">
-              <MiniBadge text={player.potential} tone={player.potentialScore >= 88 ? "premium" : player.potentialScore >= 76 ? "good" : "neutral"} />
-              <MiniBadge text={player.archetype} />
-              <MiniBadge text={player.roleLabel || player.role} />
-              <MiniBadge text={player.status} tone={healthBand.tone} />
-              <TradeStabilityConcernBadge player={player} compact />
-            </div>
-
-            <div className="nhlrost-player-card__metrics">
-              <InfoPair label="True OVR" value={player.trueOverall ? round1(player.trueOverall) : "—"} />
-              <InfoPair label="Potential" value={player.potentialScore ? `${player.potentialScore}/100` : "—"} />
-              <InfoPair label="Morale" value={`${round0(player.morale)} · ${moraleBand.label}`} tone={moraleBand.tone} />
-              <InfoPair label="Fatigue" value={`${round0(player.fatigue)} · ${fatigueBand.label}`} tone={fatigueBand.tone} />
-              <InfoPair label="Cap Hit" value={formatMoneyMillions(player.contract?.capHit)} />
-              <InfoPair label="Asset" value={player.asset?.label || "—"} />
-            </div>
-
-            <div className="nhlrost-player-card__statline">{statLineForPlayer(player)}</div>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-function LineView({ lineGroups, selectedPlayerKey, onSelectPlayer }) {
-  const forwardRows = lineGroups?.forwards || EMPTY_ARRAY;
-  const defenseRows = lineGroups?.defense || EMPTY_ARRAY;
-  const goalies = lineGroups?.goalies || EMPTY_ARRAY;
-  const extras = lineGroups?.extras || EMPTY_OBJECT;
-
-  const renderPlayerChip = (player, label = "") => {
-    if (!player) {
-      return (
-        <span className="nhlrost-line-chip is-empty">
-          <em>{label || "Empty"}</em>
-        </span>
-      );
-    }
-
-    return (
-      <button
-        type="button"
-        className={`nhlrost-line-chip ${player.key === selectedPlayerKey ? "is-selected" : ""}`}
-        onClick={() => onSelectPlayer(player)}
-      >
-        <span>{label || player.position}</span>
-        <strong>{player.name}</strong>
-        <em>{player.ovr ? round0(player.ovr) : "—"} OVR · {player.potential}</em>
-      </button>
-    );
-  };
-
-  return (
-    <div className="nhlrost-lines">
-      <section className="nhlrost-line-section">
-        <header>
-          <span>Forward Lines</span>
-          <strong>Position-aware auto read</strong>
-        </header>
-
-        {forwardRows.map((line, index) => (
-          <article key={`f-line-${index}`} className="nhlrost-line-row">
-            <strong>L{index + 1}</strong>
-            <div>
-              {renderPlayerChip(line[0], "LW")}
-              {renderPlayerChip(line[1], "C")}
-              {renderPlayerChip(line[2], "RW")}
-            </div>
-          </article>
-        ))}
-      </section>
-
-      <section className="nhlrost-line-section">
-        <header>
-          <span>Defense Pairs</span>
-          <strong>LD/RD balanced where possible</strong>
-        </header>
-
-        {defenseRows.map((pair, index) => (
-          <article key={`d-pair-${index}`} className="nhlrost-line-row">
-            <strong>D{index + 1}</strong>
-            <div>
-              {renderPlayerChip(pair[0], "LD")}
-              {renderPlayerChip(pair[1], "RD")}
-            </div>
-          </article>
-        ))}
-      </section>
-
-      <section className="nhlrost-line-section nhlrost-line-section--goalies">
-        <header>
-          <span>Goalies</span>
-          <strong>Best available healthy goalies</strong>
-        </header>
-
-        <article className="nhlrost-line-row">
-          <strong>G</strong>
-          <div>
-            {renderPlayerChip(goalies[0], "Starter")}
-            {renderPlayerChip(goalies[1], "Backup")}
-          </div>
-        </article>
-      </section>
-
-      <section className="nhlrost-line-section nhlrost-line-section--extras">
-        <header>
-          <span>Extras</span>
-          <strong>Not assigned to current auto lines</strong>
-        </header>
-
-        <div className="nhlrost-extra-grid">
-          {(extras.forwards || EMPTY_ARRAY).map((player) => renderPlayerChip(player, "F"))}
-          {(extras.defense || EMPTY_ARRAY).map((player) => renderPlayerChip(player, "D"))}
-          {(extras.goalies || EMPTY_ARRAY).map((player) => renderPlayerChip(player, "G"))}
-        </div>
-      </section>
-
-      <ConnectedActionNotice
-        tone="neutral"
-        title="Line editing not faked"
-        body="This view reads and organizes loaded roster data. It does not pretend to save lines until a real backend lineup endpoint exists."
-      />
-    </div>
-  );
-}
-
-function RatingsEngineView({ players, selectedPlayerKey, onSelectPlayer }) {
-  if (!players.length) {
-    return <EmptyPanel title="No ratings loaded" body="No players match the current filters." />;
-  }
-
-  return (
-    <div className="nhlrost-ratings-grid-view">
-      {players.map((player) => {
-        const selected = player.key === selectedPlayerKey;
-
-        return (
-          <button
-            type="button"
-            key={player.key}
-            className={`nhlrost-rating-card ${selected ? "is-selected" : ""}`}
-            onClick={() => onSelectPlayer(player)}
-          >
-            <header>
-              <PlayerAvatar player={player} size="sm" />
-              <div>
-                <strong>{player.name}</strong>
-                <span>
-                  {player.position} · {player.roleLabel || player.role}
-                </span>
-              </div>
-              <OvrStack player={player} />
-            </header>
-
-            <div className="nhlrost-rating-card__bars">
-              {(player.rating_groups || EMPTY_ARRAY).map((group) => {
-                const avg = averageRows(group.rows);
-
-                return (
-                  <ProgressBar
-                    key={group.key || group.title}
-                    label={group.title}
-                    value={avg}
-                    tone={avg >= 84 ? "good" : avg >= 72 ? "neutral" : "warn"}
-                  />
-                );
-              })}
-            </div>
-
-            <footer>
-              <span>{player.knownRatingCount} known ratings</span>
-              <strong>{player.overallConfidence} confidence</strong>
-            </footer>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
 
 /* ─────────────────────────────────────────────────────────────────────────
  * Player dossier (modal). Styles live in components/dossier/PlayerDossier.css
@@ -6809,7 +5978,7 @@ export function RosterScreen() {
 
   const {
     franchiseState,
-    rosterRowIndex,
+    
     setRosterRowIndex,
     setScreen,
     refreshFranchise,
@@ -6857,19 +6026,18 @@ export function RosterScreen() {
 
   const [searchTerm, setSearchTerm] = useState("");
   const [positionFilter, setPositionFilter] = useState("ALL");
-  const [leagueFilter, setLeagueFilter] = useState("ALL");
-  const [statusFilter, setStatusFilter] = useState("All");
-  const [typeFilter, setTypeFilter] = useState("ALL");
-  const [roleFilter, setRoleFilter] = useState("ALL");
+  const [leagueFilter, ] = useState("ALL");
+  const [statusFilter, ] = useState("All");
+  const [typeFilter, ] = useState("ALL");
+  const [roleFilter, ] = useState("ALL");
   const [sortKey, setSortKey] = useState("overall_desc");
   const [statsCentralPayload, setStatsCentralPayload] = useState(null);
-  const [viewMode, setViewMode] = useState(VIEW_MODES.BOARD);
+  const [viewMode, ] = useState(VIEW_MODES.BOARD);
   const [activeTab, setActiveTab] = useState("overview");
-  const [showCoreOnly, setShowCoreOnly] = useState(false);
+  const [showCoreOnly, ] = useState(false);
   const [showWarningsOnly, setShowWarningsOnly] = useState(false);
-  const [advancedFiltersOpen, setAdvancedFiltersOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
-  const [detailsCollapsed, setDetailsCollapsed] = useState(false);
+  const [, setDetailsCollapsed] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [tablePage, setTablePage] = useState(0);
   const [selectedPlayerKey, setSelectedPlayerKey] = useState("");
@@ -6911,6 +6079,15 @@ export function RosterScreen() {
       EMPTY_OBJECT
     );
   }, [organizations, userTeamId, defaultOrgId, selectedOrganization]);
+
+  // Rights Held follows the Team picker: your list, or a read-only look at another club's.
+  const rightsTeamId = String(
+    selectedOrganization?.team_id ?? selectedOrganization?.id ?? selectedOrganization?.abbr ?? userTeamId ?? ""
+  );
+  const viewingUserOrg =
+    !rightsTeamId || rightsTeamId.toLowerCase() === String(userTeamId || "").toLowerCase() ||
+    String(selectedOrganization?.abbr || "").toLowerCase() === String(userTeamId || "").toLowerCase();
+  const rightsOrganization = viewingUserOrg ? userOrganization : selectedOrganization;
 
   const franchiseStatsLookup = useMemo(
     () =>
@@ -6979,7 +6156,7 @@ export function RosterScreen() {
 
     if (!rb || !Object.keys(rb).length) {
       if (browseSource === PLAYER_POOLS.MY_PROSPECTS) {
-        return collectMyProspectRawPlayers(rb, franchiseState, userTeamId, userOrganization);
+        return collectMyProspectRawPlayers(rb, franchiseState, rightsTeamId, rightsOrganization, { isUserTeam: viewingUserOrg });
       }
 
       return franchiseState?.roster || EMPTY_ARRAY;
@@ -7002,7 +6179,7 @@ export function RosterScreen() {
     }
 
     if (browseSource === PLAYER_POOLS.MY_PROSPECTS) {
-      return collectMyProspectRawPlayers(rb, franchiseState, userTeamId, userOrganization);
+      return collectMyProspectRawPlayers(rb, franchiseState, rightsTeamId, rightsOrganization, { isUserTeam: viewingUserOrg });
     }
 
     if (browseSource === PLAYER_POOLS.DEVELOPMENT) {
@@ -7044,6 +6221,9 @@ export function RosterScreen() {
     selectedOrganization,
     userOrganization,
     userTeamId,
+    rightsTeamId,
+    rightsOrganization,
+    viewingUserOrg,
     orgLevel,
     devLeagues,
     devLeagueIdx,
@@ -7062,18 +6242,6 @@ export function RosterScreen() {
     });
   }, [browseSource, draftBoard, rawPlayers, franchiseState, franchiseStatsLookup]);
 
-  const roleOptions = useMemo(() => {
-    const roles = Array.from(
-      new Set(
-        players
-          .map((player) => safeStr(player.roleLabel || player.role, ""))
-          .filter(Boolean)
-          .filter((role) => role !== "—")
-      )
-    ).sort((a, b) => a.localeCompare(b));
-
-    return ["ALL", ...roles];
-  }, [players]);
 
   const filteredPlayers = useMemo(() => {
     const query = safeStr(searchTerm, "").trim().toLowerCase();
@@ -7468,9 +6636,6 @@ export function RosterScreen() {
     return buildRosterWarnings(players, capInfo);
   }, [players, capInfo]);
 
-  const lineGroups = useMemo(() => {
-    return buildLineGroups(players);
-  }, [players]);
 
   const tableTotalPages = Math.max(1, Math.ceil(filteredPlayers.length / TABLE_PAGE_SIZE));
   const safeTablePage = clamp(tablePage, 0, tableTotalPages - 1);
@@ -7513,8 +6678,8 @@ export function RosterScreen() {
     }
 
     if (browseSource === PLAYER_POOLS.MY_PROSPECTS) {
-      const orgName = userOrganization?.name || franchiseState?.team?.name || "Organization";
-      return `${orgName} · My Prospects`;
+      const orgName = rightsOrganization?.name || franchiseState?.team?.name || "Organization";
+      return viewingUserOrg ? `${orgName} · My Prospects` : `${orgName} · Prospect Rights Held`;
     }
 
     if (browseSource === PLAYER_POOLS.DRAFT_CLASS) return "Draft Class";
@@ -7542,6 +6707,8 @@ export function RosterScreen() {
     orgLevel,
     selectedOrganization,
     userOrganization,
+    rightsOrganization,
+    viewingUserOrg,
     franchiseState,
     devLeagues,
     devLeagueIdx,
@@ -7549,27 +6716,6 @@ export function RosterScreen() {
     devTeamIdx,
   ]);
 
-  const countsLabel = useMemo(() => {
-    if (browseSource === PLAYER_POOLS.DRAFT_CLASS) {
-      const total = draftBoard?.total ?? draftBoard?.entries?.length ?? players.length;
-      const subtitle = draftBoard?.subtitle || draftBoard?.title || "Draft board";
-
-      return `${subtitle} · ${players.length}/${total}`;
-    }
-
-    if (rb?.counts) {
-      return [
-        `NHL ${rb.counts.nhl_contracted ?? orgSummary.nhl}`,
-        `AHL ${rb.counts.ahl_contracted ?? orgSummary.ahl}`,
-        `ECHL ${rb.counts.echl_contracted ?? orgSummary.echl}`,
-        `UFA ${rb.counts.free_agents ?? "—"}`,
-        `Overseas ${rb.counts.overseas ?? "—"}`,
-        `Dev ${rb.counts.junior_skaters ?? "—"}`,
-      ].join(" · ");
-    }
-
-    return `${orgSummary.total} loaded players`;
-  }, [browseSource, draftBoard, players.length, rb?.counts, orgSummary]);
 
   const activeTeamLabel = safeStr(
     franchiseState?.team?.name ||
@@ -7588,19 +6734,6 @@ export function RosterScreen() {
     }
   }, [canRefresh, refreshFranchise]);
 
-  const resetFilters = useCallback(() => {
-    setSearchTerm("");
-    setPositionFilter("ALL");
-    setLeagueFilter("ALL");
-    setStatusFilter("All");
-    setTypeFilter("ALL");
-    setRoleFilter("ALL");
-    setSortKey("overall_desc");
-    setShowCoreOnly(false);
-    setShowWarningsOnly(false);
-    setAdvancedFiltersOpen(false);
-    setTablePage(0);
-  }, []);
 
   const openScreen = useCallback(
     (screen) => {
@@ -7732,26 +6865,6 @@ export function RosterScreen() {
     return () => document.removeEventListener("mousedown", onMouseDown);
   }, []);
 
-  const poolOptions = useMemo(() => {
-    const options = [
-      { value: PLAYER_POOLS.ORGANIZATION, label: "Organization" },
-      { value: PLAYER_POOLS.MY_PROSPECTS, label: "My Prospects" },
-      { value: PLAYER_POOLS.FREE_AGENTS, label: "Free Agents" },
-      { value: PLAYER_POOLS.OVERSEAS, label: "Overseas / Unsigned" },
-      { value: PLAYER_POOLS.DEVELOPMENT, label: "Development Leagues" },
-    ];
-
-    const hasDraft =
-      Array.isArray(draftBoard?.entries) ||
-      Array.isArray(draftBoard?.players) ||
-      Array.isArray(draftBoard?.rankings);
-
-    if (hasDraft) {
-      options.push({ value: PLAYER_POOLS.DRAFT_CLASS, label: "Draft Class" });
-    }
-
-    return options;
-  }, [draftBoard]);
 
   const orgOptions = useMemo(() => {
     return organizations.map((org, index) => ({
@@ -7760,19 +6873,7 @@ export function RosterScreen() {
     }));
   }, [organizations]);
 
-  const devLeagueOptions = useMemo(() => {
-    return devLeagues.map((league, index) => ({
-      value: String(index),
-      label: league.league_name || league.league_code || `League ${index + 1}`,
-    }));
-  }, [devLeagues]);
 
-  const devTeamOptions = useMemo(() => {
-    return devTeams.map((team, index) => ({
-      value: String(index),
-      label: team.name || team.team_name || `Team ${index + 1}`,
-    }));
-  }, [devTeams]);
 
   const leaguePoolFilter = useMemo(() => {
     if (searchMode === PLAYER_SEARCH_MODES.NHL_LEAGUE) return "nhl";
@@ -7818,13 +6919,6 @@ export function RosterScreen() {
 
   const showTeamColumn = searchMode === PLAYER_SEARCH_MODES.NHL_LEAGUE;
 
-  const showPoolColumn =
-    showTeamColumn ||
-    browseSource === PLAYER_POOLS.MY_PROSPECTS ||
-    browseSource !== PLAYER_POOLS.ORGANIZATION ||
-    leagueFilter === "ALL" ||
-    viewMode === VIEW_MODES.TABLE ||
-    viewMode === VIEW_MODES.BOARD;
 
   return (
     <div className="nhlrost-root">
@@ -7972,7 +7066,7 @@ export function RosterScreen() {
                 />
 
                 <LeaguePoolSegmented value={leaguePoolFilter} onChange={handleLeaguePoolChange} />
-                {leaguePoolFilter === "rights" && typeof setScreen === "function" ? (
+                {leaguePoolFilter === "rights" && viewingUserOrg && typeof setScreen === "function" ? (
                   <button
                     type="button"
                     className="nhlrost-sign-prospects-btn"

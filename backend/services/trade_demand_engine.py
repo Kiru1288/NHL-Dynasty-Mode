@@ -15,23 +15,9 @@ from app.sim_engine.franchise.player_agent_engine import (
     ensure_player_agent,
     get_agent_gm_relationship,
 )
-from app.sim_engine.franchise.trade_stability_engine import (
-    CRISIS_DEADLINE_MAX,
-    apply_daily_stability_update,
-    apply_trade_hub_exposure,
-    clear_demand_temporary_modifiers,
-    crisis_distressed_asset_cost,
-    crisis_stage_from_remaining,
-    crisis_trade_value_multiplier,
-    ensure_player_storyline_state,
-    ensure_trade_stability_state,
-    formal_demand_eligible,
-    _player_character_0_100,
-    gather_player_concerns,
-    primary_complaint_from_pressures,
-    stability_to_escalation_level,
-    update_player_stability,
-)
+from app.sim_engine.franchise.trade_stability_engine import CRISIS_DEADLINE_MAX, apply_daily_stability_update, apply_trade_hub_exposure, clear_demand_temporary_modifiers, crisis_distressed_asset_cost, crisis_stage_from_remaining, crisis_trade_value_multiplier, ensure_player_storyline_state, formal_demand_eligible, _player_character_0_100, primary_complaint_from_pressures, update_player_stability
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 #: Depth players (70+) can now sour too — was 74, which excluded most bottom-six.
 DEMAND_MIN_OVR = 70
@@ -322,7 +308,7 @@ def seed_mntc_destinations(player: Any, league: Any, *, list_size: int = 8, rng:
     else:
         import random
 
-        stable = random.Random(abs(hash(("mntc", str(_get(player, "id", ""))))) & 0xFFFFFFFF)
+        stable = random.Random(int(__import__("hashlib").sha256(("mntc|" + str(_get(player, "id", ""))).encode()).hexdigest()[:12], 16) & 0xFFFFFFFF)
         picked = list(stable.sample(clubs, min(size, len(clubs))))
     chosen = []
     for tid, ab in picked:
@@ -339,7 +325,7 @@ def seed_mntc_destinations(player: Any, league: Any, *, list_size: int = 8, rng:
             setattr(contract, "approved_destinations", chosen)
             setattr(contract, "ntc_teams", chosen)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return chosen
 
 
@@ -450,7 +436,7 @@ def _apply_crisis_value_state(
             if char < 65:
                 setattr(player, "locker_room_disruptor", True)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     after = max(-20.0, base_before * mult - distressed)
     return mult, after
 
@@ -835,7 +821,7 @@ def open_trade_demand(
         try:
             setattr(player, "locker_room_disruptor", True)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     dests = _preferred_destinations(player, team, league, reason, rng=r, list_size=12)
     copy = REASON_COPY.get(reason) or REASON_COPY["general"]
@@ -890,11 +876,11 @@ def open_trade_demand(
         setattr(player, "_trade_demand_destinations", list(dests))
         setattr(player, "_trade_demand_team_id", tid)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         _enqueue_demand_surfaces(session, row, team)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return row
 
 
@@ -977,7 +963,7 @@ def _age_cpu_demands(session: Any, calendar_idx: int) -> Dict[str, int]:
                 setattr(player, "_trade_demand_destinations", list(row.get("preferred_destinations") or []))
                 setattr(player, "_trade_demand_team_id", tid)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
 
         if days_open >= CPU_DEMAND_STAGE3_DAYS:
             stage = 3
@@ -1001,7 +987,7 @@ def _age_cpu_demands(session: Any, calendar_idx: int) -> Dict[str, int]:
             try:
                 setattr(player, "_trade_demand_destinations", list(row.get("preferred_destinations") or []))
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         out["aged"] += 1
     return out
 
@@ -1020,7 +1006,7 @@ def process_trade_demand_day(session: Any, calendar_idx: int, day_meta: Optional
     sync_trade_demand_crises(session, tick_timers=False)
     cpu_aging = _age_cpu_demands(session, int(calendar_idx))
     deadline_ctx = get_trade_deadline_context(session)
-    book = ensure_trade_demands(session)
+    ensure_trade_demands(session)
 
     iso = ""
     try:
@@ -1235,7 +1221,7 @@ def _sync_stability_surface(session: Any, player: Any, team: Any, stability_row:
         try:
             setattr(player, "dossier_labels", new_labels[-8:])
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     flags = getattr(session, "trade_stability_roster_flags", None)
     if not isinstance(flags, dict):
@@ -1290,7 +1276,7 @@ def _maybe_enqueue_stability_warning(
         try:
             setattr(player, "dossier_labels", labels_dossier)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     popup = {
         "id": warn_key,
@@ -1300,7 +1286,7 @@ def _maybe_enqueue_stability_warning(
         "source_label": f"Agent — {agent.get('name', 'Representative')}",
         "headline": f"{name} — {tag}",
         "body": (
-            f"{agent.get('name', 'The player\'s agent')} has reached out regarding {name}'s "
+            f"{agent.get('name', 'The player’s agent')} has reached out regarding {name}'s "
             f"satisfaction (stability {stability_row.get('trade_stability_score')}). "
             f"No formal trade demand yet."
         ),
@@ -1404,7 +1390,7 @@ def _maybe_enqueue_stability_concern_hint(
         try:
             setattr(player, "dossier_labels", labels_dossier[-8:])
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     popup = {
         "id": warn_key,

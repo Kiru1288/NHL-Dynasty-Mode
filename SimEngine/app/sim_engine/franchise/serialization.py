@@ -3,6 +3,15 @@
 from __future__ import annotations
 
 from app.sim_engine.franchise._shared import *  # noqa: F401,F403
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
+
+def _stable_hash(value):
+    """Process-stable replacement for built-in hash() (salted per process via PYTHONHASHSEED)."""
+    import hashlib as _hl
+
+    return int.from_bytes(_hl.sha256(str(value).encode("utf-8")).digest()[:8], "big", signed=True)
+
 
 def _display_team(t: Any) -> str:
     city = str(getattr(t, "city", "") or "").strip()
@@ -1470,7 +1479,7 @@ def _serialize_player_row(
         if mods and eff_ovr != base_ovr:
             row["ovr"] = eff_ovr
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         from app.sim_engine.franchise.conduct_incidents import (  # noqa: WPS433
             get_active_incident_for_player,
@@ -1500,7 +1509,7 @@ def _serialize_player_row(
             if isinstance(inc, dict):
                 row["conduct_incident"] = serialize_incident_for_ui(inc)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return row
 def _prospect_league_for_player(p: Any) -> Optional[str]:
     asg = getattr(p, "_franchise_assignment", None) or {}
@@ -1670,7 +1679,7 @@ def _attach_prospect_stats_to_row(
             if v is not None:
                 row[k] = v
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _rows_from_players_list(
@@ -1821,7 +1830,7 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
 
         calendar_iso = _calendar_iso_for_day(session, int(getattr(session, "calendar_cursor", 0) or 0))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     stat_keys = (
         "gp",
         "games_played",
@@ -1876,7 +1885,7 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
                 pk = str(getattr(p, "id", "") or "")
                 if not pk:
                     continue
-                h = abs(hash(pk)) % 997
+                h = abs(_stable_hash(pk)) % 997
                 scout = max(18.0, min(99.0, ovr99 + (h % 23) - 11))
                 tier = ("A", "B", "C")[h % 3]
                 stats = prospect_stats_for_api(

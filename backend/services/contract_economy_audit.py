@@ -5,12 +5,12 @@ the living cap/contract system without adding new gameplay features.
 
 from __future__ import annotations
 
-import json
-import random
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 # Path bootstrap for standalone script execution
 _ROOT = Path(__file__).resolve().parents[2]
@@ -288,7 +288,7 @@ def bootstrap_audit_session(seed: int = 424242, *, full_franchise: bool = False)
     try:
         bootstrap_full_league_hierarchy(league, sim.rng)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     season_y = 2025
     _ensure_league_roster_contracts(league, season_y)
@@ -301,7 +301,7 @@ def bootstrap_audit_session(seed: int = 424242, *, full_franchise: bool = False)
         if callable(depth_fn):
             depth_fn(season_y, sim.rng)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     team_by_id: Dict[str, Any] = {}
     team_ids: List[str] = []
@@ -331,7 +331,7 @@ def bootstrap_audit_session(seed: int = 424242, *, full_franchise: bool = False)
         try:
             _seed_audit_prospect_pipeline(session)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     return session
 
 
@@ -554,7 +554,7 @@ def _validate_waiver_integrity(league: Any) -> List[str]:
             pid = str(entry.get("player_id", ""))
             orig = str(entry.get("original_team_id", ""))
             claim = str(entry.get("claimed_by", ""))
-            player = entry.get("player_ref")
+            entry.get("player_ref")
             on_orig = any(
                 _player_id(p) == pid
                 for t in (_get(league, "teams", None) or [])
@@ -720,20 +720,7 @@ def _validate_post_fa_audit(session: Any, cpu_result: Dict[str, Any]) -> List[Di
 
 
 def simulate_offseason_cycle(session: Any) -> SeasonSnapshot:
-    from app.sim_engine.economy.cap_engine import advance_league_salary_cap, player_cap_hit_millions
-    from services.contract_economy import (
-        compute_bad_contract_score,
-        compute_contract_tags,
-        compute_fair_aav,
-        compute_team_needs,
-        get_team_cap_snapshot_full,
-        has_nmc,
-        run_cap_compliance_before_season,
-        run_cpu_free_agency,
-        run_cpu_rfa_decisions,
-        run_prospect_promotion_pass,
-        team_cap_snapshot_legacy_compat,
-    )
+    from services.contract_economy import compute_team_needs, get_team_cap_snapshot_full, has_nmc, run_cap_compliance_before_season, run_cpu_free_agency, run_cpu_rfa_decisions, run_prospect_promotion_pass, team_cap_snapshot_legacy_compat
     from services.franchise_offseason import _advance_salary_cap
     from services.franchise_sim import _team_cap_snapshot
 
@@ -743,8 +730,8 @@ def simulate_offseason_cycle(session: Any) -> SeasonSnapshot:
 
     _advance_salary_cap(session)
 
-    fa_before = len(_get(league, "free_agents", None) or [])
-    rfa_before = sum(len(_get(t, "rfa_rights", None) or []) for t in (_get(league, "teams", None) or []))
+    len(_get(league, "free_agents", None) or [])
+    sum(len(_get(t, "rfa_rights", None) or []) for t in (_get(league, "teams", None) or []))
     cpu_rfa = run_cpu_rfa_decisions(session)
     snap.cpu_rfa_re_signed = int(cpu_rfa.get("re_signed_count", 0) or 0)
     snap.cpu_rfa_walked = int(cpu_rfa.get("walked_count", 0) or 0)
@@ -945,9 +932,6 @@ def run_stress_audit(
     seed: int = 424242,
     full_franchise: bool = False,
 ) -> AuditReport:
-    from app.sim_engine.economy.cap_engine import player_cap_hit_millions
-    from services.contract_economy import get_team_cap_snapshot_full
-
     session = bootstrap_audit_session(seed=seed, full_franchise=full_franchise)
     league = session.sim.league
     start_registry = _collect_player_registry(league)

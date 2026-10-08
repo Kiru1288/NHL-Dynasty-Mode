@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 # NHL team payroll ranges (millions USD).
 # 2025-26 .. 2027-28: NHL/NHLPA announced ranges (Jan 31 2025, nhl.com).
@@ -307,14 +309,14 @@ def _season_start_year_from_label(season_label: Optional[str], league: Any = Non
         try:
             return int(str(season_label).split("-")[0])
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     for key in ("season_year", "season_start_year", "current_season_year"):
         v = _get(league, key, None)
         if v is not None:
             try:
                 return int(v)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
     return None
 
 
@@ -329,7 +331,7 @@ def apply_nhl_salary_cap_for_season(league: Any, season_start_year: int) -> Dict
         setattr(league, "cap_floor", float(lower))
         setattr(league, "season_year", int(season_start_year))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     econ = _get(league, "economics", None)
     if econ is not None:
         try:
@@ -340,7 +342,7 @@ def apply_nhl_salary_cap_for_season(league: Any, season_start_year: int) -> Dict
                 setattr(econ, "salary_cap", float(upper))
                 setattr(econ, "cap_floor", float(lower))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     return {"upper": upper, "lower": lower}
 
 
@@ -489,7 +491,7 @@ def _league_cap_bounds_millions(
             try:
                 apply_nhl_salary_cap_for_season(league, int(season_y))
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         return {"upper": float(default_upper), "lower": float(default_lower)}
 
     upper = 0.0
@@ -532,7 +534,7 @@ def _league_cap_bounds_millions(
             try:
                 apply_nhl_salary_cap_for_season(league, int(season_y))
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
 
     return {"upper": upper, "lower": floor}
 
@@ -827,7 +829,7 @@ def advance_league_salary_cap(
         try:
             setattr(league, "cap_schedule_m", sched)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         floor = nhl_lower_limit_millions(int(sy_next), league)
     else:
         floor = round(next_cap * NHL_CAP_FLOOR_RATIO, 1)
@@ -867,7 +869,7 @@ def advance_league_salary_cap(
             setattr(econ, "cap_floor", float(floor))
             setattr(econ, "cap_growth_rate", float(getattr(league, "cap_growth_rate")))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     return row
 

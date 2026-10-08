@@ -4,7 +4,6 @@ Franchise offseason phase controller — year-over-year continuation after Stanl
 
 from __future__ import annotations
 
-import random
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -16,6 +15,8 @@ from app.sim_engine.franchise.calendar import (
     map_abstract_schedule_to_calendar,
     season_anchor_event_markers,
 )
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 OFFSEASON_STAGES: Tuple[str, ...] = (
     "awards",
@@ -42,6 +43,13 @@ STAGE_NEXT_EVENT: Dict[str, str] = {
     "roster_cleanup": "generate_next_season",
     "next_season_reveal": "preseason_start",
 }
+
+
+def _stable_hash(value):
+    """Process-stable replacement for built-in hash() (salted per process via PYTHONHASHSEED)."""
+    import hashlib as _hl
+
+    return int.from_bytes(_hl.sha256(str(value).encode("utf-8")).digest()[:8], "big", signed=True)
 
 
 def _sync_phase_fields(session: FranchiseSession) -> None:
@@ -247,7 +255,7 @@ def complete_playoffs(session: FranchiseSession) -> Dict[str, Any]:
         try:
             apply_career_award_history(teams, awards, season_year, result_id=payload["metadata"]["result_id"])
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         awards_dict = payload.get("awards") or {}
     except Exception:
         awards_dict = {k: _serialize_award(v) for k, v in (awards or {}).items()}
@@ -501,13 +509,7 @@ def _process_retirements(session: FranchiseSession) -> Dict[str, Any]:
 
 
 def _tick_league_contracts(session: FranchiseSession) -> Dict[str, Any]:
-    from app.sim_engine.franchise.engine import (
-        _build_free_agent_row,
-        _contract_years_remaining,
-        _is_true_free_agent,
-        _serialize_player_row,
-        player_cap_hit_millions,
-    )
+    from app.sim_engine.franchise.engine import _contract_years_remaining, _serialize_player_row
 
     sim = session.sim
     league = getattr(sim, "league", None)
@@ -599,7 +601,6 @@ def _run_offseason_development(session: FranchiseSession) -> Dict[str, Any]:
         return {"development_report": session.development_report_payload}
 
     import run_sim as rs
-    from app.sim_engine.franchise.engine import _franchise_nhl_age_and_phase_tick
 
     sim = session.sim
     league = getattr(sim, "league", None)
@@ -619,7 +620,7 @@ def _run_offseason_development(session: FranchiseSession) -> Dict[str, Any]:
         try:
             rs._run_player_progression_pass(teams, rng, None)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     for team in teams:
         for p in getattr(team, "roster", None) or []:
@@ -666,7 +667,7 @@ def _run_draft_lottery(session: FranchiseSession) -> Dict[str, Any]:
         lot_teams = []
         for i, row in enumerate(ordered[:16]):
             lot_teams.append(LotteryTeam(team_id=str(row.get("team_id", "")), points=int(row.get("pts", 0))))
-        seed = hash((int(session.season_calendar_year), int(getattr(sim.rng, "getstate", lambda: (0,))()[1][0] if hasattr(sim.rng, "getstate") else 0))) % (2**31)
+        seed = _stable_hash((int(session.season_calendar_year), int(getattr(sim.rng, "getstate", lambda: (0,))()[1][0] if hasattr(sim.rng, "getstate") else 0))) % (2**31)
         result = run_draft_lottery(teams=lot_teams, seed=seed)
         order = list(getattr(result, "pick_order", None) or [])
         for pick_num, tid in enumerate(order[:16], start=1):
@@ -742,7 +743,7 @@ def _prepare_resign_payload(session: FranchiseSession) -> Dict[str, Any]:
         from app.sim_engine.franchise.engine import _team_cap_snapshot
         user_cap = _team_cap_snapshot(user_team, sim, session) if user_team else {}
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     payload = {"expiring_contracts": expiring, "cap_snapshot": user_cap}
     session.resign_payload = payload
@@ -786,7 +787,7 @@ def _run_roster_cleanup(session: FranchiseSession) -> Dict[str, Any]:
         session.next_important_event = "generate_next_season"
         return {"roster_cleanup": payload}
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     user_team = session.team_by_id.get(session.user_team_id)
     roster = [
@@ -835,7 +836,6 @@ def _run_roster_cleanup(session: FranchiseSession) -> Dict[str, Any]:
 def generate_next_season(session: FranchiseSession) -> Dict[str, Any]:
     """Build new schedule/calendar — only increments year when data exists."""
     from app.sim_engine.league import generate_regular_season_schedule
-    from app.sim_engine.league.schedule_generator import _safe_team_id
     from app.sim_engine.league.standings import StandingsTable
     from app.sim_engine.franchise.engine import (
         _finalize_schedule_after_generation,

@@ -16,34 +16,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 import services.franchise_sim as franchise_sim
-from services.franchise_sim import (
-    advance_franchise_bulk,
-    advance_franchise_day,
-    advance_franchise_to_next_user_game,
-    advance_season_phase,
-    apply_decision,
-    apply_storyline_choice,
-    auto_resolve_franchise_decisions,
-    continue_franchise_offseason,
-    dismiss_franchise_popups,
-    enter_franchise_playoffs,
-    execute_franchise_draft_pick,
-    generate_franchise_next_season,
-    get_cached_trade_assets_payload,
-    get_contract_office,
-    get_franchise_chemistry_report,
-    get_franchise_game_detail,
-    list_teams_summary,
-    reopen_franchise_offseason_stage,
-    snapshot_draft_rank_prev,
-)
-from services.trade_service import (
-    build_trade_market_payload,
-    execute_franchise_trade,
-    evaluate_franchise_trade,
-    get_franchise_trade_history,
-    request_ntc_waiver,
-)
+from services.franchise_sim import advance_franchise_bulk, advance_franchise_day, advance_franchise_to_next_user_game, advance_season_phase, apply_decision, apply_storyline_choice, continue_franchise_offseason, dismiss_franchise_popups, enter_franchise_playoffs, execute_franchise_draft_pick, generate_franchise_next_season, get_cached_trade_assets_payload, get_franchise_chemistry_report, get_franchise_game_detail, list_teams_summary, reopen_franchise_offseason_stage, snapshot_draft_rank_prev
+from services.trade_service import execute_franchise_trade, evaluate_franchise_trade, get_franchise_trade_history, request_ntc_waiver
 from services.trade_finder import find_trade_offers
 from services.franchise_store import (
     active_session_count,
@@ -61,6 +35,8 @@ from services.franchise_scouting import (
     get_scouting_state,
     get_scouting_world,
 )
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 log = logging.getLogger("uvicorn.error")
 
@@ -101,7 +77,7 @@ async def _stamp_backend_identity(request, call_next):
         response.headers["X-API-Code-Revision"] = str(fp.get("revision") or "")
         response.headers["X-Response-Time-Ms"] = f"{elapsed_ms:.1f}"
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         from services.perf_profiler import record as perf_record
 
@@ -112,7 +88,7 @@ async def _stamp_backend_identity(request, call_next):
             meta={"status": getattr(response, "status_code", None)},
         )
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return response
 
 
@@ -187,6 +163,8 @@ class FranchisePopupDismissBody(BaseModel):
 
 class FranchiseTradeBody(BaseModel):
     assets_by_team: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    # True when the user pressed Propose (counts against GM patience, leaks rumours).
+    proposal: bool = False
 
 
 class FranchiseTradeFindBody(BaseModel):
@@ -537,7 +515,7 @@ def post_franchise_governance_vote(
     try:
         franchise_sim.invalidate_session_payload_caches(s, "governance_vote")
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     save_session(s)
     return json_safe(out)
 
@@ -558,6 +536,15 @@ def post_franchise_governance_lobby(
         raise HTTPException(status_code=400, detail=str(e)) from e
     save_session(s)
     return json_safe({"governance": payload})
+
+
+@app.get("/api/franchise/team-identity")
+def get_franchise_team_identity(x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    """Every club's playing identity (style, traits, what it hunts for)."""
+    from services.team_identity_service import team_identity_payload
+
+    s = _session_or_404(x_franchise_session)
+    return team_identity_payload(s)
 
 
 @app.get("/api/franchise/contract-office")
@@ -622,7 +609,7 @@ def _contract_action_route(action: str, body: dict[str, Any], session_header: Op
         result["contracts"] = result["re_sign"]
         save_session(s)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     if action in ("sign-elc", "prospect-rights", "submit-elc-offer"):
         try:
             from services.franchise_offseason import _run_prospect_rights_stage
@@ -633,7 +620,7 @@ def _contract_action_route(action: str, body: dict[str, Any], session_header: Op
             result["prospect_rights"] = rights.get("prospect_rights")
             save_session(s)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     from services.contract_economy import get_cached_contract_office
 
     s._cached_contract_office_payload = None
@@ -702,7 +689,7 @@ def post_roster_move(body: dict[str, Any] = Body(...), x_franchise_session: Opti
         try:
             result["state"] = build_state_payload(s)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     return result
 
 
@@ -854,6 +841,22 @@ def get_franchise_ahl_ledger(season: Optional[int] = None, x_franchise_session: 
     return build_ahl_ledger_payload(s, season)
 
 
+@app.get("/api/franchise/lines/view")
+def get_franchise_team_lines_view(
+    team_id: str,
+    level: str = "nhl",
+    x_franchise_session: Optional[str] = Header(default=None),
+) -> dict[str, Any]:
+    """Read-only lines for any club (NHL or AHL) — scouting view from Edit Lines."""
+    from services.team_lines_view import build_team_lines_view
+
+    s = _session_or_404(x_franchise_session)
+    try:
+        return build_team_lines_view(s, team_id, level)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
 @app.get("/api/franchise/ahl/lines")
 def get_franchise_ahl_lines(x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
     from services.ahl_league import build_ahl_lines_payload
@@ -965,16 +968,16 @@ def post_franchise_advance(
                 try:
                     snapshot_draft_rank_prev(s, s.sim)
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
         elif step.get("status") == "ok":
             try:
                 snapshot_draft_rank_prev(s, s.sim)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         save_session(s)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return {"step": step, "state": state}
 
 
@@ -1033,7 +1036,7 @@ def post_franchise_playoff_action(
     try:
         save_session(s)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return json_safe({"ok": True, "result": result, "state": state})
 
 
@@ -1077,7 +1080,7 @@ def post_franchise_offseason_continue(
     try:
         save_session(s)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     # step may include awards/retirements blobs with non-JSON leftovers.
     return json_safe({"step": step, "state": state})
 
@@ -1104,7 +1107,7 @@ def post_franchise_offseason_reopen_stage(
     try:
         save_session(s)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return json_safe({"step": step, "state": state})
 
 
@@ -1248,7 +1251,11 @@ def post_franchise_trade_evaluate(
 ) -> dict[str, Any]:
     s = _session_or_404(x_franchise_session)
     try:
-        evaluation = evaluate_franchise_trade(s, assets_by_team=dict(body.assets_by_team or {}))
+        evaluation = evaluate_franchise_trade(
+            s, assets_by_team=dict(body.assets_by_team or {}), record_rumor_fallout=bool(body.proposal),
+        )
+        if body.proposal:
+            save_session(s)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     return {"evaluation": evaluation}
@@ -1272,6 +1279,33 @@ def post_franchise_trade_find(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.get("/api/franchise/trade/inbound")
+def get_franchise_trade_inbound(
+    x_franchise_session: Optional[str] = Header(default=None),
+) -> dict[str, Any]:
+    from services.cpu_inbound_offers import active_inbound_offers
+
+    s = _session_or_404(x_franchise_session)
+    return {"offers": active_inbound_offers(s), "today": int(getattr(s, "calendar_cursor", 0) or 0)}
+
+
+class FranchiseInboundDeclineBody(BaseModel):
+    offer_id: str = Field(..., min_length=1)
+
+
+@app.post("/api/franchise/trade/inbound/decline")
+def post_franchise_trade_inbound_decline(
+    body: FranchiseInboundDeclineBody,
+    x_franchise_session: Optional[str] = Header(default=None),
+) -> dict[str, Any]:
+    from services.cpu_inbound_offers import decline_inbound_offer
+
+    s = _session_or_404(x_franchise_session)
+    out = decline_inbound_offer(s, body.offer_id)
+    save_session(s)
+    return out
 
 
 @app.post("/api/franchise/trade/ntc-waive")
@@ -1498,7 +1532,10 @@ def post_draft_combine_meeting(
     from services.franchise_scouting import apply_combine_user_meeting
 
     s = _session_or_404(x_franchise_session)
-    result = apply_combine_user_meeting(s, body.prospect_id, body.meeting_type)
+    try:
+        result = apply_combine_user_meeting(s, body.prospect_id, body.meeting_type)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     save_session(s)
     return {**result, "state": franchise_sim.build_state_payload(s, include_heavy=False)}
 
@@ -1712,12 +1749,23 @@ class BurnerPreviewBody(BaseModel):
 
 
 @app.get("/api/franchise/{session_id}/social-feed")
-def get_social_feed(session_id: str, tab: str = "all", sub: str = "all", page: int = 0) -> dict[str, Any]:
-    """Puckr / IceHole / burner feed generated from real sim state (services/social_feed_engine.py)."""
+def get_social_feed(
+    session_id: str,
+    tab: str = "all",
+    sub: str = "all",
+    page: int = 0,
+    thread_page: Optional[int] = None,
+    author: str = "",
+) -> dict[str, Any]:
+    """Puckr / IceHole / burner feed generated from real sim state (services/social_feed_engine.py).
+    Posts are written by the sim as days finish; this read only runs a cheap events catch-up."""
     s = _session_or_404(session_id)
     from services.social_feed_engine import build_social_feed_response
 
-    return build_social_feed_response(s, tab=tab, sub=sub, page=max(0, int(page)))
+    return build_social_feed_response(
+        s, tab=tab, sub=sub, page=max(0, int(page)),
+        thread_page=None if thread_page is None else max(0, int(thread_page)), author=str(author or ""),
+    )
 
 
 @app.get("/api/franchise/{session_id}/burner")
@@ -1734,7 +1782,8 @@ def preview_burner_post(session_id: str, body: BurnerPreviewBody) -> dict[str, A
     from app.sim_engine.franchise.burner_engine import preview_burner_risk  # noqa: WPS433
     from app.sim_engine.franchise.storyline_engine import _market_key_for_team  # noqa: WPS433
 
-    mk = body.market_key or _market_key_for_team(s, str(getattr(s, "user_team_id", "") or ""))
+    # The market is always your own club's (bug U5): picking a quieter market can't lower the risk.
+    mk = _market_key_for_team(s, str(getattr(s, "user_team_id", "") or ""))
     return preview_burner_risk(s, body.text, mk)
 
 
@@ -1744,8 +1793,13 @@ def post_burner(session_id: str, body: BurnerPostBody) -> dict[str, Any]:
     from app.sim_engine.franchise.burner_engine import submit_burner_post  # noqa: WPS433
     from app.sim_engine.franchise.storyline_engine import _market_key_for_team  # noqa: WPS433
 
-    mk = body.market_key or _market_key_for_team(s, str(getattr(s, "user_team_id", "") or ""))
-    result = submit_burner_post(s, body.text, mk, random.Random())
+    mk = _market_key_for_team(s, str(getattr(s, "user_team_id", "") or ""))
+    acct = getattr(s, "gm_burner_account", None) or {}
+    seed = f"{getattr(s, 'session_id', '')}|burner|{getattr(s, 'calendar_cursor', 0)}|{len(acct.get('posts') or [])}|{body.text}"
+    try:
+        result = submit_burner_post(s, body.text, mk, random.Random(seed))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     franchise_sim.invalidate_session_payload_caches(s, "burner_post")
     save_session(s)
     return {**result, "state": franchise_sim.build_state_payload(s, include_heavy=False)}

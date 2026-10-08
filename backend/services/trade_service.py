@@ -5,7 +5,6 @@ Franchise session trade service — bridges API to SimEngine trade module.
 from __future__ import annotations
 import os
 
-import uuid
 from typing import Any, Dict, List, Optional
 
 from services.franchise_paths import ensure_simengine_path
@@ -22,13 +21,11 @@ from app.sim_engine.trades.trade_pick_registry import (  # noqa: E402
     tradeable_draft_year,
     upcoming_draft_year,
 )
-from app.sim_engine.trades.trade_value import (  # noqa: E402
-    TRADE_VALUE_FORMULA_VERSION,
-    evaluate_pick_asset_value,
-    pick_value_hint,
-)
+from app.sim_engine.trades.trade_value import TRADE_VALUE_FORMULA_VERSION, pick_value_hint
 from app.sim_engine.economy.cap_engine import calculate_team_cap_snapshot  # noqa: E402
 from app.sim_engine.economy.team_needs import TeamNeeds  # noqa: E402
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 # Kept in backend (uvicorn-watched) so formula bumps reload the API process.
 # Keep in sync with SimEngine TRADE_VALUE_FORMULA_VERSION.
@@ -136,7 +133,14 @@ def _trade_context(session: Any) -> Dict[str, Any]:
         try:
             setattr(league, "player_season_stats", getattr(session, "player_season_stats", None))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+        # Pick / finish projections read each club's live record.
+        try:
+            from app.sim_engine.trades.trade_value import sync_trade_standings
+
+            sync_trade_standings(league, getattr(session, "standings", None))
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     cal = getattr(session, "nhl_calendar", None) or []
     cursor = int(getattr(session, "calendar_cursor", 0) or 0)
     max_d = max(40, int(getattr(session, "nhl_regular_season_last_index", 192) or 192))
@@ -168,7 +172,7 @@ def _trade_context(session: Any) -> Dict[str, Any]:
     try:
         prune_expired_consents(session)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     clause_window = waiver_window(session)
     return {
         "sim": sim,
@@ -223,7 +227,6 @@ def request_ntc_waiver(
         raise ValueError(f"Unknown destination team: {destination_team_id}")
 
     from app.sim_engine.trades.trade_asset import find_player_on_team_roster
-    from app.sim_engine.trades.trade_rules import evaluate_ntc_waiver_request
 
     player, _ = find_player_on_team_roster(src, str(player_id))
     if player is None:
@@ -238,11 +241,12 @@ def request_ntc_waiver(
     return decision
 
 
-def _ensure_trade_infrastructure(session: Any) -> None:
+def _ensure_trade_infrastructure(session: Any) -> Dict[str, Any]:
+    """Prepare the league for a trade call and return the trade context (built once)."""
     ctx = _trade_context(session)
     league = ctx["league"]
     if league is None:
-        return
+        return ctx
     try:
         setattr(league, "season_year", int(ctx["season_year"]))
         setattr(league, "current_season", int(ctx["season_year"]))
@@ -250,16 +254,145 @@ def _ensure_trade_infrastructure(session: Any) -> None:
         setattr(league, "draft_completed", bool(ctx.get("draft_completed")))
         setattr(league, "season_is_calendar", True)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     ensure_franchise_pick_registry(
         league,
         season_calendar_year=int(ctx["season_year"]),
         years_ahead=4,
         draft_completed=bool(ctx.get("draft_completed")),
     )
+    try:
+        from services.franchise_entry_draft import build_known_pick_slots
+
+        ctx["known_pick_slots"] = build_known_pick_slots(session)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    return ctx
+
+
+def _trade_state_signature(session: Any, assets_by_team: Dict[str, Any]) -> str:
+    import hashlib
+
+    league = getattr(getattr(session, "sim", None), "league", None)
+    parts = [
+        str(int(getattr(session, "calendar_cursor", 0) or 0)),
+        str(getattr(session, "phase", "") or ""),
+        str(len(getattr(league, "trade_history", None) or [])),
+        str(len(getattr(session, "ntc_waivers", None) or {})),
+    ]
+    team_by_id = getattr(session, "team_by_id", None) or {}
+    for tid in sorted(str(t) for t in (assets_by_team or {}).keys()):
+        tm = team_by_id.get(tid)
+        if tm is None:
+            continue
+        for attr in ("roster", "ahl_roster", "prospect_pool"):
+            parts.append(",".join(sorted(str(getattr(p, "id", "")) for p in (getattr(tm, attr, None) or []))))
+        # Injury status changes a player's value; don't reuse an evaluation from before he got hurt.
+        try:
+            from app.sim_engine.economy.team_needs import is_player_injured  # noqa: WPS433
+
+            parts.append(",".join(sorted(str(getattr(p, "id", "")) for p in (getattr(tm, "roster", None) or []) if is_player_injured(p))))
+        except Exception:
+            pass
+    return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
+
+
+GM_PATIENCE_WARN = 3  # rejected proposals to one GM in a day before he warns you
+GM_PATIENCE_LIMIT = 5  # ...and before he stops taking calls until tomorrow
+PING_PONG_DAYS = 30
+
+
+def _partner_of(session: Any, assets_by_team: Dict[str, Any]) -> str:
+    utid = str(getattr(session, "user_team_id", "") or "")
+    for tid in (assets_by_team or {}).keys():
+        if str(tid) != utid:
+            return str(tid)
+    return ""
+
+
+def _ping_pong_block(session: Any, assets_by_team: Dict[str, Any]) -> Optional[str]:
+    """U21: a GM won't hand back a player he just traded you (or take back one he just sent)."""
+    utid = str(getattr(session, "user_team_id", "") or "")
+    partner = _partner_of(session, assets_by_team)
+    if not partner:
+        return None
+    cur = int(getattr(session, "calendar_cursor", 0) or 0)
+    league = getattr(getattr(session, "sim", None), "league", None)
+    hist = list(getattr(league, "trade_history", None) or []) if league is not None else []
+    moving = {}
+    for tid, assets in (assets_by_team or {}).items():
+        for a in assets or []:
+            if str((a or {}).get("type") or "") in ("player", "prospect"):
+                moving[str(a.get("id") or "")] = str(tid)
+    for row in reversed(hist[-200:]):
+        if not isinstance(row, dict):
+            continue
+        day = row.get("calendar_day")
+        if day is None or cur - int(day or 0) > PING_PONG_DAYS:
+            continue
+        teams = {str(t) for t in (row.get("participating_teams") or [])}
+        if teams != {utid, partner}:
+            continue
+        for m in list(row.get("moved_players") or []):
+            pid = str((m or {}).get("asset_id") or "")
+            # He'd be going straight back to the club that just traded him away.
+            if pid in moving and str(m.get("source_team_id")) == moving[pid]:
+                name = str(m.get("player_name") or "that player")
+                return f"They just made the trade for {name} — they aren't reversing it this soon."
+    return None
 
 
 def evaluate_franchise_trade(
+    session: Any,
+    *,
+    assets_by_team: Dict[str, List[Dict[str, Any]]],
+    record_rumor_fallout: bool = False,
+) -> Dict[str, Any]:
+    """Evaluate a package. ``record_rumor_fallout`` marks a real proposal (Propose button):
+    it counts against the GM's patience and leaks rumours when rejected (U9, U24)."""
+    partner = _partner_of(session, assets_by_team)
+    cur = int(getattr(session, "calendar_cursor", 0) or 0)
+    patience = dict(getattr(session, "_gm_patience", None) or {})
+    pkey = f"{cur}|{partner}"
+    if record_rumor_fallout and partner and int(patience.get(pkey, 0) or 0) >= GM_PATIENCE_LIMIT:
+        return {
+            "accepted": False,
+            "can_execute": False,
+            "verdict": "rejected",
+            "rejection_reasons": ["Their GM has stopped taking your calls today. Try again tomorrow."],
+            "gm_patience": {"rejections_today": int(patience.get(pkey, 0)), "limit": GM_PATIENCE_LIMIT},
+            "cap_impact": {},
+        }
+    public = dict(_evaluate_franchise_trade_core(session, assets_by_team=assets_by_team))
+    block = _ping_pong_block(session, assets_by_team)
+    if block:
+        public["accepted"] = False
+        public["verdict"] = "rejected"
+        public["rejection_reasons"] = [block] + [r for r in list(public.get("rejection_reasons") or []) if r != block]
+    if record_rumor_fallout and partner:
+        if not public.get("accepted"):
+            n = int(patience.get(pkey, 0) or 0) + 1
+            patience = {k: v for k, v in patience.items() if str(k).startswith(f"{cur}|")}
+            patience[pkey] = n
+            session._gm_patience = patience
+            public["gm_patience"] = {"rejections_today": n, "limit": GM_PATIENCE_LIMIT}
+            if n >= GM_PATIENCE_WARN:
+                left = GM_PATIENCE_LIMIT - n
+                msg = (
+                    "Their GM is losing patience with these offers."
+                    + (f" {left} more and he stops taking your calls today." if left > 0 else " He's done for today.")
+                )
+                public["rejection_reasons"] = list(public.get("rejection_reasons") or []) + [msg]
+        try:
+            from app.sim_engine.franchise.storyline_engine import record_trade_hub_evaluation  # noqa: WPS433
+
+            record_trade_hub_evaluation(session, public, dict(assets_by_team or {}), proposal_submitted=True)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    return public
+
+
+def _evaluate_franchise_trade_core(
     session: Any,
     *,
     assets_by_team: Dict[str, List[Dict[str, Any]]],
@@ -269,7 +402,9 @@ def evaluate_franchise_trade(
 
     stats_rev = int(getattr(session, "_stats_revision", 0) or 0)
     assets_key = hashlib.sha256(repr(sorted((assets_by_team or {}).items())).encode()).hexdigest()[:24]
-    cache_key = f"{stats_rev}|{assets_key}"
+    # The verdict depends on rosters, the calendar and the trade log, not just stats:
+    # key on all of them so an executed trade or a roster move never serves a stale verdict.
+    cache_key = f"{stats_rev}|{assets_key}|{_trade_state_signature(session, assets_by_team)}"
     cached = getattr(session, "_trade_eval_cache", None)
     if isinstance(cached, dict) and str(cached.get("key") or "") == cache_key:
         payload = cached.get("payload")
@@ -279,8 +414,7 @@ def evaluate_franchise_trade(
                 cur = int(getattr(session, "calendar_cursor", 0) or 0)
                 out["trade_id"] = f"trade_{cur}_{assets_key[:8]}"
             return out
-    _ensure_trade_infrastructure(session)
-    ctx = _trade_context(session)
+    ctx = _ensure_trade_infrastructure(session)
     try:
         from services.franchise_sim import ensure_player_financials
 
@@ -304,7 +438,7 @@ def evaluate_franchise_trade(
                         ensure_player_financials(p, league, season_y, team=team)
                         break
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     result = evaluate_trade_package(
         dict(assets_by_team or {}),
         league=ctx["league"],
@@ -366,9 +500,133 @@ def evaluate_franchise_trade(
                 proposal_submitted=True,
             )
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     session._trade_eval_cache = {"key": cache_key, "payload": public}
     return public
+
+
+def process_pending_trade_waivers(session: Any) -> List[Dict[str, Any]]:
+    """Put non-exempt players a CPU club sent down after a trade on waivers (U10)."""
+    league = getattr(getattr(session, "sim", None), "league", None)
+    queue = list(getattr(league, "_pending_trade_waivers", None) or []) if league is not None else []
+    if not queue:
+        return []
+    try:
+        league._pending_trade_waivers = []
+    except Exception:
+        return []
+    out: List[Dict[str, Any]] = []
+    try:
+        from services.waivers import place_on_waivers
+    except Exception:
+        return out
+    user_tid = str(getattr(session, "user_team_id", "") or "")
+    teams = {str(getattr(t, "team_id", "")): t for t in list(getattr(league, "teams", None) or [])}
+    for item in queue:
+        tid = str((item or {}).get("team_id") or "")
+        pid = str((item or {}).get("player_id") or "")
+        team = teams.get(tid)
+        if team is None or not pid or tid == user_tid:
+            continue
+        player = next((p for p in list(getattr(team, "ahl_roster", None) or []) if str(getattr(p, "id", "")) == pid), None)
+        if player is None:
+            continue
+        try:
+            res = place_on_waivers(session, team, player, reason="trade_roster_room", manual=False)
+            if res and res.get("ok", True):
+                out.append({"team_id": tid, "player_id": pid})
+            else:
+                # NMC or similar: he stays in the AHL as before.
+                continue
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    return out
+
+
+OFFSEASON_TRADE_WINDOWS = {
+    # stage → (label, max deals)
+    "salary_cap": ("after the Cup", 3),
+    "draft": ("on the draft floor", 4),
+    "free_agency": ("on July 1", 3),
+}
+
+
+def run_offseason_cpu_trade_window(session: Any, stage: str) -> List[Dict[str, Any]]:
+    """C6: CPU clubs trade in the summer too — after the Cup, at the draft and on July 1."""
+    window = OFFSEASON_TRADE_WINDOWS.get(str(stage or ""))
+    if window is None:
+        return []
+    done = set(getattr(session, "_offseason_trade_windows_done", None) or set())
+    key = f"{int(getattr(session, 'season_calendar_year', 0) or 0)}:{stage}"
+    if key in done:
+        return []
+    done.add(key)
+    session._offseason_trade_windows_done = done
+    league = getattr(getattr(session, "sim", None), "league", None)
+    if league is None:
+        return []
+    label, cap = window
+    try:
+        from app.sim_engine.trades.cpu_trade_proposer import propose_and_execute_cpu_trades
+
+        try:
+            setattr(league, "_franchise_user_team_id", str(getattr(session, "user_team_id", "") or ""))
+            setattr(league, "_franchise_phase", str(getattr(session, "phase", "") or "offseason"))
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+        rows = propose_and_execute_cpu_trades(
+            league,
+            max_executions=int(cap),
+            calendar_cursor=int(getattr(session, "calendar_cursor", 0) or 0),
+            regular_season_last_index=int(getattr(session, "nhl_regular_season_last_index", 0) or 192),
+            offseason=True,
+        )
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+        return []
+    session._trade_eval_cache = None
+    try:
+        from services.franchise_sim import _record_storyline
+
+        for t in rows or []:
+            _record_storyline(
+                session,
+                {
+                    "type": "trade",
+                    "priority": "MEDIUM",
+                    "date": int(getattr(session, "calendar_cursor", 0) or 0),
+                    "headline": str(t.get("headline") or "Trade completed"),
+                    "summary": str(t.get("reason_text") or f"A deal {label}."),
+                    "team": str(t.get("to_team_id") or ""),
+                    "from_team_id": str(t.get("from_team_id") or ""),
+                    "trade_id": str(t.get("trade_id") or ""),
+                    "trade_category": str(t.get("trade_category") or ""),
+                    "offseason_window": label,
+                },
+            )
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    try:
+        process_pending_trade_waivers(session)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    return list(rows or [])
+
+
+def _user_roster_overflow(session: Any, ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    tid = str(ctx.get("user_team_id") or "")
+    team = (ctx.get("team_by_id") or {}).get(tid)
+    if team is None:
+        return None
+    n = len(list(getattr(team, "roster", None) or []))
+    if n <= 23:
+        return None
+    return {
+        "roster_size": n,
+        "limit": 23,
+        "over_by": n - 23,
+        "message": f"Your NHL roster is at {n}. Send down or waive {n - 23} player{'s' if n - 23 != 1 else ''} before the next game.",
+    }
 
 
 def execute_franchise_trade(
@@ -378,8 +636,11 @@ def execute_franchise_trade(
     record_notifications_fn: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """Evaluate and execute trade; raises ValueError on failure."""
-    _ensure_trade_infrastructure(session)
-    ctx = _trade_context(session)
+    ctx = _ensure_trade_infrastructure(session)
+    session._trade_eval_cache = None
+    block = _ping_pong_block(session, assets_by_team)
+    if block:
+        raise ValueError(block)
 
     evaluation = evaluate_trade_package(
         dict(assets_by_team or {}),
@@ -401,7 +662,7 @@ def execute_franchise_trade(
                 proposal_submitted=True,
             )
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     exec_result = execute_validated_trade(
         evaluation,
@@ -429,7 +690,7 @@ def execute_franchise_trade(
                     to_team_id=to_tid,
                 )
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     try:
         from services.trade_demand_engine import clear_demands_on_trade
@@ -445,7 +706,18 @@ def execute_franchise_trade(
 
             consume_consents(session, moved)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+
+    try:
+        placed = process_pending_trade_waivers(session)
+        warn = _user_roster_overflow(session, ctx)
+        if isinstance(exec_result, dict):
+            if placed:
+                exec_result["waiver_placements"] = placed
+            if warn:
+                exec_result["roster_warning"] = warn
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     if record_notifications_fn is not None:
         record_notifications_fn(session, exec_result, ctx)
@@ -460,14 +732,13 @@ def execute_franchise_trade(
             if isinstance(exec_result, dict):
                 exec_result["draft_clock"] = sync
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     return exec_result
 
 
 def build_trade_assets_payload(session: Any) -> Dict[str, Any]:
-    _ensure_trade_infrastructure(session)
-    ctx = _trade_context(session)
+    ctx = _ensure_trade_infrastructure(session)
     league = ctx["league"]
     if os.environ.get("NHL_FRANCHISE_DEBUG", "0") == "1":
         audit = audit_pick_registry_integrity(
@@ -524,7 +795,7 @@ def build_trade_assets_payload(session: Any) -> Dict[str, Any]:
                             c.standard_player_contract = True
                             p.signed_status = "signed"
                         except Exception:
-                            pass
+                            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     cap_kw = {
         "season_year": int(ctx["season_year"]),
@@ -718,8 +989,7 @@ def build_trade_assets_payload(session: Any) -> Dict[str, Any]:
 
 
 def build_trade_market_payload(session: Any) -> Dict[str, Any]:
-    _ensure_trade_infrastructure(session)
-    ctx = _trade_context(session)
+    ctx = _ensure_trade_infrastructure(session)
     league = ctx["league"]
     if league is None:
         return {"recent_trades": [], "market_temperature": "Cool", "teams": {}}

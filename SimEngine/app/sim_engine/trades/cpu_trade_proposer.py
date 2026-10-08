@@ -19,6 +19,8 @@ from app.sim_engine.trades.trade_value import (
     reduced_trade_value_fallback,
 )
 from app.sim_engine.economy.team_needs import TeamNeeds
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 logger = logging.getLogger(__name__)
 
@@ -946,8 +948,17 @@ def _pick_for_value(
     best: Optional[Dict[str, Any]] = None
     best_val = 0.0
     best_score = float("inf")
+    # Only the next three drafts are tradeable — don't build packages the rules will bounce.
+    try:
+        from app.sim_engine.trades.trade_pick_registry import draft_year_from_context
+
+        _dy = int(draft_year_from_context(ctx, league=league))
+    except Exception:
+        _dy = 0
     for row in get_team_owned_picks(league, tid):
         if bool(row.get("resolved")):
+            continue
+        if _dy and not (_dy <= _safe_int(row.get("year"), 0) <= _dy + 2):
             continue
         if str(row.get("pick_id") or "") in excluded:
             continue
@@ -983,9 +994,13 @@ def propose_and_execute_cpu_trades(
     fairness_gap_max: float = CPU_AMBIENT_FAIRNESS_GAP_MAX,
     season_year: Optional[int] = None,
     draft_year: Optional[int] = None,
+    offseason: bool = False,
 ) -> List[Dict[str, Any]]:
     """
     Generate and execute CPU-CPU trades using evaluate_trade_package + execute_validated_trade.
+
+    ``offseason=True`` runs a summer window (after the Cup, draft floor, July 1): no deadline
+    pressure, no rentals; rebuilders move veterans for futures and clubs swap surplus (C6).
     Ambient trades require legality, partner interest, and fair value — no AI bypass.
     """
     teams = list(getattr(league, "teams", None) or [])
@@ -1010,6 +1025,18 @@ def propose_and_execute_cpu_trades(
         draft_year=draft_year,
     )
     ctx["cpu_ambient_trade"] = True
+    if offseason:
+        ctx["deadline_phase"] = 0.0
+        ctx["days_to_deadline"] = 99
+        ctx["trade_deadline_passed"] = False
+        ctx["cpu_offseason_market"] = True
+        ctx["offseason_trade"] = True
+    try:
+        from app.sim_engine.trades.trade_value import sync_trade_standings
+
+        sync_trade_standings(league)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     # Board of Governors trade-volume rules (e.g. trade-call windows, holiday freezes).
     mods = getattr(league, "governance_modifiers", None)
     tv = float((mods or {}).get("trade_volume", 0.0) or 0.0) if isinstance(mods, dict) else 0.0
@@ -1028,7 +1055,7 @@ def propose_and_execute_cpu_trades(
         setattr(league, "draft_year", int(ctx["draft_year"]))
         setattr(league, "season_is_calendar", True)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     ensure_franchise_pick_registry(league, season_calendar_year=int(ctx["season_year"]), years_ahead=4)
     team_by_id = ctx["team_by_id"]
     profiles = dict(getattr(league, "cpu_franchise_profiles", None) or {})
@@ -1041,7 +1068,7 @@ def propose_and_execute_cpu_trades(
         try:
             setattr(tm, "gm_window", cw)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     needs_model = TeamNeeds()
     deadline = _safe_float(ctx.get("deadline_phase"), 0.0)
 
@@ -1065,6 +1092,7 @@ def propose_and_execute_cpu_trades(
     if int(partner_memory.get("counts_season", -1) or -1) != _season_key:
         partner_memory["season_pair_counts"] = {}
         partner_memory["season_team_trades"] = {}
+        partner_memory["season_lopsided_losses"] = {}
         partner_memory["counts_season"] = _season_key
     season_pair_counts = partner_memory.get("season_pair_counts")
     if not isinstance(season_pair_counts, dict):
@@ -1162,9 +1190,18 @@ def propose_and_execute_cpu_trades(
         buyer_window = _team_window(buyer)
         sold_ovr = _player_ovr(s_offer)
         buyer_assets: List[Any] = [] if pick_only else [b_return]
-        filler = _roster_filler(
-            seller, buyer, s_offer, None if pick_only else b_return, ctx=ctx, exclude=used_players,
-        )
+        b_return_2 = (extra or {}).get("return_player_2")
+        if extra is not None and "return_player_2" in extra:
+            # History rows are serialised — keep the id, not the object.
+            extra = dict(extra)
+            extra["return_player_2"] = _player_id(b_return_2) if b_return_2 is not None else ""
+        if b_return_2 is not None and not pick_only:
+            buyer_assets.append(b_return_2)  # 2-for-1 (C4)
+        filler = None
+        if b_return_2 is None:
+            filler = _roster_filler(
+                seller, buyer, s_offer, None if pick_only else b_return, ctx=ctx, exclude=used_players,
+            )
         if filler is not None:
             buyer_assets.append(filler)
         # Deadline deals routinely need the seller to retain salary to fit the buyer's cap,
@@ -1184,6 +1221,10 @@ def propose_and_execute_cpu_trades(
         if retain is None:
             _funnel(motive, "cap_no_fit")
             return False
+        planned_retain = float((extra or {}).get("planned_retention") or 0.0)
+        cap_retain = float(retain)
+        if planned_retain > retain:
+            retain = planned_retain  # seller retains on a rental to lift the return (C4)
         if retain > 0 and _player_id(s_offer) not in {_player_id(p) for p in list(getattr(seller, "roster", None) or [])}:
             retain = 0.0  # only NHL contracts carry retention
         # Seller already at the roster max → the buyer sends its extra body to the AHL
@@ -1194,7 +1235,13 @@ def propose_and_execute_cpu_trades(
         seller_nhl_ids = {_player_id(p) for p in list(getattr(seller, "roster", None) or [])}
         to_seller = sum(1 for a in buyer_assets if a is not None and _player_id(a) in buyer_nhl_ids)
         from_seller = 1 if _player_id(s_offer) in seller_nhl_ids else 0
-        if filler is not None and _active_count(seller, league) + to_seller - from_seller > _RMAX:
+        # Sell-offs are futures deals: the buyer's extra body goes to its own AHL club
+        # rather than to a rebuilding seller that doesn't want a depth vet (C4).
+        from app.sim_engine.trades.needs_matcher import SELLOFF_MOTIVES as _SELLOFFS
+
+        if filler is not None and (
+            motive in _SELLOFFS or _active_count(seller, league) + to_seller - from_seller > _RMAX
+        ):
             buyer_assets = [a for a in buyer_assets if a is not filler]
             send_down, filler = filler, None
         # Player coming back in a swap may not fit the SELLER's cap — the buyer retains.
@@ -1283,6 +1330,23 @@ def propose_and_execute_cpu_trades(
         if send_down is not None:
             _paper_send_down(buyer, send_down)
         outcome = _eval_exec()
+        if outcome is None and retain > cap_retain:
+            # The planned retention didn't clear (slots, 15% dead-money cap, value) — try
+            # the plain deal before giving up.
+            retain = cap_retain
+            package = _build_package(
+                seller,
+                buyer,
+                s_offer,
+                buyer_assets,
+                return_retained=return_retained,
+                retained_pct=float(retain),
+                seller_pick=seller_pick,
+                buyer_pick=buyer_pick,
+                buyer_pick_2=buyer_pick_2,
+            )
+            if package:
+                outcome = _eval_exec()
         if outcome is None:
             if send_down is not None:
                 _paper_recall(buyer, send_down)
@@ -1351,7 +1415,7 @@ def propose_and_execute_cpu_trades(
                     break
             setattr(league, "trade_history", hist)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         recent_pairs[pair_mem_key] = int(calendar_cursor)
         season_pair_counts[pair_mem_key] = season_count + 1
         team_trade_counts[sid] = int(team_trade_counts.get(sid, 0)) + 1
@@ -1397,15 +1461,15 @@ def propose_and_execute_cpu_trades(
         if seller_pick:
             yr = seller_pick.get("year")
             rnd = seller_pick.get("round")
-            outgoing_labels.append(f"{yr} Round {rnd}" if yr and rnd else f"Pick {seller_pick.get('pick_id') or '?'}")
+            outgoing_labels.append(f"{yr} Round {rnd}" if yr and rnd else "a draft pick")
         if buyer_pick:
             yr = buyer_pick.get("year")
             rnd = buyer_pick.get("round")
-            incoming_labels.append(f"{yr} Round {rnd}" if yr and rnd else f"Pick {buyer_pick.get('pick_id') or '?'}")
+            incoming_labels.append(f"{yr} Round {rnd}" if yr and rnd else "a draft pick")
         if buyer_pick_2:
             yr2 = buyer_pick_2.get("year")
             rnd2 = buyer_pick_2.get("round")
-            incoming_labels.append(f"{yr2} Round {rnd2}" if yr2 and rnd2 else f"Pick {buyer_pick_2.get('pick_id') or '?'}")
+            incoming_labels.append(f"{yr2} Round {rnd2}" if yr2 and rnd2 else "a draft pick")
         if not incoming_labels:
             incoming_labels = ["draft capital"]
         to_bits = ", ".join(outgoing_labels)
@@ -1627,14 +1691,18 @@ def propose_and_execute_cpu_trades(
         from app.sim_engine.trades.needs_matcher import SELLOFF_MOTIVES
 
         league_gp = _median([a.games_played for a in assessments.values()] or [0])
-        if league_gp < 20:
+        if ctx.get("cpu_offseason_market"):
+            selloff_cap = 3  # summer: rebuilders turn veterans into futures
+        elif league_gp < 20:
             selloff_cap = 0
         elif deadline < 0.3:
             selloff_cap = 1
         elif days_left_ctx == 0:
             selloff_cap = 99  # deadline day: everything left is for sale
         elif days_left_ctx <= 2:
-            selloff_cap = 2
+            selloff_cap = 3
+        elif days_left_ctx <= 7:
+            selloff_cap = 2  # C5: the deadline week moves real volume
         else:
             selloff_cap = 1  # sellers hold inventory for deadline day
         selloffs_done = 0
@@ -1716,13 +1784,17 @@ def propose_and_execute_cpu_trades(
                     buyer_pick_2=picks[1] if len(picks) > 1 else None,
                     motive=plan.motive,
                     attempt_gap_max=CPU_AMBIENT_FAIRNESS_GAP_MAX
-                    + 2.0 * premium_value
-                    + 2.0 * seller_discount_value
+                    + 2.0 * plan.premium * tv
+                    + 1.25 * (premium_value - plan.premium * tv)
+                    + 1.25 * seller_discount_value
                     + (8.0 if plan.motivated_seller else 0.0),
+                    # Lopsided plans no longer get the looser interest gate (C1 selection bias).
                     min_interest=0.30
-                    if (plan.motivated_seller or plan.premium > 0.0 or plan.lopsided_loser)
+                    if (plan.motivated_seller or plan.premium > 0.0)
                     else CPU_AMBIENT_MIN_INTEREST,
                     extra={
+                        "return_player_2": plan.return_player_2,
+                        "planned_retention": plan.retain_pct,
                         "reason_codes": plan.reason_codes,
                         "reason_text": plan.reason_text,
                         "trade_category": plan.trade_category,
@@ -1744,6 +1816,11 @@ def propose_and_execute_cpu_trades(
                 seller_deals[sid] = seller_deals.get(sid, 0) + 1
                 if plan.lopsided_loser:
                     telemetry["lopsided"] = int(telemetry.get("lopsided", 0) or 0) + 1
+                    _loser_id = bid if plan.lopsided_loser == "buyer" else sid
+                    _ll = partner_memory.setdefault("season_lopsided_losses", {})
+                    _ll[_loser_id] = int(_ll.get(_loser_id, 0) or 0) + 1
+                if plan.return_player_2 is not None:
+                    used_players.add(_player_id(plan.return_player_2))
                 if plan.motive in SELLOFF_MOTIVES:
                     selloffs_done += 1
                 if plan.motive == "panic_buy":
@@ -1829,7 +1906,7 @@ def propose_ahl_depth_trades(
                 row.setdefault("package_motive", "ahl_depth_swap")
                 break
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return [
         {
             "from_team_id": aid,

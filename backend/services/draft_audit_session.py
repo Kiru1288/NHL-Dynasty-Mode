@@ -1,8 +1,7 @@
 """Fast draft-class audit sessions — canonical path uses live ranking code only."""
 from __future__ import annotations
 
-import random
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from services.franchise_paths import ensure_simengine_path
 

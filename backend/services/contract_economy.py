@@ -14,18 +14,11 @@ import logging
 import math
 import hashlib
 import random
-from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.sim_engine.economy.cap_engine import (
-    buried_cap_hit_millions,
-    calculate_team_cap_snapshot,
-    can_sign_player,
-    can_trade_cap_fit,
-    normalize_money_to_millions,
-    player_cap_hit_millions,
-    validate_team_cap_compliance,
-)
+from app.sim_engine.economy.cap_engine import buried_cap_hit_millions, calculate_team_cap_snapshot, can_sign_player, normalize_money_to_millions, player_cap_hit_millions
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 CONTRACT_SCHEMA_VERSION = 2
 OFFER_SHEET_ELIGIBLE_AAV_CEILING_M = 3.613  # NHL Group-2 offer-sheet threshold (millions)
@@ -103,7 +96,7 @@ def _emit_contract_storyline(session: Any, text: str, *, kind: str = "contracts"
             session.storyline_events = []
             events = session.storyline_events
         events.append({
-            "id": f"contract-{abs(hash(text)) & 0xFFFFFFFF:08x}",
+            "id": f"contract-{_stable_seed(text) & 0xFFFFFFFF:08x}",
             "kind": kind,
             "severity": severity,
             "text": text,
@@ -111,7 +104,7 @@ def _emit_contract_storyline(session: Any, text: str, *, kind: str = "contracts"
         })
         session.storyline_events = events[-200:]
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 _NON_NHL_SPC_TYPES = frozenset({
     "AHL", "ECHL", "AHL_ECHL", "PTO", "ATO", "TRYOUT",
     "AHL_ONLY", "ECHL_ONLY", "AHLONLY", "ECHLONLY", "MINORS", "MINOR",
@@ -142,7 +135,16 @@ def _normalize_contract_type_token(raw: Any) -> str:
     return s or "STANDARD"
 
 
-LEAGUE_MINIMUM_AAV_M = 0.775
+#: 2026-27 league minimum (2025 MOU). ``league_minimum_aav`` steps it up by season.
+LEAGUE_MINIMUM_AAV_M = 0.85
+#: 2025 MOU minimum-salary schedule (season start year -> $M).
+LEAGUE_MINIMUM_SCHEDULE_M = {2025: 0.775, 2026: 0.85, 2027: 0.90, 2028: 0.95, 2029: 1.0}
+
+
+def _stable_seed(*parts: Any) -> int:
+    """Process-independent seed. Python's hash() of strings is randomized per run,
+    which rerolled every player's hidden negotiation personality on each restart."""
+    return int(hashlib.sha256("|".join(str(p) for p in parts).encode("utf-8")).hexdigest()[:12], 16)
 #: Cap the market-value curve is calibrated to (2026-27 upper limit).
 MARKET_VALUE_CAP_ANCHOR_M = 104.0
 MAX_SALARY_SHARE_OF_CAP = 0.20
@@ -161,7 +163,20 @@ def max_salary_share_of_cap(league: Any = None) -> float:
 
 def league_minimum_aav(league: Any = None) -> float:
     delta = float(_governance_mods(league).get("min_salary_m", 0.0) or 0.0)
-    return max(0.5, LEAGUE_MINIMUM_AAV_M + delta)
+    base = LEAGUE_MINIMUM_AAV_M
+    try:
+        sy = int(_get(league, "season_year", 0) or 0) if league is not None else 0
+    except (TypeError, ValueError):
+        sy = 0
+    if sy:
+        yrs = sorted(LEAGUE_MINIMUM_SCHEDULE_M)
+        if sy <= yrs[0]:
+            base = LEAGUE_MINIMUM_SCHEDULE_M[yrs[0]]
+        elif sy >= yrs[-1]:
+            base = LEAGUE_MINIMUM_SCHEDULE_M[yrs[-1]]
+        else:
+            base = LEAGUE_MINIMUM_SCHEDULE_M.get(sy, base)
+    return max(0.5, base + delta)
 
 
 def cba_max_term(league: Any = None, *, own_team: bool = True) -> int:
@@ -250,7 +265,7 @@ def _player_potential(player: Any) -> float:
         try:
             return float(ratings.get("dev_potential", 0) or 0)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         return float(_get(player, "potential", 0) or 0)
     except Exception:
@@ -350,7 +365,7 @@ def prune_owned_from_fa_pools(league: Any) -> int:
             try:
                 setattr(league, attr, keep)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
     return removed
 
 
@@ -817,7 +832,7 @@ def _clear_expired_contract(player: Any) -> None:
         player.cap_hit_m = 0.0
         player.aav_m = 0.0
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _strip_malformed_contract(player: Any) -> None:
@@ -849,18 +864,18 @@ def hydrate_player_contract(player: Any) -> None:
                 try:
                     setattr(c, k, v)
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
     except Exception:
         try:
             player.contract = normalized
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     try:
         player.cap_hit_m = normalized["cap_hit_m"]
         player.aav_m = normalized["aav_m"]
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def apply_contract_to_player(player: Any, contract: Dict[str, Any], season_year: int) -> None:
@@ -878,30 +893,30 @@ def apply_contract_to_player(player: Any, contract: Dict[str, Any], season_year:
             try:
                 setattr(existing, k, v)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
     else:
         try:
             player.contract = normalized
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     try:
         player.cap_hit_m = normalized["cap_hit_m"]
         player.aav_m = normalized["aav_m"]
         player.rights_status = normalized["rights_status"]
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     # Extension / re-sign replaces the pending July-1 burn — clear exclusivity flags
     # so the player is not force-expired into free agency on market open.
     try:
         setattr(player, "pending_july1_expiry", False)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         setattr(player, "ufa_exclusive", False)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     if isinstance(normalized, dict):
         normalized.pop("pending_july1_expiry", None)
     existing_after = _get(player, "contract", None)
@@ -933,7 +948,7 @@ def _agent_offer_dialogue(
         agent = ensure_player_agent(player, None)
         name = str((agent or {}).get("name") or name)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     who = _player_name(player)
     if accepted and instant:
         return f"{name}: {who} will sign this. Send the paperwork."
@@ -980,7 +995,7 @@ def _notify_contract_result(session: Any, text: str, *, priority: str = "HIGH") 
         except Exception:
             return
     row = {
-        "id": f"notif:contract:{len(notes)}:{abs(hash(text)) & 0xFFFF:x}",
+        "id": f"notif:contract:{len(notes)}:{_stable_seed(text) & 0xFFFF:x}",
         "type": "contract",
         "title": "Contract",
         "text": str(text)[:240],
@@ -1001,7 +1016,7 @@ def _notify_contract_result(session: Any, text: str, *, priority: str = "HIGH") 
             "priority": priority,
         })
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def get_team_cap_snapshot_full(
@@ -1028,7 +1043,7 @@ def get_team_cap_snapshot_full(
         include_expiring=bool(count_expiring),
     )
 
-    roster = _all_rostered(team)
+    _all_rostered(team)
     slots_used = _count_team_contract_slots(team)
 
     projected_next = None
@@ -1080,7 +1095,7 @@ def sync_team_cap_fields(team: Any, league: Any, sim: Any = None, **kwargs) -> D
         team.cap_space_m = snap["usable_cap_space_m"]
         team.cap_snapshot = snap
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return snap
 
 
@@ -1175,11 +1190,60 @@ def compute_peer_gap_score(player: Any, team: Any) -> float:
     return round(min(15.0, max(0.0, ovr - second)), 2)
 
 
+def _expected_ppg_for_player(player: Any) -> float:
+    """Typical points/game for a skater of this rating (D score ~62% of forwards)."""
+    try:
+        from app.sim_engine.progression.development import _expected_ppg_for_ovr
+
+        e = float(_expected_ppg_for_ovr(_player_ovr(player)))
+    except Exception:
+        e = max(0.08, (_player_ovr(player) - 50.0) * 0.02)
+    if _player_pos(player) == "D":
+        e *= 0.62
+    return max(0.08, e)
+
+
 def _player_production_score(player: Any) -> float:
-    """League-wide on-ice results in [0,1]. 0.5 = neutral / unknown so rating-
-    driven value is unaffected when no stats exist (keeps bootstrap stable)."""
+    """On-ice results vs. what a player of this rating usually produces, in [0,1].
+
+    0.5 = producing exactly to his rating (or no data). Reads, in order: imported
+    ``season_stats``, the live franchise ledger line synced onto the player
+    (``_live_season_line``), then last season's stamped ``production_score``.
+    Small samples shrink toward last season (or toward his rating) so a hot week
+    does not reprice a contract, but a hot half-season does.
+    """
     stats = _get(player, "season_stats", None) or {}
-    if not isinstance(stats, dict) or not stats:
+    if not isinstance(stats, dict):
+        stats = {}
+    if _player_pos(player) != "G":
+        pts = gp = None
+        if stats:
+            gp = float(stats.get("gp", stats.get("games_played", 0)) or 0)
+            pts = float(stats.get("pts", stats.get("points", 0)) or 0)
+        if not gp:
+            live = _get(player, "_live_season_line", None)
+            if isinstance(live, dict) and float(live.get("gp") or 0) > 0:
+                gp = float(live.get("gp") or 0)
+                pts = float(live.get("pts") or 0)
+        exp = _expected_ppg_for_player(player)
+        prior_rel, prior_gp = 1.0, 20.0
+        stamped = _get(player, "production_score", None)
+        try:
+            stamped_f = float(stamped) if stamped is not None else None
+        except (TypeError, ValueError):
+            stamped_f = None
+        if stamped_f is not None and 0.0 < stamped_f < 1.0:
+            # Stamp scale: 0.32 + PPG*0.55 (franchise_offseason._dev_stamp_season_production).
+            last_ppg = max(0.0, (stamped_f - 0.32) / 0.55)
+            prior_rel, prior_gp = max(0.3, min(2.2, last_ppg / exp)), 30.0
+        if gp and gp > 0:
+            rel = (float(pts or 0) + prior_gp * exp * prior_rel) / ((gp + prior_gp) * exp)
+        elif stamped_f is not None:
+            rel = 1.0 + (prior_rel - 1.0) * 0.75
+        else:
+            return 0.5
+        return max(0.0, min(1.0, 0.5 + (rel - 1.0) * 0.9))
+    if not stats:
         return 0.5
     if _player_pos(player) == "G":
         sv = stats.get("save_pct") or stats.get("sv_pct")
@@ -1223,7 +1287,7 @@ def _player_experience_factor(player: Any) -> float:
 def _player_negotiation_profile(player: Any) -> Dict[str, float]:
     """Deterministic, hidden per-player personality (item 10) plus a small
     fixed interest variance (item 5). Stable across calls for the same id."""
-    seed = abs(hash(("nego", _player_id(player)))) & 0xFFFFFFFF
+    seed = _stable_seed(("nego", _player_id(player))) & 0xFFFFFFFF
     r = random.Random(seed)
     return {
         "security_pref": round(r.uniform(0.0, 1.0), 3),
@@ -1259,10 +1323,11 @@ def compute_market_value(player: Any, league: Any = None) -> float:
             LEAGUE_MINIMUM_AAV_M
             + max(0.0, ovr - 58.0) * 0.12
             + max(0.0, ovr - 82.0) * 0.62
-            + max(0.0, ovr - 88.0) * 0.45
+            + max(0.0, ovr - 88.0) * 0.22
         )
-    # Production shifts value +/-~15% so results matter without overriding rating.
-    base *= 0.85 + 0.30 * _player_production_score(player)
+    # Production shifts value +/-~18%: a contract year well above his rating raises
+    # the ask; a dud season lowers it. Rating still sets the band.
+    base *= 0.82 + 0.36 * _player_production_score(player)
     # Only pay a youth-potential premium when there is some pro proof.
     if pot > 80 and age <= 24:
         base *= 1.0 + 0.08 * _player_experience_factor(player)
@@ -1358,7 +1423,7 @@ def compute_contract_tags(player: Any, team: Optional[Any] = None) -> List[str]:
     aav = player_cap_hit_millions(player) or c.get("aav_m", 0)
     ovr = _player_ovr(player)
     yrs = _contract_years_remaining(player)
-    age = _player_age(player)
+    _player_age(player)
     rights = c.get("rights_status", "UFA")
 
     if yrs <= 1:
@@ -1606,7 +1671,7 @@ def build_elc_contract(
 
             return normalize_contract_dict(offer_to_contract_dict(offer, season_year))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     return normalize_contract_dict({
         "type": "ELC",
         "contract_type": "ELC",
@@ -1643,7 +1708,7 @@ def _ensure_reserve_list(team: Any) -> List[Dict[str, Any]]:
         try:
             team.reserve_list = []
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         return getattr(team, "reserve_list", [])
     return reserve
 
@@ -1840,7 +1905,7 @@ def assign_elc_contract(
             )
             player.contract_burned = False
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     reserve = _ensure_reserve_list(team)
     for entry in reserve:
@@ -1869,7 +1934,7 @@ def assign_elc_contract(
             team.performance_bonus_reserve = new_reserve
             team.bonus_reserve_m = new_reserve
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     sync_team_cap_fields(team, league)
     return {
@@ -1932,7 +1997,7 @@ def apply_post_elc_assignment(
             setattr(player, "organizational_status", "signed_ahl")
             setattr(player, "current_league_id", getattr(player, "ahl_league_id", None) or "AHL")
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         moved = False
         try:
             moved = bool(
@@ -1953,21 +2018,21 @@ def apply_post_elc_assignment(
             if "JUNIOR" not in path and "CHL" not in path and "OHL" not in path:
                 setattr(player, "development_path", path or "JUNIOR")
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         result["organizational_status"] = "signed_junior"
     elif plan == "keep_college":
         try:
             setattr(player, "organizational_status", "signed_ncaa")
             setattr(player, "development_path", "NCAA")
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         result["organizational_status"] = "signed_ncaa"
     elif plan == "keep_europe":
         try:
             setattr(player, "organizational_status", "overseas_loan")
             setattr(player, "development_path", "EUROPE")
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         result["organizational_status"] = "overseas_loan"
     elif plan == "invite_camp":
         try:
@@ -1975,20 +2040,20 @@ def apply_post_elc_assignment(
             setattr(player, "camp_invite_season", int(season_year))
             setattr(player, "organizational_status", "signed_unassigned")
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         result["organizational_status"] = "signed_unassigned"
         result["camp_invite"] = True
     else:
         try:
             setattr(player, "organizational_status", "signed_unassigned")
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         result["organizational_status"] = "signed_unassigned"
 
     try:
         remove_prospect_from_ahl(team, player)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     result["in_minors"] = bool(getattr(player, "in_minors", False))
     return _mirror_post_elc_assignment_to_reserve(team, player, result)
 
@@ -2023,7 +2088,7 @@ def auto_sign_elc_on_promotion(
         player.entry_level_contract_eligible = True
         player.signed_status = "unsigned"
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     result = assign_elc_contract(player, team, league, season_year)
     if result.get("ok"):
@@ -2036,7 +2101,7 @@ def auto_sign_elc_on_promotion(
         player.entry_level_contract_eligible = False
         player.rights_status = "RFA"
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     sync_team_cap_fields(team, league)
     return {"ok": True, "contract": fallback, "fallback": True, "reason": result.get("reason")}
 
@@ -2046,7 +2111,7 @@ def install_prospect_contract_hooks(league: Any) -> None:
         league._on_nhl_roster_promotion = auto_sign_elc_on_promotion
         league._on_roster_make_room = make_roster_room_for_promotion
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def promote_prospect_to_nhl(
@@ -2078,7 +2143,7 @@ def promote_prospect_to_nhl(
         player.status = "nhl"
         player.prospect_status = "nhl"
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     # A player moving onto the active NHL roster can never simultaneously be an AHL
     # assignment — clear any stale minors placement so the two systems can't conflict
     # (e.g. a signing flow that set assignment_plan=assign_ahl before also promoting).
@@ -2087,7 +2152,7 @@ def promote_prospect_to_nhl(
 
         remove_prospect_from_ahl(team, player)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     if auto_elc:
         elc = auto_sign_elc_on_promotion(player, team, league, season_year)
@@ -2171,7 +2236,7 @@ def run_prospect_promotion_pass(session: Any) -> Dict[str, Any]:
                     setattr(p, "organizational_status", "signed")
                     setattr(p, "signed_status", "signed")
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
                 _ = reason
 
     wire = _ensure_waiver_wire(league)
@@ -2192,7 +2257,7 @@ def _ensure_rfa_rights_list(team: Any) -> List[Dict[str, Any]]:
         try:
             team.rfa_rights = []
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         return getattr(team, "rfa_rights", [])
     return rights
 
@@ -2285,7 +2350,7 @@ def refresh_offer_sheet_compensation_tiers(league: Any) -> List[Dict[str, Any]]:
         league.offer_sheet_compensation_tiers = tiers
         league.offer_sheet_compensation_cap_m = cap
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return tiers
 
 
@@ -2294,7 +2359,7 @@ def _active_offer_sheet_tiers(league: Any = None) -> List[Dict[str, Any]]:
         cached = _get(league, "offer_sheet_compensation_tiers", None)
         if isinstance(cached, list) and cached:
             return list(cached)
-        cap = _league_salary_cap_upper_limit(league)
+        _league_salary_cap_upper_limit(league)
         return refresh_offer_sheet_compensation_tiers(league)
     return resolve_offer_sheet_tiers(88.0)
 
@@ -2371,7 +2436,7 @@ def add_rfa_rights(team: Any, player: Any, season_year: int, league: Any = None)
     try:
         team.rfa_rights = rights_list
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     # Keep the off-roster RFA discoverable for demand / negotiate / qualify.
     try:
         from services.draft_player_registry import register_player
@@ -2384,7 +2449,7 @@ def add_rfa_rights(team: Any, player: Any, season_year: int, league: Any = None)
             if lg is not None:
                 register_player(lg, player)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return entry
 
 
@@ -2729,7 +2794,7 @@ def bury_player_contract(team: Any, player: Any, league: Any = None, *, skip_wai
         player.waiver_status = "buried"
         player.roster_location = "minors"
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     sync_team_cap_fields(team, league)
     return {
         "ok": True,
@@ -2754,7 +2819,7 @@ def unbury_player_contract(team: Any, player: Any, league: Any = None) -> Dict[s
         player.waiver_status = None
         player.roster_location = "nhl"
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     sync_team_cap_fields(team, league)
     return {"ok": True, "player_id": _player_id(player)}
 
@@ -2765,7 +2830,7 @@ def _ensure_waiver_wire(league: Any) -> List[Dict[str, Any]]:
         try:
             league.waiver_wire = []
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         return getattr(league, "waiver_wire", [])
     return wire
 
@@ -2876,7 +2941,7 @@ def expose_player_to_waivers(
         player.on_waiver_wire = True
         player.active_roster = False
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     sync_team_cap_fields(team, league)
     return {"ok": True, "waiver_entry": entry}
 
@@ -2978,7 +3043,7 @@ def _transfer_waiver_player(player: Any, from_team: Any, to_team: Any, league: A
         player.in_minors = False
         player.roster_location = "nhl"
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     sync_team_cap_fields(to_team, league)
 
 
@@ -3067,7 +3132,7 @@ def resolve_cleared_waivers(league: Any, sim: Any = None, *, season_year: Option
             player.waiver_status = "cleared"
             player.on_waiver_wire = False
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         cleared.append({
             "player_id": entry.get("player_id"),
             "team_id": tid,
@@ -3449,7 +3514,9 @@ def compute_player_demand(
     gap = compute_peer_gap_score(player, team) if team is not None else 0.0
     prof = _player_negotiation_profile(player)
 
-    leverage = 1.0 + 0.10 * importance + 0.035 * min(gap, 10.0)
+    # Leverage is modest: being your best player is a reason to pay market, not
+    # 30% over it (a 33-year-old was asking 1.32x market).
+    leverage = 1.0 + 0.06 * importance + 0.012 * min(gap, 10.0)
     want = market * leverage * _demand_context_multiplier(context)
     # Bet-on-self players push AAV up; security-minded shade it down for term.
     want *= 1.0 + 0.05 * (prof["gamble_pref"] - prof["security_pref"] * 0.6)
@@ -3465,7 +3532,7 @@ def compute_player_demand(
     ovr = _player_ovr(player)
     age = _player_age(player)
     pot = _player_potential(player)
-    term_rng = random.Random(abs(hash(("term", _player_id(player)))) & 0xFFFFFFFF)
+    term_rng = random.Random(_stable_seed(("term", _player_id(player))) & 0xFFFFFFFF)
     base_years = _term_for_profile(ovr, age, pot, importance, term_rng)
     yr_shift = int(round(prof["security_pref"] * 1.5 - prof["gamble_pref"] * 1.5))
     want_years = max(1, min(cba_max_term(league, own_team=context not in ("ufa", "free_agent", "fa")), base_years + yr_shift))
@@ -3535,8 +3602,14 @@ def compute_player_demand(
         if abs(_mm - 1.0) > 1e-6:
             want = max(LEAGUE_MINIMUM_AAV_M, round(want * _mm, 3))
             min_acceptable = max(LEAGUE_MINIMUM_AAV_M, round(min_acceptable * _mm, 3))
+        from services.negotiation_meetings import demand_discount_m
+
+        _disc = float(demand_discount_m(player, team, context) or 0.0)
+        if _disc > 0:
+            want = max(LEAGUE_MINIMUM_AAV_M, round(want - _disc, 3))
+            min_acceptable = max(LEAGUE_MINIMUM_AAV_M, round(min(min_acceptable, want * 0.94), 3))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     return {
         "market_value_m": market,
@@ -3585,6 +3658,23 @@ def evaluate_contract_offer(
     want_aav = demand["want_aav_m"]
     want_years = demand["want_years"]
     min_acceptable = demand["min_acceptable_aav_m"]
+    # Open market: the number on the FA board IS his ask (it already carries
+    # days-on-market decay). Negotiating against a second, hidden number made the
+    # board ask unsignable and kept the user out of the cold-market discount.
+    if str(context or "").lower() in ("ufa", "free_agent", "fa", "free_agency"):
+        try:
+            _sess_b = offer.get("_franchise_session") or offer.get("_session")
+            _book = getattr(_sess_b, "fa_market_book", None) if _sess_b is not None else None
+            _ent = ((_book or {}).get("entries") or {}).get(_player_id(player)) if isinstance(_book, dict) else None
+            _board = float((_ent or {}).get("ask_aav_m") or 0.0)
+            if _board > 0 and want_aav > 0:
+                _ratio = _board / want_aav
+                want_aav = round(_board, 3)
+                min_acceptable = max(LEAGUE_MINIMUM_AAV_M, round(min_acceptable * _ratio, 3))
+                demand["want_aav_m"] = want_aav
+                demand["min_acceptable_aav_m"] = min_acceptable
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     prof = demand["profile"]
     security = float(prof["security_pref"])
     gamble = float(prof["gamble_pref"])
@@ -3642,10 +3732,7 @@ def evaluate_contract_offer(
         pid = str(getattr(player, "id", "") or getattr(player, "player_id", "") or "")
         tid = str(getattr(team, "team_id", "") or getattr(team, "id", "") or "")
         if session is not None and pid:
-            from app.sim_engine.franchise.storyline_engine import (  # noqa: WPS433
-                _u_sync_player_entities,
-                build_human_dossier_payload,
-            )
+            from app.sim_engine.franchise.storyline_engine import _u_sync_player_entities
 
             entities = _u_sync_player_entities(session)
             entity = entities.get(pid) or {}
@@ -3677,7 +3764,7 @@ def evaluate_contract_offer(
 
             relationship_component += interest_adjustment(session, player, team, context)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     stay_interest = max(
         0.0,
         min(
@@ -3736,6 +3823,8 @@ def evaluate_contract_offer(
             import_component += 2.5
 
     lr_penalty, _lr_block, lr_tags = locker_room_fa_penalty(player)
+    if not str(context or "").lower() in ("ufa", "free_agent", "fa", "free_agency"):
+        _lr_block = False  # CPU hard-block is for open-market pursuit, not your own player
 
     other = (
         term_component * 0.35
@@ -3749,6 +3838,16 @@ def evaluate_contract_offer(
     )
     other = max(-6.0, min(6.0, other))
     interest = ask_anchor + salary_component + other
+    # Signing-bonus demand is a lever, not a wall: a shortfall costs interest,
+    # and a clear salary overpay buys some of it back.
+    bonus_short = False
+    _short_m = float(offer.get("_bonus_shortfall_m") or 0.0)
+    _dem_m = float(offer.get("_bonus_demand_m") or 0.0)
+    if _short_m > 0 and _dem_m > 0:
+        _frac = min(1.0, _short_m / _dem_m)
+        _buyback = max(0.0, min(1.0, gap_m / max(0.5, want_aav * 0.15)))
+        interest -= 9.0 * _frac * (1.0 - 0.7 * _buyback)
+        bonus_short = _frac >= 0.5 and _buyback < 0.5
     interest = max(0.0, min(100.0, interest))
 
     # Bonus / loyalty flexes the cash floor so AAV can sit under market want.
@@ -3794,16 +3893,33 @@ def evaluate_contract_offer(
         accept_cut -= 3.0
     accept_cut = max(48.0, accept_cut)
     accepted = interest >= accept_cut and meets_floor
-    # A player who is not eager to stay does not flip to yes over $100k.
-    # The gap has to be real money, on the order of a million.
-    if accepted and stay_label != "High" and gap_m < 0.75:
+    # A player who doesn't want to stay won't take less than his number.
+    if accepted and stay_label == "Low" and gap_m < 0:
         accepted = False
+    # His ask is his ask: meeting it (with acceptable term and the protection he
+    # wants) gets a yes. Previously the at-ask anchor sat under the acceptance bar
+    # and a +$750K rule rejected offers at, and even 20-40% over, the ask.
+    _clause_ok = preferred_clause == "None" or nmc or (ntc and preferred_clause != "NMC")
+    _term_ok = years >= max(1, want_years - 1) and not (age >= 32 and years > want_years + 2)
+    if (
+        aav_m >= want_aav - 0.005
+        and _clause_ok
+        and _term_ok
+        and not bonus_short
+        and not _lr_block
+    ):
+        interest = max(interest, accept_cut + 4.0 + min(20.0, max(0.0, gap_m) / max(0.25, want_aav) * 60.0))
+        interest = min(100.0, interest)
+        meets_floor = True
+        accepted = True
     instant_accept = accepted and interest >= (80.0 if ovr < 84 else 88.0)
 
     if accepted and instant_accept:
         reason = "Accepted immediately"
     elif accepted:
         reason = "Considering — will decide after reviewing the market"
+    elif bonus_short:
+        reason = "Wants cash up front (signing bonus)"
     elif not meets_floor:
         reason = "Wants higher AAV"
     elif preferred_clause != "None" and not ntc and not nmc:
@@ -3824,7 +3940,10 @@ def evaluate_contract_offer(
     if counter_years > years:
         term_relief = min(0.08, 0.02 * (counter_years - years) * (0.5 + security))
     counter_aav = round(max(effective_min, want_aav * (1.0 - term_relief)), 3)
-    counter_aav = max(counter_aav, round(aav_m * 1.02, 3))
+    # Never counter above an offer that already meets his number (the old +2%
+    # rule escalated forever: offer $2.54M vs a $2.12M ask -> counter $2.59M).
+    if aav_m >= counter_aav:
+        counter_aav = round(aav_m, 3)
     counter_nmc = bool(nmc or preferred_clause == "NMC")
     if counter_nmc:
         counter_ntc = False
@@ -4275,6 +4394,20 @@ def score_free_agent_fit(
     score = 0.12 + (ovr / 99.0) * 0.28 + need * 0.42
     if lr_penalty > 0:
         score -= min(0.35, lr_penalty / 100.0)
+    # Team identity: clubs chase free agents who fit how they play.
+    try:
+        _ident = getattr(team, "team_identity", None)
+        if isinstance(_ident, dict) and not _ident.get("is_user"):
+            from app.sim_engine.systems.team_identity import player_identity_fit
+
+            _fit = player_identity_fit(_ident, player)
+            score += 0.16 * (_fit - 0.5)
+            if _fit >= 0.68:
+                reasons.append("identity_fit")
+            elif _fit <= 0.36:
+                reasons.append("identity_mismatch")
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     if ovr >= best + 5:
         score += 0.14
@@ -4455,7 +4588,7 @@ def _find_player_in_league(league: Any, player_id: str) -> Tuple[Optional[Any], 
         if player is not None:
             return player, None
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return None, None
 
 
@@ -4622,7 +4755,7 @@ def sign_minor_or_tryout_contract(
             player.organizational_status = "tryout"
             player.status = "tryout"
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         return {"ok": True, "allowed": True, "contract": contract, "contract_category": "pto"}
 
     if category in ("echl",):
@@ -4656,7 +4789,7 @@ def sign_minor_or_tryout_contract(
         player.current_league_id = dest
         player.status = "minor"
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     # Place on affiliate / prospect pool — not NHL roster
     pool = list(_get(team, "prospect_pool", None) or [])
@@ -4674,7 +4807,7 @@ def sign_minor_or_tryout_contract(
         pid = _player_id(player)
         league.free_agents = [p for p in fa if _player_id(p) != pid]
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     sync_team_cap_fields(team, league)
     return {
@@ -4686,6 +4819,163 @@ def sign_minor_or_tryout_contract(
         "uses_nhl_slot": False,
         "nhl_cap_hit_m": 0.0,
     }
+
+
+# ---------------------------------------------------------------------------
+# Negotiation flow rules: extension eligibility, in-season reluctance, walk-away
+# ---------------------------------------------------------------------------
+
+_FA_CONTEXTS = ("ufa", "free_agent", "fa", "free_agency")
+TALKS_MAX_REJECTIONS = 4
+TALKS_MAX_LOWBALLS = 3
+LOWBALL_RATIO = 0.85
+
+
+def _talks_window(session: Any) -> str:
+    phase = str(getattr(session, "phase", "") or "").lower()
+    bucket = "off" if phase in ("offseason", "post_cup") else "season"
+    return f"{int(getattr(session, 'season_calendar_year', 0) or 0)}-{bucket}"
+
+
+def _talks_entry(session: Any, player_id: str) -> Dict[str, Any]:
+    root = getattr(session, "contract_talks", None)
+    if not isinstance(root, dict):
+        root = {}
+        session.contract_talks = root
+    key = f"{player_id}|{_talks_window(session)}"
+    ent = root.get(key)
+    if not isinstance(ent, dict):
+        ent = {"rejections": 0, "lowballs": 0, "closed": False}
+        root[key] = ent
+    return ent
+
+
+def _is_user_team(session: Any, team: Any) -> bool:
+    tid = str(_get(team, "team_id", "") or _get(team, "id", "") or "")
+    return bool(tid) and tid == str(getattr(session, "user_team_id", "") or "")
+
+
+def in_season_talks_reluctance(player: Any, season_year: int) -> float:
+    """Chance (stable per player per season) he refuses to talk contract mid-season."""
+    prof = _player_negotiation_profile(player)
+    ovr = _player_ovr(player)
+    p = (
+        0.12
+        + (0.22 if ovr >= 86 else (0.08 if ovr >= 80 else 0.0))
+        + 0.15 * float(prof.get("gamble_pref") or 0.5)
+        - 0.18 * float(prof.get("loyalty") or 0.5)
+    )
+    return max(0.04, min(0.50, p))
+
+
+def _negotiation_gate(
+    session: Any, player: Any, team: Any, league: Any, ctx: str, aav_m: float, season_year: int
+) -> Optional[Dict[str, Any]]:
+    """Rules that stop a user offer before the player even weighs it."""
+    if session is None or not _is_user_team(session, team):
+        return None
+    pid = _player_id(player)
+    name = _player_name(player)
+    own = str(ctx or "").lower() not in _FA_CONTEXTS
+    # CBA: an extension can only be signed in the final year of the current deal.
+    if own and str(ctx or "").lower() in ("re_sign", "offer", "extension", ""):
+        on_roster = pid in {_player_id(p) for p in _all_rostered(team)}
+        yrs = int(_contract_years_remaining(player) or 0)
+        if on_roster and yrs > 1:
+            return {
+                "ok": False,
+                "status": "invalid",
+                "reason": f"Extensions open in the final year of his contract — {name} has {yrs} years left.",
+            }
+    talks = _talks_entry(session, pid)
+    if talks.get("closed"):
+        when = "after the season" if _talks_window(session).endswith("season") else "in the next negotiating window"
+        return {
+            "ok": False,
+            "status": "rejected",
+            "reason": f"{name} has ended talks for now. His camp will listen again {when}.",
+            "talks": dict(talks),
+        }
+    phase = str(getattr(session, "phase", "") or "").lower()
+    if own and phase in ("regular", "playoffs", "playoff_ready"):
+        roll = random.Random(_stable_seed("in_season_talks", pid, int(season_year))).random()
+        if roll < in_season_talks_reluctance(player, season_year):
+            try:
+                want = float(compute_player_demand(player, team, league, context="re_sign").get("want_aav_m") or 0.0)
+            except Exception:
+                want = 0.0
+            blow_away = round(want * 1.08, 2)
+            if want <= 0 or aav_m < blow_away:
+                return {
+                    "ok": False,
+                    "status": "deferred",
+                    "reason": (
+                        f"{name} doesn't want to talk contract during the season — he'll negotiate "
+                        f"after the season. Only an offer of ${blow_away:.2f}M+ would change his mind."
+                    ),
+                    "blow_away_aav_m": blow_away,
+                }
+    return None
+
+
+def _record_talks_round(
+    session: Any, player: Any, team: Any, aav_m: float, want_aav_m: float
+) -> Dict[str, Any]:
+    """Count a rejected/countered user offer. Lowballs sour talks and raise his number;
+    too many rounds and he walks away until the next window."""
+    if session is None or not _is_user_team(session, team):
+        return {}
+    pid = _player_id(player)
+    talks = _talks_entry(session, pid)
+    talks["rejections"] = int(talks.get("rejections") or 0) + 1
+    if want_aav_m > 0 and aav_m < want_aav_m * LOWBALL_RATIO:
+        talks["lowballs"] = int(talks.get("lowballs") or 0) + 1
+        try:
+            from services.negotiation_meetings import _bump_gm_ledger, _contract_expiry
+
+            _bump_gm_ledger(session, pid, "negotiation_goodwill", -3.0)
+            setattr(player, "_lowball_ask_shift", {
+                "team_id": str(_get(team, "team_id", "") or _get(team, "id", "")),
+                "expiry": _contract_expiry(player),
+                "pct": min(6.0, 1.5 * int(talks["lowballs"])),
+            })
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    if talks["rejections"] >= TALKS_MAX_REJECTIONS or int(talks.get("lowballs") or 0) >= TALKS_MAX_LOWBALLS:
+        talks["closed"] = True
+    talks["rounds_left"] = max(0, TALKS_MAX_REJECTIONS - int(talks["rejections"]))
+    return dict(talks)
+
+
+def sync_live_production_lines(session: Any) -> int:
+    """Copy this season's ledger GP/points onto each player so contract value can
+    see how he's actually playing (``_player_production_score``)."""
+    pss = getattr(session, "player_season_stats", None)
+    league = getattr(getattr(session, "sim", None), "league", None)
+    if league is None:
+        return 0
+    if not isinstance(pss, dict):
+        pss = {}
+    players: List[Any] = []
+    for t in list(_get(league, "teams", None) or []):
+        players.extend(list(_get(t, "roster", None) or []))
+    players.extend(list(_get(league, "free_agents", None) or []))
+    n = 0
+    for p in players:
+        pid = _player_id(p)
+        row = pss.get(pid) if pid else None
+        try:
+            if isinstance(row, dict) and int(row.get("gp") or 0) > 0:
+                setattr(p, "_live_season_line", {
+                    "gp": int(row.get("gp") or 0),
+                    "pts": int(row.get("pts") or (int(row.get("g") or 0) + int(row.get("a") or 0))),
+                })
+                n += 1
+            elif getattr(p, "_live_season_line", None) is not None:
+                setattr(p, "_live_season_line", None)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    return n
 
 
 def sign_player_to_team(
@@ -4737,6 +5027,13 @@ def sign_player_to_team(
                 "feedback": f"{_offer_feedback_label(evaluation, aav_m, years)} · Can't submit: {reason}" if reason else _offer_feedback_label(evaluation, aav_m, years),
             },
         }
+    if not offer.get("force") and not offer.get("resolve_pending") and _ctx not in ("bootstrap",):
+        _gate = _negotiation_gate(
+            offer.get("_session") or offer.get("_franchise_session"),
+            player, team, league, _ctx, aav_m, int(season_year),
+        )
+        if _gate is not None:
+            return _gate
     if _ctx not in ("bootstrap",) and not offer.get("force"):
         try:
             _cap_ul = float(_league_salary_cap_upper_limit(league) or MARKET_VALUE_CAP_ANCHOR_M)
@@ -4787,7 +5084,7 @@ def sign_player_to_team(
                     # A player can't demand more than the rules let this club pay.
                     want_pct = min(want_pct, float(_e_cap.get("max_bonus_pct") or 0.0))
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         if want_pct > 0:
             # Bonus demand is anchored on his own ask, not on whatever the club offers —
             # and a clear overpay on salary buys out the cash-up-front demand.
@@ -4801,15 +5098,11 @@ def sign_player_to_team(
             total_val = max(0.001, base_aav * max(1, years))
             want_m = round(total_val * want_pct, 2)
             if want_pct > 0 and bonus_m + 1e-6 < want_m:
-                return {
-                    "ok": False,
-                    "status": "rejected",
-                    "reason": (
-                        f"{_player_name(player)} wants a signing bonus of at least "
-                        f"${want_m:.2f}M ({want_pct:.0%} of the deal)"
-                    ),
-                    "bonus_demand_pct": want_pct,
-                    "bonus_demand_m": want_m,
+                # Interest penalty in evaluate_contract_offer, not a submission wall.
+                offer = {
+                    **offer,
+                    "_bonus_shortfall_m": round(want_m - bonus_m, 3),
+                    "_bonus_demand_m": want_m,
                 }
     if bonus_m > 0 and not offer.get("force"):
         _sess_b = offer.get("_session")
@@ -5013,6 +5306,10 @@ def sign_player_to_team(
         interest = float(eval_result.get("interest") or 0)
         status = "rejected" if interest < 40.0 else "countered"
         counter = eval_result.get("counter_offer") or {}
+        _talks = _record_talks_round(session, player, team, aav_m, float(eval_result.get("want_aav_m") or 0.0))
+        if _talks.get("closed"):
+            status = "rejected"
+            eval_result = {**eval_result, "reason": f"{eval_result.get('reason') or 'No deal'} — he's ended talks for now"}
         if session is not None and pid and status == "countered":
             neg_map = getattr(session, "resign_negotiations", {}) or {}
             entry = neg_map.get(pid) if isinstance(neg_map.get(pid), dict) else None
@@ -5058,7 +5355,7 @@ def sign_player_to_team(
                     reason=str(eval_result.get("reason") or ""),
                 )
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         counter_feedback = _offer_feedback_label(eval_result, aav_m, years)
         if status == "countered":
             caav = counter.get("aav_m")
@@ -5107,6 +5404,7 @@ def sign_player_to_team(
                 "feedback": counter_feedback,
             },
             "negotiation": (getattr(session, "resign_negotiations", {}) or {}).get(pid) if session else None,
+            "talks": _talks,
         }
 
     # Competitive but not insane: hold pending until day sim resolves (unless force/resolve).
@@ -5171,7 +5469,7 @@ def sign_player_to_team(
                 reason=str(eval_result.get("reason") or ""),
             )
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         _notify_contract_result(
             session,
             f"Offer sent to {_player_name(player)}: ${aav_m:.2f}M × {years}y. Decision in about {resolve_days} day{'s' if resolve_days != 1 else ''}.",
@@ -5234,7 +5532,7 @@ def sign_player_to_team(
                 list_size=int(contract.get("modified_no_trade_teams") or 10),
             )
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     # Signed-state and playoff-eligibility are tracked separately (default eligible).
     playoff_eligible = bool(offer.get("playoff_eligible", True))
     contract["playoff_eligible"] = playoff_eligible
@@ -5257,7 +5555,7 @@ def sign_player_to_team(
         try:
             player.playoff_eligible = playoff_eligible
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         _remove_from_unsigned_pools(league, player)
         _notify_contract_result(
             session,
@@ -5282,7 +5580,7 @@ def sign_player_to_team(
     try:
         player.playoff_eligible = playoff_eligible
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     _remove_from_unsigned_pools(league, player)
     # Negotiated re-sign of an RFA must clear rights or the ghost "Rights" row
@@ -5305,7 +5603,7 @@ def sign_player_to_team(
                 player.contract["two_way"] = True
                 player.contract["is_two_way"] = True
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     else:
         roster = list(_get(team, "roster", None) or [])
         if player not in roster:
@@ -5322,12 +5620,12 @@ def sign_player_to_team(
             player.on_ltir = False
             player.organizational_status = "signed"
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     try:
         player.team_id = str(_get(team, "team_id", "") or _get(team, "id", ""))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     if session is not None and pid and str(offer.get("context") or "") in ("re_sign", "extension", "ufa", ""):
         try:
@@ -5354,7 +5652,7 @@ def sign_player_to_team(
                 },
             )
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     sync_team_cap_fields(team, league)
     signed_line = (
@@ -5480,7 +5778,7 @@ def release_rfa_rights(team: Any, player_id: str, league: Any, session: Any = No
         try:
             player.rights_status = "UFA"
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     if session is not None:
         try:
             from services.franchise_offseason import upsert_resign_phase_outcome
@@ -5494,7 +5792,7 @@ def release_rfa_rights(team: Any, player_id: str, league: Any, session: Any = No
                 reason="walked_away",
             )
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     return {"ok": True, "player_id": player_id, "status": "released"}
 
 
@@ -5533,7 +5831,7 @@ def execute_buyout(team: Any, player: Any, league: Any, season_year: int) -> Dic
         player.contract = None
         player.cap_hit_m = 0
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     sync_team_cap_fields(team, league)
     return {"ok": True, "buyout": est, "saved_aav_m": aav}
@@ -5586,7 +5884,7 @@ def sign_elc(
             try:
                 player.organizational_status = "signed_nhl"
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
 
     sync_team_cap_fields(team, league)
     return {"ok": True, "contract": result.get("contract")}
@@ -5696,7 +5994,6 @@ def compute_arbitration_award(
         cap_situation = max(0.0, min(1.0, usable / max(1.0, hi)))
     except Exception:
         cap_situation = 0.5
-    midpoint = (lo + hi) / 2.0
     base = (
         0.35 * (lo + (hi - lo) * prod)
         + 0.30 * max(lo, min(hi, market))
@@ -5704,7 +6001,7 @@ def compute_arbitration_award(
         + 0.15 * (lo + (hi - lo) * cap_situation)
     )
     var = random.Random(
-        abs(hash(("arb", _player_id(player), int(season_year)))) & 0xFFFFFFFF
+        _stable_seed(("arb", _player_id(player), int(season_year))) & 0xFFFFFFFF
     ).uniform(-0.03, 0.03)
     award = round(min(hi, max(lo, base * (1.0 + var))), 3)
     years = 2 if (age <= 27 and award <= market * 1.1) else 1
@@ -5783,7 +6080,7 @@ def activate_pending_extension(player: Any, season_year: int) -> bool:
     try:
         setattr(player, "pending_july1_expiry", False)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return True
 
 
@@ -5817,17 +6114,17 @@ def handle_player_contract_expiry(
                 c["years_remaining"] = 0
                 c.pop("pending_july1_expiry", None)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         elif c is not None:
             try:
                 if hasattr(c, "years_remaining"):
                     c.years_remaining = 0
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         try:
             setattr(player, "pending_july1_expiry", False)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     else:
         yrs_before = _contract_years_remaining(player)
         norm_peek = normalize_contract_payload(player)
@@ -5849,18 +6146,18 @@ def handle_player_contract_expiry(
                     c["pending_july1_expiry"] = True
                     c["years_remaining"] = 1
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
             try:
                 setattr(player, "pending_july1_expiry", True)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             return "kept"
 
         if c is not None and hasattr(c, "tick_year"):
             try:
                 c.tick_year()
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         elif isinstance(c, dict):
             try:
                 c["years_remaining"] = max(0, int(c.get("years_remaining", 0)) - 1)
@@ -5880,7 +6177,7 @@ def handle_player_contract_expiry(
         try:
             setattr(player, "pending_july1_expiry", False)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         return "rfa_rights"
 
     fa_pool = list(_get(league, "free_agents", None) or [])
@@ -5891,11 +6188,11 @@ def handle_player_contract_expiry(
     try:
         player.rights_status = "UFA"
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         setattr(player, "pending_july1_expiry", False)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     # Home-team exclusive window: former club gets first crack on the re-sign desk
     # before open free agency. Tag so the desk / market can find them.
     tid = str(_get(team, "team_id", "") or _get(team, "id", "") or "")
@@ -5905,7 +6202,7 @@ def handle_player_contract_expiry(
             player.previous_nhl_team_id = tid
             player.ufa_exclusive = True
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return "ufa"
 
 
@@ -6024,7 +6321,7 @@ def expire_pending_july1_contracts(session: Any) -> Dict[str, Any]:
     try:
         session.july1_contracts_expired = True
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return {
         "expired_ufas": expired_ufas,
         "expired_rfas": expired_rfas,
@@ -6204,7 +6501,7 @@ def _cpu_team_revenue_m(team: Any, session: Any = None) -> float:
         if rev > 0:
             return rev
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     if session is not None:
         try:
             from services.league_operations import calculate_team_revenue
@@ -6215,7 +6512,7 @@ def _cpu_team_revenue_m(team: Any, session: Any = None) -> float:
             if rev > 0:
                 return rev
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     # No session context (league-only callers): a stable mid-market estimate per club.
     # Returning 0 silently barred every CPU club from paying signing bonuses, so any
     # bonus-demanding free agent could never sign anywhere but the user's team.
@@ -6257,7 +6554,7 @@ def _cpu_negotiate_offer(
     ntc_mode = "NONE"
     nmc = False
     signing_bonus_m = 0.0
-    rng = random.Random(abs(hash(("cpu_nego", _player_id(player), _get(team, "team_id", "")))) & 0xFFFFFFFF)
+    rng = random.Random(_stable_seed(("cpu_nego", _player_id(player), _get(team, "team_id", ""))) & 0xFFFFFFFF)
 
     if ceiling is None:
         space = max(
@@ -6304,7 +6601,7 @@ def _cpu_negotiate_offer(
                     return False, round(aav, 3), years
                 signing_bonus_m = max(signing_bonus_m, round(max(aav * years, 0.25) * want_pct, 3))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     rounds = max(1, int(max_rounds))
     if float(_player_ovr(player)) >= 88:
@@ -6341,7 +6638,7 @@ def _cpu_negotiate_offer(
         try:
             signing_bonus_m = max(signing_bonus_m, float(co.get("signing_bonus_m") or 0))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         nxt_cap = _cap_hit(nxt_aav, nxt_years, signing_bonus_m)
         space = max(0.0, float(ctx.get("cap_space_m", 0) or 0))
         if nxt_cap > ceiling + 1e-6:
@@ -6395,30 +6692,73 @@ def run_cpu_prospect_rights_pass(session: Any) -> Dict[str, Any]:
         if not tid or tid == user_tid:
             continue
         prof = profiles.get(tid) if isinstance(profiles.get(tid), dict) else {}
-        if prof.get("prospect_rights_complete"):
+        # Once per season (the flag used to be permanent, so CPU clubs stopped signing
+        # their draft picks after the first offseason).
+        done_key = f"prospect_rights_complete_{season_year}"
+        if prof.get(done_key):
             continue
         slots = validate_contract_slots(team, league, additional=0)
-        open_slots = max(0, CONTRACT_SLOTS_LIMIT - int(slots.get("contract_slots_used") or 0))
+        # Keep one contract slot free for in-season moves. In the offseason, deals that
+        # are running out free their slots on July 1 — real clubs sign their picks
+        # knowing that (they used to sit at 48/50 and never sign anyone).
+        used = int(slots.get("contract_slots_used") or 0)
+        expiring = 0
+        if str(getattr(session, "phase", "") or "").lower() not in ("regular", "playoffs", "preseason"):
+            for p_ in list(getattr(team, "roster", None) or []) + list(getattr(team, "ahl_roster", None) or []):
+                try:
+                    if _contract_years_remaining(p_) <= 1 and _player_age(p_) >= 24:
+                        expiring += 1
+                except Exception:
+                    continue
+        open_slots = max(0, CONTRACT_SLOTS_LIMIT - 1 - used + int(expiring * 0.6))
         signed_here = 0
-        for p in list(getattr(team, "prospect_pool", None) or []):
+        pool_ids = {str(_player_id(p)) for p in list(getattr(team, "prospect_pool", None) or [])}
+        rights_kids = list(getattr(team, "prospect_pool", None) or [])
+        # Drafted kids still on junior / NCAA / European clubs hold this club's rights too.
+        for block in list(getattr(league, "development_leagues", None) or []):
+            for jt in (block.get("teams") or []) if isinstance(block, dict) else []:
+                for kid in (jt.get("players") or []) if isinstance(jt, dict) else []:
+                    if kid is None or getattr(kid, "retired", False):
+                        continue
+                    if str(getattr(kid, "nhl_rights_team_id", None) or getattr(kid, "rights_team_id", None) or "") != tid:
+                        continue
+                    if str(_player_id(kid)) not in pool_ids:
+                        rights_kids.append(kid)
+                        pool_ids.add(str(_player_id(kid)))
+
+        def _pot(pl: Any) -> float:
+            try:
+                from app.sim_engine.progression.potential import read_player_potential99  # noqa: WPS433
+
+                return float(read_player_potential99(pl) or 0.0)
+            except Exception:
+                return 0.0
+
+        # Best prospects first, so limited slots go to the ones who matter.
+        rights_kids.sort(key=lambda pl: (-_pot(pl), -_player_ovr(pl)))
+        for p in rights_kids:
             if str(getattr(p, "signed_status", "unsigned") or "").lower() == "signed":
                 continue
             if not bool(getattr(p, "entry_level_contract_eligible", True)):
                 continue
             age = _player_age(p)
             ovr = _player_ovr(p)
+            pot = _pot(p)
             expiry = getattr(p, "rights_expiry_year", None)
             urgent = expiry is not None and int(expiry or 9999) <= season_year + 1
-            # Contenders / urgent rights / NHL-ready tools → sign a small subset.
+            # Sign the kids who are ready or who'd otherwise walk; leave 18-year-olds
+            # in junior unless they're special.
             should_sign = False
-            if open_slots <= 0 or signed_here >= 2:
+            if open_slots <= 0 or signed_here >= 3:
                 should_sign = False
-            elif urgent and ovr >= 58:
+            elif urgent and (ovr >= 58 or pot >= 68):
+                should_sign = True  # use it or lose it
+            elif age >= 20 and (ovr >= 62 or pot >= 72):
                 should_sign = True
-            elif age >= 20 and ovr >= 64:
+            elif age == 19 and (ovr >= 66 or pot >= 80):
                 should_sign = True
-            elif age <= 18 and ovr < 62:
-                should_sign = False
+            elif age <= 18 and ovr >= 72:
+                should_sign = True  # NHL-ready teenager
             if should_sign:
                 try:
                     from services.elc_offer_engine import submit_elc_offer
@@ -6449,6 +6789,7 @@ def run_cpu_prospect_rights_pass(session: Any) -> Dict[str, Any]:
                         "action": "elc_declined",
                     })
         prof = dict(prof)
+        prof[done_key] = True
         prof["prospect_rights_complete"] = True
         profiles[tid] = prof
 
@@ -6640,6 +6981,12 @@ def run_cpu_in_season_free_agency(
       * only when a team has a real positional need (high need score or an unfilled hole),
       * players must ACCEPT through negotiation — no force-sign of a rejected offer.
     """
+    try:
+        from services.contract_economy import sync_live_production_lines as _sync_lpl
+    
+        _sync_lpl(session)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     sim = session.sim
     league = getattr(sim, "league", None)
     if league is None:
@@ -6774,7 +7121,6 @@ def run_cpu_rfa_decisions(session: Any) -> Dict[str, Any]:
     sim = session.sim
     league = getattr(sim, "league", None)
     season_year = int(getattr(session, "season_calendar_year", 2025) or 2025)
-    rng = getattr(sim, "rng", None) or random.Random(0)
     user_tid = str(getattr(session, "user_team_id", "") or "")
 
     re_signed: List[Dict[str, Any]] = []
@@ -6975,7 +7321,7 @@ def run_cpu_own_ufa_resign(session: Any) -> Dict[str, Any]:
             try:
                 setattr(p, "ufa_exclusive", True)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         by_team.setdefault(from_tid, []).append(p)
 
     re_signed: List[Dict[str, Any]] = []
@@ -7018,7 +7364,7 @@ def run_cpu_own_ufa_resign(session: Any) -> Dict[str, Any]:
                 try:
                     setattr(player, "ufa_exclusive", False)
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
                 walked.append({
                     "team_id": tid, "player_id": pid, "overall": round(ovr),
                     "position": pos, "reason": "no_room" if unaffordable else "surplus",
@@ -7064,7 +7410,7 @@ def run_cpu_own_ufa_resign(session: Any) -> Dict[str, Any]:
                             try:
                                 setattr(player, "ufa_exclusive", False)
                             except Exception:
-                                pass
+                                _swallowed_log.debug("suppressed exception", exc_info=True)
                             re_signed.append({
                                 "team_id": tid, "player_id": pid, "name": _player_name(player),
                                 "overall": round(ovr), "position": pos,
@@ -7075,7 +7421,7 @@ def run_cpu_own_ufa_resign(session: Any) -> Dict[str, Any]:
                 try:
                     setattr(player, "ufa_exclusive", False)
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
                 walked.append({
                     "team_id": tid, "player_id": pid, "overall": round(ovr),
                     "position": pos, "reason": "wants_contender",
@@ -7092,7 +7438,7 @@ def run_cpu_own_ufa_resign(session: Any) -> Dict[str, Any]:
                 try:
                     setattr(player, "ufa_exclusive", False)
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
                 walked.append({
                     "team_id": tid, "player_id": pid, "overall": round(ovr),
                     "position": pos, "reason": "no_agreement",
@@ -7114,7 +7460,7 @@ def run_cpu_own_ufa_resign(session: Any) -> Dict[str, Any]:
                 try:
                     setattr(player, "ufa_exclusive", False)
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
                 walked.append({
                     "team_id": tid, "player_id": pid, "overall": round(ovr),
                     "position": pos, "reason": str(result.get("reason") or "sign_failed"),
@@ -7126,7 +7472,7 @@ def run_cpu_own_ufa_resign(session: Any) -> Dict[str, Any]:
             try:
                 setattr(player, "ufa_exclusive", False)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             re_signed.append({
                 "team_id": tid, "player_id": pid, "name": _player_name(player),
                 "overall": round(ovr), "position": pos,
@@ -7136,7 +7482,7 @@ def run_cpu_own_ufa_resign(session: Any) -> Dict[str, Any]:
     try:
         league.free_agents = fa_pool
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     return {
         "re_signed": re_signed,
@@ -7205,7 +7551,7 @@ def _apply_offer_sheet_decision(
     try:
         player.team_id = str(_get(offering_team, "team_id", "") or _get(offering_team, "id", ""))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     comp = _record_offer_sheet_compensation(
         league,
         offering_team,
@@ -7333,7 +7679,7 @@ def tick_offer_sheets(
         rights_team = _team(sheet.get("rights_team_id", ""))
         offering_team = _team(sheet.get("offering_team_id", ""))
         aav_m = round(normalize_money_m(sheet.get("aav_m") or 0), 3)
-        years = max(1, int(sheet.get("years") or 1))
+        max(1, int(sheet.get("years") or 1))
         filed_day = int(sheet.get("filed_day") or 0)
         expires_day = int(sheet.get("expires_day") or (filed_day + OFFER_SHEET_MATCH_WINDOW_DAYS))
         days_elapsed = max(0, day - filed_day)
@@ -7356,7 +7702,6 @@ def tick_offer_sheets(
         if is_user_rights and not force_finalize:
             sheet["days_remaining"] = max(0, expires_day - day)
             if days_elapsed >= 4 and not sheet.get("pressure_emitted"):
-                pname = sheet.get("player_name") or _player_name(player)
                 _emit_contract_storyline(
                     session,
                     f"Offer sheet decision due soon: match or decline {_player_name(player)} "
@@ -7595,7 +7940,7 @@ def _record_offer_sheet_compensation(
                     "pick_id": str(match["pick_id"]),
                 })
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     log = _get(league, "offer_sheet_compensation_log", None)
     if not isinstance(log, list):
         try:
@@ -7987,9 +8332,19 @@ def _select_team_trade_pick(
 
     ensure_draft_pick_registry(league)
     picks = get_team_owned_picks(league, _team_id(team))
+    # Only the next three drafts are tradeable (trade_rules blocks the rest), so the
+    # cap-dump sweetener used to pick an untradeable 2030 pick and the deal failed.
+    try:
+        from app.sim_engine.trades.trade_pick_registry import upcoming_draft_year  # noqa: WPS433
+
+        season = int(getattr(league, "season_year", None) or getattr(league, "current_season", None) or 0)
+        first_year = upcoming_draft_year(season) if season else None
+    except Exception:
+        first_year = None
     eligible = [
         p for p in picks
         if min_round <= int(p.get("round", 0) or 0) <= max_round and not p.get("resolved")
+        and (first_year is None or first_year <= int(p.get("year", 0) or 0) <= first_year + 2)
     ]
     if not eligible:
         return None
@@ -8111,7 +8466,7 @@ def execute_cap_casualty_trade(
             clause_window_key = (waiver_window(host) or {}).get("key")
             waivers = dict(getattr(host, "ntc_waivers", None) or {})
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     ctx = {
         "sim": sim,
         "league": league,
@@ -8213,6 +8568,86 @@ def _weighted_order(items: List[Any], rng: Any, *, decay: float = 0.55, head: in
         out.append(top.pop(idx))
         weights.pop(idx)
     return out + rest
+
+
+def run_cpu_cap_floor_pass(session: Any, *, max_trades: int = 3) -> Dict[str, Any]:
+    """CPU clubs below the salary floor sell their cap space: they absorb a contract a
+    capped-out CPU club wants gone and get paid a pick for it (it used to leave a third
+    of the league $10–20M under the floor all season with nothing done about it)."""
+    league = getattr(session.sim, "league", None)
+    if league is None:
+        return {"cap_floor_trades": [], "count": 0}
+    sim = session.sim
+    season_year = int(getattr(session, "season_calendar_year", 2025) or 2025)
+    user_tid = str(getattr(session, "user_team_id", "") or "")
+    team_by_id = dict(getattr(session, "team_by_id", None) or _team_by_id_from_league(league))
+    snaps = {}
+    for t in _get(league, "teams", None) or []:
+        tid = _team_id(t)
+        if tid == user_tid:
+            continue
+        try:
+            snaps[tid] = get_team_cap_snapshot_full(t, league, sim, season_year=season_year)
+        except Exception:
+            continue
+    under = []
+    for tid, sn in snaps.items():
+        gap = float(sn.get("lower_limit_m") or 0.0) - float(sn.get("total_cap_hit_m") or 0.0)
+        if gap > 0.5:
+            under.append((gap, tid))
+    under.sort(reverse=True)
+    tight = sorted((float(sn.get("usable_cap_space_m") or 0.0), tid) for tid, sn in snaps.items() if float(sn.get("usable_cap_space_m") or 0.0) < 6.0)
+    executed: List[Dict[str, Any]] = []
+    used_sellers: set = set()
+    cand_cache: Dict[str, List[Dict[str, Any]]] = {}
+    for gap, btid in under:
+        if len(executed) >= max_trades:
+            break
+        buyer = team_by_id.get(btid)
+        if buyer is None:
+            continue
+        buyer_space = float(snaps[btid].get("usable_cap_space_m") or 0.0)
+        best = None
+        for _space, stid in tight:
+            if stid == btid or stid in used_sellers:
+                continue
+            seller = team_by_id.get(stid)
+            if seller is None:
+                continue
+            if stid not in cand_cache:
+                cand_cache[stid] = identify_cap_casualty_candidates(seller, league, sim, season_year=season_year, include_protected=False)
+            for cand in cand_cache[stid]:
+                if not cand.get("tradeable") or cand.get("has_nmc"):
+                    continue
+                # Only genuinely overpaid deals: the seller isn't over the cap, so it
+                # shouldn't hand a useful player away for a late pick.
+                if float(cand.get("bad_score") or 0.0) < 0.30 or float(cand.get("overall") or 0.0) >= 82:
+                    continue
+                hit = float(cand.get("cap_hit_m") or 0.0)
+                if hit < 1.0 or hit > buyer_space - 0.25:
+                    continue
+                fit = min(hit, gap) - max(0.0, hit - gap - 6.0)  # fill the hole without bloating
+                if best is None or fit > best[0]:
+                    best = (fit, seller, cand)
+        if best is None:
+            continue
+        _fit, seller, cand = best
+        try:
+            package = build_cap_casualty_trade_package(seller, buyer, cand, league, sim, season_year=season_year)
+        except ValueError:
+            continue
+        try:
+            res = execute_cap_casualty_trade(
+                league, seller, buyer, package, reason="cap_floor_absorb", sim=sim, season_year=season_year,
+                team_by_id=team_by_id, user_team_id=user_tid, session=session,
+            )
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+            continue
+        if res.get("ok"):
+            executed.append(res.get("record") or {})
+            used_sellers.add(_team_id(seller))
+    return {"cap_floor_trades": executed, "count": len(executed)}
 
 
 def run_cpu_cap_casualty_trade_pass(session: Any, *, max_trades: int = 12) -> Dict[str, Any]:
@@ -8361,7 +8796,7 @@ def build_own_ufa_resign_row(player: Any, team: Any, season_year: int, league: A
 
         row = merge_headshot_into_row(row, player)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     row["available_actions"] = contract_row_available_actions(row)
     # Own UFAs negotiate a new deal (not a mid-contract extension).
     for act in row["available_actions"]:
@@ -8491,7 +8926,7 @@ def build_contract_row(player: Any, team: Any, season_year: int, league: Any = N
 
         row = merge_headshot_into_row(row, player)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     row["available_actions"] = contract_row_available_actions(row)
     return row
 
@@ -8648,19 +9083,19 @@ def build_contract_office(session: Any) -> Dict[str, Any]:
             from services.franchise_sim import _ensure_team_affiliate_nhl_spcs
 
             if not bool(getattr(user_team, "_affiliate_spcs_ensured", False)):
-                seed = abs(hash(f"aff_backfill|{session.user_team_id}|{season_year}")) & 0xFFFFFFFF
+                seed = _stable_seed(f"aff_backfill|{session.user_team_id}|{season_year}") & 0xFFFFFFFF
                 _ensure_team_affiliate_nhl_spcs(user_team, season_year, __import__("random").Random(seed))
                 try:
                     user_team._affiliate_spcs_ensured = True
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
             # Also backfill other orgs once per session so CPU trades/slots stay consistent
             if not bool(getattr(session, "_league_affiliate_spcs_ensured", False)):
                 for tm in list(getattr(league, "teams", None) or []):
                     if tm is user_team:
                         continue
                     tid = str(getattr(tm, "team_id", None) or getattr(tm, "id", "") or "")
-                    tseed = abs(hash(f"aff_backfill|{tid}|{season_year}")) & 0xFFFFFFFF
+                    tseed = _stable_seed(f"aff_backfill|{tid}|{season_year}") & 0xFFFFFFFF
                     _ensure_team_affiliate_nhl_spcs(tm, season_year, __import__("random").Random(tseed))
                 session._league_affiliate_spcs_ensured = True
             # League-wide usable space — FA Wire / CPU bids must not use stale mirrors.
@@ -8672,7 +9107,7 @@ def build_contract_office(session: Any) -> Dict[str, Any]:
                 regular_season_last_index=last_idx,
             )
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     in_season_cap = _phase_is_in_season(session)
     cap_snapshot = get_team_cap_snapshot_full(
@@ -8696,7 +9131,7 @@ def build_contract_office(session: Any) -> Dict[str, Any]:
 
                 row["agent"] = agent_public_view(p, session)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             contracts.append(row)
 
     contracts.sort(key=lambda r: (
@@ -8754,7 +9189,6 @@ def build_contract_office(session: Any) -> Dict[str, Any]:
                 contracts.append(row)
                 seen_c.add(pid)
 
-    rfa_rights = serialize_rfa_rights(user_team) if user_team else []
     rfa_rows = [
         build_rfa_rights_row(r, season_year, league)
         for r in _ensure_rfa_rights_list(user_team)
@@ -8779,7 +9213,7 @@ def build_contract_office(session: Any) -> Dict[str, Any]:
                 day_now = int(getattr(session, "fa_market_day", 0) or getattr(session, "calendar_days_finished", 0) or 0)
                 row["offer_sheet_days_remaining"] = max(0, expires - day_now)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     buyout_candidates = []
     cap_casualty = []
@@ -8815,11 +9249,11 @@ def build_contract_office(session: Any) -> Dict[str, Any]:
             if rng is not None:
                 ensure_overseas_fa_pool(league, rng, min_count=120, min_goalies=12)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         try:
             prune_owned_from_fa_pools(league)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         seen_fa: set = set()
         fa_market_day = int(getattr(session, "fa_market_day", 0) or 0)
         overseas_wire_open = fa_open or fa_market_day >= 10
@@ -8853,7 +9287,7 @@ def build_contract_office(session: Any) -> Dict[str, Any]:
                     try:
                         setattr(p, "ufa_exclusive", True)
                     except Exception:
-                        pass
+                        _swallowed_log.debug("suppressed exception", exc_info=True)
                     continue
                 seen_fa.add(pid)
                 try:
@@ -8987,6 +9421,12 @@ def build_contract_office(session: Any) -> Dict[str, Any]:
 
 
 def get_cached_contract_office(session: Any) -> Dict[str, Any]:
+    try:
+        from services.contract_economy import sync_live_production_lines as _sync_lpl
+    
+        _sync_lpl(session)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     rev = int(getattr(session, "_stats_revision", 0) or 0)
     cached = getattr(session, "_cached_contract_office_payload", None)
     if isinstance(cached, dict) and int(cached.get("revision", -1)) == rev:
@@ -9224,6 +9664,12 @@ def _attach_free_agent_stats_central(session: Any, player: Any, detail: Dict[str
 
 def build_free_agent_detail(session: Any, player_id: str) -> Dict[str, Any]:
     """Full detail for a single free agent (loaded on demand so the office list stays light)."""
+    try:
+        from services.contract_economy import sync_live_production_lines as _sync_lpl
+    
+        _sync_lpl(session)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     from services.franchise_sim import _build_free_agent_row
 
     sim = session.sim
@@ -9260,6 +9706,10 @@ def build_free_agent_detail(session: Any, player_id: str) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def handle_contract_action(session: Any, action: str, body: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        sync_live_production_lines(session)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     sim = session.sim
     league = getattr(sim, "league", None)
     user_team = session.team_by_id.get(str(session.user_team_id))
@@ -9308,7 +9758,7 @@ def handle_contract_action(session: Any, action: str, body: Dict[str, Any]) -> D
                 if status == "accepted":
                     mark_fa_player_signed(session, player_id)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             # Always refresh FA board after a user offer so signed players leave the list.
             try:
                 from services.franchise_offseason import _open_free_agency
@@ -9342,7 +9792,7 @@ def handle_contract_action(session: Any, action: str, body: Dict[str, Any]) -> D
                     result["free_agency_market"] = market
                     result["free_agents"] = refreshed_fa.get("free_agents") or market.get("free_agents")
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             if str(result.get("status") or "") == "accepted":
                 try:
                     from services.franchise_offseason import invalidate_offseason_decision_payloads
@@ -9350,7 +9800,7 @@ def handle_contract_action(session: Any, action: str, body: Dict[str, Any]) -> D
                     invalidate_offseason_decision_payloads(session, reason="fa_sign")
                     result["roster_cleanup"] = getattr(session, "roster_cleanup_payload", None) or {}
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
     elif action in ("re-sign", "offer"):
         if player is None:
             player = _find_player_in_league(league, player_id)[0]
@@ -9378,7 +9828,7 @@ def handle_contract_action(session: Any, action: str, body: Dict[str, Any]) -> D
                 result["re_sign"] = refreshed.get("re_sign") or refreshed.get("contracts")
                 result["contracts"] = refreshed.get("contracts") or refreshed.get("re_sign")
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         return result
     elif result is not None:
         # Countered / rejected — still return negotiation state + refreshed board.
@@ -9388,7 +9838,7 @@ def handle_contract_action(session: Any, action: str, body: Dict[str, Any]) -> D
             result["re_sign"] = refreshed.get("re_sign") or refreshed.get("contracts")
             result["contracts"] = refreshed.get("contracts") or refreshed.get("re_sign")
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         return result
 
     # --- Remaining actions (buyout / waive / bury / elc / offer-sheet / arbitration) ---
@@ -9556,7 +10006,7 @@ def handle_contract_action(session: Any, action: str, body: Dict[str, Any]) -> D
             from services.franchise_offseason import invalidate_offseason_decision_payloads
             invalidate_offseason_decision_payloads(session, reason=action)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     return result
 
 

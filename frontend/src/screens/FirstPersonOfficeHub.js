@@ -40,10 +40,8 @@ import React, {
     readGraphicsQuality,
     writeGraphicsQuality,
   } from "../utils/graphicsQuality";
-  import PlayerHeadshot from "../components/PlayerHeadshot";
   import { resolveFranchiseTeamLogo, toLogoUrl } from "../utils/teamLogos";
   import { collectLockerPulse, buildHubStoryTicker } from "../utils/lockerRoomPulse";
-  import { ensurePlayerHeadshotFields } from "../utils/playerHeadshots";
   import { SCREENS } from "../game/constants";
   import "./FirstPersonOfficeHub.css";
   import officeFontBold from "../styles/ArchivoBlack-Regular.ttf";
@@ -488,7 +486,6 @@ import React, {
   }
 
   const USE_RETRO_OFFICE_PACK = false;
-  const USE_PROCEDURAL_ROOM_SHELL = true;
 
   /**
    * Gitignored (GitHub 100MB limit): styles/Retro Office Pack/Itch Upload/
@@ -574,44 +571,9 @@ import React, {
     return Math.abs(n) >= 500 ? n / 1000000 : n;
   }
 
-  function titleCaseWords(value) {
-    return String(value || "")
-      .replace(/_/g, " ")
-      .replace(/\b\w/g, (m) => m.toUpperCase());
-  }
 
-  function formatOfficeMode(mode) {
-    return titleCaseWords(mode || "regular");
-  }
 
-  function formatStandingsLine(line) {
-    const text = String(line || "Standings");
-    return text.replace(/^(\d+)\s/, (_, n) => {
-      const num = Number(n);
-      const mod10 = num % 10;
-      const mod100 = num % 100;
-      const suffix =
-        mod100 >= 11 && mod100 <= 13
-          ? "th"
-          : mod10 === 1
-            ? "st"
-            : mod10 === 2
-              ? "nd"
-              : mod10 === 3
-                ? "rd"
-                : "th";
-      return `${num}${suffix} `;
-    });
-  }
 
-  function formatNextGameLabel(nextGame, phase = "") {
-    const text = String(nextGame || "");
-    if (text && text !== "No game listed" && text !== "Upcoming Game") return text;
-    const ph = String(phase || "").toLowerCase();
-    if (ph.includes("offseason")) return "Offseason — no game scheduled";
-    if (ph.includes("complete")) return "Season complete";
-    return "No game on schedule";
-  }
 
   function officeSafeNumber(value, fallback = 0) {
     const n = Number(value);
@@ -1600,17 +1562,6 @@ import React, {
     return COMMAND_TARGET_ROUTES[target] || null;
   }
 
-  const QUICK_MENU_BADGE_TITLES = {
-    Deadline: "Trade deadline window",
-    Draft: "Draft week priority",
-    FA: "Free agency period",
-    Offseason: "Offseason operations",
-    Pressure: "Owner pressure elevated",
-    Injuries: "Injury crisis active",
-    Playoffs: "Playoff push",
-    Slide: "Losing streak flagged",
-    Urgent: "Urgent desk item",
-  };
 
   export {
     OFFICE_PANEL_IDS,
@@ -2466,34 +2417,6 @@ import React, {
         />
     );
   }
-  function StationPlaque({ text, hovered = false, width = 0.52, position = [0, 0.02, 0.38] }) {
-    return (
-      <group position={[0, 0.02, 0.38]} rotation={[-0.18, 0, 0]} raycast={() => null}>
-        <RoundedBox args={[width, 0.07, 0.018]} radius={0.008} smoothness={4}>
-          <meshStandardMaterial
-            color={hovered ? "#1a1610" : "#12141a"}
-            roughness={0.55}
-            metalness={0.12}
-            emissive={hovered ? OFFICE_PALETTE.goldDim : "#000000"}
-            emissiveIntensity={hovered ? 0.18 : 0}
-          />
-        </RoundedBox>
-        <mesh position={[0, 0.028, 0.012]} raycast={() => null}>
-          <boxGeometry args={[width * 0.92, 0.006, 0.008]} />
-          <meshStandardMaterial
-            color={OFFICE_PALETTE.gold}
-            roughness={0.42}
-            metalness={0.62}
-            emissive={OFFICE_PALETTE.goldDim}
-            emissiveIntensity={hovered ? 0.22 : 0.08}
-          />
-        </mesh>
-        <WallText position={[0, 0, 0.014]} size={0.028} color={hovered ? "#f0e4c8" : "#d8d0c4"}>
-          {text}
-        </WallText>
-      </group>
-    );
-  }
 
   function InteractCorners({ args = [0.75, 0.5, 0.2], position = [0, 0, 0], hovered = false }) {
     if (!hovered) return null;
@@ -2704,24 +2627,6 @@ import React, {
     );
   }
   
-  function GlowMaterial({
-    color = "#1b2536",
-    emissive = "#000000",
-    intensity = 0.2,
-    roughness = 0.55,
-    metalness = 0.1,
-  }) {
-    return (
-      <meshStandardMaterial
-          color={color}
-          emissive={emissive}
-          emissiveIntensity={intensity}
-          roughness={roughness}
-          metalness={metalness}
-          envMapIntensity={0.35}
-        />
-    );
-  }
   
   function WallText({
     children,
@@ -2811,16 +2716,6 @@ import React, {
     );
   }
 
-  function LeatherMaterial({ color = "#231f1d", roughness = 0.88 }) {
-    return (
-      <meshStandardMaterial
-        color={color}
-        roughness={roughness}
-        metalness={0.02}
-        envMapIntensity={0.12}
-      />
-    );
-  }
 
   function MetalMaterial({
     color = "#8a7350",
@@ -2837,67 +2732,8 @@ import React, {
     );
   }
 
-  function PlasticMaterial({ color = "#1a1f28", roughness = 0.62 }) {
-    return (
-      <meshStandardMaterial
-        color={color}
-        roughness={roughness}
-        metalness={0.04}
-        envMapIntensity={0.22}
-      />
-    );
-  }
 
-  function GlassMaterial({ opacity = 0.22 }) {
-    return (
-      <meshPhysicalMaterial
-        color="#c8dce8"
-        roughness={0.08}
-        metalness={0.04}
-        transparent
-        opacity={opacity}
-        clearcoat={0.85}
-        clearcoatRoughness={0.12}
-      />
-    );
-  }
 
-  function DustMotes({ count = 48, enabled = true }) {
-    const pointsRef = useRef();
-    const positions = useMemo(() => {
-      const arr = new Float32Array(count * 3);
-      for (let i = 0; i < count; i += 1) {
-        arr[i * 3] = (Math.random() - 0.5) * 6.4;
-        arr[i * 3 + 1] = 0.35 + Math.random() * 2.6;
-        arr[i * 3 + 2] = (Math.random() - 0.5) * 5.2;
-      }
-      return arr;
-    }, [count]);
-
-    useFrame((state) => {
-      if (!pointsRef.current || !enabled) return;
-      pointsRef.current.rotation.y = state.clock.elapsedTime * 0.008;
-      pointsRef.current.position.y = Math.sin(state.clock.elapsedTime * 0.12) * 0.04;
-    });
-
-    if (!enabled) return null;
-
-    return (
-      <points ref={pointsRef} raycast={() => null}>
-        <bufferGeometry>
-          <bufferAttribute attach="attributes-position" args={[positions, 3]} />
-        </bufferGeometry>
-        <pointsMaterial
-          size={0.016}
-          color="#c4bba8"
-          transparent
-          opacity={0.11}
-          depthWrite={false}
-          sizeAttenuation
-        />
-      </points>
-    );
-  }
 
   function PracticalLights({ lowPowerMode = false, prefersReducedMotion = false }) {
     const deskRef = useRef();
@@ -2976,27 +2812,6 @@ import React, {
     );
   }
 
-  function WoodGrainLines({ width = 4.35, depth = 1.38, y = 1.031, z = 1.03, count = 16 }) {
-    return (
-      <group>
-        {Array.from({ length: count }).map((_, i) => (
-          <mesh
-            key={`grain-${i}`}
-            position={[-width / 2 + (i / (count - 1)) * width, y, z]}
-            raycast={() => null}
-          >
-            <boxGeometry args={[0.005, 0.002, depth]} />
-            <meshStandardMaterial
-              color="#352018"
-              roughness={0.62}
-              transparent
-              opacity={0.28}
-            />
-          </mesh>
-        ))}
-      </group>
-    );
-  }
 
   function FloorPlanks({ width = 9, depth = 8, count = 22 }) {
     return (
@@ -3030,26 +2845,6 @@ import React, {
     );
   }
 
-  function ExecutiveChairSilhouette() {
-    return (
-      <group position={[0, 0.78, 2.95]} raycast={() => null}>
-        <mesh position={[0, 0.62, 0]} castShadow>
-          <boxGeometry args={[0.88, 1.18, 0.07]} />
-          <LeatherMaterial color={OFFICE_PALETTE.leather} roughness={0.9} />
-        </mesh>
-        {[-0.48, 0.48].map((x) => (
-          <mesh key={`arm-${x}`} position={[x, 0.14, 0.18]} rotation={[0.42, 0, 0]}>
-            <boxGeometry args={[0.12, 0.05, 0.38]} />
-            <LeatherMaterial color="#080807" roughness={0.88} />
-          </mesh>
-        ))}
-        <mesh position={[0, 0.08, 0.32]}>
-          <boxGeometry args={[0.72, 0.16, 0.42]} />
-          <LeatherMaterial color="#0d0c0b" roughness={0.86} />
-        </mesh>
-      </group>
-    );
-  }
 
   function CeilingLightStrip() {
     return (
@@ -3071,43 +2866,6 @@ import React, {
     );
   }
 
-  function WallDisplayFrame({ width = 1.85, height = 1.08, children, accent = "#c9a86a" }) {
-    return (
-      <group>
-        <RoundedBox
-          position={[0, 0, -0.055]}
-          args={[width + 0.28, height + 0.28, 0.1]}
-          radius={0.04}
-          smoothness={6}
-          castShadow
-          raycast={() => null}
-        >
-          <MetalMaterial color="#12151c" roughness={0.55} metalness={0.55} />
-        </RoundedBox>
-        <mesh position={[0, 0, -0.018]} raycast={() => null}>
-          <boxGeometry args={[width + 0.08, height + 0.08, 0.04]} />
-          <meshStandardMaterial color="#080a10" roughness={0.82} metalness={0.06} />
-        </mesh>
-        <mesh position={[0, 0, -0.002]} raycast={() => null}>
-          <boxGeometry args={[width, height, 0.012]} />
-          <meshStandardMaterial color="#0a1218" roughness={0.35} metalness={0.08} emissive="#102030" emissiveIntensity={0.18} />
-        </mesh>
-        <mesh position={[0, height / 2 + 0.08, 0.0]} raycast={() => null}>
-          <boxGeometry args={[width + 0.12, 0.016, 0.02]} />
-          <meshStandardMaterial
-            color={accent}
-            emissive={accent}
-            emissiveIntensity={0.12}
-            roughness={0.48}
-            metalness={0.62}
-          />
-        </mesh>
-        <group position={[0, 0, -0.01]}>
-          {children}
-        </group>
-      </group>
-    );
-  }
 
   function Baseboards() {
     const trimMat = (
@@ -3253,37 +3011,7 @@ import React, {
     );
   }
 
-  function SmallRivets({ radius = 0.75, count = 4 }) {
-    const positions = [
-      [-radius, radius],
-      [radius, radius],
-      [-radius, -radius],
-      [radius, -radius],
-    ].slice(0, count);
 
-    return positions.map(([x, y], i) => (
-      <mesh key={`rivet-${i}`} position={[x, y, 0.04]} raycast={() => null}>
-        <cylinderGeometry args={[0.012, 0.012, 0.018, 8]} />
-        <MetalMaterial color="#6a5a42" roughness={0.35} metalness={0.78} />
-      </mesh>
-    ));
-  }
-
-  function WallFrame({ width = 2.28, height = 1.24, depth = 0.05, children }) {
-    return (
-      <group>
-        <mesh position={[0, 0, -0.01]} castShadow raycast={() => null}>
-          <boxGeometry args={[width, height, depth]} />
-          <WoodMaterial color="#151210" roughness={0.55} />
-        </mesh>
-        <mesh position={[0, 0, 0.018]} castShadow raycast={() => null}>
-          <boxGeometry args={[width - 0.14, height - 0.14, 0.022]} />
-          <MetalMaterial color="#3a342c" roughness={0.42} metalness={0.55} />
-        </mesh>
-        {children}
-      </group>
-    );
-  }
 
   function DeskLamp({ position = [-2.05, 0.89, 0.12] }) {
     return (
@@ -3309,20 +3037,6 @@ import React, {
     );
   }
 
-  function DeskPen({ position = [1.05, 1.034, 0.92] }) {
-    return (
-      <group position={position} rotation={[0, -0.4, 0]} raycast={() => null}>
-        <mesh rotation={[0, 0, Math.PI / 2]} castShadow>
-          <cylinderGeometry args={[0.006, 0.006, 0.14, 8]} />
-          <PlasticMaterial color="#1c2533" />
-        </mesh>
-        <mesh position={[0.07, 0, 0]} rotation={[0, 0, Math.PI / 2]}>
-          <cylinderGeometry args={[0.009, 0.009, 0.025, 8]} />
-          <MetalMaterial color="#c4a86a" roughness={0.25} metalness={0.8} />
-        </mesh>
-      </group>
-    );
-  }
 
   function DeskClutter() {
     return (
@@ -3341,53 +3055,7 @@ import React, {
     );
   }
 
-  function DeskDrawerFaces() {
-    const drawers = [
-      [-1.42, 0.78, 1.62],
-      [-1.42, 0.64, 1.62],
-      [1.42, 0.78, 1.62],
-      [1.42, 0.64, 1.62],
-    ];
 
-    return (
-      <group raycast={() => null}>
-        {drawers.map(([x, y, z], i) => (
-          <group key={`drawer-${i}`} position={[x, y, z]}>
-            <mesh castShadow>
-              <boxGeometry args={[0.72, 0.22, 0.04]} />
-              <WoodMaterial color="#3a2114" roughness={0.48} />
-            </mesh>
-            <mesh position={[0, 0, 0.028]}>
-              <boxGeometry args={[0.58, 0.008, 0.012]} />
-              <MetalMaterial color="#7a6848" roughness={0.3} metalness={0.75} />
-            </mesh>
-          </group>
-        ))}
-      </group>
-    );
-  }
-
-  function MarkerTray({ position = [0, -0.48, 0.07] }) {
-    const markers = ["#d83e37", "#2c65b9", "#111111", "#2e8b45"];
-    return (
-      <group position={position} raycast={() => null}>
-        <mesh>
-          <boxGeometry args={[1.35, 0.035, 0.06]} />
-          <MetalMaterial color="#4a4a4a" roughness={0.35} metalness={0.6} />
-        </mesh>
-        {markers.map((color, i) => (
-          <mesh key={color} position={[-0.42 + i * 0.28, 0.03, 0]} rotation={[0, 0, Math.PI / 2]}>
-            <cylinderGeometry args={[0.012, 0.012, 0.09, 8]} />
-            <PlasticMaterial color={color} roughness={0.45} />
-          </mesh>
-        ))}
-        <mesh position={[0.52, 0.028, 0]}>
-          <boxGeometry args={[0.08, 0.04, 0.04]} />
-          <meshStandardMaterial color="#d8d0c4" roughness={0.75} />
-        </mesh>
-      </group>
-    );
-  }
   
   function useTeamLogoTexture(teamLogo) {
     const [texture, setTexture] = useState(null);
@@ -3819,251 +3487,8 @@ import React, {
     );
   }
   
-  function ScoutingKitObject({ hovered, teamLogo, teamName, draftWeek = false }) {
-    return (
-      <group rotation={[0, 0.16, 0]}>
-        <RoundedBox args={[0.92, 0.08, 0.66]} radius={0.035} smoothness={5}>
-          <GlowMaterial
-            color={hovered ? "#d9b15a" : "#8e6b37"}
-            emissive={hovered ? "#b58222" : "#000000"}
-            intensity={hovered ? 0.18 : 0}
-            roughness={0.72}
-          />
-        </RoundedBox>
   
-        <mesh position={[-0.22, 0.038, -0.28]}>
-          <boxGeometry args={[0.45, 0.035, 0.16]} />
-          <meshStandardMaterial color="#e5bd69" roughness={0.65} />
-        </mesh>
   
-        <mesh position={[0.08, 0.062, -0.02]}>
-          <boxGeometry args={[0.72, 0.018, 0.42]} />
-          <meshStandardMaterial color="#efe5ce" roughness={0.8} />
-        </mesh>
-  
-        <WallText
-          position={[0.02, 0.08, -0.02]}
-          rotation={[-Math.PI / 2, 0, 0]}
-          size={0.06}
-          color="#1c1710"
-        >
-          SCOUTING
-        </WallText>
-
-        <TeamLogoDecal
-          teamLogo={teamLogo}
-          teamName={teamName}
-          position={[0.28, 0.082, -0.22]}
-          rotation={[-Math.PI / 2, 0, 0]}
-          width={0.12}
-          height={0.12}
-          opacity={0.72}
-          hovered={hovered}
-        />
-  
-        <group position={[-0.23, 0.11, 0.18]} rotation={[-Math.PI / 2, 0, 0]}>
-          <mesh>
-            <cylinderGeometry args={[0.07, 0.07, 0.12, 24]} />
-            <meshStandardMaterial color="#111820" roughness={0.36} />
-          </mesh>
-  
-          <mesh position={[0.14, 0, 0]}>
-            <cylinderGeometry args={[0.07, 0.07, 0.12, 24]} />
-            <meshStandardMaterial color="#111820" roughness={0.36} />
-          </mesh>
-  
-          <mesh position={[0.07, 0, 0]}>
-            <boxGeometry args={[0.08, 0.035, 0.035]} />
-            <meshStandardMaterial color="#303945" roughness={0.45} />
-          </mesh>
-        </group>
-  
-        <WallText
-          position={[0.17, 0.087, 0.18]}
-          rotation={[-Math.PI / 2, 0, 0]}
-          size={0.028}
-          color="#49351c"
-        >
-          INTL TRIP NOTES
-        </WallText>
-
-        {[
-          ["TIER 1", -0.18, -0.02, "#c9a86a"],
-          ["RISERS", 0.02, 0.02, "#7eb896"],
-          ["WATCH", 0.2, -0.04, "#7eb8d4"],
-        ].map(([label, x, z, color]) => (
-          <group key={label} position={[x, 0.084, z]} rotation={[-Math.PI / 2, 0, 0]}>
-            <mesh raycast={() => null}>
-              <boxGeometry args={[0.14, 0.09, 0.004]} />
-              <meshStandardMaterial color="#efe5ce" roughness={0.82} />
-            </mesh>
-            <WallText position={[0, 0.004, 0.004]} size={0.018} color={color}>
-              {label}
-            </WallText>
-          </group>
-        ))}
-
-        {draftWeek ? (
-          <mesh position={[0, 0.095, 0]} raycast={() => null}>
-            <planeGeometry args={[0.72, 0.42]} />
-            <meshBasicMaterial color="#c9a86a" transparent opacity={0.08} depthWrite={false} />
-          </mesh>
-        ) : null}
-      </group>
-    );
-  }
-  
-  function ContractLedgerObject({ hovered, capSpace, capPressure = false }) {
-    return (
-      <group rotation={[0, -0.08, 0]}>
-        <RoundedBox args={[0.98, 0.075, 0.7]} radius={0.03} smoothness={6}>
-          <GlowMaterial
-            color={hovered ? "#8ed0ad" : "#355c50"}
-            emissive={hovered ? "#5db88b" : "#000000"}
-            intensity={hovered ? 0.18 : 0}
-            roughness={0.68}
-          />
-        </RoundedBox>
-  
-        <mesh position={[0.04, 0.06, 0]}>
-          <boxGeometry args={[0.72, 0.02, 0.5]} />
-          <meshStandardMaterial color="#f2ead6" roughness={0.82} />
-        </mesh>
-  
-        <WallText
-          position={[0.04, 0.083, -0.18]}
-          rotation={[-Math.PI / 2, 0, 0]}
-          size={0.048}
-          color="#172820"
-        >
-          CAP LEDGER
-        </WallText>
-  
-        <WallText
-          position={[0.04, 0.086, -0.04]}
-          rotation={[-Math.PI / 2, 0, 0]}
-          size={0.035}
-          color="#375244"
-        >
-          ROOM: {formatMoney(capSpace)}
-        </WallText>
-  
-        {[0, 1, 2].map((i) => (
-          <mesh key={i} position={[0.04, 0.087, 0.08 + i * 0.09]}>
-            <boxGeometry args={[0.48, 0.005, 0.012]} />
-            <meshStandardMaterial color="#77a98c" roughness={0.7} />
-          </mesh>
-        ))}
-
-        {[
-          ["RFA", -0.18, 0.1],
-          ["UFA", 0.02, 0.14],
-          ["NMC", 0.2, 0.08],
-          ["CAP", -0.05, 0.2],
-        ].map(([label, x, z]) => (
-          <WallText
-            key={label}
-            position={[0.04 + x, 0.092, z]}
-            rotation={[-Math.PI / 2, 0, 0]}
-            size={0.022}
-            color="#2d4a3d"
-          >
-            {label}
-          </WallText>
-        ))}
-
-        <mesh position={[0.22, 0.09, 0.24]} rotation={[-Math.PI / 2, 0, 0.12]} raycast={() => null}>
-          <boxGeometry args={[0.18, 0.12, 0.004]} />
-          <PaperMaterial color="#f7f1df" />
-        </mesh>
-
-        <mesh position={[0.22, 0.091, 0.3]} rotation={[-Math.PI / 2, 0, 0.12]} raycast={() => null}>
-          <boxGeometry args={[0.1, 0.004, 0.004]} />
-          <meshStandardMaterial color="#4a4034" roughness={0.7} />
-        </mesh>
-
-        {capPressure ? (
-          <WallText
-            position={[0.22, 0.095, 0.24]}
-            rotation={[-Math.PI / 2, 0, 0.12]}
-            size={0.028}
-            color="#b72a20"
-          >
-            CAP WARN
-          </WallText>
-        ) : null}
-  
-        <group position={[-0.33, 0.105, 0.2]} rotation={[0, 0, 0.65]}>
-          <mesh>
-            <cylinderGeometry args={[0.018, 0.018, 0.42, 16]} />
-            <meshStandardMaterial color="#111111" roughness={0.35} />
-          </mesh>
-  
-          <mesh position={[0, 0.23, 0]}>
-            <cylinderGeometry args={[0.015, 0.015, 0.06, 16]} />
-            <meshStandardMaterial color="#d0a24a" metalness={0.4} roughness={0.25} />
-          </mesh>
-        </group>
-      </group>
-    );
-  }
-  
-  function TabletObject({ hovered }) {
-    return (
-      <group rotation={[0, 0.24, 0]}>
-        <RoundedBox args={[0.72, 0.055, 0.92]} radius={0.055} smoothness={7}>
-          <GlowMaterial
-            color="#090d12"
-            emissive={hovered ? "#67c9ff" : "#1e6487"}
-            intensity={hovered ? 0.55 : 0.25}
-            roughness={0.42}
-          />
-        </RoundedBox>
-  
-        <mesh position={[0, 0.035, 0]}>
-          <boxGeometry args={[0.58, 0.012, 0.72]} />
-          <meshStandardMaterial
-            color="#071725"
-            emissive="#184d6a"
-            emissiveIntensity={0.35}
-          />
-        </mesh>
-  
-        <WallText
-          position={[0, 0.05, -0.25]}
-          rotation={[-Math.PI / 2, 0, 0]}
-          size={0.055}
-          color="#d9f8ff"
-        >
-          STATS
-        </WallText>
-  
-        <WallText
-          position={[0, 0.052, -0.03]}
-          rotation={[-Math.PI / 2, 0, 0]}
-          size={0.035}
-          color="#95e8ff"
-        >
-          CF% xGF% PDO
-        </WallText>
-  
-        {[0, 1, 2, 3].map((i) => (
-          <mesh
-            key={i}
-            position={[-0.22 + i * 0.15, 0.055, 0.24]}
-            rotation={[-Math.PI / 2, 0, 0]}
-          >
-            <planeGeometry args={[0.08, 0.08 + i * 0.03]} />
-            <meshBasicMaterial
-              color="#64d6ff"
-              transparent
-              opacity={hovered ? 0.32 : 0.18}
-            />
-          </mesh>
-        ))}
-      </group>
-    );
-  }
   
   /** Sep → Jun reading order, matching how a hockey season actually runs. */
   const SEASON_TIMELINE_MONTHS = [
@@ -4242,52 +3667,6 @@ import React, {
     );
   }
   
-  function ClipboardObject({ hovered, pendingTasks }) {
-    return (
-      <group rotation={[0, 0.5, 0]}>
-        <RoundedBox args={[0.58, 0.055, 0.76]} radius={0.025} smoothness={5} raycast={() => null}>
-          <GlowMaterial color={hovered ? "#fff6d7" : "#e7dcbd"} roughness={0.8} />
-        </RoundedBox>
-  
-        <mesh position={[0, 0.055, -0.31]} raycast={() => null}>
-          <boxGeometry args={[0.32, 0.04, 0.08]} />
-          <meshStandardMaterial color="#20252d" roughness={0.5} metalness={0.16} />
-        </mesh>
-  
-        <WallText
-          position={[0, 0.076, -0.08]}
-          rotation={[-Math.PI / 2, 0, 0]}
-          size={0.043}
-          color="#1b1b1b"
-        >
-          DECISIONS
-        </WallText>
-  
-        {[0, 1, 2].map((i) => (
-          <group key={i} position={[-0.16, 0.077, 0.07 + i * 0.12]}>
-            <mesh rotation={[-Math.PI / 2, 0, 0]} raycast={() => null}>
-              <circleGeometry args={[0.018, 18]} />
-              <meshStandardMaterial color={i === 0 ? "#d9473e" : "#7a8a77"} />
-            </mesh>
-  
-            <mesh position={[0.16, 0, 0]} raycast={() => null}>
-              <boxGeometry args={[0.24, 0.004, 0.014]} />
-              <meshStandardMaterial color="#6a5b45" roughness={0.8} />
-            </mesh>
-          </group>
-        ))}
-  
-        <WallText
-          position={[0, 0.079, 0.3]}
-          rotation={[-Math.PI / 2, 0, 0]}
-          size={0.033}
-          color="#3a3327"
-        >
-          {Number(pendingTasks || 0)} pending
-        </WallText>
-      </group>
-    );
-  }
   
   function CoffeeAndPuck() {
     return (
@@ -4418,46 +3797,7 @@ import React, {
     return [...players].sort((a, b) => rating(b) - rating(a))[0];
   }
 
-  function getPlayerName(player) {
-    return (
-      player?.name ||
-      player?.full_name ||
-      `${player?.first_name || player?.firstName || ""} ${player?.last_name || player?.lastName || ""}`.trim() ||
-      "Franchise Player"
-    );
-  }
 
-  function WallPlayerPortrait({ player }) {
-    const resolvedPlayer = useMemo(() => ensurePlayerHeadshotFields(player || {}), [player]);
-
-    if (!player) {
-      return (
-        <mesh position={[0, 0, 0.045]} raycast={() => null}>
-          <boxGeometry args={[2.02, 1.02, 0.02]} />
-          <meshStandardMaterial
-            color="#142638"
-            emissive="#102943"
-            emissiveIntensity={0.1}
-            roughness={0.55}
-          />
-        </mesh>
-      );
-    }
-
-    return (
-      <>
-        <mesh position={[0, 0, 0.045]} raycast={() => null}>
-          <boxGeometry args={[2.02, 1.02, 0.02]} />
-          <meshStandardMaterial color="#142638" roughness={0.55} />
-        </mesh>
-        <Html transform position={[0, 0.02, 0.06]} scale={0.42} center style={{ pointerEvents: "none" }}>
-          <div className="office-wall-portrait">
-            <PlayerHeadshot player={resolvedPlayer} size="xl" variant="card" />
-          </div>
-        </Html>
-      </>
-    );
-  }
 
   function OfficeFurniture({ teamLogo, teamName, mood = {}, championshipCount = 0 }) {
     return (
@@ -4740,59 +4080,6 @@ import React, {
     );
   }
   
-  function WallLogo({ hovered, teamLogo, teamName, scale = 1.18 }) {
-    return (
-      <group scale={[scale, scale, scale]}>
-        <mesh position={[0, 0, -0.04]} castShadow raycast={() => null}>
-          <boxGeometry args={[1.95, 1.95, 0.06]} />
-          <WoodMaterial color="#1a1612" roughness={0.58} />
-        </mesh>
-
-        <mesh position={[0, 0, -0.018]} raycast={() => null}>
-          <boxGeometry args={[1.72, 1.72, 0.04]} />
-          <MetalMaterial color="#2a2620" roughness={0.45} metalness={0.42} />
-        </mesh>
-
-        <mesh position={[0, 0, -0.015]} raycast={() => null}>
-          <circleGeometry args={[0.86, 64]} />
-          <meshStandardMaterial
-            color={hovered ? "#3a3228" : "#1c2028"}
-            metalness={0.22}
-            roughness={0.48}
-          />
-        </mesh>
-
-        <mesh position={[0, 0, -0.02]} raycast={() => null}>
-          <planeGeometry args={[2.05, 2.05]} />
-          <meshBasicMaterial
-            color={hovered ? "#ffd8a0" : "#c9a86a"}
-            transparent
-            opacity={hovered ? 0.14 : 0.08}
-            depthWrite={false}
-          />
-        </mesh>
-  
-        <TeamLogoPlane
-          teamLogo={teamLogo}
-          teamName={teamName}
-          hovered={hovered}
-          width={1.28}
-          height={1.28}
-        />
-
-        <SmallRivets radius={0.78} />
-  
-        <WallText position={[0, -0.87, 0.045]} size={0.068} color="#c9a86a">
-          FRONT OFFICE
-        </WallText>
-
-        <mesh position={[0, 0.95, 0.02]} raycast={() => null}>
-          <planeGeometry args={[1.4, 0.2]} />
-          <meshBasicMaterial color="#ffd8a0" transparent opacity={0.06} depthWrite={false} />
-        </mesh>
-      </group>
-    );
-  }
 
   /**
    * Restrained franchise crest — smoked-glass wall emblem. It is the physical
@@ -4850,29 +4137,6 @@ import React, {
     );
   }
   
-  function HockeySticks() {
-    return (
-      <group position={[-3.75, 0.75, -2.88]} rotation={[0, 0, -0.15]}>
-        {[0, 1, 2].map((i) => (
-          <group
-            key={i}
-            position={[i * 0.08, 0, i * 0.035]}
-            rotation={[0, 0, i * 0.13]}
-          >
-            <mesh position={[0, 0.63, 0]} rotation={[0, 0, 0.08]}>
-              <boxGeometry args={[0.035, 1.45, 0.035]} />
-              <meshStandardMaterial color="#5f3a21" roughness={0.58} />
-            </mesh>
-
-            <mesh position={[0.1, -0.1, 0]} rotation={[0, 0, 0.55]}>
-              <boxGeometry args={[0.34, 0.045, 0.045]} />
-              <meshStandardMaterial color="#1b1b1b" roughness={0.5} />
-            </mesh>
-          </group>
-        ))}
-      </group>
-    );
-  }
 
   function ScoutingStation({ hovered }) {
     return (
@@ -6485,62 +5749,6 @@ import React, {
     return <DraftWarRoomEntrance hovered={hovered} draftWeek={draftWeek} />;
   }
 
-  function BroadcastScoreboard({ hovered, record, nextGame }) {
-    return (
-      <WallDisplayFrame width={1.78} height={1.02} accent={OFFICE_PALETTE.gold}>
-        <RoundedBox
-          position={[0, 0, 0.02]}
-          args={[1.62, 0.88, 0.04]}
-          radius={0.02}
-          smoothness={6}
-          raycast={() => null}
-        >
-          <meshStandardMaterial
-            color="#060810"
-            emissive={hovered ? "#142838" : "#0a1828"}
-            emissiveIntensity={hovered ? 0.32 : 0.16}
-            roughness={0.44}
-            metalness={0.1}
-          />
-        </RoundedBox>
-
-        <mesh position={[0, 0, 0.048]} raycast={() => null}>
-          <planeGeometry args={[1.48, 0.74]} />
-          <GlassMaterial opacity={0.07} />
-        </mesh>
-
-        <WallText position={[0, 0.36, 0.055]} size={0.042} color="#c9a86a">
-          LEAGUE OPERATIONS
-        </WallText>
-
-        <WallText position={[0, 0.28, 0.055]} size={0.022} color="#6a8a9a">
-          STANDINGS • SCORES • HEADLINES
-        </WallText>
-
-        <WallText position={[0, 0.06, 0.055]} size={0.034} color="#8aaaba">
-          Record {safeText(record)}
-        </WallText>
-
-        <WallText position={[0, -0.06, 0.055]} size={0.028} color="#d8e0e8">
-          Next {safeText(nextGame, "No game listed")}
-        </WallText>
-
-        <mesh position={[0, -0.3, 0.054]} raycast={() => null}>
-          <boxGeometry args={[1.32, 0.06, 0.01]} />
-          <meshStandardMaterial
-            color="#101820"
-            emissive="#1a3040"
-            emissiveIntensity={hovered ? 0.22 : 0.1}
-            roughness={0.5}
-          />
-        </mesh>
-
-        <WallText position={[0, -0.3, 0.062]} size={0.022} color="#7a9aaa">
-          BROADCAST • NEWS • LEAGUE FEED
-        </WallText>
-      </WallDisplayFrame>
-    );
-  }
   
   function ArenaWindowObject({ hovered, nextGame, seasonYear }) {
     return (
@@ -8019,7 +7227,6 @@ import React, {
         if (onNavigate) {
           onNavigate(target);
         } else {
-          console.log("Navigate:", target);
         }
         setActivePanel(null);
         setBriefingNote("");

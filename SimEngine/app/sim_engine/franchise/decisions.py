@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from app.sim_engine.franchise._shared import *  # noqa: F401,F403
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 def _maybe_enqueue_post_day_decisions(session: FranchiseSession, user_lines: List[str]) -> None:
     """Lightweight GM prompts derived from engine state (no extra full-season sim)."""
@@ -346,7 +348,7 @@ def _apply_legal_conduct_decision_effect(
         try:
             setattr(player, "_conduct_trade_restricted", True)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     return out
 
 
@@ -746,7 +748,7 @@ def _nudge_player_psych(
             cur = float(getattr(psych, attr, 0.5) or 0.5)
             setattr(psych, attr, _clamp(cur + float(delta)))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 def _nudge_team_room(
     team: Any,
     *,

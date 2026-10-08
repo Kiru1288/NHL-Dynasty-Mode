@@ -6,7 +6,7 @@ Position codes unwrap Position enums ("Position.C" must never leak into comparis
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 ACTIVE_ROSTER_MAX = 23
 ACTIVE_ROSTER_MIN = 20

@@ -15,6 +15,8 @@ import math
 import random
 from datetime import date
 from typing import Any, Dict, List, Mapping, Optional, Tuple
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 # League profiles: lower difficulty = easier scoring environment.
 LEAGUE_SCORING_PROFILES: Dict[str, Dict[str, Any]] = {
@@ -465,7 +467,7 @@ def invalidate_prospect_analytics_cache(prospect: Any) -> None:
         try:
             delattr(prospect, attr)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _player_ovr_0_1(prospect: Any) -> float:
@@ -486,7 +488,7 @@ def _player_ovr_0_1(prospect: Any) -> float:
     try:
         setattr(prospect, "_prospect_cached_ovr_0_1", v)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return v
 
 
@@ -547,7 +549,7 @@ def _playstyle_bucket(prospect: Any) -> str:
     try:
         setattr(prospect, "_prospect_cached_playstyle_bucket", bucket)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return bucket
 
 
@@ -588,7 +590,7 @@ def _offensive_talent_score(prospect: Any) -> float:
     try:
         setattr(prospect, "_prospect_cached_offensive_talent", score)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return score
 
 
@@ -731,7 +733,7 @@ def begin_prospect_stint(
     try:
         setattr(prospect, "_prospect_stint", st)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return st
 
 
@@ -769,7 +771,7 @@ def archive_prospect_stint(prospect: Any, *, reason: str = "left_level") -> bool
     try:
         setattr(prospect, "prospect_stat_history", hist[-24:])
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return True
 
 
@@ -1049,7 +1051,7 @@ def _defensive_analytics_score(prospect: Any) -> float:
     try:
         setattr(prospect, "_prospect_cached_defensive_analytics", score)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return score
 
 
@@ -1169,7 +1171,7 @@ def _sync_prospect_week_baseline(prospect: Any, actual: Dict[str, Any], week_key
             },
         )
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _week_stat_delta(prospect: Any, actual: Dict[str, Any]) -> Dict[str, int]:
@@ -1510,12 +1512,12 @@ def initialize_prospect_season(
         try:
             setattr(prospect, "_prospect_season_year", int(season_year))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     sy = int(season_year) if season_year is not None else _season_year_of(prospect)
     try:
         setattr(prospect, "_prospect_ppg_seed_year", sy)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     profile = get_league_scoring_profile(league)
     seeded = _stable_rng(prospect, "projection", sy, key)
@@ -1542,7 +1544,7 @@ def initialize_prospect_season(
             setattr(prospect, "_prospect_last_stat_update_iso", "")
             setattr(prospect, "_prospect_injury_games_remaining", 0)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     if not preserve_actual or _stint(prospect) is None:
         begin_prospect_stint(
             prospect, league, start_frac=stint_start_frac, iso=stint_iso, season_year=sy
@@ -1586,7 +1588,7 @@ def _prospect_injury_games(prospect: Any, delta_gp: int, rng: random.Random) -> 
                 setattr(prospect, "injury_status", f"Out {left} GP")
                 setattr(prospect, "injury_note", f"Missed {missed} GP this week — {left} remaining")
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         return missed
     hazard = _INJURY_HAZARD_PER_GAME
     traits = getattr(prospect, "traits", None)
@@ -1609,7 +1611,7 @@ def _prospect_injury_games(prospect: Any, delta_gp: int, rng: random.Random) -> 
         setattr(prospect, "injury_note", note)
         setattr(prospect, "weekly_stock_reason", note)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return missed
 
 
@@ -1626,7 +1628,7 @@ def _apply_stock_to_actual(prospect: Any, actual: Dict[str, Any], weekly_stock: 
         setattr(prospect, "stock_trend", actual["stock_trend"])
         setattr(prospect, "weekly_stock_reason", actual["stock_reason"])
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def advance_prospect_stats_to_date(
@@ -1719,7 +1721,7 @@ def advance_prospect_stats_to_date(
         try:
             setattr(prospect, "_prospect_season_year", int(season_year))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     proj_gp = max(1, _safe_int(projected.get("gp"), 60))
     last_iso = str(getattr(prospect, "_prospect_last_stat_update_iso", "") or "")[:10]
@@ -1745,7 +1747,7 @@ def advance_prospect_stats_to_date(
             proj_gp = max(1, _safe_int(projected.get("gp"), 60))
             last_iso = ""
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     if last_iso == target_iso and target_iso:
         cached = getattr(prospect, "_prospect_season_stats", None)
@@ -1760,7 +1762,7 @@ def advance_prospect_stats_to_date(
             _apply_stock_to_actual(prospect, actual, weekly_stock)
             setattr(prospect, "_prospect_season_stats", dict(actual))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         return actual
 
     if expected_gp_override is None:
@@ -1782,7 +1784,7 @@ def advance_prospect_stats_to_date(
                 setattr(prospect, "_prospect_last_stat_update_iso", target_iso)
                 setattr(prospect, "_prospect_games_simulated_to_date", expected_gp)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             cached = getattr(prospect, "_prospect_season_stats", None)
             return dict(cached) if isinstance(cached, dict) else _empty_actual_stat_line()
 
@@ -1797,7 +1799,7 @@ def advance_prospect_stats_to_date(
             setattr(prospect, "_prospect_games_simulated_to_date", expected_gp)
             setattr(prospect, "_prospect_last_stock_week_key", week_key)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         return dict(cached)
 
     _sync_prospect_week_baseline(prospect, actual, week_key)
@@ -1813,7 +1815,7 @@ def advance_prospect_stats_to_date(
         try:
             setattr(prospect, "_prospect_expected_ppg", float(target_ppg))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         _simulate_skater_games(prospect, league, playable_gp, rng, actual, target_ppg)
 
     actual["stat_source"] = "calendar_sim"
@@ -1842,7 +1844,7 @@ def advance_prospect_stats_to_date(
         setattr(prospect, "_prospect_games_simulated_to_date", expected_gp)
         setattr(prospect, "_prospect_last_stock_week_key", week_key)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     return dict(actual)
 
@@ -1912,7 +1914,7 @@ def apply_external_season_line(
             "week_points": weekly_stock.get("week_points", 0),
         }
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     try:
         if season_year is not None:
@@ -1923,7 +1925,7 @@ def apply_external_season_line(
         if week_key:
             setattr(prospect, "_prospect_last_stock_week_key", week_key)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return dict(actual)
 
 
@@ -2045,11 +2047,11 @@ def advance_all_development_league_stats(
                 st["last_live_iso"] = iso
             updated += 1
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         setattr(league, "_prospect_stat_sync_state", {"iso": iso, "season": sy})
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return updated
 
 
@@ -2484,7 +2486,7 @@ def attach_prospect_production_context(
         setattr(prospect, "production_adjusted_score", out["production_adjusted_score"])
         setattr(prospect, "_prospect_season_stats", dict(stat_line))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return out
 
 
@@ -2697,7 +2699,7 @@ def derive_prospect_analytics(
     off_talent = _offensive_talent_score(prospect)
     def_talent = _defensive_talent_score(prospect)
     league_diff = _safe_float(profile.get("difficulty"), 0.65)
-    prod_adj = _safe_float(stat_line.get("production_adjusted_score"), ppg * (1.0 - league_diff * 0.28))
+    _safe_float(stat_line.get("production_adjusted_score"), ppg * (1.0 - league_diff * 0.28))
     # Public signal only: the published draft rank, else current ability. (Was hidden potential.)
     public_ability = _clamp(_player_ovr_0_1(prospect) * 1.08, 0.2, 0.99)
     rank_signal = 1.0 - _clamp((float(draft_rank or 120) - 1.0) / 119.0, 0.0, 1.0) if draft_rank else public_ability

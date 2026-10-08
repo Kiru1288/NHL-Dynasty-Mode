@@ -27,6 +27,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 USER_AGENT = "NHLFranchiseMode/0.2 (unofficial-fan-project; local-sim)"
 WEB_API = "https://api-web.nhle.com/v1"
@@ -160,7 +162,7 @@ def _fetch_skater_summary(season_id: int) -> Dict[int, Dict[str, Any]]:
                 if gp > 0:
                     row["timeOnIcePerGame"] = float(extra["timeOnIce"]) / gp
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
     _attach_team_toi_ranks(summary)
     return summary
 
@@ -837,12 +839,12 @@ def _apply_draft_and_body(
         try:
             ident.height_cm = int(round(h_in * 2.54))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     if w_lb and ident is not None:
         try:
             ident.weight_kg = float(round(w_lb * 0.453592, 1))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     if h_in:
         setattr(player, "height_in", int(round(h_in)))
     if w_lb:
@@ -885,7 +887,7 @@ def _apply_draft_and_body(
             elif pick_in_round is not None:
                 ident.draft_pick = int(pick_in_round)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     setattr(player, "drafted", True)
     setattr(player, "undrafted", False)
@@ -966,7 +968,7 @@ def _attach_career_stats(player: Any, *, landing: Optional[Dict[str, Any]], is_g
             if game_type is not None and int(game_type) != 2:
                 continue
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         gp = _int(entry, "gamesPlayed", "gp")
         if gp <= 0:
             continue
@@ -1071,7 +1073,7 @@ def _ensure_estimated_contract(player: Any, *, season_year: int, rng: Any = None
         )
         setattr(player, "contract_source", "estimated")
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _apply_real_contract(
@@ -1109,7 +1111,7 @@ def _apply_real_contract(
         player.cap_hit_m = float(payload.get("cap_hit_m") or payload.get("aav_m") or 0)
         player.aav_m = float(payload.get("aav_m") or payload.get("cap_hit_m") or 0)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1306,7 +1308,7 @@ def _build_player_from_roster_row(
         if birth:
             birth_year = int(birth.split("-")[0])
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     dynasty_entry = None
     r4 = None
@@ -1437,12 +1439,12 @@ def _build_player_from_roster_row(
         try:
             setattr(player, "_generated_profile", gen_profile)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     try:
         persist_recomputed_ovr(player)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     if dynasty_entry is not None:
         try:
             from services.dynasty_ratings_parser import apply_dynasty_entry_to_player
@@ -1456,7 +1458,7 @@ def _build_player_from_roster_row(
             try:
                 align_attribute_ovr_to_target(player, float(target_ovr), rounds=align_rounds)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
     else:
         try:
             align_attribute_ovr_to_target(player, float(target_ovr), rounds=align_rounds)
@@ -1464,7 +1466,7 @@ def _build_player_from_roster_row(
             try:
                 persist_recomputed_ovr(player)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
 
     setattr(player, "nhl_player_id", nhl_id)
     setattr(player, "external_player_id", str(nhl_id))
@@ -1479,7 +1481,7 @@ def _build_player_from_roster_row(
                 setattr(identity, "birth_month", parts[1])
                 setattr(identity, "birth_day", parts[2])
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     if dynasty_entry is None and r4:
         setattr(player, "real_nhl_r4", True)
     from app.sim_engine.generation.player_headshots import valid_nhl_headshot_url
@@ -1500,7 +1502,7 @@ def _build_player_from_roster_row(
         try:
             setattr(player, "sweater_number", int(sweater))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     _apply_draft_and_body(
         player,
@@ -1515,7 +1517,7 @@ def _build_player_from_roster_row(
             bio_registry = load_player_bio_registry(as_of=date(int(season_year), 9, 15))
             apply_player_bio_by_name(player, bio_registry, as_of_year=season_year)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     if landing:
         _attach_career_stats(player, landing=landing, is_goalie=is_goalie)
 
@@ -1544,7 +1546,7 @@ def _build_player_from_roster_row(
             setattr(player, "id", f"NHL_{nhl_id}")
             setattr(player, "_ledger_player_id", f"NHL_{nhl_id}")
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     # Persist rating-season boxcars for trade production / audit only.
     # Do NOT write prior-year counting stats into live player.season_stats —
@@ -1560,14 +1562,14 @@ def _build_player_from_roster_row(
                 # Clear accidental flat prior-year seed.
                 setattr(player, "season_stats", {})
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     # Re-align after ledger init — potential / character hooks must not leave
     # stored OVR far below the stats-derived target.
     try:
         align_attribute_ovr_to_target(player, float(target_ovr), rounds=40)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     return player
 
@@ -1830,19 +1832,19 @@ def _assign_player_to_ahl(player: Any, team: Any) -> None:
         player.roster_location = "ahl"
         player.organizational_status = "minors"
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         ctx = getattr(player, "context", None)
         if ctx is not None:
             ctx.current_team_id = f"AHL_{tid}" if tid else "AHL"
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         from app.sim_engine.league_hierarchy_bootstrap import _set_assignment, _team_label
 
         _set_assignment(player, org_nhl_team_id=tid, level="ahl", club=_team_label(team))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _assign_player_to_nhl(player: Any, team: Any) -> None:
@@ -1854,13 +1856,13 @@ def _assign_player_to_nhl(player: Any, team: Any) -> None:
         player.roster_location = "nhl"
         player.organizational_status = "nhl"
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         ctx = getattr(player, "context", None)
         if ctx is not None and tid:
             ctx.current_team_id = tid
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _fetch_org_prospects(abbr: str) -> Dict[str, Any]:
@@ -1971,7 +1973,7 @@ def import_real_minor_goalies(
 
             apply_dynasty_entry_to_player(player, e, seed=int(rng.random() * 1e9), align_rounds=align_rounds)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         try:
             from services.contract_economy import apply_contract_to_player, has_active_contract
 
@@ -1995,7 +1997,7 @@ def import_real_minor_goalies(
                     int(season_year),
                 )
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         _assign_player_to_ahl(player, team)
         setattr(player, "real_minor_import", True)
         real_new.append(player)
@@ -2043,7 +2045,7 @@ def import_real_minor_goalies(
                         if p in (getattr(league, "players", None) or []):
                             league.players.remove(p)
                     except Exception:
-                        pass
+                        _swallowed_log.debug("suppressed exception", exc_info=True)
                 continue
             new_ahl.append(p)
         # Best three real goalies play in the AHL; any extra go to the ECHL affiliate.
@@ -2060,13 +2062,13 @@ def import_real_minor_goalies(
 
                     _set_assignment(p, org_nhl_team_id=str(getattr(team, "team_id", "") or ""), level="echl", club=_team_label(team))
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
                 team.echl_roster.append(p)
             try:
                 if p not in (getattr(league, "players", None) or []):
                     league.players.append(p)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             added += 1
         team.ahl_roster = new_ahl
     return added
@@ -2109,7 +2111,7 @@ def _drop_org_name_duplicates(team: Any) -> int:
         try:
             setattr(team, attr, kept)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     return removed
 
 
@@ -2154,7 +2156,7 @@ def _player_has_nmc(player: Any) -> bool:
         if is_brady_tkachuk(player):
             return True
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     c = getattr(player, "contract", None)
     if isinstance(c, dict):
         return bool(c.get("no_move_clause") or c.get("nmc") or c.get("no_movement_clause"))
@@ -2276,7 +2278,7 @@ def enforce_opening_night_cap_compliance(
                 team.ltir_pool_season = int(season_year)
                 team.ltir_pool_source = "opening_day_real_nhl_ltir_allowance"
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             report.setdefault("ltir_allowances", []).append({"team": abbr, "allowance_m": round(over_by + 0.05, 3)})
     try:
         import logging as _logging
@@ -2288,7 +2290,7 @@ def enforce_opening_night_cap_compliance(
                 row["team"], row["over_by_m"], row["total_m"], row["upper_m"],
             )
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return report
 
 
@@ -2368,7 +2370,7 @@ def build_real_nhl_league_players(
                 skater_b = sk_fut.result()
                 goalie_b = gl_fut.result()
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     if not hasattr(league, "players") or league.players is None:
         league.players = []
@@ -2413,7 +2415,7 @@ def build_real_nhl_league_players(
         try:
             nhl_ids.append(int(row.get("id") or 0))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     landings: Dict[int, Dict[str, Any]] = {}
     if not fast_import:
@@ -2572,7 +2574,7 @@ def build_real_nhl_league_players(
         try:
             _drop_org_name_duplicates(team)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
         # Spotrac dead money (buyouts / retained) — previously never imported, so
         # clubs looked ~$5M too loose vs CapFriendly/Spotrac once AAVs were fixed.
@@ -2583,7 +2585,7 @@ def build_real_nhl_league_players(
             team.retained_salary_records = list(dead.get("retained") or [])
             team.retained_salary = list(dead.get("retained") or [])
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
         # Competitive score for AI / standings priors
         try:
@@ -2599,7 +2601,7 @@ def build_real_nhl_league_players(
                 )[:12]
                 team.state.competitive_score = sum(ovrs) / len(ovrs) if ovrs else 0.5
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     if imported < 400:
         detail = "; ".join(failures[:6]) if failures else "unknown"
@@ -2643,7 +2645,7 @@ def build_real_nhl_league_players(
 
             enforce_league_ovr_distribution_from_league(league, rng=rng, target_90_plus=0)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     brady_meta: Dict[str, Any] = {}
     if not fast_import:
@@ -2681,7 +2683,7 @@ def build_real_nhl_league_players(
             "brady_tkachuk_chaos": brady_meta,
         })
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     return {
         "ok": True,

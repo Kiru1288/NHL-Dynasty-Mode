@@ -797,7 +797,7 @@ export default function DraftCombine({ franchiseState = {}, eventData = {}, onCo
 
         if (prospect) setSelectedProspectId(getId(prospect));
       } catch (e) {
-        setError(e?.message || "Meeting failed");
+        setError(e?.response?.data?.detail || e?.message || "Meeting failed");
       } finally {
         setMeetingLoading("");
       }

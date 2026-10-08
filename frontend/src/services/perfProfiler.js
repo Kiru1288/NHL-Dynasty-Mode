@@ -9,7 +9,13 @@
  */
 
 const STORAGE_KEY = "nhl_perf";
-const SLOW_MS = Number(localStorage.getItem("nhl_perf_slow_ms") || 100);
+const SLOW_MS = (() => {
+  try {
+    return Number(localStorage.getItem("nhl_perf_slow_ms") || 100) || 100;
+  } catch {
+    return 100;
+  }
+})();
 
 function _enabled() {
   try {

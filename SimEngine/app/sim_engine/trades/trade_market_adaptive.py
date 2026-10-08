@@ -11,7 +11,7 @@ Runtime state lives on league.cpu_market_runtime (dict).
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List
 
 # Season targets (tunable without touching proposer loops).
 TARGET_PICK_RATE = 0.36

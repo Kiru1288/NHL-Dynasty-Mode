@@ -20,6 +20,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 
 # =============================================================================
@@ -623,7 +625,7 @@ class WaiverAI:
             league.waiver_priority = priority
             league.waiver_wire = remaining_wire
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         return logs
 
 

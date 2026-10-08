@@ -10,6 +10,8 @@ from __future__ import annotations
 import hashlib
 import random
 from typing import Any, Dict, List, Optional
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 
 def _rng(parts: Any) -> float:
@@ -61,7 +63,7 @@ def develop_unsigned_prospect(
         setattr(player, "_active_dev_season", sid)
         setattr(player, "_dev_source_path", "unsigned_prospect")
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     ledger = ensure_development_ledger(player, sid)
     if ledger.get("development_applied"):
@@ -75,7 +77,7 @@ def develop_unsigned_prospect(
             "nhl_readiness": float(getattr(player, "nhl_readiness", 0) or 0),
         }
 
-    age = int(getattr(player, "age", None) or getattr(getattr(player, "identity", None), "age", 18) or 18)
+    int(getattr(player, "age", None) or getattr(getattr(player, "identity", None), "age", 18) or 18)
     path = str(getattr(player, "development_path", "") or getattr(player, "current_league_id", "") or "")
     league_id = str(getattr(player, "current_league_id", "") or path)
     lq = _league_quality(league_id)
@@ -107,7 +109,7 @@ def develop_unsigned_prospect(
         setattr(player, "_league_quality_mod", 0.88 + 0.2 * lq)
         setattr(player, "_dev_env_growth_mult", org_mod * coach_mod)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     profile = resolve_development_profile(
         player,
@@ -144,14 +146,14 @@ def develop_unsigned_prospect(
         if _owed is not None:
             budget = _owed * (0.92 + 0.16 * _rng((getattr(player, "id", ""), season_year, "left")))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     ratings = getattr(player, "ratings", None)
     delta_display = 0.0
     if isinstance(ratings, dict) and ratings:
         # Seeded RNG for attribute allocation phase labels only.
         seed = int(_rng((getattr(player, "id", ""), season_year, "alloc")) * 1e9)
-        rng = random.Random(seed)
+        random.Random(seed)
         phase = "NORMAL"
         if _rng((getattr(player, "id", ""), season_year, "phase")) < 0.08:
             phase = "STALL"
@@ -172,12 +174,12 @@ def develop_unsigned_prospect(
         try:
             setattr(player, "overall", float(display_rating(new_ovr01)))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         try:
             if not callable(getattr(type(player), "ovr", None)):
                 setattr(player, "ovr", float(new_ovr01))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         ovr_after = normalize_rating(getattr(player, "overall", new_ovr01))
         delta_display = (ovr_after - ovr_before) * 99.0
 
@@ -226,7 +228,7 @@ def develop_unsigned_prospect(
     try:
         persist_recomputed_ovr(player)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     attr_out = {}
     if isinstance(ledger.get("attribute_deltas"), dict):
@@ -276,7 +278,7 @@ def run_unsigned_prospect_development_pass(session: Any, *, season_year: Optiona
             try:
                 setattr(p, "_active_dev_season", sy)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             res = develop_unsigned_prospect(p, season_year=sy, nhl_team=team, request_league_transfer=transfer)
             if res.get("ok"):
                 results.append({**res, "rights_team_id": str(getattr(team, "team_id", None) or getattr(team, "id", "") or "")})
@@ -290,5 +292,5 @@ def run_unsigned_prospect_development_pass(session: Any, *, season_year: Optiona
     try:
         session.unsigned_development_payload = payload
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return payload

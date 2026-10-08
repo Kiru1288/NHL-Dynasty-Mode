@@ -25,6 +25,8 @@ from app.sim_engine.trades.trade_asset import (
     player_display_name,
 )
 from app.sim_engine.trades.trade_pick_registry import get_pick_by_id
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 logger = logging.getLogger(__name__)
 
@@ -246,12 +248,14 @@ def _pick_projected_slot(proj: Dict[str, Any], rnd: int) -> Optional[int]:
     window = str(proj.get("window") or "").lower()
     if rnd != 1:
         return None
+    # No usable record (preseason / early October): project from direction. A rebuilding
+    # club picks near the top, a contender near the back (this mapping used to be inverted).
     if window == "rebuild":
-        return 28
+        return 5
     if window == "contender":
-        return 6
+        return 26
     if window == "declining":
-        return 18
+        return 12
     return None
 
 
@@ -320,7 +324,7 @@ def _scouting_confidence(player: Any) -> float:
             if v > 0:
                 return v / 100.0 if v > 1.5 else v
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     return 0.5
 
 
@@ -385,9 +389,53 @@ def _safe_int(x: Any, default: int = 0) -> int:
         return default
 
 
+def sync_trade_standings(league: Any, standings: Any = None) -> int:
+    """Stamp each club with its live record (gp, pts, pts_pct, rank) for pick/finish projections.
+
+    Teams carry no gp/w/l attributes, so pick values used to fall back to the club's window
+    label for every projection. Reads a StandingsTable when given, else the engine's
+    per-tick snapshot on the league. Returns the number of clubs stamped.
+    """
+    rows: Dict[str, Dict[str, float]] = {}
+    recs = getattr(standings, "records", None) if standings is not None else None
+    if isinstance(recs, dict) and recs:
+        for tid, rec in recs.items():
+            w = int(getattr(rec, "wins", 0) or 0)
+            l_ = int(getattr(rec, "losses", 0) or 0)
+            otl = int(getattr(rec, "otl", 0) or getattr(rec, "ot_losses", 0) or 0)
+            gp = w + l_ + otl
+            pts = 2 * w + otl
+            rows[str(tid)] = {"gp": gp, "pts": pts, "pts_pct": pts / max(1, 2 * gp)}
+    else:
+        snap = getattr(league, "_cpu_standings_snapshot", None) or {}
+        for tid, row in snap.items():
+            if isinstance(row, dict):
+                rows[str(tid)] = {"gp": int(row.get("gp") or 0), "pts": int(row.get("pts") or 0),
+                                  "pts_pct": float(row.get("pts_pct") or 0.0)}
+    if not rows:
+        return 0
+    ranked = sorted(rows.items(), key=lambda kv: (-kv[1]["pts_pct"] if kv[1]["gp"] else 0.0, -kv[1]["pts"]))
+    n = 0
+    teams = list(getattr(league, "teams", None) or [])
+    by_id = {str(getattr(t, "team_id", getattr(t, "id", ""))): t for t in teams}
+    for rank, (tid, row) in enumerate(ranked, start=1):
+        t = by_id.get(tid)
+        if t is None:
+            continue
+        try:
+            setattr(t, "_trade_standings", {**row, "rank": rank, "n_teams": len(ranked)})
+            n += 1
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    return n
+
+
 def _team_points_pct(team: Any) -> Optional[float]:
     if team is None:
         return None
+    live = getattr(team, "_trade_standings", None)
+    if isinstance(live, dict) and int(live.get("gp") or 0) >= 5:
+        return float(live.get("pts_pct") or 0.0)
     gp = _safe_float(getattr(team, "gp", getattr(team, "games_played", 0)), 0.0)
     pts = _safe_float(getattr(team, "pts", getattr(team, "points", 0)), 0.0)
     if gp > 0 and pts >= 0:
@@ -422,6 +470,9 @@ def _team_core_strength(team: Any) -> float:
 def _team_league_rank(team: Any, team_by_id: Optional[Dict[str, Any]] = None) -> Optional[int]:
     if team is None:
         return None
+    live = getattr(team, "_trade_standings", None)
+    if isinstance(live, dict) and int(live.get("gp") or 0) >= 5 and live.get("rank"):
+        return int(live["rank"])
     for key in ("league_rank", "overall_rank", "standings_rank"):
         v = getattr(team, key, None)
         if v is not None:
@@ -503,7 +554,7 @@ def _player_ovr(player: Any) -> float:
 
         return float(player_current_ovr_01(player)) * 99.0
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     fn = getattr(player, "ovr", None)
     if callable(fn):
         try:
@@ -527,7 +578,7 @@ def _player_potential_ovr(player: Any, current_ovr: float) -> float:
         if pot is not None:
             return max(float(current_ovr), float(pot))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     ratings = getattr(player, "ratings", None)
     if isinstance(ratings, dict):
         for key in ("dev_potential", "potential", "pot"):
@@ -800,7 +851,7 @@ def _is_elc_contract(player: Any) -> bool:
 
 
 def _injury_games_out(player: Any) -> int:
-    for key in ("injury_games_remaining", "games_out", "games_remaining"):
+    for key in ("_world_injury_games_remaining", "injury_games_remaining", "games_out", "games_remaining"):
         val = getattr(player, key, None)
         if val is not None:
             try:
@@ -841,6 +892,44 @@ def _injury_value_mod(
     if need_mod >= 6.0 and pos == "G" and games <= 21:
         discount *= 0.65
     return -discount
+
+
+def _season_games_remaining(league: Any, season_games: int = 82) -> int:
+    snap = getattr(league, "_cpu_standings_snapshot", None) or {}
+    gps = []
+    for row in snap.values() if isinstance(snap, dict) else []:
+        try:
+            gps.append(int((row or {}).get("gp") or 0))
+        except Exception:
+            continue
+    gp = (sum(gps) / len(gps)) if gps else 0.0
+    return max(0, int(round(season_games - gp)))
+
+
+def _injury_value_pct(player: Any, *, window: str, league: Any, years: int, deadline_phase: float) -> float:
+    """Share of a player's trade value lost to his current injury.
+
+    A flat few-point discount meant a season-ending injury barely mattered, so you
+    could hand a CPU club a star who wouldn't play again this year at near full price.
+    Now the club loses the share of this season he'll miss (weighted by how much it
+    cares about this season), spread over his term, plus a re-injury risk."""
+    if not is_player_injured(player):
+        return 0.0
+    games = _injury_games_out(player)
+    remaining = _season_games_remaining(league)
+    if games <= 0:
+        return 0.03
+    if remaining <= 0:
+        lost = 0.0  # offseason: he'll be back by camp, mostly
+    else:
+        lost = min(1.0, games / max(8.0, float(remaining)))
+    now_weight = {"contender": 0.9, "win_now": 0.9, "rebuild": 0.35}.get(str(window or "").lower(), 0.6)
+    if deadline_phase > 0.5 and now_weight >= 0.6:
+        now_weight = min(1.0, now_weight + 0.1)
+    term = max(1, int(years or 1))
+    pct = lost * now_weight / (term ** 0.5)
+    pct += 0.08 if games >= 40 else 0.04 if games >= 15 else 0.01
+    return max(0.0, min(0.75, pct))
 
 
 def _elc_value_mod(
@@ -937,7 +1026,7 @@ def _bad_contract_score(player: Any, ovr: float, cap_hit: float, years: int, age
         if tagged > 0:
             score = max(score, tagged)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return min(2.0, score)
 
 
@@ -1219,8 +1308,17 @@ def _position_value_mult(pos: str, val_ovr: float) -> float:
     if pos == "D":
         return 1.05 if val_ovr >= 82 else 1.0
     if pos == "G":
-        # Real market: a Vezina-calibre 31-year-old moved for a late 1st plus pieces.
-        return 0.65 if val_ovr >= 92 else 0.55
+        # The crease is the biggest single lever on team strength in this sim (see
+        # trades/lineup_impact.py), so a real starter is priced like a top skater.
+        # The old flat 0.55 let you buy an 85+ starter for a mid prospect. Backups and
+        # fringe goalies still carry the market discount.
+        if val_ovr >= 90:
+            return 1.0
+        if val_ovr >= 85:
+            return 0.9
+        if val_ovr >= 80:
+            return 0.72
+        return 0.55
     return 1.0
 
 
@@ -1311,7 +1409,7 @@ def evaluate_player_asset_value(
                     ],
                     "retained_pct_supported": True,
                 }
-        return _evaluate_player_asset_value_impl(
+        res = _evaluate_player_asset_value_impl(
             player,
             source_team,
             acquiring_team,
@@ -1319,6 +1417,26 @@ def evaluate_player_asset_value(
             context=context,
             retained_pct=retained_pct,
         )
+        # Team identity: CPU clubs pay a little more for players who fit how they
+        # play (a run-and-gun club chases speed and finishing; a heavy club chases
+        # size and bite) and a little less for poor fits. User club unaffected.
+        try:
+            ident = getattr(acquiring_team, "team_identity", None) if acquiring_team is not None else None
+            if isinstance(ident, dict) and not ident.get("is_user") and isinstance(res, dict):
+                from app.sim_engine.systems.team_identity import fit_reason, player_identity_fit
+
+                fit = player_identity_fit(ident, player)
+                tot = float(res.get("total") or 0.0)
+                if tot > 0:
+                    mult = 1.0 + 0.14 * (fit - 0.5)
+                    res["total"] = round(tot * mult, 3)
+                    res["identity_fit"] = round(fit, 3)
+                    note = fit_reason(ident, player, fit)
+                    if note:
+                        res["explain"] = list(res.get("explain") or []) + [note]
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+        return res
     except Exception as exc:
         pid = str(getattr(player, "id", None) or getattr(player, "player_id", "") or "")
         logger.exception(
@@ -1509,6 +1627,11 @@ def _evaluate_player_asset_value_impl(
         deadline_phase=deadline_phase,
         need_mod=need_mod,
     )
+    # Real injury cost is applied proportionally below (the flat mod was clamped to
+    # a few points); keep only a token amount inside the context stack.
+    injury_pct = _injury_value_pct(player, window=window, league=league, years=years, deadline_phase=deadline_phase)
+    if injury_pct > 0:
+        injury_mod = max(injury_mod, -1.0)
 
     rental_mod = _rental_market_mod(
         ovr=ovr,
@@ -1665,6 +1788,9 @@ def _evaluate_player_asset_value_impl(
         "context_cap": round(context_mod - context_raw, 2),
     }
     total = base_core + context_mod + market_applied
+    if injury_pct > 0 and total > 0:
+        components["injury_pct"] = round(injury_pct, 3)
+        total *= (1.0 - injury_pct)
     # Extra star premium / depth tax on top of the uncapped talent curve.
     # Pipeline assets skip star-premium — ceiling is already discounted in val_ovr.
     if not is_prospect_val:
@@ -1750,6 +1876,22 @@ def _evaluate_player_asset_value_impl(
     # Hockey value floor: a near-minimum deal can be waived/buried for almost
     # nothing, so it should never cost a sweetener to move.
     hockey_floor = 0.0 if cap_hit <= LEAGUE_MINIMUM_AAV_M + 0.25 else -15.0
+    # Injury: scale with how much of the remaining season (and term) the player misses.
+    # The flat context discount alone moved a 92 OVR star only ~4% for a 60-game injury.
+    inj_games = _injury_games_out(player) if is_player_injured(player) else 0
+    if inj_games > 0 and total > 0:
+        ictx = context or {}
+        last_idx = max(40, int(ictx.get("regular_season_last_index", 192) or 192))
+        cur = int(ictx.get("calendar_cursor", 0) or 0)
+        season_left = max(0.08, min(1.0, (last_idx - cur) / float(last_idx))) if cur <= last_idx else 1.0
+        games_left = max(8.0, 82.0 * season_left)
+        share_missed = min(1.0, inj_games / games_left)
+        term = max(1, int(years or 1))
+        weight = 0.6 if term <= 1 else 0.6 / (1.0 + 0.5 * (term - 1))
+        inj_discount = share_missed * weight + (0.08 if inj_games > games_left else 0.0)
+        inj_discount = max(0.0, min(0.65, inj_discount))
+        components["injury_share_discount"] = round(inj_discount, 3)
+        total *= 1.0 - inj_discount
     total = max(hockey_floor, float(total))
     # Contract burden sits outside the context clamp so albatross deals go negative.
     # Depth players are also measured against what their ROLE is worth.
@@ -2134,6 +2276,72 @@ def evaluate_asset_value(
     return evaluate_pick_asset_value(row, acquiring_team, source_team, league, context=context)
 
 
+def _pos_group(pos: str) -> str:
+    p = str(pos or "").upper()
+    if p.startswith("G"):
+        return "G"
+    if p in ("D", "LD", "RD"):
+        return "D"
+    if p == "C":
+        return "C"
+    return "W"
+
+
+def _seller_loss_premium(team: Any, player_id: str) -> float:
+    """Extra weight a club puts on losing one of its own players (0..0.22).
+
+    Market value is nearly identical from every club's chair, which made trades zero-sum:
+    the CPU only ever took deals that were even or better for itself, so the user could
+    never come out ahead and a club never felt the hole a departure leaves. A club now
+    weighs (a) where the player sits on its own depth chart and (b) how big the drop is
+    to the next man at his position. Contenders feel it more, rebuilders less.
+    """
+    roster = [p for p in (getattr(team, "roster", None) or []) if not getattr(p, "retired", False)]
+    me = next((p for p in roster if str(getattr(p, "id", "")) == str(player_id)), None)
+    if me is None:
+        return 0.0
+    grp = _pos_group(_player_pos(me))
+    peers = sorted((_player_ovr(p) for p in roster if _pos_group(_player_pos(p)) == grp), reverse=True)
+    my_ovr = _player_ovr(me)
+    rank = sum(1 for v in peers if v > my_ovr + 1e-6)
+    slots = {"G": 1, "D": 2, "C": 2, "W": 4}.get(grp, 2)
+    prem = 0.0
+    if rank < slots:
+        prem += 0.08 if grp != "G" else 0.12
+    nxt = next((v for v in peers if v < my_ovr - 1e-6), None)
+    if nxt is not None and rank < slots + 1:
+        prem += min(0.08, max(0.0, (my_ovr - nxt - 2.0) * 0.012))
+    window = _team_window(team)
+    mult = 1.35 if window == "contender" else 0.45 if window == "rebuild" else 1.0
+    return max(0.0, min(0.22, prem * mult))
+
+
+def _buyer_fit_premium(team: Any, player: Any) -> float:
+    """Extra weight a club puts on a player who would start for it at a thin position (0..0.16).
+
+    Mirrors _seller_loss_premium: a seller moving depth and a buyer filling a hole can both
+    come out ahead, which is how real hockey trades get made.
+    """
+    if team is None or player is None:
+        return 0.0
+    roster = [p for p in (getattr(team, "roster", None) or []) if not getattr(p, "retired", False)]
+    grp = _pos_group(_player_pos(player))
+    peers = sorted((_player_ovr(p) for p in roster if _pos_group(_player_pos(p)) == grp), reverse=True)
+    slots = {"G": 1, "D": 4, "C": 2, "W": 4}.get(grp, 2)
+    starters = peers[:slots]
+    ovr = _player_ovr(player)
+    if len(starters) < slots:
+        prem = 0.10
+    else:
+        worst = starters[-1]
+        if ovr <= worst:
+            return 0.0
+        prem = 0.04 + min(0.08, (ovr - worst) * 0.012)
+    window = _team_window(team)
+    mult = 1.3 if window == "contender" else 0.5 if window == "rebuild" else 1.0
+    return max(0.0, min(0.16, prem * mult))
+
+
 def evaluate_package_value(
     package: TradePackage,
     team_id: str,
@@ -2151,29 +2359,45 @@ def evaluate_package_value(
         acq = team_by_id.get(tid)
         if src is None or acq is None:
             continue
-        incoming_vals.append(evaluate_asset_value(asset, src, acq, league, context=context))
+        row = dict(evaluate_asset_value(asset, src, acq, league, context=context))
+        if getattr(asset, "type", "") == "player":
+            try:
+                from app.sim_engine.trades.trade_asset import find_player_in_organization
 
-    for asset in package.outgoing_by_team.get(tid, []):
-        src = team_by_id.get(tid)
-        acq = team_by_id.get(asset.acquiring_team_id if hasattr(asset, "acquiring_team_id") else "")
-        if src is None or acq is None:
-            continue
-        outgoing_vals.append(evaluate_asset_value(asset, src, acq, league, context=context))
+                pl, _loc, _i = find_player_in_organization(src, str(getattr(asset, "player_id", "") or ""))
+                prem = _buyer_fit_premium(acq, pl) if pl is not None else 0.0
+            except Exception:
+                prem = 0.0
+            m_total = float(row.get("total", 0.0) or 0.0)
+            if prem > 0 and m_total > 0:
+                row["market_total"] = m_total
+                row["buyer_fit_premium"] = round(prem, 3)
+                row["total"] = round(m_total * (1.0 + prem), 2)
+        incoming_vals.append(row)
 
-    in_total = sum(v.get("total", 0.0) for v in incoming_vals)
-    out_total = sum(
-        evaluate_asset_value(a, team_by_id.get(tid), team_by_id.get(a.acquiring_team_id), league, context=context).get("total", 0.0)
-        for a in package.outgoing_by_team.get(tid, [])
-        if team_by_id.get(tid) and team_by_id.get(a.acquiring_team_id)
-    )
-
-    # Outgoing value to this team = what they give up (value to receiving teams averaged)
+    # Outgoing: what this club gives up. Blend the market's view (value to the receiver)
+    # with the club's own view (its fit, its depth chart, its needs) so a club feels the
+    # loss of its own top centre or only good goalie, and a deal can help both sides.
     out_vals: List[Dict[str, Any]] = []
+    src_team = team_by_id.get(tid)
     for asset in package.outgoing_by_team.get(tid, []):
-        src = team_by_id.get(tid)
-        acq = team_by_id.get(asset.acquiring_team_id)
-        if src and acq:
-            out_vals.append(evaluate_asset_value(asset, src, acq, league, context=context))
+        acq = team_by_id.get(asset.acquiring_team_id if hasattr(asset, "acquiring_team_id") else "")
+        if src_team is None or acq is None:
+            continue
+        market = evaluate_asset_value(asset, src_team, acq, league, context=context)
+        row = dict(market)
+        if getattr(asset, "type", "") == "player":
+            try:
+                prem = _seller_loss_premium(src_team, str(getattr(asset, "player_id", "") or ""))
+            except Exception:
+                prem = 0.0
+            m_total = float(market.get("total", 0.0) or 0.0)
+            if prem > 0 and m_total > 0:
+                row["market_total"] = m_total
+                row["seller_loss_premium"] = round(prem, 3)
+                row["total"] = round(m_total * (1.0 + prem), 2)
+        out_vals.append(row)
+    outgoing_vals = out_vals
 
     raw_out = sum(v.get("total", 0.0) for v in out_vals)
     raw_in = sum(v.get("total", 0.0) for v in incoming_vals)

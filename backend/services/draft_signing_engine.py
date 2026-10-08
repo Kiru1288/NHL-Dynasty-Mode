@@ -6,6 +6,8 @@ Kept for backwards-compatible imports from contract_economy / tests.
 from __future__ import annotations
 
 from typing import Any, Dict, Optional
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 
 def evaluate_elc_signing_decision(
@@ -86,5 +88,5 @@ def attempt_sign_elc_with_decision(
 
             promote_prospect_to_nhl(player, team, league, season_year, auto_elc=False)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     return result

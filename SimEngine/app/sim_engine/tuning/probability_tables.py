@@ -7,9 +7,11 @@ Chaos index widens effective randomness (higher chaos → more extreme rolls).
 from __future__ import annotations
 
 import math
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping
 
 from app.sim_engine.tuning.era_modifiers import resolve_era_profile
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 
 def _clamp(x: float, lo: float, hi: float) -> float:
@@ -201,5 +203,5 @@ def determine_player_role(player: Any, team: Any, league_state: Mapping[str, Any
         setattr(player, "role_narrative", narrative)
         setattr(player, "_tuning_usage_factor", usage)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return str(base)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, List, Dict, Optional, Tuple
+from typing import Any, List, Optional
 import random
 
 from app.sim_engine.entities.player import Player
@@ -661,7 +661,6 @@ class Team:
         rebuild_bias = 0.15 if cap_dip else 0.0
         if league_health is not None and league_health < 0.48:
             rebuild_bias += 0.10
-        win_now_bias = 0.15 if cap_spike else 0.0
 
         if stable < 0.25 and pressure > 0.75:
             return TeamStatus.DYSFUNCTIONAL

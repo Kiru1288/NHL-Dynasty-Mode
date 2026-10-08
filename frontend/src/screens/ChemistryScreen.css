@@ -283,17 +283,16 @@
   min-width: 0;
 }
 
-.chemistry-node strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+
 
 .chemistry-connection-card .chemistry-node {
   grid-template-columns: minmax(0, 1fr);
 }
 
 .chemistry-node strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--chem-text);
   font-weight: 700;
 }
@@ -370,9 +369,7 @@
   flex-direction: column;
 }
 
-.chemistry-line-card .chemistry-worksheet {
-  margin-top: auto;
-}
+
 
 .chemistry-line-card .chemistry-chip-row {
   margin: 8px 0;
@@ -385,6 +382,7 @@
 
 /* Scheme-fit notation reads as a two-column coaching worksheet under a rule. */
 .chemistry-line-card .chemistry-worksheet {
+  margin-top: auto;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 2px 18px;
   padding-top: 6px;

@@ -46,6 +46,13 @@ _SCORE_LABELS = {
 }
 
 
+def _stable_hash(value):
+    """Process-stable replacement for built-in hash() (salted per process via PYTHONHASHSEED)."""
+    import hashlib as _hl
+
+    return int.from_bytes(_hl.sha256(str(value).encode("utf-8")).digest()[:8], "big", signed=True)
+
+
 def _clip(value: float, lo: float = 0.0, hi: float = 100.0) -> float:
     return lo if value < lo else hi if value > hi else value
 
@@ -170,7 +177,7 @@ def compose_data_story_copy(stype: str, ctx: Dict[str, Any], rng: random.Random,
     streak = int(ctx.get("streak") or 0)
     gaa = float(ctx.get("gaa") or 0)
     rank = int(ctx.get("league_rank") or ctx.get("rank") or 0)
-    opponent = str(ctx.get("opponent") or "")
+    str(ctx.get("opponent") or "")
     contract_year = bool(ctx.get("contract_year"))
 
     if stype == "star_underperforming":
@@ -357,7 +364,7 @@ _COMMUNITY_HOOKS = (
 
 
 def community_event_copy(name: str, team: str, player_id: str = "") -> Tuple[str, str]:
-    seed = abs(hash(str(player_id or name)))
+    seed = abs(_stable_hash(str(player_id or name)))
     hook = _COMMUNITY_HOOKS[seed % len(_COMMUNITY_HOOKS)]
     known = str(team or "").strip()
     if "{team}" in hook and (not known or known.lower() in ("the club", "club", "the team")):
@@ -465,7 +472,7 @@ def reporter_conflict_copy(
             ),
             "player_line": "It had been building. I'm not pretending it hadn't.",
         }
-    seed = abs(hash(f"{player_id}|{actor_name}|{reporter_name}"))
+    seed = abs(_stable_hash(f"{player_id}|{actor_name}|{reporter_name}"))
     if rng is not None:
         seed ^= rng.randrange(1, 10_000)
     idx = seed % len(_REPORTER_FRAMES)

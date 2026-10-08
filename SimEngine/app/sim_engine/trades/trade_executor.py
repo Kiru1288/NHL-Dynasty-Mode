@@ -8,15 +8,7 @@ import uuid
 import copy
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.sim_engine.trades.trade_asset import (
-    DraftPickTradeAsset,
-    PlayerTradeAsset,
-    RetainedSalaryRecord,
-    TradePackage,
-    find_player_on_team_roster,
-    player_display_name,
-    team_id_of,
-)
+from app.sim_engine.trades.trade_asset import DraftPickTradeAsset, PlayerTradeAsset, RetainedSalaryRecord, TradePackage, player_display_name, team_id_of
 from app.sim_engine.trades.trade_evaluator import evaluate_trade_package
 from app.sim_engine.trades.trade_history import append_trade_record
 from app.sim_engine.trades.trade_pick_registry import (
@@ -27,7 +19,8 @@ from app.sim_engine.trades.trade_pick_registry import (
     transfer_pick,
 )
 from app.sim_engine.trades.trade_rules import _contract_years_for_retention
-from app.sim_engine.economy.cap_engine import player_cap_hit_millions
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 
 def _append_retained_record(team: Any, record: RetainedSalaryRecord, season_label: Optional[str]) -> None:
@@ -47,6 +40,34 @@ def _append_retained_record(team: Any, record: RetainedSalaryRecord, season_labe
         }
     )
     setattr(team, "retained_salary_records", rows)
+
+
+def _pick_name(row: Dict[str, Any], team_by_id: Dict[str, Any], pick_id: Any) -> str:
+    """'2027 EDM 4th-round pick' instead of the registry id (C10)."""
+    year, rnd = row.get("year"), row.get("round")
+    if not (year and rnd):
+        return "a draft pick"
+    t = team_by_id.get(str(row.get("original_team_id") or ""))
+    abbr = str(getattr(t, "abbreviation", "") or getattr(t, "abbr", "") or "").upper() if t is not None else ""
+    n = int(rnd)
+    suffix = {1: "st", 2: "nd", 3: "rd"}.get(n, "th")
+    return f"{int(year)} {abbr + ' ' if abbr else ''}{n}{suffix}-round pick"
+
+
+def _snapshot_player_fields(player: Any) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    for k, v in dict(getattr(player, "__dict__", {}) or {}).items():
+        out[k] = copy.copy(v) if isinstance(v, (dict, list, set)) else v
+    return out
+
+
+def _restore_player_fields(player: Any, snap: Dict[str, Any]) -> None:
+    d = getattr(player, "__dict__", None)
+    if not isinstance(d, dict):
+        return
+    for k in [k for k in d if k not in snap]:
+        d.pop(k, None)
+    d.update(snap)
 
 
 def _org_list_attrs() -> Tuple[str, ...]:
@@ -86,7 +107,7 @@ def _purge_player_id_from_team_lists(team: Any, player_id: str) -> int:
         try:
             setattr(team, "scratches", keep_sc)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     return removed
 
 
@@ -216,7 +237,7 @@ def _apply_player_move(
     try:
         _sync_assignment_flags(player, dest_attr)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     # Belt-and-suspenders: drop any leftover copies on every other club.
     _purge_player_from_other_organizations(
@@ -241,7 +262,7 @@ def _apply_player_move(
             else:
                 setattr(player, field, asset.acquiring_team_id)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     # Draft rights follow the player, otherwise the prospect still reads as
     # belonging to the club that drafted him on every rights surface.
@@ -250,7 +271,7 @@ def _apply_player_move(
             try:
                 setattr(player, field, asset.acquiring_team_id)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         _move_reserve_list_entry(source, acq, str(asset.player_id), asset.acquiring_team_id)
 
     ctx = context or {}
@@ -265,12 +286,31 @@ def _apply_player_move(
         try:
             setattr(player, field, val)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     stats = (context or {}).get("player_season_stats") if isinstance(context, dict) else None
     if isinstance(stats, dict):
         row = stats.get(str(asset.player_id))
         if isinstance(row, dict):
+            # U12: keep a per-team split. The row stays the season total; each split holds
+            # what he did for a previous club, so "with new club" = total − splits.
+            try:
+                old_tid = str(row.get("team_id") or asset.source_team_id)
+                splits = list(row.get("team_splits") or [])
+                prior: Dict[str, float] = {}
+                for sp in splits:
+                    for k, v in sp.items():
+                        if isinstance(v, (int, float)) and not isinstance(v, bool):
+                            prior[k] = prior.get(k, 0) + v
+                piece: Dict[str, Any] = {"team_id": old_tid, "until_day": int((context or {}).get("calendar_cursor", 0) or 0)}
+                for k, v in row.items():
+                    if isinstance(v, (int, float)) and not isinstance(v, bool) and k not in ("until_day",):
+                        piece[k] = round(v - prior.get(k, 0), 4) if isinstance(v, float) else v - int(prior.get(k, 0))
+                if int(piece.get("gp", 0) or 0) > 0:
+                    splits.append(piece)
+                    row["team_splits"] = splits
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             row["team_id"] = str(asset.acquiring_team_id)
 
     pname = player_display_name(player)
@@ -305,10 +345,16 @@ def _apply_player_move(
                 cap_pct = float(max_retention_pct((context or {}).get("league")))
             except Exception:
                 cap_pct = 50.0
+            prior_count = int(getattr(player, "retention_count", 0) or 0)
+            if getattr(player, "retained_share_expiry", None) not in (None, expiry):
+                prior_count = 0
             setattr(player, "retained_share_pct", min(cap_pct, prior + float(asset.retained_pct)))
             setattr(player, "retained_share_expiry", expiry)
+            # NHL: a contract can be retained on at most twice (U14).
+            setattr(player, "retention_count", prior_count + 1)
+            setattr(player, "retention_last_day", int((context or {}).get("calendar_cursor", 0) or 0))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         retained_m = cap_hit * (asset.retained_pct / 100.0)
         rec = RetainedSalaryRecord(
             player_id=asset.player_id,
@@ -321,6 +367,10 @@ def _apply_player_move(
             seasons_remaining=max(1, _contract_years_for_retention(player)),
         )
         _append_retained_record(source, rec, season_label)
+        try:
+            source.retained_salary_records[-1]["retained_day"] = int((context or {}).get("calendar_cursor", 0) or 0)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         retained_records.append(
             {
                 "player_id": rec.player_id,
@@ -337,6 +387,7 @@ def _apply_pick_move(
     asset: DraftPickTradeAsset,
     league: Any,
     moved_picks: List[Dict[str, Any]],
+    team_by_id: Optional[Dict[str, Any]] = None,
 ) -> None:
     row = transfer_pick(league, asset.pick_id, asset.acquiring_team_id)
     moved_picks.append(
@@ -349,11 +400,7 @@ def _apply_pick_move(
             "year": row.get("year"),
             "round": row.get("round"),
             "original_team_id": row.get("original_team_id") or getattr(asset, "original_team_id", None) or "",
-            "display_name": (
-                f"{row.get('year')} Round {row.get('round')}"
-                if row.get("year") and row.get("round")
-                else f"Pick {asset.pick_id}"
-            ),
+            "display_name": _pick_name(row, team_by_id or {}, asset.pick_id),
         }
     )
 
@@ -412,7 +459,30 @@ def execute_validated_trade(
     moved_picks: List[Dict[str, Any]] = []
     retained_records: List[Dict[str, Any]] = []
 
+    # U11: player fields (team ids, rights, retention, flags) and stat rows roll back too.
+    player_snaps: List[Tuple[Any, Dict[str, Any]]] = []
+    stat_snaps: Dict[str, Dict[str, Any]] = {}
+    _stats_ref = ctx.get("player_season_stats") if isinstance(ctx.get("player_season_stats"), dict) else None
+    for _a in package.normalized_assets:
+        if not isinstance(_a, PlayerTradeAsset):
+            continue
+        _src = team_by_id.get(str(_a.source_team_id))
+        for _attr in _org_list_attrs():
+            for _p in list(getattr(_src, _attr, None) or []) if _src is not None else []:
+                if str(getattr(_p, "id", "")) == str(_a.player_id):
+                    player_snaps.append((_p, _snapshot_player_fields(_p)))
+        if _stats_ref is not None and isinstance(_stats_ref.get(str(_a.player_id)), dict):
+            stat_snaps[str(_a.player_id)] = copy.deepcopy(_stats_ref[str(_a.player_id)])
+
     def _rollback_all() -> None:
+        for _p, _snap in player_snaps:
+            try:
+                _restore_player_fields(_p, _snap)
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+        if _stats_ref is not None:
+            for _pid, _row in stat_snaps.items():
+                _stats_ref[_pid] = _row
         for tid, tm in team_by_id.items():
             if tid in snapshots:
                 _restore_team_org_lists(tm, snapshots[tid])
@@ -424,7 +494,7 @@ def execute_validated_trade(
         try:
             sync_owned_pick_ids_from_registry(league)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     try:
         for asset in package.normalized_assets:
@@ -438,7 +508,7 @@ def execute_validated_trade(
                     context=ctx,
                 )
             elif isinstance(asset, DraftPickTradeAsset):
-                _apply_pick_move(asset, league, moved_picks)
+                _apply_pick_move(asset, league, moved_picks, team_by_id)
     except Exception as exc:
         _rollback_all()
         raise ValueError(f"Trade execution failed and was rolled back: {exc}") from exc
@@ -467,9 +537,18 @@ def execute_validated_trade(
 
         arrived = {str(m.get("player_id") or m.get("asset_id") or "") for m in moved_players}
         for tid in package.participating_team_ids:
+            # The user's club is never trimmed automatically: they choose who goes down
+            # (through the waiver flow); the roster-compliance check blocks advancing until then.
+            if user_team_id and str(tid) == str(user_team_id):
+                continue
             tm = team_by_id.get(str(tid))
             if tm is not None:
                 roster_moves.extend(auto_send_down_overflow(tm, protect_ids=arrived))
+        pending = [m for m in roster_moves if m.get("needs_waivers")]
+        if pending:
+            queue = list(getattr(league, "_pending_trade_waivers", None) or [])
+            queue.extend({"team_id": m["team_id"], "player_id": m["player_id"]} for m in pending)
+            setattr(league, "_pending_trade_waivers", queue)
     except Exception:
         roster_moves = []
 
@@ -484,7 +563,7 @@ def execute_validated_trade(
     for m in moved_players[:4]:
         headline_bits.append(f"{m.get('player_name')}: {_tname(m['source_team_id'])} -> {_tname(m['acquiring_team_id'])}")
     for m in moved_picks[:2]:
-        headline_bits.append(f"Pick {m.get('asset_id')}: {_tname(m['source_team_id'])} -> {_tname(m['acquiring_team_id'])}")
+        headline_bits.append(f"{m.get('display_name') or 'Draft pick'}: {_tname(m['source_team_id'])} -> {_tname(m['acquiring_team_id'])}")
     headline = "TRADE EXECUTED: " + ("; ".join(headline_bits) if headline_bits else "Assets moved")
 
     trade_id = f"trade_{uuid.uuid4().hex[:12]}"

@@ -11,6 +11,8 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 # Narrative tags for player journeys
 TAG_ROOKIE_SENSATION = "rookie_sensation"
@@ -529,7 +531,7 @@ def apply_narrative_mechanics_to_rosters(
                     if hasattr(psych, "clamp_all"):
                         psych.clamp_all()
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
 
             if ev_summary and len(trace) < max_trace_lines:
                 nm = _player_name(player)
@@ -670,8 +672,7 @@ def update_player_journeys(
     ovrs_only = [x[2] for x in all_ovrs]
     league_avg_ovr = sum(ovrs_only) / len(ovrs_only)
     league_median_ovr = sorted(ovrs_only)[len(ovrs_only) // 2] if ovrs_only else 0.55
-    n_players = len(all_ovrs)
-    top_10_pct_ovr = sorted(ovrs_only, reverse=True)[max(0, n_players // 10)] if n_players >= 10 else 0.90
+    len(all_ovrs)
 
     for player, team, ovr, age in all_ovrs:
         key = _player_key(player)

@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import hashlib
-from typing import Any, List, Optional
+from typing import Any, List
 
 KEY = "_world_chemistry"
 ROSTER_SIG = "_world_roster_sig"

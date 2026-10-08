@@ -7,9 +7,11 @@ Runs at Final Skate (offseason retirements stage). Development Camp handles prog
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.sim_engine.franchise.session import FranchiseSession
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 # NHL yearly retirement targets
 NHL_RETIREMENT_FLOOR = 10
@@ -216,7 +218,7 @@ def _evaluate_with_engine(session: FranchiseSession, player: Any, team: Any, rng
     except Exception:
         return None, 0.0
 
-    seed = hash((_player_id(player), int(session.season_calendar_year))) % (2**31)
+    seed = int(__import__("hashlib").sha256(("%s|%s" % (_player_id(player), int(session.season_calendar_year))).encode()).hexdigest()[:12], 16) % (2**31)
     engine = RetirementEngine(seed=seed)
     engine.rng = rng
     adapter = _build_retirement_adapter(player)
@@ -290,7 +292,7 @@ def _compute_retirement_risk(
             risk += float(getattr(factors, "morale_pressure", 0) or 0) * 10.0
             risk -= float(getattr(factors, "legacy_resistance", 0) or 0) * 8.0
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     return int(_clamp(risk, 0.0, 100.0) * 1.0)
 
@@ -556,7 +558,7 @@ def _archive_retired_player(session: FranchiseSession, player: Any, row: Dict[st
         try:
             team.retired_alumni = alumni
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _apply_team_retirement_effects(session: FranchiseSession, team: Any, player: Any, row: Dict[str, Any]) -> None:
@@ -570,14 +572,14 @@ def _apply_team_retirement_effects(session: FranchiseSession, team: Any, player:
     try:
         team.needs = needs
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     cap_freed = list(getattr(team, "_retirement_cap_freed", None) or [])
     cap_freed.append(float(row.get("cap_hit_removed") or player_cap_hit_millions(player) or 0))
     try:
         team._retirement_cap_freed = cap_freed
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     pid = _player_id(player)
     cap_id = str(getattr(team, "captain_id", getattr(team, "captain", "")) or "")
@@ -586,14 +588,14 @@ def _apply_team_retirement_effects(session: FranchiseSession, team: Any, player:
             team.captain_id = ""
             team.captain = ""
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     alts = list(getattr(team, "alternate_captains", None) or getattr(team, "alternates", None) or [])
     if pid in [str(x) for x in alts]:
         alts = [x for x in alts if str(x) != pid]
         try:
             team.alternate_captains = alts
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _sweater_number(player: Any) -> Any:
@@ -637,7 +639,7 @@ def _apply_retirement_cap_charge(session: FranchiseSession, team: Any, player: A
     try:
         team.buyout_cap_hits = buyouts
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     row["cap_hit_removed"] = float(est.get("cap_savings_m") or 0)
     row["buyout_annual_m"] = est.get("annual_penalty_m")
     row["buyout_years"] = est.get("years")
@@ -648,13 +650,13 @@ def _apply_retirement_cap_charge(session: FranchiseSession, team: Any, player: A
                 try:
                     setattr(contract, attr, 0)
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
         for attr in ("aav_m", "cap_hit_m", "aav"):
             if hasattr(contract, attr):
                 try:
                     setattr(contract, attr, 0)
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _record_retirement_honors(session: FranchiseSession, team: Any, player: Any, row: Dict[str, Any]) -> None:
@@ -670,7 +672,7 @@ def _record_retirement_honors(session: FranchiseSession, team: Any, player: Any,
         try:
             session.hall_of_fame_watch = watch
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     if jersey < 72 or team is None:
         return
     number = _sweater_number(player)
@@ -682,7 +684,7 @@ def _record_retirement_honors(session: FranchiseSession, team: Any, player: Any,
     try:
         team.retired_numbers = book
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     row["jersey_retired"] = True
     row["retired_number"] = number
 
@@ -693,7 +695,6 @@ def _confirm_retirement(
     team: Any,
     row: Dict[str, Any],
 ) -> None:
-    from app.sim_engine.franchise.engine import _strip_retired_from_nhl_rosters
 
     _apply_retirement_cap_charge(session, team, player, row)
     _record_retirement_honors(session, team, player, row)
@@ -704,7 +705,7 @@ def _confirm_retirement(
         player.retirement_year = int(session.season_calendar_year)
         player.retirement_status = "confirmed"
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     league = getattr(session.sim, "league", None)
     if league is not None:
@@ -714,7 +715,7 @@ def _confirm_retirement(
         try:
             league.retired_players = pool
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     _archive_retired_player(session, player, row)
     _apply_team_retirement_effects(session, team, player, row)
@@ -789,7 +790,7 @@ def _extend_contract_one_year(player: Any) -> int:
             try:
                 setattr(contract, attr, years)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
     hit = 0.0
     for attr in ("aav_m", "cap_hit_m", "aav"):
         if hasattr(contract, attr):
@@ -804,7 +805,7 @@ def _extend_contract_one_year(player: Any) -> int:
             try:
                 setattr(contract, attr, 0.775)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
     return years
 
 
@@ -864,14 +865,14 @@ def _grant_leadership(team: Any, player: Any) -> str:
             team.captain_id = pid
             team.captain = pid
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         return "captain"
     if pid not in alternates and len(alternates) < 2:
         alternates.append(pid)
         try:
             team.alternate_captains = alternates
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         return "alternate"
     return "named"
 
@@ -916,7 +917,7 @@ def apply_retirement_decision(session: FranchiseSession, decision: Dict[str, Any
                     try:
                         setattr(user_team, bucket, kept)
                     except Exception:
-                        pass
+                        _swallowed_log.debug("suppressed exception", exc_info=True)
         effects["retired"] = True
         effects["buyout_annual_m"] = row.get("buyout_annual_m")
         effects["cap_hit_removed"] = row.get("cap_hit_removed")
@@ -926,13 +927,13 @@ def apply_retirement_decision(session: FranchiseSession, decision: Dict[str, Any
             player.retirement_status = "returning_for_one_more_year"
             player._retirement_return_season = year
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         psych = getattr(player, "psych", None)
         if psych is not None and hasattr(psych, "morale"):
             try:
                 psych.morale = _clamp(_player_morale(player) + 0.06, 0.0, 1.0)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         if cid == "one_year_deal":
             effects["contract_years"] = _extend_contract_one_year(player)
         elif cid == "reduced_role":
@@ -941,12 +942,12 @@ def apply_retirement_decision(session: FranchiseSession, decision: Dict[str, Any
                 try:
                     health.wear_and_tear = max(0.0, float(health.wear_and_tear or 0) - 0.08)
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
             effects["line_demoted"] = _demote_saved_line(session, pid)
             try:
                 player._retirement_role = "reduced_minutes"
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         elif cid == "leadership_role":
             effects["leadership"] = _grant_leadership(user_team, player)
         elif cid == "contender_push":
@@ -966,11 +967,11 @@ def apply_retirement_decision(session: FranchiseSession, decision: Dict[str, Any
                 )
                 effects["promise_id"] = (promise or {}).get("id")
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             try:
                 player._retirement_promise = "contender_push"
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         effects["retired"] = False
         effects["returns_through_season"] = year
 
@@ -1104,12 +1105,7 @@ def run_franchise_retirement_pass(session: FranchiseSession) -> Dict[str, Any]:
             return existing
         return {"all": safe_list(existing)}
 
-    from app.sim_engine.franchise.engine import (
-        _display_team,
-        _franchise_nhl_age_and_phase_tick,
-        _strip_retired_from_nhl_rosters,
-        player_cap_hit_millions,
-    )
+    from app.sim_engine.franchise.engine import _franchise_nhl_age_and_phase_tick, _strip_retired_from_nhl_rosters, player_cap_hit_millions
 
     sim = session.sim
     league = getattr(sim, "league", None)
@@ -1145,7 +1141,7 @@ def run_franchise_retirement_pass(session: FranchiseSession) -> Dict[str, Any]:
                 try:
                     player.retirement_status = ""
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
 
             age = _player_age(player)
             ovr = _player_ovr_norm(player)

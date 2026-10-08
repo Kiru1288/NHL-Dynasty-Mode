@@ -9,6 +9,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import random
 
 from app.sim_engine.progression.development import career_phase_for_age
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 
 def _clamp_rating(x: float, lo: int = 20, hi: int = 99) -> int:
@@ -66,7 +68,7 @@ def _ovr(player: Any) -> float:
         try:
             return float(ovr_fn())
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     return float(getattr(player, "ovr", 0.5))
 
 
@@ -259,18 +261,23 @@ def career_aging_decline_try(player: Any, rng: Any, league: Any = None) -> Optio
         )
         return None
 
+    # A steady age curve with modest noise (was a 5-20% coin flip, so most veterans
+    # never declined and a few fell off a cliff — decline felt random).
     if age <= 29:
-        p = 0.05
+        p = 0.10
         amt_lo, amt_hi = 0.5, 1.0
-    elif age <= 33:
-        p = 0.20
-        amt_lo, amt_hi = 0.5, 1.5
-    elif age <= 36:
-        p = 0.35
-        amt_lo, amt_hi = 1.0, 2.5
-    else:
+    elif age <= 31:
         p = 0.55
-        amt_lo, amt_hi = 1.5, 3.5
+        amt_lo, amt_hi = 0.5, 1.5
+    elif age <= 34:
+        p = 0.75
+        amt_lo, amt_hi = 1.0, 2.5
+    elif age <= 36:
+        p = 0.85
+        amt_lo, amt_hi = 1.5, 3.0
+    else:
+        p = 0.90
+        amt_lo, amt_hi = 2.0, 4.0
 
     chance_mult = 1.0
     amt_mult = 1.0
@@ -290,7 +297,6 @@ def career_aging_decline_try(player: Any, rng: Any, league: Any = None) -> Optio
     rr = _clamp01(rr)
     p *= 0.65 + 0.35 * (1.0 - rr)
 
-    p *= 0.65
     if age <= 29:
         p *= 0.5
 
@@ -298,8 +304,8 @@ def career_aging_decline_try(player: Any, rng: Any, league: Any = None) -> Optio
         try:
             n_decl = int(getattr(league, "_aging_season_decline_count", 0) or 0)
             n_tot = int(getattr(league, "_aging_season_player_total", 0) or 0)
-            if n_tot > 0 and n_decl > n_tot * 0.22:
-                p *= 0.5
+            if n_tot > 0 and n_decl > n_tot * 0.60:
+                p *= 0.7
         except (TypeError, ValueError):
             pass
 

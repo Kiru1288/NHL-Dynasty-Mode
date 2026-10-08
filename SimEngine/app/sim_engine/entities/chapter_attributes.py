@@ -12,17 +12,10 @@ from __future__ import annotations
 
 import copy
 import random
-from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from dataclasses import dataclass
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from app.sim_engine.entities.player import (  # noqa: WPS433
-    ALIASES,
-    ATTRIBUTE_KEYS,
-    DEFAULT_NHL_RATING,
-    clamp_rating,
-    display_rating,
-    normalize_ratings_dict,
-)
+from app.sim_engine.entities.player import ATTRIBUTE_KEYS, clamp_rating
 
 SCHEMA_VERSION = 1
 RATING_MIN = 20

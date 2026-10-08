@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 # League ELC rules (millions). Keep aligned with contract_economy.ELC_AAV_M.
 ELC_AAV_M = 0.95
@@ -508,7 +510,7 @@ def evaluate_offer_acceptance(
                 "score": round(score, 3),
             }
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     score = max(0.0, min(1.0, score))
     if "NCAA" in path and age <= 20 and readiness < 68 and (expiry is None or int(expiry) > season_year + 1):
@@ -808,7 +810,7 @@ def submit_elc_offer(
             player.organizational_status = prev_status
             player.prospect_status = prev_prospect
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         hist_row["result"] = "failed"
         hist_row["reason"] = result.get("reason")
         record_negotiation(session, hist_row)
@@ -826,7 +828,7 @@ def submit_elc_offer(
         setattr(player, "rights_status", "signed")
         setattr(player, "signed_status", "signed")
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     assign_res = apply_post_elc_assignment(
         session, player, team, built.get("assignment_plan"), season_year=season_year
@@ -836,7 +838,7 @@ def submit_elc_offer(
     try:
         record_signing_bonus_cash(session, team, float(built.get("signing_bonus_total_m") or 0.0) / max(1, int(built.get("term_years") or 3)), season_year, label=f"ELC: {getattr(getattr(player, 'identity', None), 'name', '')}")
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     hist_row["assignment"] = assign_res
     record_negotiation(session, hist_row)
 
@@ -903,7 +905,7 @@ def process_elc_slides(session: Any, season_year: int) -> Dict[str, Any]:
                     setattr(p, "contract_burned", False)
                     setattr(p, "nhl_games_played_this_season", 0)
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
                 slid.append({"player_id": _pid(p), "gp": gp, "expiry_year": c.get("expiry_year")})
             else:
                 c["slide_triggered"] = False
@@ -912,6 +914,6 @@ def process_elc_slides(session: Any, season_year: int) -> Dict[str, Any]:
                     setattr(p, "elc_slide_eligible", False)
                     setattr(p, "contract_burned", True)
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
                 burned.append({"player_id": _pid(p), "gp": gp})
     return {"slid": slid, "burned": burned, "count": len(slid) + len(burned)}

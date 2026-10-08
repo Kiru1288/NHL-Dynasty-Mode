@@ -2,30 +2,27 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { getBurnerState, postBurnerMessage, previewBurnerPost } from "../../../services/franchiseService";
 import "./BurnerPanel.css";
 
-const RISKY_MID = new Set([
-  "coach", "bench", "deal", "management", "soft", "joke", "gm",
-]);
-const RISKY_HIGH = new Set([
-  "trade", "traded", "shop", "shopping", "dump", "fire", "fired", "quit", "resign",
-  "owner", "ownership", "cheap", "lazy", "selfish", "washed", "overpaid", "embarrassing",
-  "tank", "tanking", "choke", "choked", "clown", "disgrace", "garbage",
-]);
+// Highlighting uses the server's own weights (burner state payload), so the preview
+// marks exactly the words the risk score counts (bug F10).
 
 function tokenize(text) {
   return String(text || "").split(/(\s+)/);
 }
 
-function highlightHtml(text) {
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+}
+
+function highlightHtml(text, weights = {}, names = new Set()) {
   return tokenize(text)
-    .map((chunk) => {
-      if (!chunk.trim()) return chunk;
-      const bare = chunk.toLowerCase().replace(/[^a-z']/g, "");
-      if (RISKY_HIGH.has(bare)) {
-        return `<mark class="burner-hl burner-hl--danger">${chunk}</mark>`;
-      }
-      if (RISKY_MID.has(bare)) {
-        return `<mark class="burner-hl burner-hl--warn">${chunk}</mark>`;
-      }
+    .map((raw) => {
+      const chunk = escapeHtml(raw);
+      if (!raw.trim()) return chunk;
+      const bare = raw.toLowerCase().replace(/[^a-z']/g, "");
+      const w = Number(weights[bare]) || 0;
+      if (w >= 16) return `<mark class="burner-hl burner-hl--danger">${chunk}</mark>`;
+      if (w > 0) return `<mark class="burner-hl burner-hl--warn">${chunk}</mark>`;
+      if (names.has(bare)) return `<mark class="burner-hl burner-hl--warn" title="Named in a live storyline">${chunk}</mark>`;
       return chunk;
     })
     .join("");
@@ -70,6 +67,7 @@ function RiskGauge({ risk }) {
 export default function BurnerPanel({ sessionId, marketProfiles, defaultMarketKey, onPosted }) {
   const [state, setState] = useState(null);
   const [text, setText] = useState("");
+  // Your club's market always applies; it isn't a dial you can turn (bug U5).
   const [marketKey, setMarketKey] = useState(defaultMarketKey || "default");
   const [previewRisk, setPreviewRisk] = useState(0);
   const [preview, setPreview] = useState(null);
@@ -118,16 +116,13 @@ export default function BurnerPanel({ sessionId, marketProfiles, defaultMarketKe
     }
   };
 
-  const markets = useMemo(() => {
-    const prof = marketProfiles && typeof marketProfiles === "object" ? marketProfiles : {};
-    return Object.entries(prof).map(([key, val]) => ({
-      key,
-      label: val?.label || key,
-    }));
-  }, [marketProfiles]);
+  const weights = useMemo(() => (state?.risky_words && typeof state.risky_words === "object" ? state.risky_words : {}), [state?.risky_words]);
+  const nameSet = useMemo(() => new Set((state?.storyline_names || []).map((n) => String(n).toLowerCase())), [state?.storyline_names]);
 
   const band = riskBand(previewRisk);
-  const marketLabel = markets.find((m) => m.key === marketKey)?.label || marketKey;
+  const marketLabel = state?.default_market_label || (marketProfiles && marketProfiles[marketKey]?.label) || marketKey;
+  const canPost = state ? state.can_post !== false : true;
+  const hypeCount = Number(state?.recent_hype_posts) || 0;
 
   const handlePost = async () => {
     if (!text.trim()) {
@@ -139,18 +134,12 @@ export default function BurnerPanel({ sessionId, marketProfiles, defaultMarketKe
     try {
       const res = await postBurnerMessage(text, marketKey, sessionId);
       setText("");
-      setState((prev) => ({
-        ...(prev || {}),
-        ...(res?.handle ? { handle: res.handle } : {}),
-        posts: [...(prev?.posts || []), res].slice(-20),
-        suspicion_score: res?.caught
-          ? 100
-          : (prev?.suspicion_score || 0) + (Number(res?.risk) || 0) * 0.12,
-      }));
       if (onPosted) onPosted(res);
+      // Reload the real numbers instead of guessing the suspicion bump (bug F10).
       await load();
     } catch (e) {
-      setError("Post failed. Server rejected the request.");
+      // Show the server's reason (bug F11), e.g. a burned account's cooldown.
+      setError(e?.response?.data?.detail || "Post failed. Server rejected the request.");
     } finally {
       setBusy(false);
     }
@@ -179,27 +168,33 @@ export default function BurnerPanel({ sessionId, marketProfiles, defaultMarketKe
         </div>
       ) : null}
 
-      <label className="burner-field">
-        <span>Market lens</span>
-        <select value={marketKey} onChange={(e) => setMarketKey(e.target.value)}>
-          {markets.map((m) => (
-            <option key={m.key} value={m.key}>{m.label}</option>
-          ))}
-        </select>
-      </label>
+      <div className="burner-field">
+        <span>Market</span>
+        <strong>{marketLabel}</strong>
+      </div>
+      {state?.exposed ? (
+        <p className="burner-error">
+          This account was traced to you{state?.days_until_new_account ? `. A new one can be opened in ${state.days_until_new_account} days.` : ". You can open a new one now."}
+        </p>
+      ) : null}
+      {hypeCount >= 2 ? (
+        <p className="burner-note">
+          {hypeCount} hype posts this week. An account that only cheers for the club starts to look like team PR, and each one does less.
+        </p>
+      ) : null}
 
       <div className="burner-composer">
         <div
           ref={backdropRef}
           className="burner-composer__backdrop"
           aria-hidden
-          dangerouslySetInnerHTML={{ __html: highlightHtml(text || " ") }}
+          dangerouslySetInnerHTML={{ __html: highlightHtml(text || " ", weights, nameSet) }}
         />
         <textarea
           ref={textareaRef}
           className="burner-composer__input"
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => setText(e.target.value.slice(0, 280))}
           onScroll={syncScroll}
           placeholder="Draft a post the room cannot trace back to you."
           rows={5}
@@ -235,8 +230,9 @@ export default function BurnerPanel({ sessionId, marketProfiles, defaultMarketKe
 
       {error ? <p className="burner-error">{error}</p> : null}
 
-      <button type="button" className="burner-post-btn" disabled={busy || state?.exposed || !text.trim()} onClick={handlePost}>
-        {busy ? "Posting…" : "Post from burner"}
+      <div className="burner-count">{text.length}/280</div>
+      <button type="button" className="burner-post-btn" disabled={busy || !canPost || !text.trim()} onClick={handlePost}>
+        {busy ? "Posting…" : state?.exposed && canPost ? "Open a new burner and post" : "Post from burner"}
       </button>
 
       <div className="burner-history">

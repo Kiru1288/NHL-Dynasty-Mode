@@ -11,6 +11,8 @@ import statistics
 from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Sequence
 
 from app.sim_engine.tuning.era_modifiers import resolve_era_profile
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 
 def _clamp01(x: float) -> float:
@@ -90,7 +92,7 @@ def apply_season_feedback_to_league_state(
             try:
                 ovrs.append(_ovr(p))
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
 
     if not ovrs:
         return report
@@ -137,7 +139,7 @@ def _ovr(player: Any) -> float:
         try:
             return float(fn())
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     v = getattr(player, "ovr", 0.5)
     return float(v) / 99.0 if float(v) > 1.5 else float(v)
 
@@ -317,7 +319,7 @@ def normalize_team_strengths(
                 cs = float(getattr(state, "competitive_score", 0.5))
                 setattr(state, "competitive_score", _clamp01(cs + 0.04 * gap))
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         for p in active:
             rdict = getattr(p, "ratings", None)
             if not rdict or not isinstance(rdict, dict):

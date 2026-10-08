@@ -20,6 +20,7 @@ import {
   getStatsCentral,
 } from "../services/franchiseService";
 import BurnerPanel from "../components/franchise/social/BurnerPanel";
+import { SocialPostCard, PlayerSocialRail } from "../components/franchise/social/PlayerSocial";
 import { PlayerProfileModal, normalizeRosterBrowserPlayer } from "./RosterScreen";
 import { collectLockerPulse, buildHubStoryTicker, isRoutineLeagueTrade } from "../utils/lockerRoomPulse";
 import { resolveChapterMap, chapterNumericValue } from "../utils/chapterAttributes";
@@ -1344,13 +1345,6 @@ function matchesFilter(story, filter) {
   return true;
 }
 
-function priorityClass(priority) {
-  const p = String(priority || "").toUpperCase();
-  if (p === "CRITICAL") return "critical";
-  if (p === "HIGH") return "high";
-  if (p === "LOW") return "low";
-  return "medium";
-}
 
 function heatLabel(heat) {
   const n = Number(heat);
@@ -1450,11 +1444,19 @@ function filterRecentSocialItems(items, currentIso, maxAgeDays = 2) {
   const today = parseIsoDate(currentIso);
   if (!today) return items;
   const cutoff = today.getTime() - maxAgeDays * 86400000;
-    return items.filter((item) => {
+  return items.filter((item) => {
     const ts = socialPostTimestamp(item);
-    if (!ts) return false;
+    if (!ts) return true; // undated rows (offseason wire items) stay visible
     return ts >= cutoff;
   });
+}
+
+/** Stable fallback id from content, so rows don't re-mount when pages load. */
+function stableKey(prefix, ...parts) {
+  const text = parts.map((p) => str(p)).join("|");
+  let h = 5381;
+  for (let i = 0; i < text.length; i += 1) h = ((h << 5) + h + text.charCodeAt(i)) | 0;
+  return `${prefix}-${(h >>> 0).toString(36)}`;
 }
 
 function sortSocialItemsDesc(items) {
@@ -1480,8 +1482,23 @@ function buildSocialPosts(stories, narrativeUniverse, { currentIso = null, maxAg
     filterRecentSocialItems(asArray(narrativeUniverse?.social_posts), currentIso, maxAgeDays)
   ).filter((p) => !isBrokenSocialPost(p?.text));
   if (backendPosts.length) {
-    return backendPosts.slice(0, limit).map((p, idx) => ({
-      id: str(p.id || `post-${idx}`),
+    return backendPosts.slice(0, limit).map((p) => ({
+      id: str(p.id || stableKey("post", p.handle, p.time, p.text)),
+      kind: str(p.kind || ""),
+      authorType: str(p.author_type || ""),
+      authorPlayerId: str(p.author_player_id || ""),
+      authorAvatar: p.author_avatar || null,
+      personaLabel: str(p.persona_label || ""),
+      followers: Number(p.followers) || 0,
+      threadReplies: asArray(p.thread_replies),
+      deleted: Boolean(p.deleted),
+      deletedNote: str(p.deleted_note || ""),
+      quote: p.quote || null,
+      evidenceCard: p.evidence_card || null,
+      ratioed: Boolean(p.ratioed),
+      beef: p.beef || null,
+      burnerSuspicion: Number(p.burner_suspicion) || 0,
+      teamId: str(p.team_id || ""),
       badge: str(p.badge || p.author_type || ""),
       color: p.author_color || null,
       time: str(p.time || ""),
@@ -1489,7 +1506,7 @@ function buildSocialPosts(stories, narrativeUniverse, { currentIso = null, maxAg
       playerId: str(p.player_id || ""),
       playerName: str(p.player_name || ""),
       views: p.views,
-      handle: str(p.handle || `@User${idx}`),
+      handle: str(p.handle || "@anon"),
       name: str(p.author_name || p.name || "Hockey Fan"),
       verified: Boolean(p.verified),
       isAgent: str(p.author_type || "") === "agent",
@@ -1506,16 +1523,17 @@ function buildSocialPosts(stories, narrativeUniverse, { currentIso = null, maxAg
       outlet: str(p.outlet || ""),
     }));
   }
-  return (Array.isArray(stories) ? stories : []).slice(0, 24).map((s, idx) => {
+  // Fallback when the live feed is empty: wire copies of storylines, posted by a news
+  // account. Never invent a verified account in a player's name.
+  return (Array.isArray(stories) ? stories : []).slice(0, 24).map((s) => {
     const isInsider = /trade|rumor|contract|market/i.test(`${s.type} ${s.category} ${s.headline}`);
-    const handle = isInsider
-      ? str(s.sourceLabel || s.source || "InsiderDesk").replace(/\s+/g, "")
-      : str(s.playerName || s.teamName || "HockeyFan").replace(/\s+/g, "");
+    const source = str(s.sourceLabel || s.source || "");
+    const name = isInsider ? source || "League Insider" : "League Wire";
     return {
-      id: s.id || `post-${idx}`,
-      handle: `@${handle}`,
-      name: isInsider ? str(s.sourceLabel || s.source || "League Insider") : str(s.playerName || s.teamName || "Fan"),
-      verified: isInsider || Boolean(s.playerName),
+      id: s.id || stableKey("story", s.headline),
+      handle: `@${name.replace(/[^A-Za-z0-9]+/g, "") || "LeagueWire"}`,
+      name,
+      verified: true,
       age: s.ageLabel || "—",
       text: s.summary || s.headline,
       related: s.headline !== (s.summary || "") ? s.headline : "",
@@ -1534,8 +1552,10 @@ function buildRedditThreads(threads, subFilter = "all", { currentIso = null, max
     subFilter === "all"
       ? rows
       : rows.filter((t) => str(t.subreddit).toLowerCase() === str(subFilter).toLowerCase());
-  return filtered.slice(0, limit).map((t, idx) => ({
-    id: str(t.thread_id || `thread-${idx}`),
+  return filtered.slice(0, limit).map((t) => {
+    const tid = str(t.thread_id || stableKey("thread", t.subreddit, t.title));
+    return {
+    id: tid,
     attach: t.attach || null,
     subreddit: str(t.subreddit || "r/hockey"),
     title: str(t.title || "Thread"),
@@ -1552,17 +1572,18 @@ function buildRedditThreads(threads, subFilter = "all", { currentIso = null, max
     playerName: str(t.player_name || ""),
     knowledgeType: str(t.knowledge_type || ""),
     comments: asArray(t.top_comments).map((c, ci) => ({
-      id: `c-${idx}-${ci}`,
+      id: `${tid}-c${ci}`,
       author: str(c.author || "u/fan"),
       text: str(c.text || ""),
       upvotes: Number(c.upvotes) || 0,
       isRival: Boolean(c.is_rival),
       flair: str(c.flair || ""),
-      replies: asArray(c.replies).map((r, ri) => ({ id: `c-${idx}-${ci}-${ri}`, author: str(r.author || "u/fan"), text: str(r.text || ""), upvotes: Number(r.upvotes) || 0 })),
+      replies: asArray(c.replies).map((r, ri) => ({ id: `${tid}-c${ci}-r${ri}`, author: str(r.author || "u/fan"), text: str(r.text || ""), upvotes: Number(r.upvotes) || 0 })),
     })),
     heat: heatLabel(t.heat),
     createdAt: str(t.created_at || "—"),
-  }));
+    };
+  });
 }
 
 function fanPulseTrend(pulse) {
@@ -2257,7 +2278,7 @@ function TradeSummaryPanel({ story, compact = false }) {
           <strong>{str(board.left?.display_name || leftAbbr)}</strong>
           <span>Receives</span>
           <div className="sl-trade-board__assets">
-            {leftAssets.length ? leftAssets.map((a, i) => <TradeAssetChip key={i} asset={a} compact={compact} />) : (
+            {leftAssets.length ? leftAssets.map((a, i) => <TradeAssetChip key={a?.id || a?.player_id || a?.pick_id || i} asset={a} compact={compact} />) : (
               <p className="sl-muted">Assets undisclosed</p>
             )}
           </div>
@@ -2271,7 +2292,7 @@ function TradeSummaryPanel({ story, compact = false }) {
           <strong>{str(board.right?.display_name || rightAbbr)}</strong>
           <span>Receives</span>
           <div className="sl-trade-board__assets">
-            {rightAssets.length ? rightAssets.map((a, i) => <TradeAssetChip key={i} asset={a} compact={compact} />) : (
+            {rightAssets.length ? rightAssets.map((a, i) => <TradeAssetChip key={a?.id || a?.player_id || a?.pick_id || i} asset={a} compact={compact} />) : (
               <p className="sl-muted">Assets undisclosed</p>
             )}
           </div>
@@ -2405,6 +2426,232 @@ function LeadStory({ story, socialCount, onOpen, choiceOptions, onResolve, busyC
 /* player meetings                                                     */
 /* ------------------------------------------------------------------ */
 
+// ---------------------------------------------------------------------------
+// Meeting room: the conversation plays out beat by beat. Lines arrive one at a time
+// (typing dots before he answers), stage directions set the mood, two meters show his
+// stress and the pressure on you, and nothing about the effects is shown until he's out
+// of the room.
+// ---------------------------------------------------------------------------
+
+const prefersReducedMotion = () =>
+  typeof window !== "undefined" &&
+  typeof window.matchMedia === "function" &&
+  window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+function isNarrationLine(line) {
+  return str(line?.speaker).toLowerCase() === "narration";
+}
+
+function isGmSpeaker(line) {
+  const s = str(line?.speaker);
+  return s === "GM" || s === "You";
+}
+
+function useStagedReveal(lines, resetKey) {
+  const [shown, setShown] = useState(0);
+  const keyRef = useRef(resetKey);
+  useEffect(() => {
+    if (keyRef.current !== resetKey) {
+      keyRef.current = resetKey;
+      setShown(0);
+    }
+  }, [resetKey]);
+  const total = lines.length;
+  const next = shown < total ? lines[shown] : null;
+  const typing = Boolean(next && !isNarrationLine(next) && !isGmSpeaker(next));
+  useEffect(() => {
+    if (shown >= total) return undefined;
+    if (prefersReducedMotion()) {
+      setShown(total);
+      return undefined;
+    }
+    const line = lines[shown];
+    const len = str(line?.text).length;
+    const delay = isGmSpeaker(line)
+      ? 380
+      : isNarrationLine(line)
+        ? 850
+        : 700 + Math.min(1700, len * 22);
+    const t = setTimeout(() => setShown((n) => Math.min(total, n + 1)), delay);
+    return () => clearTimeout(t);
+  }, [shown, total, lines]);
+  return { shown, typing, done: shown >= total, skip: () => setShown(total) };
+}
+
+function MeetingMeter({ label, value, valueLabel, tone }) {
+  const v = Math.max(0, Math.min(100, Number(value) || 0));
+  return (
+    <div className="sl-tension__meter">
+      <div className="sl-tension__row">
+        <span>{label}</span>
+        <b>{valueLabel}</b>
+      </div>
+      <div className={`sl-tension__bar sl-tension__bar--${tone}`}>
+        <i style={{ width: `${v}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function meetingPressureLabel(v) {
+  const n = Number(v) || 0;
+  if (n >= 75) return "Everything's riding on this";
+  if (n >= 55) return "High stakes";
+  if (n >= 35) return "It matters";
+  return "Routine";
+}
+
+function MeetingTension({ conversation }) {
+  const c = asObject(conversation);
+  if (c.tension == null) return null;
+  const t = Number(c.tension) || 0;
+  const band = t >= 85 ? "edge" : t >= 65 ? "hot" : t >= 45 ? "tense" : t >= 25 ? "uneasy" : "calm";
+  return (
+    <section className={`sl-tension sl-tension--${band}`} aria-label="Room temperature">
+      <div className="sl-tension__head">
+        {c.stature_label ? <span className="sl-tension__chip">{str(c.stature_label)}</span> : null}
+        {c.reaction_label ? <span className="sl-tension__chip sl-tension__chip--read">{str(c.reaction_label)}</span> : null}
+      </div>
+      <MeetingMeter label="His stress" value={t} valueLabel={str(c.mood || "")} tone={band} />
+      <MeetingMeter label="Pressure on you" value={c.gm_pressure} valueLabel={meetingPressureLabel(c.gm_pressure)} tone="gm" />
+      {c.stakes ? <p className="sl-tension__stakes">{str(c.stakes)}</p> : null}
+    </section>
+  );
+}
+
+function MeetingLine({ line, playerName }) {
+  if (isNarrationLine(line)) {
+    return <p className="sl-narration">{str(line.text)}</p>;
+  }
+  const gm = isGmSpeaker(line);
+  return (
+    <div className={`sl-bubble sl-bubble--${gm ? "gm" : "player"} sl-bubble--meeting sl-bubble--live`}>
+      <div className="sl-bubble__tail" aria-hidden />
+      <em className="sl-bubble__speaker">{gm ? "You" : str(line.speaker || playerName || "Player")}</em>
+      <p>{str(line.text)}</p>
+    </div>
+  );
+}
+
+function MeetingChoice({ choice, disabled, onClick }) {
+  const risk = str(choice?.risk || "uncertain");
+  return (
+    <button type="button" className={`sl-mchoice sl-mchoice--${risk}`} disabled={disabled} onClick={onClick}>
+      <strong>{str(choice?.label)}</strong>
+      {choice?.detail ? <span className="sl-mchoice__detail">{str(choice.detail)}</span> : null}
+      {choice?.read ? <em className="sl-mchoice__read">{str(choice.read)}</em> : null}
+    </button>
+  );
+}
+
+function MeetingRoom({ meeting, closing, busy, portrait, onChoose, onLeave, onShowOutcome, notice }) {
+  const dialogue = asArray(meeting?.dialogue);
+  const lines = useMemo(
+    () => (closing ? [...dialogue, ...asArray(closing.lines)] : dialogue),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [meeting, closing]
+  );
+  const reveal = useStagedReveal(lines, str(meeting?.id));
+  const logRef = useRef(null);
+  useEffect(() => {
+    const el = logRef.current;
+    if (el && typeof el.scrollIntoView === "function") {
+      try {
+        el.scrollIntoView({ block: "end", behavior: prefersReducedMotion() ? "auto" : "smooth" });
+      } catch (e) {
+        el.scrollIntoView(false);
+      }
+    }
+  }, [reveal.shown, reveal.typing]);
+  const [verdictShown, setVerdictShown] = useState(false);
+  useEffect(() => {
+    setVerdictShown(false);
+    if (!closing || !reveal.done) return undefined;
+    const t = setTimeout(() => setVerdictShown(true), prefersReducedMotion() ? 0 : 700);
+    return () => clearTimeout(t);
+  }, [closing, reveal.done]);
+  const conversation = closing?.conversation || meeting?.conversation;
+  const name = str(meeting?.player_name || "Player");
+  const verdictTone =
+    closing?.walked_out || ["boils_over", "bristles"].includes(str(closing?.reaction))
+      ? "bad"
+      : str(closing?.reaction) === "guarded"
+        ? "mixed"
+        : "good";
+  return (
+    <div className={`sl-room sl-room--cinematic sl-room--meeting${closing?.walked_out ? " is-walkout" : ""}`}>
+      <div className="sl-room__vignette" aria-hidden />
+      <header className="sl-room__head sl-room__head--meet">
+        <button type="button" className="sl-back" onClick={onLeave}>
+          {closing ? "← Back to his file" : "← Leave room"}
+        </button>
+        <div className="sl-pm-hero">
+          <PlayerHeadshot player={portrait} size={88} />
+          <div>
+            <p className="sl-room__kicker">Private meeting · door closed</p>
+            <h2>{name}</h2>
+            <span className="sl-room__sub">{str(meeting?.title)}</span>
+          </div>
+        </div>
+      </header>
+
+      <MeetingTension conversation={conversation} />
+
+      <div className="sl-dialogue sl-dialogue--cinematic sl-dialogue--live" aria-live="polite">
+        {lines.slice(0, reveal.shown).map((line, i) => (
+          <MeetingLine key={i} line={line} playerName={name} />
+        ))}
+        {reveal.typing ? (
+          <div className="sl-bubble sl-bubble--player sl-bubble--typing" aria-label={`${name} is answering`}>
+            <em className="sl-bubble__speaker">{name}</em>
+            <p className="sl-typing">
+              <i />
+              <i />
+              <i />
+            </p>
+          </div>
+        ) : null}
+        <div ref={logRef} />
+      </div>
+
+      {!reveal.done ? (
+        <button type="button" className="sl-skip" onClick={reveal.skip}>
+          Skip ahead
+        </button>
+      ) : null}
+
+      {!closing && reveal.done ? (
+        <section className="sl-pm-decision sl-pm-decision--live">
+          <h4>{Number(meeting?.beat) >= 1 ? "Where do you take it?" : "Your move"}</h4>
+          <div className="sl-mchoices">
+            {asArray(meeting?.choices).map((c) => (
+              <MeetingChoice key={str(c.id)} choice={c} disabled={busy} onClick={() => onChoose(str(c.id))} />
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {closing && verdictShown ? (
+        <section className={`sl-verdict sl-verdict--${verdictTone}`}>
+          <p className="sl-verdict__kicker">{closing.walked_out ? "He walked out" : "After the door closed"}</p>
+          <h3>{str(closing.verdict)}</h3>
+          <div className="sl-verdict__actions">
+            {closing.outcome ? (
+              <button type="button" className="sl-verdict__btn" onClick={onShowOutcome}>
+                See what changed
+              </button>
+            ) : null}
+            <button type="button" className="sl-back" onClick={onLeave}>
+              Back to his file
+            </button>
+          </div>
+        </section>
+      ) : null}
+      {notice ? <p className="sl-notice">{notice}</p> : null}
+    </div>
+  );
+}
+
 function PlayerMeetingsPanel({
   meetingsPayload,
   busy,
@@ -2423,6 +2670,7 @@ function PlayerMeetingsPanel({
   const [activeMeeting, setActiveMeeting] = useState(null);
   const [notice, setNotice] = useState("");
   const [lastOutcome, setLastOutcome] = useState(null);
+  const [closing, setClosing] = useState(null);
   const [addressedPlayerIds, setAddressedPlayerIds] = useState(() => new Set());
   const [rosterQuery, setRosterQuery] = useState("");
   const { setScreen, setPendingPromiseNav } = useGameUI();
@@ -2531,6 +2779,15 @@ function PlayerMeetingsPanel({
     [onStartMeeting, loadPlayerDetail]
   );
 
+  const openRequestRoom = useCallback((req) => {
+    setNotice("");
+    setLastOutcome(null);
+    setClosing(null);
+    setActiveMeeting({ ...req, player_id: req.player_id || req.actor_id, beat: Number(req.beat) || 0 });
+    setSelectedPlayerId(str(req.player_id || req.actor_id));
+    setView("meeting");
+  }, []);
+
   const handleResolveRequest = useCallback(
     async (interactionId, choiceId) => {
       setNotice("");
@@ -2577,7 +2834,7 @@ function PlayerMeetingsPanel({
           return;
         }
         const gm = res?.state?.last_gm_result || res?.last_gm_result || {};
-        setLastOutcome({
+        const outcomeRow = {
           message: res?.message || gm.headline || res?.history?.choice_label || "Conversation recorded.",
           summary: res?.effect_summary || gm.summary,
           receipts: res?.receipts,
@@ -2589,17 +2846,45 @@ function PlayerMeetingsPanel({
           player_name: res?.player_name || activeMeeting?.player_name,
           portrait: portraitOf(res?.player_id || activeMeeting?.player_id),
           navigate: res?.navigate,
-        });
+        };
         markPlayerAddressed(activeMeeting?.player_id);
+        const scene = res?.scene;
+        if (scene && asArray(scene.closing).length) {
+          // Play the end of the conversation out before any numbers appear.
+          setClosing({
+            lines: asArray(scene.closing),
+            verdict: scene.verdict,
+            reaction: scene.reaction,
+            walked_out: Boolean(scene.walked_out),
+            conversation: {
+              ...asObject(activeMeeting?.conversation),
+              ...asObject(res?.conversation),
+              tension: scene.tension_end,
+              reaction_label: scene.reaction_label,
+              mood: scene.walked_out ? "Gone" : asObject(activeMeeting?.conversation).mood,
+            },
+            outcome: outcomeRow,
+          });
+          return;
+        }
+        setLastOutcome(outcomeRow);
         setActiveMeeting(null);
         setView("player");
         onRefresh?.();
       } catch (err) {
-        setNotice(err?.message || "Could not complete meeting.");
+        setNotice(err?.response?.data?.detail || err?.message || "Could not complete meeting.");
       }
     },
-    [onAdvanceMeeting, onRefresh, markPlayerAddressed, activeMeeting?.player_id]
+    [onAdvanceMeeting, onRefresh, markPlayerAddressed, activeMeeting]
   );
+
+  const leaveMeetingRoom = useCallback(() => {
+    const hadClosing = Boolean(closing);
+    setClosing(null);
+    setActiveMeeting(null);
+    setView("player");
+    if (hadClosing) onRefresh?.();
+  }, [closing, onRefresh]);
 
   if (!meetingsPayload || !roster.length) {
     return (
@@ -2608,6 +2893,24 @@ function PlayerMeetingsPanel({
         title="The door is closed"
         body="Advance the calendar to sync roster relationships and open meeting availability."
       />
+    );
+  }
+
+  if (view === "meeting" && activeMeeting && (closing || activeMeeting.conversation)) {
+    return (
+      <>
+        <MeetingRoom
+          meeting={activeMeeting}
+          closing={closing}
+          busy={busy}
+          portrait={portraitOf(str(activeMeeting.player_id))}
+          onChoose={(cid) => handleAdvance(str(activeMeeting.id), cid)}
+          onLeave={leaveMeetingRoom}
+          onShowOutcome={() => setLastOutcome(closing?.outcome || null)}
+          notice={notice}
+        />
+        <MeetingOutcomePanel outcome={lastOutcome} onDismiss={() => setLastOutcome(null)} />
+      </>
     );
   }
 
@@ -2752,17 +3055,23 @@ function PlayerMeetingsPanel({
             {asArray(req.dialogue).slice(0, 1).map((d, i) => (
               <blockquote key={i}>{str(d.text)}</blockquote>
             ))}
-            <div className="sl-choices sl-choices--cinematic">
-              {asArray(req.choices).map((c) => (
-                <ResponseChoiceButton
-                  key={str(c.id)}
-                  choice={c}
-                  className="sl-choice sl-choice--cinematic"
-                  disabled={busy}
-                  onClick={() => handleResolveRequest(str(req.id), str(c.id))}
-                />
-              ))}
-            </div>
+            {req.conversation ? (
+              <button type="button" className="sl-verdict__btn" disabled={busy} onClick={() => openRequestRoom(req)}>
+                Bring him in
+              </button>
+            ) : (
+              <div className="sl-choices sl-choices--cinematic">
+                {asArray(req.choices).map((c) => (
+                  <ResponseChoiceButton
+                    key={str(c.id)}
+                    choice={c}
+                    className="sl-choice sl-choice--cinematic"
+                    disabled={busy}
+                    onClick={() => handleResolveRequest(str(req.id), str(c.id))}
+                  />
+                ))}
+              </div>
+            )}
           </article>
         ))}
 
@@ -2942,18 +3251,30 @@ function PlayerMeetingsPanel({
                   <h4>{str(req.title)}</h4>
                   <p>{str(req.summary)}</p>
                   <div className="md-request__choices">
-                    {asArray(req.choices).map((c) => (
+                    {req.conversation ? (
                       <button
-                        key={str(c.id)}
                         type="button"
-                        className="md-choice"
+                        className="md-choice md-choice--open"
                         disabled={busy}
-                        onClick={() => handleResolveRequest(str(req.id), str(c.id))}
+                        onClick={() => openRequestRoom(req)}
                       >
-                        <strong>{str(c.label)}</strong>
-                        {c.detail || c.description ? <span>{str(c.detail || c.description)}</span> : null}
+                        <strong>Bring him in</strong>
+                        <span>{str(asObject(req.conversation).mood || "")}{asObject(req.conversation).stature_label ? ` · ${str(req.conversation.stature_label)}` : ""}</span>
                       </button>
-                    ))}
+                    ) : (
+                      asArray(req.choices).map((c) => (
+                        <button
+                          key={str(c.id)}
+                          type="button"
+                          className="md-choice"
+                          disabled={busy}
+                          onClick={() => handleResolveRequest(str(req.id), str(c.id))}
+                        >
+                          <strong>{str(c.label)}</strong>
+                          {c.detail || c.description ? <span>{str(c.detail || c.description)}</span> : null}
+                        </button>
+                      ))
+                    )}
                   </div>
                 </article>
               );
@@ -3463,11 +3784,15 @@ export default function StorylinesScreen() {
   const [redditSubFilter, setRedditSubFilter] = useState(pendingSocialNav?.subreddit || "all");
   const [expandedThreadId, setExpandedThreadId] = useState(null);
   const [liveSocialFeed, setLiveSocialFeed] = useState(null);
+  const [liveThreads, setLiveThreads] = useState(null);
+  const [feedError, setFeedError] = useState("");
   const [feedTab, setFeedTab] = useState("all");
   const [feedPage, setFeedPage] = useState(0);
+  const [threadPage, setThreadPage] = useState(0);
+  const [authorFilter, setAuthorFilter] = useState("");
   useEffect(() => {
     setFeedPage(0);
-  }, [franchiseState?.calendar_cursor, feedTab]);
+  }, [franchiseState?.calendar_cursor, feedTab, authorFilter]);
   const [meetingBusy, setMeetingBusy] = useState(false);
   // Open on your own club — "All" is mostly league-wide wire noise.
   const [filter, setFilter] = useState("team");
@@ -3643,30 +3968,60 @@ export default function StorylinesScreen() {
   }, [pendingSocialNav, setPendingSocialNav]);
 
   useEffect(() => {
-    if (department !== "social") return undefined;
+    setThreadPage(0);
+  }, [franchiseState?.calendar_cursor, feedTab, redditSubFilter]);
+
+  // Puckr posts (skipped on the Burner tab — bug F9).
+  useEffect(() => {
+    if (department !== "social" || socialSubTab === "burner") return undefined;
     let cancelled = false;
     (async () => {
       try {
-        const feed = await getSocialFeed(sessionId, { tab: feedTab, page: feedPage });
-        if (!cancelled) {
-          setLiveSocialFeed((prev) =>
-            feedPage > 0 && prev
-              ? {
-                  ...feed,
-                  puckr: [...asArray(prev.puckr), ...asArray(feed?.puckr)],
-                  icehole: [...asArray(prev.icehole), ...asArray(feed?.icehole)],
-                }
-              : feed
-          );
-        }
-      } catch {
-        if (!cancelled) setLiveSocialFeed(null);
+        const feed = await getSocialFeed(sessionId, {
+          tab: feedTab,
+          page: feedPage,
+          ...(authorFilter ? { author: authorFilter } : {}),
+        });
+        if (cancelled) return;
+        setFeedError("");
+        setLiveSocialFeed((prev) =>
+          feedPage > 0 && prev ? { ...feed, puckr: [...asArray(prev.puckr), ...asArray(feed?.puckr)] } : feed
+        );
+      } catch (e) {
+        // Keep whatever is already loaded (bug F2).
+        if (!cancelled) setFeedError(e?.response?.data?.detail || "Couldn't refresh the feed.");
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [department, sessionId, franchiseState?.calendar_idx, franchiseState?.calendar_cursor, feedTab, feedPage]);
+  }, [department, socialSubTab, sessionId, franchiseState?.calendar_idx, franchiseState?.calendar_cursor, feedTab, feedPage, authorFilter]);
+
+  // IceHole threads: server-side subreddit filter and their own paging (bugs S12/S13).
+  useEffect(() => {
+    if (department !== "social" || socialSubTab !== "icehole") return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const feed = await getSocialFeed(sessionId, {
+          tab: feedTab,
+          page: 0,
+          thread_page: threadPage,
+          sub: redditSubFilter || "all",
+        });
+        if (cancelled) return;
+        setFeedError("");
+        setLiveThreads((prev) =>
+          threadPage > 0 && prev ? { ...feed, icehole: [...asArray(prev.icehole), ...asArray(feed?.icehole)] } : feed
+        );
+      } catch (e) {
+        if (!cancelled) setFeedError(e?.response?.data?.detail || "Couldn't refresh IceHole.");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [department, socialSubTab, sessionId, franchiseState?.calendar_cursor, feedTab, threadPage, redditSubFilter]);
 
   const currentCalendarIso = calendarLabel(franchiseState);
 
@@ -3679,10 +4034,12 @@ export default function StorylinesScreen() {
 
   const redditThreads = useMemo(() => {
     const opts = { currentIso: currentCalendarIso, maxAgeDays: 60, limit: 2000 };
-    const icehole = asArray(liveSocialFeed?.icehole);
-    const source = icehole.length ? icehole : asArray(narrativeUniverse?.reddit_threads);
-    return buildRedditThreads(source, redditSubFilter, opts);
-  }, [liveSocialFeed, narrativeUniverse, redditSubFilter, currentCalendarIso]);
+    if (liveThreads) {
+      // Already filtered by subreddit on the server.
+      return buildRedditThreads(asArray(liveThreads.icehole), "all", opts);
+    }
+    return buildRedditThreads(asArray(narrativeUniverse?.reddit_threads), redditSubFilter, opts);
+  }, [liveThreads, narrativeUniverse, redditSubFilter, currentCalendarIso]);
 
   const prospectPoolRankings = useMemo(
     () =>
@@ -3723,28 +4080,44 @@ export default function StorylinesScreen() {
     [narrativeUniverse]
   );
 
+  // The backend names the club's subreddit (r/Oilers); building it from the market label
+  // gave r/Edmonton, which matched nothing (bug F1).
   const userSubreddit = useMemo(() => {
-    const label = str(userMarket?.label || franchiseState?.user_team_name || "Team");
-    const slug = label.replace(/[^A-Za-z0-9]+/g, "").slice(-12) || "Team";
-    return `r/${slug}`;
-  }, [userMarket, franchiseState]);
+    const fromFeed = str(liveSocialFeed?.user_subreddit || liveThreads?.user_subreddit || "");
+    if (fromFeed) return fromFeed;
+    const nick = str(franchiseState?.user_team_name || "").trim().split(/\s+/).pop() || "hockey";
+    return `r/${nick.toLowerCase().replace(/[^a-z0-9]+/g, "")}`;
+  }, [liveSocialFeed?.user_subreddit, liveThreads?.user_subreddit, franchiseState?.user_team_name]);
 
-  const redditSubPills = useMemo(() => ["all", userSubreddit, "r/hockey"], [userSubreddit]);
+  const redditSubPills = useMemo(() => {
+    const extra = asArray(liveThreads?.subreddits || liveSocialFeed?.subreddits).filter(
+      (sub) => sub && sub.toLowerCase() !== userSubreddit.toLowerCase() && sub !== "r/hockey"
+    );
+    return ["all", userSubreddit, "r/hockey", ...extra.slice(0, 4)];
+  }, [userSubreddit, liveThreads?.subreddits, liveSocialFeed?.subreddits]);
 
   const socialCountByStory = useMemo(() => {
     const map = new Map();
+    const seen = new Set();
     const posts = [
       ...asArray(narrativeUniverse?.social_posts),
       ...asArray(narrativeUniverse?.twitter_feed),
       ...asArray(narrativeUniverse?.social_feed),
+      ...asArray(liveSocialFeed?.puckr),
+      ...asArray(liveThreads?.icehole),
     ];
     posts.forEach((p) => {
       const sid = str(p?.storyline_id || "");
       if (!sid) return;
+      const key = str(p?.id || p?.thread_id || "");
+      if (key) {
+        if (seen.has(key)) return;
+        seen.add(key);
+      }
       map.set(sid, (map.get(sid) || 0) + 1);
     });
     return map;
-  }, [narrativeUniverse]);
+  }, [narrativeUniverse, liveSocialFeed?.puckr, liveThreads?.icehole]);
 
   const socialCountFor = useCallback(
     (s) => (s ? socialCountByStory.get(s.storylineId) || socialCountByStory.get(s.id) || 0 : 0),
@@ -4998,6 +5371,73 @@ export default function StorylinesScreen() {
         .sl-subtabs.sl-pm { margin: 16px 0 14px; }
         .sl-dialogue { display: grid; gap: 14px; margin-bottom: 18px; position: relative; z-index: 1; }
         .sl-dialogue--cinematic { padding: 14px 0 6px; }
+        /* ---- live meeting room ---- */
+        .sl-dialogue--live { min-height: 140px; }
+        .sl-bubble--live { animation: slLineIn .32s ease-out both; }
+        @keyframes slLineIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+        .sl-narration { margin: 2px 0 2px 14px; font-style: italic; font-size: 13.5px; color: rgba(220,236,244,.62);
+          animation: slLineIn .4s ease-out both; }
+        .sl-bubble--typing { opacity: .85; }
+        .sl-typing { display: inline-flex; gap: 5px; align-items: center; height: 18px; }
+        .sl-typing i { width: 7px; height: 7px; border-radius: 50%; background: var(--cyan); opacity: .35;
+          animation: slTyping 1.1s infinite ease-in-out; }
+        .sl-typing i:nth-child(2) { animation-delay: .15s; }
+        .sl-typing i:nth-child(3) { animation-delay: .3s; }
+        @keyframes slTyping { 0%, 80%, 100% { opacity: .25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-3px); } }
+        .sl-tension { margin: 10px 0 16px; padding: 12px 14px; border: 1px solid var(--line-2); border-radius: 12px;
+          background: rgba(8,18,26,.55); display: grid; gap: 10px; position: relative; z-index: 1; }
+        .sl-tension__head { display: flex; gap: 8px; flex-wrap: wrap; }
+        .sl-tension__chip { font-size: 10px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase;
+          padding: 3px 8px; border-radius: 999px; border: 1px solid var(--line-2); color: rgba(234,247,252,.8); }
+        .sl-tension__chip--read { border-color: rgba(233,168,60,.5); color: var(--gold); }
+        .sl-tension__row { display: flex; justify-content: space-between; font-size: 11px; letter-spacing: .06em;
+          text-transform: uppercase; color: rgba(220,236,244,.7); margin-bottom: 4px; }
+        .sl-tension__row b { color: rgba(240,248,252,.95); font-weight: 800; }
+        .sl-tension__bar { height: 8px; border-radius: 999px; background: rgba(255,255,255,.07); overflow: hidden; }
+        .sl-tension__bar i { display: block; height: 100%; border-radius: inherit; transition: width .9s cubic-bezier(.2,.8,.2,1), background .6s; }
+        .sl-tension__bar--calm i { background: var(--green); }
+        .sl-tension__bar--uneasy i { background: #c6d86a; }
+        .sl-tension__bar--tense i { background: var(--gold); }
+        .sl-tension__bar--hot i { background: #ff8a4c; }
+        .sl-tension__bar--edge i { background: var(--red); }
+        .sl-tension__bar--gm i { background: rgba(150,170,255,.85); }
+        .sl-tension--hot .sl-tension__bar--hot, .sl-tension--edge .sl-tension__bar--edge { animation: slPulse 1.2s infinite; }
+        @keyframes slPulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(255,95,109,0); } 50% { box-shadow: 0 0 10px 1px rgba(255,95,109,.45); } }
+        .sl-tension__stakes { margin: 0; font-size: 13px; line-height: 1.5; color: rgba(225,240,247,.78); }
+        .sl-skip { background: none; border: 0; color: rgba(220,236,244,.55); font-size: 12px; cursor: pointer;
+          text-decoration: underline; padding: 0 0 10px; }
+        .sl-mchoices { display: grid; gap: 10px; }
+        .sl-mchoice { text-align: left; display: grid; gap: 4px; padding: 12px 14px; border-radius: 12px; cursor: pointer;
+          border: 1px solid var(--line-2); background: rgba(10,24,34,.7); color: inherit; animation: slLineIn .3s ease-out both;
+          transition: transform .12s, border-color .2s; }
+        .sl-mchoice:hover:not(:disabled) { transform: translateY(-1px); border-color: rgba(22,220,234,.55); }
+        .sl-mchoice:disabled { opacity: .55; cursor: default; }
+        .sl-mchoice strong { font-size: 14.5px; }
+        .sl-mchoice__detail { font-size: 12.5px; color: rgba(220,236,244,.7); }
+        .sl-mchoice__read { font-style: normal; font-size: 10.5px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; }
+        .sl-mchoice--safe .sl-mchoice__read { color: var(--green); }
+        .sl-mchoice--uncertain .sl-mchoice__read { color: #c6d86a; }
+        .sl-mchoice--risky .sl-mchoice__read { color: var(--gold); }
+        .sl-mchoice--danger { border-color: rgba(255,95,109,.4); }
+        .sl-mchoice--danger .sl-mchoice__read { color: var(--red); }
+        .sl-verdict { margin-top: 14px; padding: 16px; border-radius: 14px; border: 1px solid var(--line-2);
+          background: rgba(8,18,26,.7); animation: slVerdictIn .5s ease-out both; position: relative; z-index: 1; }
+        @keyframes slVerdictIn { from { opacity: 0; transform: scale(.97); } to { opacity: 1; transform: none; } }
+        .sl-verdict h3 { margin: 4px 0 12px; font-size: 20px; }
+        .sl-verdict__kicker { margin: 0; font-size: 10.5px; font-weight: 900; letter-spacing: .1em; text-transform: uppercase; color: rgba(220,236,244,.6); }
+        .sl-verdict--good { border-color: rgba(82,223,148,.45); }
+        .sl-verdict--mixed { border-color: rgba(233,168,60,.45); }
+        .sl-verdict--bad { border-color: rgba(255,95,109,.5); }
+        .sl-verdict__actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+        .sl-verdict__btn { padding: 9px 14px; border-radius: 10px; border: 1px solid rgba(22,220,234,.5);
+          background: rgba(22,220,234,.12); color: inherit; font-weight: 800; cursor: pointer; }
+        .sl-room--meeting.is-walkout .sl-room__vignette { background: radial-gradient(circle at 50% 30%, rgba(255,95,109,.14), transparent 70%); }
+        .md-choice--open strong::after { content: " →"; }
+        @media (prefers-reduced-motion: reduce) {
+          .sl-bubble--live, .sl-narration, .sl-mchoice, .sl-verdict { animation: none; }
+          .sl-typing i, .sl-tension--hot .sl-tension__bar--hot, .sl-tension--edge .sl-tension__bar--edge { animation: none; }
+          .sl-tension__bar i { transition: none; }
+        }
         .sl-dialogue__line { padding-left: 14px; border-left: 2px solid var(--line-2);
           animation: slRise .3s cubic-bezier(.2,.7,.3,1) both; }
         .sl-dialogue__line.is-gm { border-left-color: var(--gold); }
@@ -5229,7 +5669,7 @@ export default function StorylinesScreen() {
         </header>
 
         {/* ---------- ticker ---------- */}
-        {tickerItems.length ? (
+        {tickerItems.length && department !== "prospect_pools" && department !== "prospect_leaderboard" ? (
           <div className="sl-ticker" aria-label="League wire">
             <div className="sl-ticker__flag">
               <span className="sl-ticker__dot" aria-hidden />
@@ -5356,11 +5796,12 @@ export default function StorylinesScreen() {
                   {[
                     ["all", "All"],
                     ["mine", "My team"],
+                    ["players", "Players"],
                     ["games", "Games"],
                     ["trades", "Trades"],
                     ["rumors", "Rumors"],
                   ].map(([id, label]) => (
-                    <button key={id} type="button" className={feedTab === id ? "is-active" : ""} onClick={() => setFeedTab(id)}>
+                    <button key={id} type="button" className={feedTab === id ? "is-active" : ""} onClick={() => { setAuthorFilter(""); setFeedTab(id); }}>
                       {label}
                     </button>
                   ))}
@@ -5369,91 +5810,37 @@ export default function StorylinesScreen() {
 
               {socialSubTab === "puckr" ? (
                 <div className="sl-feed">
+                  {feedError ? <p className="burner-error">{feedError}</p> : null}
+                  {authorFilter ? (
+                    <div className="psx-author-bar">
+                      <span>Showing posts by one player</span>
+                      <button type="button" className="psx-linkbtn" onClick={() => setAuthorFilter("")}>Show everyone</button>
+                    </div>
+                  ) : null}
                   {socialPosts.length ? (
                     socialPosts.map((post, i) => (
-                      <button
+                      <SocialPostCard
                         key={post.id}
-                        type="button"
-                        className="sl-post"
-                        style={{ animationDelay: `${Math.min(i, 10) * 24}ms` }}
-                        onClick={() => {
-                          if (post.storyId) {
-                            const match = stories.find((s) => s.id === post.storyId || s.storylineId === post.storyId);
-                            if (match) {
-                              setDepartment(isTradeDeskStory(match) ? "trade_desk" : "front_page");
-                              setFilter("all");
-                            } else {
-                              setDepartment("front_page");
-                            }
-                            openStory(post.storyId);
+                        post={post}
+                        index={i}
+                        onAuthor={(pid) => setAuthorFilter(pid)}
+                        onOpen={(p) => {
+                          const match = stories.find((st) => st.id === p.storyId || st.storylineId === p.storyId);
+                          if (match) {
+                            setDepartment(isTradeDeskStory(match) ? "trade_desk" : "front_page");
+                            setFilter("all");
+                          } else {
+                            setDepartment("front_page");
                           }
+                          openStory(p.storyId);
                         }}
-                      >
-                        <div className="sl-post__head">
-                          <span className="sl-post__avatar" aria-hidden style={post.color ? { background: post.color } : undefined}>{playerInitials(post.name)}</span>
-                          <strong>{post.name}</strong>
-                          {post.verified ? <span className="sl-post__verified">✓</span> : null}
-                          <span>{post.handle}</span>
-                          {post.badge && post.badge !== "fan" ? <span className="sl-post__badge">{post.badge}</span> : null}
-                          <em>{post.age}{post.time ? ` · ${post.time}` : ""}</em>
-                        </div>
-                        <p>{post.text}</p>
-                        {post.attach?.type === "score" ? (
-                          <div className="sl-attach sl-attach--score">
-                            <span>{post.attach.status}</span>
-                            <b>{post.attach.away?.abbr} {post.attach.away?.score}</b>
-                            <b>{post.attach.home?.abbr} {post.attach.home?.score}</b>
-                            <small>SOG {post.attach.away?.shots ?? "—"}-{post.attach.home?.shots ?? "—"} · xG {Number(post.attach.away?.xg || 0).toFixed(1)}-{Number(post.attach.home?.xg || 0).toFixed(1)}</small>
-                            {asArray(post.attach.stars).length ? (
-                              <small>{asArray(post.attach.stars).map((st, si) => `${si + 1}★ ${st.name} (${st.line})`).join(" · ")}</small>
-                            ) : null}
-                          </div>
-                        ) : null}
-                        {post.attach?.type === "statline" || post.attach?.type === "contract" ? (
-                          <div className="sl-attach sl-attach--player">
-                            <PlayerHeadshot player={{ ...post.attach, id: post.attach.player_id, position: post.attach.pos }} size="sm" />
-                            <div>
-                              <b>{post.attach.name}</b>
-                              <small>
-                                {[post.attach.pos, post.attach.abbr, post.attach.age ? `${post.attach.age}y` : ""].filter(Boolean).join(" · ")}
-                              </small>
-                              <small>
-                                {post.attach.type === "contract"
-                                  ? `${post.attach.years}y × $${Number(post.attach.aav || 0).toFixed(2)}M`
-                                  : `${post.attach.label ? `${post.attach.label}: ` : ""}${post.attach.line}`}
-                              </small>
-                            </div>
-                          </div>
-                        ) : null}
-                        {post.attach?.type === "standings" ? (
-                          <div className="sl-attach sl-attach--standings">
-                            {asArray(post.attach.rows).map((r) => (
-                              <small key={r.team_id} className={r.focus ? "is-focus" : ""}>
-                                {r.rank}. {r.abbr} {r.pts} pts ({r.gp} GP) · {Math.round(Number(r.odds || 0) * 100)}%
-                              </small>
-                            ))}
-                          </div>
-                        ) : null}
-                        <div className="sl-post__meta">
-                          {post.related && post.related !== post.text && !post.text.includes(post.related) ? (
-                            <span className="sl-post__related">{post.related}</span>
-                          ) : null}
-                          {post.cred ? <span>{post.cred}</span> : null}
-                          {post.likes != null ? (
-                            <>
-                              <span>{Number(post.replies || 0).toLocaleString()} replies</span>
-                              <span>{Number(post.reposts || 0).toLocaleString()} reposts</span>
-                              <span>{Number(post.likes || 0).toLocaleString()} likes</span>
-                            </>
-                          ) : null}
-                        </div>
-                      </button>
+                      />
                     ))
                   ) : (
                     <EmptyPanel
                       kicker="Puckr · quiet"
                       title="No posts yet"
-                      body="The timeline fills as days are simulated: games, trades, injuries, signings and rumors."
+                      body="The timeline fills as days are simulated: games, trades, injuries, signings, rumors, and whatever the players decide to post at 2 AM."
                     />
                   )}
                   {liveSocialFeed?.has_more_posts ? (
@@ -5529,6 +5916,11 @@ export default function StorylinesScreen() {
                         body="Heated storylines spawn fan threads once league heat builds."
                       />
                     )}
+                    {liveThreads?.has_more_threads ? (
+                      <button type="button" className="nhlcal-advance-button-secondary" onClick={() => setThreadPage((pg) => pg + 1)}>
+                        Load more threads
+                      </button>
+                    ) : null}
                   </div>
                 </>
               ) : null}
@@ -5553,7 +5945,7 @@ export default function StorylinesScreen() {
                   </div>
                   <h3>Hot threads</h3>
                   <div className="sl-effects">
-                    {redditThreads.slice(0, 6).map((t, i) => (
+                    {[...redditThreads].sort((a, b) => b.upvotes - a.upvotes).slice(0, 6).map((t, i) => (
                       <div key={t.id} className="sl-trend">
                         <b>{i + 1}</b>
                         <span>{t.title}</span>
@@ -5562,6 +5954,18 @@ export default function StorylinesScreen() {
                     ))}
                   </div>
                 </div>
+              ) : socialSubTab === "puckr" && liveSocialFeed?.player_social ? (
+                <>
+                  <PlayerSocialRail
+                    summary={liveSocialFeed.player_social}
+                    activeAuthor={authorFilter}
+                    onAuthor={(pid) => setAuthorFilter((cur) => (cur === pid ? "" : pid))}
+                    onMeet={(pid) => {
+                      setPendingMeetingPlayerId?.(pid);
+                      setDepartment("player_meetings");
+                    }}
+                  />
+                </>
               ) : (
                 <div className="sl-panel">
                   <h3>Trending now</h3>

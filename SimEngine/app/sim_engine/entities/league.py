@@ -1018,7 +1018,7 @@ class League:
         Slowly drifts era intensity; occasionally transitions.
         The league should feel different by decade.
         """
-        current = self.get_active_era_definition()
+        self.get_active_era_definition()
         self.era_state.years_in_era += 1
 
         # intensity drifts slowly (eras fade, not flip)

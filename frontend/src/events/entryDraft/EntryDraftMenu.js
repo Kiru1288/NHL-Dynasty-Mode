@@ -570,21 +570,6 @@ function getNhlEta(p) {
   return String(value);
 }
 
-function formatNhlPotentialEta(p) {
-  const peak = p?.potential_eta ?? p?.dossier?.potential_eta ?? p?.dossier?.peak_eta;
-  if (peak != null && peak !== "") {
-    if (typeof peak === "object") {
-      if (peak.label) return String(peak.label);
-      if (peak.years != null) return `${Math.round(Number(peak.years))}y to peak`;
-    }
-    return String(peak);
-  }
-  const etaObj = p?.dossier?.eta;
-  if (etaObj && typeof etaObj === "object" && etaObj.peak_years != null) {
-    return `${Math.round(Number(etaObj.peak_years))}y to peak`;
-  }
-  return getNhlEta(p);
-}
 
 function isPhilosophyNeedLabel(label) {
   const s = String(label || "").toLowerCase();
@@ -593,18 +578,12 @@ function isPhilosophyNeedLabel(label) {
   return false;
 }
 
-function getDevelopmentPath(p) {
-  return p?.development_path || null;
-}
 
 function getComparable(p) {
   const v = p?.comparable_player || p?.player_comparable || p?.style_comparable;
   return v ? String(v) : null;
 }
 
-function getScoutSummary(p) {
-  return p?.scout_summary || p?.scout_quote || p?.summary || null;
-}
 
 function getBackendWhyWorks(p) {
   return p?.why_pick_makes_sense || p?.why_this_pick_makes_sense || null;
@@ -614,15 +593,6 @@ function getBackendWhyFails(p) {
   return p?.why_pick_could_fail || p?.bust_reason || null;
 }
 
-function shortTeamName(name) {
-  if (!name) return "";
-  const s = String(name);
-  if (s.includes(" ")) {
-    const parts = s.trim().split(/\s+/);
-    return parts[parts.length - 1];
-  }
-  return s;
-}
 
 function teamAbbrev(teamId, teamName) {
   return (
@@ -990,9 +960,6 @@ function chapterAttributeRows(prospect) {
     .filter(Boolean);
 }
 
-function attributeRows(prospect) {
-  return chapterAttributeRows(prospect);
-}
 
 function buildDraftGrade(userPicks) {
   const picks = safeArray(userPicks);
@@ -4373,171 +4340,6 @@ function ReactionRow({ tweet }) {
   );
 }
 
-function PickProfileSheet({ pick, reactionTweet, onClose }) {
-  useEffect(() => {
-    if (!pick) return undefined;
-    const onKey = (e) => { if (e.key === "Escape") onClose?.(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [pick, onClose]);
-
-  if (!pick) return null;
-
-  const name = pick.prospect_name || getPlayerName(pick);
-  const pos = pick.position || getPlayerPosition(pick);
-  const goalie = String(pos || "").toUpperCase() === "G";
-  const nationality = pick.nationality || null;
-  const natCode = pick.country_code || pick.nat || nationality;
-  const overall = num(pick.overall_pick);
-  const pub = getPublicRankAtPick(pick);
-  const movement = describePickMovement(pick);
-  const { tag, tone } = getPickDisplayTag(pick);
-  const rights = pick.rights_card || {};
-  const tags = safeArray(pick.pick_tags).filter(Boolean);
-
-  const profile = [
-    ["Age", num(pick.age)],
-    ["Position", pos],
-    [goalie ? "Catches" : "Shoots", pick.shoots || pick.handedness],
-    ["League", pick.league || pick.league_name],
-    ["Nationality", nationality],
-    ["Eligibility", num(pick.draft_eligibility_year)],
-  ].filter(([, v]) => v != null && v !== "");
-
-  const projection = [
-    ["Current OVR", num(pick.floor_grade) != null ? Math.round(num(pick.floor_grade)) : null],
-    ["Projected ceiling", num(pick.ceiling_grade) != null ? Math.round(num(pick.ceiling_grade)) : null],
-    ["Talent grade", pick.potential_grade],
-    [goalie ? "Starter path" : "Projected role", pick.player_type || getDefiningTrait(pick)],
-    ["NHL readiness", pick.nhl_readiness || formatNhlReadiness(pick)],
-    ["Peak window", formatNhlPotentialEta(pick) || getNhlEta(pick)],
-    ["Scout confidence", formatConfidence(pick)],
-    ["Bust risk", pick.risk_score ?? getRisk(pick)],
-  ].filter(([, v]) => v != null && v !== "");
-
-  const value = [
-    ["Overall pick", overall != null ? `#${overall}` : null],
-    ["Round", num(pick.round) != null ? (num(pick.pick_in_round) != null ? `${pick.round} · #${pick.pick_in_round}` : String(pick.round)) : null],
-    ["Public board", pub != null ? `#${pub}` : null],
-    ["Preseason", getPreseasonRank(pick) != null ? `#${getPreseasonRank(pick)}` : null],
-    ["Value vs slot", fmtSigned(getPickValueDelta(pick))],
-    ["Movement", movement?.label],
-  ].filter(([, v]) => v != null && v !== "");
-
-  const rightsRows = [
-    ["Rights through", rights.rights_through],
-    ["Rights status", rights.rights_status],
-    ["Returning to", rights.returning_to || pick.development_path],
-    ["Org role", rights.expected_role],
-    ["ELC", rights.elc_decision],
-    ["Signing deadline", rights.rights_signing_deadline],
-  ].filter(([, v]) => v != null && v !== "");
-
-  return createPortal(
-    <div className={`${PREFIX}-scrim`} role="presentation" onClick={onClose}>
-      <div
-        className={`${PREFIX}-sheet ${PREFIX}-sheet--dossier`}
-        role="dialog"
-        aria-modal="true"
-        aria-label={`${name} draft profile`}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <header className={`${PREFIX}-sheet-head`}>
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <ProspectFlag country={nationality} code={natCode} width={34} />
-            <div>
-              <h2>{name}</h2>
-              <p>
-                {[
-                  overall != null ? `Pick #${overall}` : null,
-                  pick.team_name,
-                  pick.is_traded && pick.via_team_name ? `via ${pick.via_team_name}` : null,
-                ].filter(Boolean).join(" · ")}
-              </p>
-            </div>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <PickBadge tag={tag} tone={tone} />
-            <button type="button" className="nhlcal-advance-button-secondary edraft-sheet-close" onClick={onClose}>
-              <Icon name="close" size={12} /> Close
-            </button>
-          </div>
-        </header>
-
-        <div className={`${PREFIX}-sheet-body ${PREFIX}-sheet--dossier-body`}>
-          <div className={`${PREFIX}-dossier`}>
-            {profile.length ? (
-              <section className={`${PREFIX}-sec`}>
-                <SectionHead icon="book" title="Player profile" />
-                <div className={`${PREFIX}-facts`}>
-                  {profile.map(([l, v]) => <Fact key={l} label={l} value={v} />)}
-                </div>
-              </section>
-            ) : null}
-
-            {projection.length ? (
-              <section className={`${PREFIX}-sec`}>
-                <SectionHead icon={goalie ? "crease" : "chart"} title="Scouting & projection" />
-                <div className={`${PREFIX}-facts`}>
-                  {projection.map(([l, v]) => <Fact key={l} label={l} value={v} />)}
-                </div>
-              </section>
-            ) : null}
-
-            {value.length ? (
-              <section className={`${PREFIX}-sec`}>
-                <SectionHead icon="target" title="Draft value" />
-                <div className={`${PREFIX}-facts`}>
-                  {value.map(([l, v]) => <Fact key={l} label={l} value={v} />)}
-                </div>
-              </section>
-            ) : null}
-
-            {pick.pick_reason ? (
-              <section className={`${PREFIX}-sec`}>
-                <SectionHead icon="shield" title="Why this pick" />
-                <p className={`${PREFIX}-report`}>{pick.pick_reason}</p>
-              </section>
-            ) : null}
-
-            {(getBackendWhyWorks(pick) || getBackendWhyFails(pick)) ? (
-              <section className={`${PREFIX}-sec`}>
-                <SectionHead icon="compare" title="Analysis" />
-                {getBackendWhyWorks(pick) ? <p className={`${PREFIX}-callout`}>{getBackendWhyWorks(pick)}</p> : null}
-                {getBackendWhyFails(pick) ? <p className={`${PREFIX}-callout is-warn`}>{getBackendWhyFails(pick)}</p> : null}
-              </section>
-            ) : null}
-
-            {rightsRows.length ? (
-              <section className={`${PREFIX}-sec`}>
-                <SectionHead icon="shield" title="Rights & development" />
-                <div className={`${PREFIX}-facts`}>
-                  {rightsRows.map(([l, v]) => <Fact key={l} label={l} value={v} />)}
-                </div>
-              </section>
-            ) : null}
-
-            {reactionTweet ? (
-              <section className={`${PREFIX}-sec`}>
-                <SectionHead icon="flame" title="Floor reaction" />
-                <div className={`${PREFIX}-feed`}>
-                  <ReactionRow tweet={reactionTweet} />
-                </div>
-              </section>
-            ) : null}
-
-            {tags.length ? (
-              <div className={`${PREFIX}-need-line`}>
-                {tags.slice(0, 6).map((t) => <Chip key={t}>{t}</Chip>)}
-              </div>
-            ) : null}
-          </div>
-        </div>
-      </div>
-    </div>,
-    uiPortalTarget()
-  );
-}
 
 /* ------------------------------------------------------------------ */
 /* Selection modal                                                     */
@@ -5008,7 +4810,7 @@ function RoundRecapPanel({ recap, onContinue }) {
       {safeArray(recap.user_picks).length ? (
         <div className={`${PREFIX}-reveal-meta`}>
           {safeArray(recap.user_picks).map((p, i) => (
-            <Chip key={i} icon="check">{`${formatPick(p.overall_pick)} ${p.prospect_name}`}</Chip>
+            <Chip key={p?.overall_pick ?? i} icon="check">{`${formatPick(p.overall_pick)} ${p.prospect_name}`}</Chip>
           ))}
         </div>
       ) : null}
@@ -5210,14 +5012,14 @@ function RecapShow({ draft, completed, userPicks, draftOrder, userTeamId }) {
         <div className={`${PREFIX}-card`}>
           <div className={`${PREFIX}-card-head`}><h4>Best steals</h4></div>
           {steals.length ? steals.map((p, i) => (
-            <ValueRow key={i} pick={p} tone="pos" onOpen={() => setProfilePick(enrichPickFromBoard(p, draft))} />
+            <ValueRow key={p?.pick_id || p?.overall_pick || p?.prospect_id || i} pick={p} tone="pos" onOpen={() => setProfilePick(enrichPickFromBoard(p, draft))} />
           )) : <p className={`${PREFIX}-empty`}>The board stayed honest.</p>}
         </div>
 
         <div className={`${PREFIX}-card`}>
           <div className={`${PREFIX}-card-head`}><h4>Biggest reaches</h4></div>
           {reaches.length ? reaches.map((p, i) => (
-            <ValueRow key={i} pick={p} tone="neg" onOpen={() => setProfilePick(enrichPickFromBoard(p, draft))} />
+            <ValueRow key={p?.pick_id || p?.overall_pick || p?.prospect_id || i} pick={p} tone="neg" onOpen={() => setProfilePick(enrichPickFromBoard(p, draft))} />
           )) : <p className={`${PREFIX}-empty`}>A disciplined night.</p>}
         </div>
 
@@ -5278,8 +5080,6 @@ export default function EntryDraftMenu({ franchiseState = {}, eventData = {}, on
   const [selectedAvailable, setSelectedAvailable] = useState(null);
   const [reportOpen, setReportOpen] = useState(false);
   const [boardOpen, setBoardOpen] = useState(false);
-  const [shortlistIds, setShortlistIds] = useState([]);
-  const [pinnedIds, setPinnedIds] = useState([]);
   const [confirmDialog, setConfirmDialog] = useState(null);
 
   const simLock = useRef(false);
@@ -5335,7 +5135,6 @@ export default function EntryDraftMenu({ franchiseState = {}, eventData = {}, on
   const orderNote = draft.draft_order_note;
   const storylines = safeArray(draft.storylines);
   const needs = safeArray(draft.team_needs);
-  const phil = draft.team_philosophy || {};
   const draftOrder = safeArray(draft.draft_order);
   const totalPicks = draft.total_picks || 224;
   const overallNow = currentPick?.overall_pick || draft.overall_pick;
@@ -5727,15 +5526,7 @@ export default function EntryDraftMenu({ franchiseState = {}, eventData = {}, on
     setCompareIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id].slice(-3)));
   }, []);
 
-  const toggleShortlist = useCallback((p) => {
-    const id = getId(p);
-    setShortlistIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
-  }, []);
 
-  const togglePin = useCallback((p) => {
-    const id = getId(p);
-    setPinnedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id].slice(-12)));
-  }, []);
 
   const openDraftModal = useCallback(() => {
     userModalDismissedPickRef.current = null;

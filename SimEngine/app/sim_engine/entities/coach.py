@@ -719,7 +719,6 @@ class Coach:
             bury_penalty = 0.06 * bury_risk
 
         # Role fit is huge: playing a skill winger like a grinder hurts growth
-        fit_penalty = clamp(0.55 - in_role_fit, 0.0, 0.55) * 0.18
 
         # Relationship impacts confidence/growth
         confidence_delta = (rel_score - 0.50) * 0.10 - (rel.conflict * 0.06)
@@ -1141,7 +1140,8 @@ def coach_fit_score(coach: Coach, team: TeamContext) -> float:
     ) - politics_penalty
 
     # Chaos: sometimes teams hire bad fits (MANDATORY realism)
-    score += random.uniform(-0.08, 0.06)
+    _chaos = random.Random(f"coach_fit|{getattr(coach, 'coach_id', '')}|{getattr(team, 'team_id', '')}")
+    score += _chaos.uniform(-0.08, 0.06)
 
     return clamp(score, 0.0, 1.0)
 

@@ -3,9 +3,18 @@
 from __future__ import annotations
 
 from app.sim_engine.franchise._shared import *  # noqa: F401,F403
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
+
+def _stable_hash(value):
+    """Process-stable replacement for built-in hash() (salted per process via PYTHONHASHSEED)."""
+    import hashlib as _hl
+
+    return int.from_bytes(_hl.sha256(str(value).encode("utf-8")).digest()[:8], "big", signed=True)
+
 
 def _rng_for_event(session: FranchiseSession, label: str) -> random.Random:
-    base = abs(hash(f"{session.session_id}|{label}|{int(session.season_calendar_year)}")) % (2**31 - 1)
+    base = abs(_stable_hash(f"{session.session_id}|{label}|{int(session.season_calendar_year)}")) % (2**31 - 1)
     return random.Random(int(base) or 1)
 def _wjc_calendar_dates(season_y: int) -> List[date]:
     """Dec 26 (season_y) through Jan 5 (season_y+1), inclusive."""
@@ -34,7 +43,7 @@ def _wjc_country_for_birth(rng: random.Random, birth_country: str) -> str:
         if code:
             return code
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     bc = str(birth_country or "").strip().lower()
     pairs = [
         (("canada", "can"), "CAN"),

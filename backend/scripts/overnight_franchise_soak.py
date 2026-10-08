@@ -24,7 +24,9 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Tuple
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parents[2]
 BACKEND = ROOT / "backend"
@@ -416,7 +418,7 @@ def start_seed(seed: int, team: str, log: SoakLog) -> Any:
     try:
         save_session(session)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     log.write("CHECKPOINT", seed=seed, season=0, stage="created", ms=int((time.perf_counter() - t0) * 1000), teams=len(session.team_by_id or {}))
     return session
 
@@ -452,7 +454,7 @@ def save_reload_cycle(session: Any, log: SoakLog, seed: int, season: int, stats:
             try:
                 delattr(session, attr)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
     fp1 = fingerprint(session)
     try:
         # Prefer deepcopy: some Player.rating proxies mutate during pickle iteration.
@@ -604,7 +606,7 @@ def run_playoffs_and_offseason(session: Any, log: SoakLog, seed: int, season: in
                     session.draft_state = st
                     session.draft_completed = True
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
 
         if stage == "roster_cleanup" or getattr(session, "next_important_event", "") == "generate_next_season":
             try:
@@ -722,7 +724,7 @@ def lightweight_progression(log: SoakLog, stats: SoakStats, seasons: int = 10) -
 
             tick_extra_league_development(session.sim, session.sim.rng)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         # Age the league so veteran decline can offset prospect growth.
         for tm in (session.team_by_id or {}).values():
             for p in list(getattr(tm, "roster", None) or []):
@@ -731,12 +733,12 @@ def lightweight_progression(log: SoakLog, stats: SoakStats, seasons: int = 10) -
                     try:
                         ident.age = int(ident.age) + 1
                     except Exception:
-                        pass
+                        _swallowed_log.debug("suppressed exception", exc_info=True)
                 elif getattr(p, "age", None) is not None:
                     try:
                         p.age = int(p.age) + 1
                     except Exception:
-                        pass
+                        _swallowed_log.debug("suppressed exception", exc_info=True)
         session.development_report_done = False
         session.development_report_completed_season = 0
         session.development_report_payload = {}

@@ -1,6 +1,23 @@
 import axios from "axios";
 import { record as perfRecord } from "./perfProfiler";
 
+function safeStorageGet(key) {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function safeStorageSet(key, value) {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // Storage blocked (private mode / disabled) — session still works for this tab.
+  }
+}
+
+
 const DEV_SAME_ORIGIN = "";
 
 function buildApiCandidates() {
@@ -135,7 +152,7 @@ api.interceptors.request.use((config) => {
   if (url.includes("/franchise/start") || url.includes("/franchise/teams")) {
     return config;
   }
-  const sid = localStorage.getItem(SESSION_STORAGE_KEY);
+  const sid = safeStorageGet(SESSION_STORAGE_KEY);
   if (sid) {
     config.headers = config.headers || {};
     config.headers["X-Franchise-Session"] = sid;
@@ -247,7 +264,7 @@ export function lineupStorageKey(kind, sessionId) {
 export function readSessionLineupCache(kind, sessionId) {
   try {
     const key = lineupStorageKey(kind, sessionId);
-    const raw = localStorage.getItem(key);
+    const raw = safeStorageGet(key);
     if (!raw) return null;
     return JSON.parse(raw);
   } catch {
@@ -258,7 +275,7 @@ export function readSessionLineupCache(kind, sessionId) {
 export function writeSessionLineupCache(kind, value, sessionId) {
   try {
     const key = lineupStorageKey(kind, sessionId);
-    localStorage.setItem(key, JSON.stringify(value));
+    safeStorageSet(key, JSON.stringify(value));
   } catch {
     // ignore
   }
@@ -286,8 +303,8 @@ export function isExpiredFranchiseSessionError(err) {
 }
 
 function rememberBackendIdentity(instanceId, codeRevision) {
-  if (instanceId) localStorage.setItem(API_INSTANCE_STORAGE_KEY, instanceId);
-  if (codeRevision) localStorage.setItem(API_CODE_REVISION_STORAGE_KEY, codeRevision);
+  if (instanceId) safeStorageSet(API_INSTANCE_STORAGE_KEY, instanceId);
+  if (codeRevision) safeStorageSet(API_CODE_REVISION_STORAGE_KEY, codeRevision);
 }
 
 /**
@@ -349,8 +366,8 @@ function noteBackendIdentityFromHeaders(headers) {
   const codeRevision = String(headers["x-api-code-revision"] || "").trim();
   if (!instanceId && !codeRevision) return;
 
-  const prevInstance = localStorage.getItem(API_INSTANCE_STORAGE_KEY);
-  const prevRevision = localStorage.getItem(API_CODE_REVISION_STORAGE_KEY);
+  const prevInstance = safeStorageGet(API_INSTANCE_STORAGE_KEY);
+  const prevRevision = safeStorageGet(API_CODE_REVISION_STORAGE_KEY);
   const changed =
     (instanceId && prevInstance && prevInstance !== instanceId) ||
     (codeRevision && prevRevision && prevRevision !== codeRevision);
@@ -418,11 +435,11 @@ api.interceptors.response.use(
 );
 
 export function setFranchiseSessionId(id) {
-  localStorage.setItem(SESSION_STORAGE_KEY, id);
+  safeStorageSet(SESSION_STORAGE_KEY, id);
 }
 
 export function getFranchiseSessionId() {
-  return localStorage.getItem(SESSION_STORAGE_KEY);
+  return safeStorageGet(SESSION_STORAGE_KEY);
 }
 
 /** User-facing message for failed franchise API calls */

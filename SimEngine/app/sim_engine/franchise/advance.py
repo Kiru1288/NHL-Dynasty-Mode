@@ -52,6 +52,8 @@ from app.sim_engine.franchise.decisions import (  # noqa: F401
 )
 from app.sim_engine.franchise.state import _record_storyline  # noqa: F401
 from app.sim_engine.franchise.progression import _run_franchise_season_end_progression  # noqa: F401
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 def _stat_ensure(session: FranchiseSession, p: Any, team_id: str) -> Dict[str, Any]:
     reg = session.player_season_stats
@@ -360,7 +362,7 @@ def _accumulate_franchise_game_stats(
 
         apply_stats_ledger_to_storylines(session, box, rng=rng)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 def _franchise_enqueue_critical_notice(
     session: FranchiseSession, *, title: str, description: str, source: str
 ) -> None:
@@ -469,7 +471,7 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
             game_meta={"calendar_day": d, "calendar_iso": cal_iso},
         )
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     h_goal = _goalie_availability_status(home)
     a_goal = _goalie_availability_status(away)
@@ -684,7 +686,7 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
 
                                 tick_conduct_games_missed(pl)
                             except Exception:
-                                pass
+                                _swallowed_log.debug("suppressed exception", exc_info=True)
             if getattr(session, "injuries_enabled", True):
                 for tm in (home, away):
                     ev = world_injuries.maybe_injure_roster_subset(
@@ -754,7 +756,7 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
 
         clear_franchise_game_stat_modifiers(sim)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     return user_line, league_line
 def _simulate_slots_for_day(
@@ -839,7 +841,7 @@ def _purge_retired_from_extra_pools(session: FranchiseSession, player: Any) -> N
             if player in lst:
                 lst.remove(player)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     for block in getattr(league, "development_leagues", None) or []:
         for tm in block.get("teams") or []:
             pls = tm.get("players")
@@ -847,7 +849,7 @@ def _purge_retired_from_extra_pools(session: FranchiseSession, player: Any) -> N
                 try:
                     pls.remove(player)
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
     for tm in getattr(league, "teams", None) or []:
         for attr in ("ahl_roster", "echl_roster"):
             lst = getattr(tm, attr, None)
@@ -857,7 +859,7 @@ def _purge_retired_from_extra_pools(session: FranchiseSession, player: Any) -> N
                 if player in lst:
                     lst.remove(player)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
 def _depth_pool_progression_tick(session: FranchiseSession) -> None:
     """Periodic full progression pass on non-NHL depth (prospects, overseas, FA, minors)."""
     from app.sim_engine.progression import run_player_progression
@@ -895,7 +897,7 @@ def _depth_pool_progression_tick(session: FranchiseSession) -> None:
                 setattr(p, "retired", True)
                 _purge_retired_from_extra_pools(session, p)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 def _finalize_regular_calendar_day(
     session: FranchiseSession,
     day_meta: Dict[str, Any],
@@ -946,13 +948,13 @@ def _finalize_regular_calendar_day(
 
         franchise_record_data_storylines(session, just_idx, day_meta, rng=session.sim.rng)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         from app.sim_engine.franchise.storyline_engine import franchise_cause_storyline_daily_pass  # noqa: WPS433
 
         franchise_cause_storyline_daily_pass(session, just_idx, day_meta, rng=session.sim.rng)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     _franchise_fanout_player_storylines(session, just_idx, day_meta)
     from app.sim_engine.franchise.common import _franchise_tick_conduct_and_resolve  # noqa: WPS433
 
@@ -964,7 +966,7 @@ def _finalize_regular_calendar_day(
 
         tick_extra_league_development(session.sim, session.sim.rng)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     # Keep prospect league stats moving with the calendar (GP/G/A/P/PPG and
     # stock movement must drift in-season; mirrors backend franchise_sim).
     try:
@@ -981,7 +983,7 @@ def _finalize_regular_calendar_day(
             )
             invalidate_session_payload_caches(session, reason="prospect_stats")
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     if int(session.calendar_days_finished) % 5 == 0:
         _depth_pool_progression_tick(session)
 
@@ -998,7 +1000,7 @@ def _split_preseason_from_regular_if_needed(session: FranchiseSession, day_meta:
         # Keep preseason snapshots available for UI or later diagnostics.
         session.preseason_standings_snapshot = session.standings
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         session.preseason_player_stats_snapshot = dict(getattr(session, "player_season_stats", None) or {})
     except Exception:
@@ -1013,7 +1015,7 @@ def _split_preseason_from_regular_if_needed(session: FranchiseSession, day_meta:
         teams = list(getattr(getattr(session, "sim", None), "league", None).teams)
         session.standings = StandingsTable(teams)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     session.player_season_stats = {}
     session.game_results = []
     session.timeline.append("REGULAR SEASON: preseason stats archived; regular-season records reset.")

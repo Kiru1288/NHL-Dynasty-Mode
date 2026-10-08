@@ -189,6 +189,12 @@ export async function getAhlLedger(season) {
   return data;
 }
 
+/** Read-only lines for any club. level: "nhl" | "ahl". */
+export async function getTeamLinesView(teamId, level = "nhl") {
+  const { data } = await api.get("/api/franchise/lines/view", { params: { team_id: teamId, level } });
+  return data;
+}
+
 export async function getAhlLines() {
   const { data } = await api.get("/api/franchise/ahl/lines");
   return data;
@@ -596,6 +602,17 @@ export async function evaluateTradePackage(payload) {
  */
 export async function findTradeOffers(payload) {
   const { data } = await api.post("/api/franchise/trade/find", payload || {});
+  return data;
+}
+
+/** Offers CPU clubs have phoned in about your players (open a few days). */
+export async function getInboundTradeOffers() {
+  const { data } = await api.get("/api/franchise/trade/inbound");
+  return data;
+}
+
+export async function declineInboundTradeOffer(offerId) {
+  const { data } = await api.post("/api/franchise/trade/inbound/decline", { offer_id: offerId });
   return data;
 }
 

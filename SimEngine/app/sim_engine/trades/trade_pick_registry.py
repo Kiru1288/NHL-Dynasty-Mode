@@ -7,6 +7,8 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from app.sim_engine.trades.trade_asset import canonical_pick_id, _team_slug
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 
 def _safe_str(x: Any, default: str = "") -> str:
@@ -445,7 +447,7 @@ def transfer_pick(league: Any, pick_id: str, new_owner_team_id: str) -> Dict[str
             new_owner,
         )
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     return dict(row)
 

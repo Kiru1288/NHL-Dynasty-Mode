@@ -6,7 +6,9 @@ Applies modifiers directly to team/player objects and league-level simulation ho
 
 from __future__ import annotations
 
-from typing import Any, Dict, Mapping, MutableMapping, Optional
+from typing import Any, Dict, Mapping, Optional
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 # Keys align with universe DEFAULT_ERAS and common aliases
 ERA_PROFILES: Dict[str, Dict[str, float]] = {
@@ -159,7 +161,7 @@ def apply_era_modifiers(league_state: Mapping[str, Any], team: Any, player: Any)
             elif prof["aging_penalty"] < 0.98:
                 setattr(career, "expected_peak_age", max(24, peak - 1))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     psych = getattr(player, "psych", None)
     if psych is not None and hasattr(psych, "morale"):
@@ -168,7 +170,7 @@ def apply_era_modifiers(league_state: Mapping[str, Any], team: Any, player: Any)
             m = float(psych.morale) + delta
             psych.morale = max(0.0, min(1.0, m))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     return summary
 

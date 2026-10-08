@@ -9,13 +9,14 @@ eligibility use real biographical data instead of random placeholders.
 from __future__ import annotations
 
 import re
-import unicodedata
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from services.dynasty_ratings_parser import normalize_player_name
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 PLAYER_BIOS_PATH = Path(__file__).resolve().parent.parent / "data" / "player_bios.txt"
 ROOT_BIOS_PATH = Path(__file__).resolve().parent.parent.parent / "age.txt"
@@ -213,6 +214,13 @@ TURNS_AGE_RE = re.compile(r"turns\s+(\d+)", re.IGNORECASE)
 EMOJI_RE = re.compile(
     r"[\U0001F1E0-\U0001F1FF\U0001F300-\U0001FAFF\U00002700-\U000027BF]+"
 )
+
+
+def _stable_hash(value):
+    """Process-stable replacement for built-in hash() (salted per process via PYTHONHASHSEED)."""
+    import hashlib as _hl
+
+    return int.from_bytes(_hl.sha256(str(value).encode("utf-8")).digest()[:8], "big", signed=True)
 
 
 @dataclass
@@ -720,7 +728,7 @@ def apply_player_bio_to_player(
     try:
         player.age = age
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     if entry.birth_month and entry.birth_day:
         bd = f"{entry.birth_year:04d}-{entry.birth_month:02d}-{entry.birth_day:02d}"
@@ -745,16 +753,16 @@ def apply_player_bio_to_player(
             from app.sim_engine.generation.prospect_body import apply_body_tradeoffs_to_ratings
             import random
 
-            seed = abs(hash(str(getattr(player, "id", "") or entry.raw_name))) & 0xFFFFFFFF
+            seed = abs(_stable_hash(str(getattr(player, "id", "") or entry.raw_name))) & 0xFFFFFFFF
             apply_body_tradeoffs_to_ratings(player, random.Random(seed))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         try:
             from app.sim_engine.generation.prospect_identity import refresh_player_identity
 
             refresh_player_identity(player, force=True)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     return True
 

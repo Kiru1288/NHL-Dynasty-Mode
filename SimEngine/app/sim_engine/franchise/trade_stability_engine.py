@@ -13,6 +13,8 @@ from app.sim_engine.franchise.player_agent_engine import (
     ensure_player_agent,
     get_agent_gm_relationship,
 )
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 STABILITY_STABLE_MIN = 70
 STABILITY_ANGST_MIN = 55
@@ -121,7 +123,7 @@ def _player_character_0_100(player: Any) -> int:
             # Floor at 40 (not 55) so genuinely low-character players stay distinguishable.
             return int(_clamp(float(chapters["Character"]), 40.0, 99.0))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     c = getattr(player, "character", None)
     if c is not None:
         try:
@@ -152,7 +154,7 @@ def _player_mental_0_100(player: Any) -> int:
         if isinstance(chapters, dict) and chapters.get("Mental"):
             return int(_clamp(float(chapters["Mental"]), 50.0, 99.0))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     chem = getattr(player, "chemistry_profile", None) or {}
     if isinstance(chem, dict):
         for key in ("mental", "resilience", "adaptability"):
@@ -624,7 +626,7 @@ def sync_player_role_from_real_data(session: Any, player: Any, team: Any) -> Pla
         if deploy.scratched:
             setattr(player, "_recently_scratched", True)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     satisfaction = infer_role_satisfaction_from_deployment(player, team, session, deploy=deploy)
     if satisfaction is not None:
@@ -635,7 +637,7 @@ def sync_player_role_from_real_data(session: Any, player: Any, team: Any) -> Pla
                 setattr(psych, "role_satisfaction", sat_norm)
                 setattr(psych, "ice_time_satisfaction", sat_norm)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
     return deploy
 
 
@@ -1148,7 +1150,7 @@ def gather_player_concerns(session: Any, player: Any, team: Any) -> PlayerConcer
             elif human_pressure_tier >= 1:
                 human_life_pressure = human_pressure_score * 0.18
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     snap = PlayerConcernSnapshot(
         role_satisfaction=role,
@@ -1538,7 +1540,7 @@ def apply_readiness_to_player(player: Any, penalties: Dict[str, float]) -> None:
     try:
         setattr(player, "_trade_demand_readiness_penalty", ovr_pen)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def clear_demand_temporary_modifiers(player: Any) -> None:
@@ -1564,7 +1566,7 @@ def clear_demand_temporary_modifiers(player: Any) -> None:
             try:
                 setattr(player, attr, False if attr == "locker_room_disruptor" else None)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def compute_instant_stability(session: Any, player: Any, team: Any) -> Dict[str, Any]:

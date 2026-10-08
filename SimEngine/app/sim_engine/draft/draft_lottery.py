@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
-from typing import List, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence
 
 
 # ==================================================
@@ -90,9 +90,10 @@ def run_draft_lottery(
     """
     Runs NHL-style draft lottery for picks #1 and #2.
 
-    - Pick #1: weighted draw among bottom-11 teams (ranks 1–11).
-    - Pick #2: weighted draw among remaining teams with original rank <= 12.
-    - Picks 3–16: remaining teams in original-rank order (worst first).
+    - Two weighted draws over all 16 non-playoff clubs (NHL odds table).
+    - A draw winner moves up at most 10 spots; if it can't reach the drawn pick, it
+      moves up exactly 10 and the drawn pick falls to the worst remaining club.
+    - Everyone else keeps original order (worst first).
     """
 
     if len(teams) < 2:
@@ -105,26 +106,32 @@ def run_draft_lottery(
     orig_rank = {str(t.team_id): i + 1 for i, t in enumerate(ordered)}
 
     if n == 16:
-        # Pick #1 — only ranks 1..11 eligible (12+ would need an 11+ spot jump).
-        pool1 = ordered[:11]
-        weights1 = ODDS_PCT[:11]
-        winner1 = _weighted_draw(pool1, weights1, rng)
-
-        remaining = [t for t in ordered if t.team_id != winner1.team_id]
-        pool2 = [t for t in remaining if orig_rank[str(t.team_id)] <= 12]
-        weights2 = [ODDS_PCT[orig_rank[str(t.team_id)] - 1] for t in pool2]
-        winner2 = _weighted_draw(pool2, weights2, rng)
-
-        winners = [winner1, winner2]
-        winner_ids = {str(w.team_id) for w in winners}
-        rest = [t for t in ordered if str(t.team_id) not in winner_ids]
-        rest.sort(key=lambda t: orig_rank[str(t.team_id)])
-        final_order = [str(winner1.team_id), str(winner2.team_id)] + [str(t.team_id) for t in rest]
+        # Current NHL format: two draws over all 16 clubs by their odds. A club may move
+        # up at most 10 spots; a winner outside that range jumps exactly 10 places and the
+        # drawn pick goes to the worst remaining club instead.
+        assigned: dict[int, str] = {}
+        winners: list[str] = []
+        remaining = list(ordered)
+        for pick_no in (1, 2):
+            weights = [ODDS_PCT[orig_rank[str(t.team_id)] - 1] for t in remaining]
+            won = _weighted_draw(remaining, weights, rng)
+            wid = str(won.team_id)
+            winners.append(wid)
+            rank = orig_rank[wid]
+            if rank - MAX_JUMP <= pick_no:
+                assigned[pick_no] = wid
+            else:
+                assigned[rank - MAX_JUMP] = wid
+            remaining = [t for t in remaining if str(t.team_id) != wid]
+        rest = [str(t.team_id) for t in ordered if str(t.team_id) not in assigned.values()]
+        final_order: list[str] = []
+        for slot in range(1, n + 1):
+            if slot in assigned:
+                final_order.append(assigned[slot])
+            else:
+                final_order.append(rest.pop(0))
         _assert_max_jump(orig_rank, final_order)
-        return LotteryResult(
-            pick_order=final_order,
-            lottery_winners=[str(winner1.team_id), str(winner2.team_id)],
-        )
+        return LotteryResult(pick_order=final_order, lottery_winners=winners)
 
     # Non-16-team fallback: legacy two-draw with max-jump guard.
     winners: list[LotteryTeam] = []

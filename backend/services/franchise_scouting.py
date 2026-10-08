@@ -17,6 +17,8 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 from services.franchise_sim import get_cached_draft_class_rankings, ensure_prospect_stats_current_for_scouting
 from services.franchise_session import FranchiseSession
 from services.franchise_sim import invalidate_session_payload_caches
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 DRAFT_OVR_REVEAL_THRESHOLD = 72.0
 PUBLIC_INTEL_CLEAR_THROUGH_RANK = 45
@@ -50,6 +52,13 @@ FILM_STUDY_HOURS = 4
 DEPLOYMENT_SALARY_PER_WEEK = 48_000
 DISCOVERY_REP_LATE_BLOOMER = 8
 DISCOVERY_REP_EARLY_FLAMER = 5
+
+
+def _stable_hash(value):
+    """Process-stable replacement for built-in hash() (salted per process via PYTHONHASHSEED)."""
+    import hashlib as _hl
+
+    return int.from_bytes(_hl.sha256(str(value).encode("utf-8")).digest()[:8], "big", signed=True)
 
 
 def _draft_franchise_date_context(session: FranchiseSession) -> Dict[str, Any]:
@@ -106,7 +115,7 @@ def _draft_scout_completion(rank: int, month: Optional[int], key: str) -> float:
         8: 0, 9: 4, 10: 8, 11: 12, 12: 16, 1: 20,
         2: 28, 3: 36, 4: 48, 5: 58, 6: 68, 7: 12,
     }.get(int(month) if month is not None else 0, 0)
-    jitter = (abs(hash(str(key))) % 11) - 5
+    jitter = (abs(_stable_hash(str(key))) % 11) - 5
     return float(max(8.0, min(88.0, base + month_bonus + jitter)))
 
 
@@ -598,7 +607,6 @@ def apply_passive_scouting_progress(session: FranchiseSession, *, days: int = 1)
         return False
     ensure_scouting_markers(session, entries)
 
-    prospects = state.get("prospects") if isinstance(state.get("prospects"), dict) else {}
     watchlist = {str(x) for x in (state.get("watchlist") or [])}
     spotlight = set(_spotlight_ids(state))
     deployments = list(state.get("active_deployments") or [])
@@ -725,7 +733,7 @@ def _intensity_mult(intensity: str) -> float:
 
 def _scout_pool(session: FranchiseSession) -> List[Dict[str, Any]]:
     """Procedural scout staff tied to franchise session (no fixed player identities)."""
-    seed = abs(hash(str(session.session_id))) % 10_000
+    seed = abs(_stable_hash(str(session.session_id))) % 10_000
     regions = [
         ("North America", "NA"),
         ("Europe", "EU"),
@@ -1093,7 +1101,7 @@ def _aggregate_world(prospects: List[Dict[str, Any]]) -> Dict[str, Any]:
     for cid, row in sorted(by_country.items(), key=lambda x: -x[1]["prospect_count"]):
         cnt = max(1, row["prospect_count"])
         avg = row["scouted_sum"] / cnt
-        seed = abs(hash(cid)) % 1000
+        seed = abs(_stable_hash(cid)) % 1000
         sweep_gain = float(ACTION_SCOUTED_GAIN["region_sweep"])
         passive_daily = float(PASSIVE_REGION_DAILY)
         pc = int(row["prospect_count"])
@@ -1943,7 +1951,7 @@ def _apply_attribute_combine(
             if p is not None:
                 setattr(p, "draft_combine", CE.public_block({**res, "draft_year": draft_year}, consensus={"score": row["interview_score"], "label": CE.interview_label(cz), "grade": CE.interview_grade(cz)}, stock={"delta": row["combine_stock_delta"], "reason": reason}))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     session.draft_combine_catalog = CE.test_catalog()
 
 
@@ -2073,35 +2081,84 @@ def run_franchise_draft_combine(session: FranchiseSession) -> Dict[str, Any]:
     return payload
 
 
+COMBINE_INTERVIEW_LIMIT = 20
+COMBINE_DINNER_LIMIT = 4
+
+
 def apply_combine_user_meeting(
     session: FranchiseSession,
     prospect_id: str,
     meeting_type: str,
 ) -> Dict[str, Any]:
-    """User-team private interview or dinner during combine — stronger board impact."""
+    """User-team private interview or dinner during combine.
+
+    O1/O2: limited (20 interviews, 4 dinners a year, one of each per prospect), only during
+    or after the combine, and the outcome depends on who the kid actually is — a dinner
+    with a character risk can go badly."""
+    import random as _random
+
     if not getattr(session, "draft_combine_done", False):
+        if str(getattr(session, "offseason_stage", "") or "") != "draft_combine":
+            raise ValueError("The draft combine hasn't started yet.")
         run_franchise_draft_combine(session)
 
+    mt = str(meeting_type or "").lower()
+    if mt not in ("interview", "dinner"):
+        raise ValueError("Meeting type must be 'interview' or 'dinner'.")
     state = _ensure_scouting_state(session)
     pid = str(prospect_id or "")
+    known = {
+        str(row.get("prospect_id") or row.get("key") or "")
+        for row in ((getattr(session, "draft_combine_payload", None) or {}).get("prospects") or [])
+        if isinstance(row, dict)
+    }
+    if known and pid not in known:
+        raise ValueError("That prospect isn't at the combine.")
     uid = str(session.user_team_id)
     impressions = state.setdefault("team_impressions", {})
     team_row = impressions.setdefault(uid, {})
     imp = dict(team_row.get(pid) or get_team_prospect_impression(session, uid, pid))
+    done_key = "dinner_held" if mt == "dinner" else "interview_held"
+    if imp.get(done_key):
+        raise ValueError(f"You already had a {mt} with him.")
+    year = str(getattr(session, "season_calendar_year", 0) or 0)
+    used_all = state.setdefault("combine_meetings_used", {})
+    used = dict(used_all.get(year) or {})
+    limit = COMBINE_DINNER_LIMIT if mt == "dinner" else COMBINE_INTERVIEW_LIMIT
+    if int(used.get(mt, 0) or 0) >= limit:
+        raise ValueError(f"You've used all {limit} {mt}s this year.")
+    used[mt] = int(used.get(mt, 0) or 0) + 1
+    used_all[year] = used
 
-    mt = str(meeting_type or "interview").lower()
-    bonus = 4.5 if mt == "dinner" else 2.5
-    imp["private_meeting_impression"] = "Excellent" if mt == "dinner" else "Positive"
+    z = float(imp.get("interview_z") or 0.0)
+    flags = [str(f) for f in (imp.get("interview_flags") or [])]
+    rng = _random.Random(f"combine_meet|{uid}|{pid}|{mt}|{year}")
+    reveal = z + rng.gauss(0.0, 0.6) - (0.9 if "character" in flags else 0.0)
+    scale = 4.5 if mt == "dinner" else 2.5
+    bonus = round(scale * max(-1.0, min(1.0, reveal / 1.4)), 2)
+    if reveal >= 0.9:
+        label = "Excellent"
+        summary = "Polished, self-aware and hungry — the room came away sold." if mt == "dinner" else "Sharp interview. He answered the hard questions straight."
+    elif reveal >= 0.1:
+        label = "Positive"
+        summary = "Good kid, good answers. Nothing that changes the file much."
+    elif reveal >= -0.7:
+        label = "Mixed"
+        summary = "Guarded. Some answers felt rehearsed and the staff isn't sure what they got."
+    else:
+        label = "Concerning"
+        summary = "It went sideways — attitude questions the scouts now have to run down." if mt == "dinner" else "Rough interview. He bristled at the accountability questions."
+    imp[done_key] = True
+    imp["private_meeting_impression"] = label
     imp["board_delta"] = round(float(imp.get("board_delta") or 0) + bonus, 2)
-    imp["confidence_delta"] = round(float(imp.get("confidence_delta") or 0) + 3.0, 2)
-    if mt == "dinner":
+    imp["confidence_delta"] = round(float(imp.get("confidence_delta") or 0) + (3.0 if mt == "dinner" else 2.0), 2)
+    if mt == "dinner" and label == "Excellent":
         imp["scout_favorite"] = True
         imp["scout_note"] = "Private dinner — GM and scouts aligned on fit."
-    imp["private_meeting_summary"] = (
-        "Strong character and leadership in private setting."
-        if mt == "dinner"
-        else "Positive one-on-one interview — compete level stood out."
-    )
+    elif label == "Concerning":
+        imp["concern_tag"] = True
+        imp["scout_note"] = "Private meeting raised red flags."
+    imp["private_meeting_summary"] = summary
     team_row[pid] = imp
     state["team_impressions"] = impressions
 

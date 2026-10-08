@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Optional
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 
 def _clamp(x: float, lo: float = 0.0, hi: float = 1.0) -> float:
@@ -41,7 +43,7 @@ def _player_ovr(player: Any) -> float:
 
         return float(player_current_ovr_01(player))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     ovr_fn = getattr(player, "ovr", None)
     if callable(ovr_fn):
         try:
@@ -161,7 +163,7 @@ def estimate_fa_market_aav_m(player: Any, league: Any = None) -> float:
 
         return float(compute_market_value(player, league))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return round(1.0 + 9.0 * max(0.0, player_economy_ability_01(player) - 0.50), 3)
 
 
@@ -175,7 +177,7 @@ def _player_potential_01(player: Any, current_01: float) -> float:
         if pot is not None:
             return _clamp(float(pot) / 99.0, current_01, 1.0)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     ratings = getattr(player, "ratings", None)
     if isinstance(ratings, dict):
         for key in ("dev_potential", "potential", "pot"):
@@ -310,7 +312,7 @@ class PlayerValue:
             market_01 = _clamp(market_m / 12.0, 0.0, 1.0)
             value = value * 0.55 + market_01 * 0.45
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
         # Normalize: map rough [-0.2..0.9] into [0..1]
         value = (value + 0.20) / 1.10

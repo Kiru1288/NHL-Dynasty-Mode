@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import hashlib
 from typing import Any, Dict, List, Optional, Tuple
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 AGENT_IDS: Tuple[str, ...] = ("carter", "walsh", "kim", "rossi", "blake")
 
@@ -215,7 +217,7 @@ def ensure_player_agent(player: Any, session: Optional[Any] = None) -> Dict[str,
         setattr(player, "agent_profile", profile)
         setattr(player, "agent_id", aid)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     if session is not None:
         get_agent_gm_relationship(session, aid)
     return agent

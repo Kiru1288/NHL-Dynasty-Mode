@@ -13,7 +13,7 @@ for p in (str(BACKEND), str(SIM), str(ROOT / "SimEngine")):
         sys.path.insert(0, p)
 
 from services import franchise_sim  # noqa: E402
-from services.contract_economy import _contract_years_remaining, _get  # noqa: E402
+from services.contract_economy import _contract_years_remaining
 
 
 def main() -> None:

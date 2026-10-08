@@ -12,6 +12,8 @@ from app.sim_engine.franchise.social_templates import (
     REDDIT_THREAD_TEMPLATES,
     filter_templates,
 )
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Reporter fragments — opener / clause / closer per narrative_angle
@@ -440,7 +442,7 @@ def _lookup_session_evidence(session: Any, storyline: Dict[str, Any]) -> Dict[st
                     if age_v > 0:
                         out["age"] = age_v
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
                 try:
                     from app.sim_engine.economy.cap_engine import player_cap_hit_millions  # noqa: WPS433
 
@@ -448,7 +450,7 @@ def _lookup_session_evidence(session: Any, storyline: Dict[str, Any]) -> Dict[st
                     if cap_m > 0:
                         out["cap_hit"] = round(cap_m, 2)
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
                 if not tid:
                     tid = str(getattr(tm, "id", "") or "")
                 break
@@ -463,7 +465,7 @@ def _lookup_session_evidence(session: Any, storyline: Dict[str, Any]) -> Dict[st
             if rank_v > 0:
                 out["league_rank"] = rank_v
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     team_name = str(storyline.get("team_name") or "").strip()
     if team_name:
         out["team"] = team_name
@@ -491,7 +493,7 @@ def _resolve_team_cap_context(session: Any, team_id: str) -> Dict[str, Any]:
                     if val not in (None, "", 0):
                         out[key] = round(float(val), 2)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     if "cap_space" not in out and team is not None:
         cap = float(getattr(team, "cap_space_m", 0) or getattr(team, "cap_space", 0) or 0)
         if cap:
@@ -734,7 +736,6 @@ def _active_storyline_boost(session: Any, storyline: Dict[str, Any]) -> float:
 def _pick_slots(frags: Dict[str, List[str]], rng: random.Random, urgent: bool) -> Tuple[str, str, str]:
     weights_o = [2.0 if urgent and f and "?" not in f else 1.0 for f in frags["openers"]]
     weights_c = [1.8 if urgent and f else 1.0 for f in frags["clauses"]]
-    weights_e = [1.0 for _ in frags["closers"]]
     opener = rng.choices(frags["openers"], weights=weights_o, k=1)[0]
     clause = rng.choices(frags["clauses"], weights=weights_c, k=1)[0]
     closer = rng.choice(frags["closers"])
@@ -955,7 +956,7 @@ def compose_ambient_fan_post(
     storyline: Optional[Dict[str, Any]] = None,
     reporter: Optional[Dict[str, Any]] = None,
 ) -> str:
-    angle = str((storyline or {}).get("narrative_angle") or "league_wire")
+    str((storyline or {}).get("narrative_angle") or "league_wire")
     if storyline and rng.random() < 0.62:
         dynasty = compose_dynasty_tweet(storyline, ctx, rng, meme=(sentiment == "meme" or rng.random() < 0.12))
         if dynasty and not _looks_like_broken_social_text(dynasty):

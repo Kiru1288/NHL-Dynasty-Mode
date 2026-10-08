@@ -25,11 +25,20 @@ from typing import Any, Dict, List, Optional, Tuple
 import math
 import random
 import uuid
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 
 # =============================================================================
 # Helpers
 # =============================================================================
+
+def _stable_hash(value):
+    """Process-stable replacement for built-in hash() (salted per process via PYTHONHASHSEED)."""
+    import hashlib as _hl
+
+    return int.from_bytes(_hl.sha256(str(value).encode("utf-8")).digest()[:8], "big", signed=True)
+
 
 def clamp(x: float, lo: float = 0.0, hi: float = 1.0) -> float:
     return lo if x < lo else hi if x > hi else x
@@ -1023,7 +1032,7 @@ def build_risk_flags(
             if float(age) - float(draft_age) >= 1.2:
                 flags.append("overager_discount")
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     # Low confidence meta-flag
     if confidence < 0.40:
@@ -1070,7 +1079,7 @@ def recommend(
             if grade >= 0.62 and pr >= 45 and confidence < 0.55:
                 rec = Recommendation.HIDDEN_GEM
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     else:
         if grade >= 0.62 and confidence < 0.50 and "limited_viewings" in risk_flags:
             rec = Recommendation.HIDDEN_GEM
@@ -1082,7 +1091,7 @@ def recommend(
             if pr <= 12 and grade < 0.58 and confidence >= 0.50:
                 rec = Recommendation.OVERRATED
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     # trade-down target: mid grade, high confidence, low risk, safe
     if grade >= 0.54 and grade <= 0.64 and confidence >= 0.60 and red_hits == 0:
@@ -1326,14 +1335,14 @@ def update_scouting(
         league_health=league_ctx.league_health,
     )
 
-    rng = random.Random(dept.rng_seed + w * 9973)
+    random.Random(dept.rng_seed + w * 9973)
 
     # Apply staleness decay first
     decay_reports(dept, current_week=w)
 
     # For each scout, decide which prospects they see and update reports
     for scout in dept.scouts:
-        scout_rng = random.Random((dept.rng_seed + w * 10007) ^ hash(scout.id))
+        scout_rng = random.Random((dept.rng_seed + w * 10007) ^ _stable_hash(scout.id))
 
         # coverage / selection:
         # - area scouts see more from their region

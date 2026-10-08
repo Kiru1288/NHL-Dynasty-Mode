@@ -701,7 +701,7 @@ export function AnimatedHost({
           >
             <div
               style={{
-                fontSize: 10,
+                fontSize: 11,
                 lineHeight: "11px",
                 letterSpacing: "0.12em",
                 textTransform: "uppercase",
@@ -1060,7 +1060,7 @@ export function BroadcastFloatingCaption({
             gap: 8,
             marginBottom: 5,
             color: "#bfdbfe",
-            fontSize: 10,
+            fontSize: 11,
             fontWeight: 900,
             letterSpacing: "0.13em",
             textTransform: "uppercase",

@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import copy
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 FORWARD_SLOTS: Tuple[str, ...] = ("LW", "C", "RW")
 DEFENSE_SLOTS: Tuple[str, ...] = ("LD", "RD")
@@ -51,7 +53,7 @@ def player_key(player: Any) -> str:
         if pid:
             return str(pid)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return canonical_id(getattr(player, "id", "") or "")
 
 
@@ -752,19 +754,19 @@ def _assign_affiliate(player: Any, team: Any, level: str) -> None:
         player.roster_location = level
         player.organizational_status = "minors"
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         ctx = getattr(player, "context", None)
         if ctx is not None:
             ctx.current_team_id = f"{level.upper()}_{tid}" if tid else level.upper()
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         from app.sim_engine.league_hierarchy_bootstrap import _set_assignment, _team_label
 
         _set_assignment(player, org_nhl_team_id=tid, level=level, club=_team_label(team))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def ensure_affiliate_goalies(session: Any, *, min_goalies: int = 2) -> List[Dict[str, Any]]:
@@ -830,7 +832,7 @@ def ensure_affiliate_goalies(session: Any, *, min_goalies: int = 2) -> List[Dict
                 setattr(league, attr, [x for x in list(getattr(league, attr, None) or []) if x is not g])
                 team.prospect_pool = [x for x in list(getattr(team, "prospect_pool", None) or []) if x is not g]
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             ahl = list(getattr(team, "ahl_roster", None) or [])
             ahl.append(g)
             team.ahl_roster = ahl

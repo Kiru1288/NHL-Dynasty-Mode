@@ -21,6 +21,8 @@ logger = logging.getLogger(__name__)
 
 from .playoffs import PlayoffResult
 from .standings import StandingsTable, TeamStandingRecord
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 BALLOT_POINTS = [10.0, 7.0, 5.0, 3.0, 1.0]
 VOTER_COUNT = 190
@@ -2341,7 +2343,6 @@ def _score_pool_with_quality(
     for row in pool:
         row = dict(row)
         missing = validate_required_award_fields(row, required_fields)
-        optional_analytics = [f for f in ("war", "impact_score", "xgf_pct", "gsax", "defense_score") if f in required_fields or True]
         # Only fail hard if NONE of analytics-ish fields exist when required includes them
         hard_missing = [f for f in missing if f in {"gp"}]
         if hard_missing:
@@ -4242,12 +4243,12 @@ def apply_career_award_history(
                 try:
                     player.awards_won = won
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
             history.append(entry)
             try:
                 player.career_awards = history
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             hist_blob = dict(getattr(player, "player_award_history", None) or {})
             if history_by_player is not None:
                 hist_blob = {**dict(history_by_player.get(pid) or {}), **hist_blob}
@@ -4261,7 +4262,7 @@ def apply_career_award_history(
             try:
                 player.player_award_history = hist_blob
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             if history_by_player is not None:
                 history_by_player[pid] = hist_blob
             writes += 1
@@ -4377,5 +4378,5 @@ def compute_official_watch_lists(
                     }
                 )
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     return out

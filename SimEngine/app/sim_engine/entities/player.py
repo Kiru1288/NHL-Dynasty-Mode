@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any
 import random
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 
 # ============================================================
@@ -174,13 +176,13 @@ def player_current_ovr_01(player: Any) -> float:
             try:
                 return normalize_rating(ovr_fn())
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         pos = getattr(player, "position", None)
         arch = getattr(player, "archetype", None)
         try:
             return normalize_rating(compute_ovr(ratings, pos, arch))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     for key in ("overall", "ovr", "true_ovr", "current_ovr"):
         raw = getattr(player, key, None)
         if raw is None:
@@ -204,7 +206,7 @@ def persist_recomputed_ovr(player: Any) -> float:
     try:
         setattr(player, "overall", float(display_rating(ovr01)))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         # Some legacy fixtures store ovr as a float attribute, not a method. Check the
         # instance attribute (not the type) — plain objects/SimpleNamespaces never have
@@ -215,19 +217,19 @@ def persist_recomputed_ovr(player: Any) -> float:
         if existing is not None and not callable(existing):
             setattr(player, "ovr", float(ovr01))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         inval = getattr(player, "_invalidate_ovr_memo", None)
         if callable(inval):
             inval()
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         from app.sim_engine.entities.chapter_attributes import sync_chapters_to_overall
 
         sync_chapters_to_overall(player)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return ovr01
 
 
@@ -1677,7 +1679,7 @@ class Player:
             try:
                 self.ratings.pop("_generated_profile", None)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             ratings.pop("_generated_profile", None)
 
         self._narrative_prog_growth_mult: float = 1.0

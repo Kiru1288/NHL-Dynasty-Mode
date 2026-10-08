@@ -129,7 +129,7 @@
     padding: 0 12px;
     background: #8b1e28;
     color: #f4d9c6;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 800;
     letter-spacing: 0.16em;
     text-transform: uppercase;
@@ -176,7 +176,7 @@
 
   .office-wire-ticker__item em {
     font-style: normal;
-    font-size: 9px;
+    font-size: 11px;
     font-weight: 800;
     letter-spacing: 0.12em;
     text-transform: uppercase;
@@ -368,7 +368,7 @@
   }
 
   .league-ops-icon__kicker {
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 800;
     letter-spacing: 0.2em;
     line-height: 1.2;
@@ -518,7 +518,7 @@
   }
 
   .office-menu-icon__kicker {
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 800;
     letter-spacing: 0.2em;
     line-height: 1.2;
@@ -734,7 +734,7 @@
     margin-top: 8px;
     padding: 2px 8px;
     border: 1px solid rgba(201, 168, 106, 0.7);
-    font-size: 10px;
+    font-size: 11px;
     font-style: normal;
     letter-spacing: 0.14em;
     text-transform: uppercase;
@@ -796,13 +796,13 @@
 
   .office-edge--secondary {
     opacity: 0.88;
-    font-size: 10px;
+    font-size: 11px;
     padding: 7px 9px;
   }
 
   .office-control-bar__hint {
     margin: 0 10px 0 0;
-    font-size: 10px;
+    font-size: 11px;
     letter-spacing: 0.08em;
     text-transform: uppercase;
     color: var(--office-muted);
@@ -936,19 +936,18 @@
   }
 
   .office-control-bar__primary {
-    min-height: 44px !important;
-    min-width: 168px !important;
-    padding: 0 22px !important;
-    font-size: 14px !important;
-    letter-spacing: 0.14em !important;
-    text-transform: uppercase !important;
-    font-weight: 700 !important;
-    color: #0c1018 !important;
-    background: linear-gradient(180deg, #e2c58a 0%, #c4a46a 100%) !important;
-    border: 1px solid rgba(255, 230, 180, 0.45) !important;
-    border-radius: 4px !important;
-    box-shadow: 0 8px 18px rgba(0, 0, 0, 0.35);
-  }
+  min-height: 44px !important;
+  min-width: 168px !important;
+  padding: 0 22px !important;
+  font-size: 14px !important;
+  letter-spacing: 0.14em !important;
+  text-transform: uppercase !important;
+  font-weight: 700 !important;
+  color: #0c1018 !important;
+  background: linear-gradient(180deg, #e2c58a 0%, #c4a46a 100%) !important;
+  border: 1px solid rgba(255, 230, 180, 0.45) !important;
+  border-radius: 4px !important;
+}
 
   .office-control-bar__primary:hover {
     filter: brightness(1.06);

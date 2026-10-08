@@ -12,10 +12,6 @@ from typing import Any, Dict, List
 from app.sim_engine.franchise.session import FranchiseSession
 
 
-def get_franchise_chemistry_report(session: FranchiseSession) -> Dict[str, Any]:
-    from app.sim_engine.systems.chemistry import build_public_chemistry_report
-
-    return build_public_chemistry_report(session)
 
 
 def enter_franchise_playoffs(session: FranchiseSession) -> Dict[str, Any]:

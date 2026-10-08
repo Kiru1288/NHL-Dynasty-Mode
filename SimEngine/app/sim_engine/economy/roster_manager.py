@@ -11,10 +11,12 @@ Responsibilities:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, List
 
 from app.sim_engine.economy.player_value import PlayerValue
 from app.sim_engine.economy.team_needs import TeamNeeds
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 
 def _safe_float(x: Any, default: float = 0.0) -> float:
@@ -57,7 +59,7 @@ def _ovr(player: Any) -> float:
         try:
             return float(player_current_ovr_01(player))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         fn = getattr(player, "ovr", None)
         if callable(fn):
             try:
@@ -104,7 +106,7 @@ class RosterManager:
             team.roster = roster
             team.prospects = prospects
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
         # Evaluate needs (used as a nudge for positional balance)
         needs = self.needs_model.evaluate(team)
@@ -163,7 +165,7 @@ class RosterManager:
                 try:
                     league.free_agents = pool
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
                 logs.append(f"SIGNING: {getattr(team, 'team_id', '?')} signs {getattr(p, 'name', 'UFA')} (fill roster)")
 
         # If overflow, waive/cut lowest value players (prefer older/declining)
@@ -203,13 +205,13 @@ class RosterManager:
             team.roster = roster
             team.prospects = prospects
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
         # Attach needs snapshot for other systems
         try:
             team.needs = needs
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         return logs
 
 

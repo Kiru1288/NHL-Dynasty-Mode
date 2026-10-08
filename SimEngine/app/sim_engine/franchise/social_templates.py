@@ -1335,6 +1335,7 @@ def filter_templates(
     fmt: str = "",
     max_results: int = 0,
     shuffle: bool = False,
+    rng: Any = None,
 ) -> List[Dict[str, Any]]:
     """
     Filter a pool by angle, tag, tone/format, and available context keys.
@@ -1356,7 +1357,7 @@ def filter_templates(
         out.append(row)
 
     if shuffle:
-        random.shuffle(out)
+        (rng or random.Random(f"tmpl|{angle}|{tag}|{tone}|{fmt}|{len(out)}")).shuffle(out)
     if max_results:
         out = out[:max_results]
     return out

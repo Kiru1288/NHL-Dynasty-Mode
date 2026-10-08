@@ -1783,21 +1783,7 @@ function deriveOwnerMood(data) {
   return { owners, players, fans, media };
 }
 
-function moodMeterValue(label) {
-  const s = String(label || "").toLowerCase();
-  if (["angry", "loud", "cold", "cautious"].some((k) => s.includes(k))) return 28;
-  if (["restless", "watchful", "watching", "pushy", "cool"].some((k) => s.includes(k))) return 48;
-  if (["strong", "hot", "calm"].some((k) => s.includes(k))) return 82;
-  if (["stable", "quiet", "warm"].some((k) => s.includes(k))) return 68;
-  return 55;
-}
 
-function moodMeterColor(value) {
-  if (value < 40) return "var(--lo-red)";
-  if (value < 55) return "var(--lo-orange)";
-  if (value < 72) return "var(--lo-cyan)";
-  return "var(--lo-green)";
-}
 
 function deriveTeamEvent(team) {
   if (isThreatened(team)) {

@@ -29,6 +29,8 @@ from app.sim_engine.trades.trade_value import (  # noqa: E402
     evaluate_pick_asset_value,
     evaluate_player_asset_value,
 )
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 
 def _eff(assets) -> float:
@@ -204,7 +206,7 @@ def _plan_cap(
 
         cap_pct = int(max_retention_pct(_RETENTION_LEAGUE.get("league")))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     pct = int(min(cap_pct, ((need / hit) * 100.0 // 5 + 1) * 5))
     if hit * pct / 100.0 + 0.005 < need:
         return None
@@ -237,7 +239,7 @@ def _buyer_retention_pct(
 
         cap_pct = int(max_retention_pct(_RETENTION_LEAGUE.get("league")))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     pct = int(min(cap_pct, ((need_cut / hit) * 100.0 // 5 + 1) * 5))
     if hit * pct / 100.0 + 0.005 < need_cut:
         return None
@@ -314,7 +316,7 @@ def _player_label(p: Any) -> Dict[str, Any]:
         out["ovr"] = int(round(ovr))
         out["pot"] = int(round(max(ovr, player_potential_display(p, ovr_display=ovr))))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         from app.sim_engine.generation.player_headshots import ensure_player_headshot, headshot_fields_from_player
 
@@ -324,7 +326,7 @@ def _player_label(p: Any) -> Dict[str, Any]:
         if nhl_id:
             out["headshot"]["nhl_id"] = nhl_id
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return out
 
 
@@ -662,6 +664,7 @@ def _sell_candidates(
     anchor_type: str = "player",
     order: Optional[List[str]] = None,
     rng: Any = None,
+    margin: float = SELL_MARGIN,
 ) -> List[List[Dict[str, Any]]]:
     """Return packages of different archetypes (hockey trade, youth, futures, swap...).
 
@@ -669,7 +672,7 @@ def _sell_candidates(
     the package closest to the partner's budget wins, with a little jitter so repeat searches
     don't always surface the same deal.
     """
-    budget = offered_value * SELL_MARGIN
+    budget = offered_value * margin
     floor = offered_value * SELL_VALUE_FLOOR
     ranked: List[Tuple[float, List[Dict[str, Any]]]] = []
     for combo in _combos(pool, MAX_COMBO_SIZE):
@@ -833,10 +836,9 @@ def find_trade_offers(
     limit: int = 8,
 ) -> Dict[str, Any]:
     """Return accepted offers built around one asset. See module docstring."""
-    from services.trade_service import _ensure_trade_infrastructure, _trade_context
+    from services.trade_service import _ensure_trade_infrastructure
 
-    _ensure_trade_infrastructure(session)
-    ctx = _trade_context(session)
+    ctx = _ensure_trade_infrastructure(session)
     league = ctx["league"]
     _RETENTION_LEAGUE["league"] = league
     team_by_id = ctx["team_by_id"] or {}
@@ -845,7 +847,11 @@ def find_trade_offers(
     if league is None or user_team is None:
         raise ValueError("Franchise league is not ready")
     if ctx.get("trade_deadline_passed"):
-        return {"mode": mode, "offers": [], "note": "The trade deadline has passed."}
+        return {
+            "mode": mode,
+            "offers": [],
+            "note": "The trade deadline has passed. Only AHL players can be traded until your season ends; build those deals in the Trade Hub.",
+        }
 
     asset_type = str(asset_type or "").lower()
     asset_id = str(asset_id or "")
@@ -971,7 +977,18 @@ def find_trade_offers(
             rot = p_index % len(base_order)
             p_index += 1
             order = base_order[rot:] + base_order[:rot]
-            cands = _sell_candidates(offered, pool, fits, anchor_type=asset_type, order=order, rng=rng)
+            # U7: a club whose hole this player fills pays over market, so the user can win
+            # a deal on value when the fit is real (the evaluator prices the same fit).
+            fit = 0.0
+            if anchor_player is not None:
+                try:
+                    from app.sim_engine.trades.trade_value import _buyer_fit_premium
+
+                    fit = float(_buyer_fit_premium(partner, anchor_player) or 0.0)
+                except Exception:
+                    fit = 0.0
+            margin = SELL_MARGIN + min(0.18, 1.2 * fit)
+            cands = _sell_candidates(offered, pool, fits, anchor_type=asset_type, order=order, rng=rng, margin=margin)
             if not cands:
                 continue
             best_total = max(_eff(c) for c in cands)

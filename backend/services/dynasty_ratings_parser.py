@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 DYNASTY_RATINGS_PATH = Path(__file__).resolve().parent.parent / "data" / "dynasty_ratings.txt"
 DYNASTY_PATCHES_PATH = Path(__file__).resolve().parent.parent / "data" / "dynasty_ratings_patches.txt"
@@ -571,7 +573,7 @@ def apply_dynasty_entry_to_player(
     try:
         player._invalidate_ovr_memo()
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     target = float(entry.chapters.get("overall", 75)) / 99.0
     target = max(0.30, min(0.99, target))
@@ -584,7 +586,7 @@ def apply_dynasty_entry_to_player(
     try:
         player._invalidate_ovr_memo()
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     setattr(player, "dynasty_ratings_import", True)
     setattr(player, "_dynasty_entry_key", f"{entry.team_abbr}|{entry.level}|{entry.raw_name}")
     setattr(player, "dynasty_rating_source", entry.level)
@@ -708,6 +710,6 @@ def spawn_player_from_dynasty_entry(
             registry = bio_registry or _spawn_bio_registry(int(year))
             apply_player_bio_by_name(player, registry, as_of_year=year)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     league_players.append(player)
     return player

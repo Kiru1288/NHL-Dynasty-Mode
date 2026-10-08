@@ -14,16 +14,12 @@
   --edraft-header-h: 48px;
   --edraft-ticker-h: 28px;
   --edraft-gap: var(--space-2);
-
   position: relative;
   min-height: 100vh;
-  max-height: 100vh;
-  overflow: hidden;
   display: flex;
   flex-direction: column;
   color: var(--edraft-text);
-  background:
-    radial-gradient(circle at 20% 0%, rgba(19, 216, 231, 0.1), transparent 32%),
+  background: radial-gradient(circle at 20% 0%, rgba(19, 216, 231, 0.1), transparent 32%),
     radial-gradient(circle at 88% 12%, rgba(233, 168, 60, 0.07), transparent 28%),
     linear-gradient(180deg, var(--ops-black) 0%, var(--ops-navy-deep) 100%);
   --ed-head: "Barlow Condensed", var(--font-broadcast-display), "Archivo Black", "Rajdhani", "Arial Narrow", sans-serif;
@@ -57,8 +53,6 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  min-height: var(--edraft-header-h);
-  padding: 6px 12px;
   border-bottom: 1px solid var(--edraft-line);
   background: var(--edraft-panel-quiet);
 }
@@ -77,7 +71,6 @@
 
 .edraft-broadcast .edraft-topbar-main {
   display: flex;
-  align-items: center;
   gap: 10px;
   flex: 1;
   min-width: 0;
@@ -196,13 +189,7 @@
 }
 
 .edraft-broadcast .edraft-text-btn {
-  border: 0;
-  background: transparent;
-  color: var(--edraft-focus);
-  font-size: 11px;
   font-weight: 600;
-  cursor: pointer;
-  padding: 0;
   font-family: inherit;
 }
 
@@ -302,7 +289,6 @@
   flex: 1 1 auto;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(160px, 0.2fr) minmax(320px, 0.45fr) minmax(280px, 0.36fr);
   gap: var(--edraft-gap);
   align-items: stretch;
   border: 1px solid var(--edraft-line);
@@ -528,20 +514,11 @@
 }
 
 .edraft-order-track {
-  display: flex;
-  gap: 2px;
-  overflow-x: auto;
   min-width: 0;
   flex: 1;
-  scrollbar-width: thin;
-  padding-bottom: 2px;
 }
 
 .edraft-order-item {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 8px;
   border-right: 1px solid rgba(156, 178, 196, 0.12);
   flex-shrink: 0;
   opacity: 0.78;
@@ -584,7 +561,6 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin-top: 4px;
 }
 
 .edraft-primary-ghost {
@@ -2859,7 +2835,7 @@
   min-height: 0;
   overflow: hidden;
 }
-.edraft-broadcast .edraft-dock { grid-area: controls; }
+
 
 /* --- Pick header: one compact band --- */
 .edraft-broadcast .edraft-pickhead {
@@ -2985,7 +2961,6 @@
 .edraft-broadcast .edraft-stage-prospect .edraft-pcard {
   flex: 1 1 auto;
   width: 100%;
-  min-height: 0;
   max-width: none;
 }
 
@@ -3108,6 +3083,7 @@
 
 /* --- Action dock (issues 20, 21, 22) --- */
 .edraft-broadcast .edraft-dock {
+  grid-area: controls;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   grid-template-areas: "state actions";

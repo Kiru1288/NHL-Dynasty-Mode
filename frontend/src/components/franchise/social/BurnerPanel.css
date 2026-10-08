@@ -25,7 +25,7 @@
   display: flex; flex-direction: column; align-items: center; min-width: 96px; padding: 8px 12px;
   border: 1px solid rgba(255, 107, 107, 0.35); border-radius: 10px; background: rgba(255, 107, 107, 0.08);
 }
-.burner-panel__suspicion span { font-size: 10px; font-weight: 900; letter-spacing: 0.12em; text-transform: uppercase; color: var(--bp-muted); }
+.burner-panel__suspicion span { font-size: 11px; font-weight: 900; letter-spacing: 0.12em; text-transform: uppercase; color: var(--bp-muted); }
 .burner-panel__suspicion strong { font-size: 26px; line-height: 1.1; }
 .burner-investigation {
   display: flex; justify-content: space-between; padding: 10px 12px; border-radius: 10px;
@@ -64,7 +64,7 @@
 .burner-gauge { width: 180px; height: auto; display: block; }
 .burner-gauge-read { display: flex; flex-direction: column; align-items: center; text-align: center; }
 .burner-gauge-read strong { font-size: 30px; line-height: 1; }
-.burner-gauge-read span { font-size: 10px; font-weight: 900; letter-spacing: 0.12em; text-transform: uppercase; color: var(--bp-muted); }
+.burner-gauge-read span { font-size: 11px; font-weight: 900; letter-spacing: 0.12em; text-transform: uppercase; color: var(--bp-muted); }
 .burner-gauge-read em { margin-top: 6px; font-style: normal; font-size: 12px; color: var(--bp-muted); }
 .burner-gauge-wrap.is-mid .burner-gauge-read strong { color: var(--bp-gold); }
 .burner-gauge-wrap.is-high .burner-gauge-read strong { color: var(--bp-red); }
@@ -77,7 +77,7 @@
 .burner-tone.is-criticism { color: var(--bp-red); border-color: rgba(255, 107, 107, 0.45); }
 .burner-tone.is-trade_talk { color: var(--bp-gold); border-color: rgba(233, 168, 60, 0.45); }
 .burner-outcome { padding: 10px 12px; border-radius: 10px; border: 1px solid var(--bp-line); background: rgba(0, 0, 0, 0.18); }
-.burner-outcome span { font-size: 10.5px; font-weight: 900; letter-spacing: 0.12em; text-transform: uppercase; }
+.burner-outcome span { font-size: 11px; font-weight: 900; letter-spacing: 0.12em; text-transform: uppercase; }
 .burner-outcome p { margin: 4px 0 0; font-size: 14px; line-height: 1.45; }
 .burner-outcome--ok { border-left: 3px solid var(--bp-green); }
 .burner-outcome--ok span { color: var(--bp-green); }
@@ -100,3 +100,7 @@
 @media (max-width: 720px) {
   .burner-risk-row { grid-template-columns: 1fr; }
 }
+
+.burner-note { font-size: 12px; opacity: 0.75; margin: 4px 0 8px; }
+.burner-count { font-size: 11px; opacity: 0.55; text-align: right; margin-top: 4px; }
+.burner-field strong { font-weight: 600; }

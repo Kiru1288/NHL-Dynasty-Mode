@@ -19,6 +19,7 @@ franchise_sim.build_draft_class_rankings() → draft_prospect_profile.py
 
 import hashlib
 from dataclasses import asdict
+import random
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.sim_engine.generation.name_generator import generate_human_identity

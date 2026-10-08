@@ -44,6 +44,8 @@ from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional,
 import math
 
 from app.sim_engine.gameplay.game_analytics_ledger import season_xgf_pct_from_row
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 
 # ============================================================
@@ -982,7 +984,6 @@ def calculate_skater_rates(row: Mapping[str, Any]) -> Dict[str, Any]:
     xgf = safe_float(first_present(row, ["xgf", "expected_goals_for"], 0.0), 0.0)
     xga_raw = first_present(row, ["xga", "expected_goals_against"], None)
     xga = safe_float(xga_raw, 0.0)
-    xga_valid = xga_raw is not None and xga > 0
     ixg = safe_float(first_present(row, ["ixg", "individual_xg"], 0.0), 0.0)
     xa = safe_float(first_present(row, ["xa", "expected_assists"], 0.0), 0.0)
 
@@ -1727,7 +1728,7 @@ def calculate_skater_value_metrics(row: Mapping[str, Any]) -> Dict[str, Any]:
         market_m = float(compute_market_value_from_row(row))
         trade_value = market_m * 14.0 + war * 8.0 + age_value * 0.20 - injury_penalty * 0.5
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     return {
         "offensive_gar": round_to(offensive_gar, 3),
@@ -2938,7 +2939,7 @@ def standings_rank_map(
         for i, rec in enumerate(standings_table.league_table()):
             out[str(getattr(rec, "team_id", i))] = int(i)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return out
 
 
@@ -3062,11 +3063,6 @@ def award_watch_scores(
     rookies = [r for r in skaters if boolish(r.get("rookie") or r.get("is_rookie"))]
     ranks = standings_rank_map(standings_table, rank_by_tid)
 
-    selke_pool = [
-        r
-        for r in forwards
-        if str(r.get("position", "")).upper() not in {"D", "G"}
-    ]
 
     def sort_awards(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         return sorted(items, key=lambda r: safe_float(r.get("award_score"), 0.0), reverse=True)[:limit]

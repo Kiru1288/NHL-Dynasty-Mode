@@ -14,6 +14,8 @@ import hashlib
 import logging
 import re
 from typing import Any, Dict, List, Mapping, Optional, Tuple
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 logger = logging.getLogger(__name__)
 
@@ -214,7 +216,7 @@ def clean_team_name(team_name: str, league_code: str = "", league_display: str =
         if resolved:
             return resolved
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     raw = re.sub(r"\s+", " ", str(team_name or "").strip())
     if not raw:
         return ""
@@ -521,7 +523,7 @@ def enrich_prospect_row_from_player(player: Any, row: Dict[str, Any]) -> None:
         if _chg is not None:
             row["_potential_change_true"] = int(_chg)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     ratings = getattr(player, "ratings", None)
     if not isinstance(ratings, dict):
@@ -532,7 +534,7 @@ def enrich_prospect_row_from_player(player: Any, row: Dict[str, Any]) -> None:
         try:
             _apply_character_integrity(row, player)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         return
 
     def _avg_keys(keys: List[str]) -> float:
@@ -645,7 +647,7 @@ def enrich_prospect_row_from_player(player: Any, row: Dict[str, Any]) -> None:
     try:
         _apply_character_integrity(row, player)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 _SKATER_CHAPTER_IDS: Tuple[str, ...] = (
@@ -721,7 +723,7 @@ def _resolve_character_chapter_score(
                 if agg is not None and float(agg) > 0:
                     return int(round(float(agg)))
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
 
     trait_keys = (
         "coachability",
@@ -2064,7 +2066,7 @@ def _ranking_violation_reason(row: Dict[str, Any], rank: int) -> Optional[str]:
     pot = _true_pot(row)
     ovr = float(row.get("true_ovr") or 0)
     pos = str(row.get("position") or "").upper()
-    prod = float(row.get("production_adjusted_score") or 0)
+    float(row.get("production_adjusted_score") or 0)
     h = int(row.get("height_cm") or 0)
 
     if rank <= 10 and pos not in ("G", "D", "LD", "RD", "LHD", "RHD"):
@@ -2473,7 +2475,7 @@ def backfill_draft_eligible_goalies(league: Any, rng: Any, needed: int) -> int:
 
             initialize_prospect_season(p, code, rng=rng)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         roster.append(p)
         target_team["players"] = roster
         created += 1

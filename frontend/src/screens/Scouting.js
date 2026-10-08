@@ -2444,14 +2444,6 @@ import React, {
       ]
     );
   
-    const cancelAssignment = useCallback(
-      (assignment) => {
-        runCommand("cancel assignment", ENDPOINTS.cancel, {
-          assignment_id: assignment.id,
-        });
-      },
-      [runCommand]
-    );
 
     const toggleSpotlight = useCallback(
       (prospect) => {
@@ -3207,45 +3199,7 @@ function OverviewView({
     );
   }
   
-  function ProspectTile({ prospect, onClick }) {
-    return (
-      <button type="button" className="prospect-tile" onClick={onClick}>
-        <span className="prospect-rank">#{prospect.rank}</span>
   
-        <PersonAvatar
-          src={prospect.headshotUrl}
-          name={prospect.name}
-          label={prospect.position}
-          size="lg"
-          player={prospect}
-        />
-  
-        <div className="prospect-tile__body">
-          <strong>{prospect.name}</strong>
-          <small>
-            {prospect.position} · {prospect.country}
-          </small>
-        </div>
-  
-        <div className={cx("prospect-grade", coverageTone(prospect.scouted))}>
-          <strong>{gradeFromCoverage(prospect.scouted)}</strong>
-          <span>{Math.round(prospect.scouted)}%</span>
-        </div>
-      </button>
-    );
-  }
-  
-  function gradeFromCoverage(value) {
-    const v = percentage(value);
-  
-    if (v >= 92) return "A";
-    if (v >= 82) return "A-";
-    if (v >= 72) return "B+";
-    if (v >= 62) return "B";
-    if (v >= 50) return "B-";
-    if (v >= 35) return "C";
-    return "?";
-  }
   
   function CompactCountryList({ countries, metric, tone, onSelectCountry }) {
     if (!countries.length) {
@@ -4596,37 +4550,6 @@ function OverviewView({
   /* Assignments helper cards                                                   */
   /* -------------------------------------------------------------------------- */
   
-  function AssignmentCard({ assignment, onCancel, busyAction }) {
-    const targetName =
-      assignment.prospect?.name ||
-      assignment.country?.name ||
-      stringOr(assignment.targetId, "Unknown");
-  
-    const scoutName = assignment.scout?.name || "Unassigned";
-  
-    return (
-      <article className="assignment-card">
-        <header>
-          <div>
-            <span>{actionLabel(assignment.action)}</span>
-            <h3>{targetName}</h3>
-            <p>{scoutName}</p>
-          </div>
-  
-          <b>{titleCase(assignment.status)}</b>
-        </header>
-  
-        <LabeledBar label="Progress" value={assignment.progress} tone="blue" />
-  
-        <footer>
-          <span>{formatMoney(assignment.cost)}</span>
-          <button type="button" disabled={busyAction} onClick={() => onCancel(assignment)}>
-            Cancel
-          </button>
-        </footer>
-      </article>
-    );
-  }
   
   /* -------------------------------------------------------------------------- */
   /* CSS goes in next chunk                                                     */

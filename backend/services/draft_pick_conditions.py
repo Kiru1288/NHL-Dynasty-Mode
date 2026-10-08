@@ -8,6 +8,8 @@ deferred and converted picks forward into the live draft_pick_registry.
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 
 def _reg(league: Any) -> Dict[str, Any]:
@@ -73,7 +75,7 @@ def resolve_pick_protections(league: Any, *, draft_year: int, lottery_order: Opt
 
         reconcile_pick_registry_consistency(league)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return events
 
 
@@ -131,7 +133,7 @@ def resolve_pick_conditions(league: Any, *, draft_year: int) -> List[Dict[str, A
 
         reconcile_pick_registry_consistency(league)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return events
 
 
@@ -228,7 +230,7 @@ def _spawn_compensatory_pick(
 
         reconcile_pick_registry_consistency(league)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def finalize_draft_pick_registry(league: Any, *, draft_year: int, lottery_order: Optional[List[str]] = None) -> Dict[str, Any]:
@@ -237,7 +239,7 @@ def finalize_draft_pick_registry(league: Any, *, draft_year: int, lottery_order:
 
         ensure_draft_pick_registry(league, start_year=int(draft_year))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     events: List[Dict[str, Any]] = []
     events.extend(roll_deferred_picks_forward(league, draft_year=draft_year))
     events.extend(resolve_pick_conditions(league, draft_year=draft_year))

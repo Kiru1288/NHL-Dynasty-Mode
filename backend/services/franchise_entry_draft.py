@@ -12,8 +12,11 @@ from __future__ import annotations
 import hashlib
 import threading
 from datetime import datetime, timezone
+import random
 from typing import Any, Dict, List, Optional, Tuple
 from services.franchise_session import FranchiseSession
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 # Guards creation of per-session draft locks.
 _DRAFT_LOCK_REGISTRY_GUARD = threading.Lock()
@@ -266,7 +269,7 @@ def _mark_pick_resolved(session: FranchiseSession, slot: Dict[str, Any], prospec
 
         reconcile_pick_registry_consistency(league)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _unmark_pick_resolved(session: FranchiseSession, slot: Dict[str, Any]) -> None:
@@ -289,7 +292,7 @@ def _unmark_pick_resolved(session: FranchiseSession, slot: Dict[str, Any]) -> No
 
         reconcile_pick_registry_consistency(league)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _retire_draft_year_after_completion(session: FranchiseSession) -> None:
@@ -304,12 +307,12 @@ def _retire_draft_year_after_completion(session: FranchiseSession) -> None:
 
         retire_draft_year_picks(league, draft_year=draft_year, reason="draft_completed")
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         setattr(league, "draft_completed", True)
         setattr(league, "draft_year", int(draft_year) + 1)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def build_full_draft_order(session: FranchiseSession) -> List[Dict[str, Any]]:
@@ -334,7 +337,7 @@ def build_full_draft_order(session: FranchiseSession) -> List[Dict[str, Any]]:
 
             finalize_draft_pick_registry(league, draft_year=draft_year, lottery_order=lottery_ids)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     picks: List[Dict[str, Any]] = []
     overall = 0
@@ -404,7 +407,7 @@ def append_stock_history_snapshot(
 
 
 def finalize_draft_class_for_event(session: FranchiseSession) -> Dict[str, Any]:
-    from services.franchise_sim import build_draft_class_rankings, get_cached_draft_class_rankings
+    from services.franchise_sim import get_cached_draft_class_rankings
 
     board = get_cached_draft_class_rankings(session, session.sim)
     entries = list(board.get("entries") or [])
@@ -418,7 +421,7 @@ def finalize_draft_class_for_event(session: FranchiseSession) -> Dict[str, Any]:
                 entries = _apply_public_combine_adjustments(session, entries, combine_map)
                 board = {**board, "entries": entries}
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
     for e in entries:
         append_stock_history_snapshot(session, e, event_source="final_ranking", date_label="Draft")
     preseason = dict(getattr(session, "draft_preseason_rank", None) or {})
@@ -526,11 +529,11 @@ def calculate_team_needs(session: FranchiseSession, team_id: str) -> List[Dict[s
             0.85,
             f"Only {rhd_nhl + rhd_pool} right-shot defensemen across roster and pool.",
         ))
-    if g_pool < 2:
+    if g_pool < 2 or g_nhl < 2:
         needs.append((
             "Goalie Pipeline",
-            0.7,
-            f"Only {g_pool} goalie prospect(s) in the organizational pool.",
+            0.8 if g_nhl < 2 else 0.7,
+            f"{g_nhl} NHL goalie(s) and {g_pool} goalie prospect(s) in the organization.",
         ))
     u23 = sum(
         1
@@ -578,7 +581,7 @@ def _scouting_overlay(session: FranchiseSession, prospect_id: str, team_id: Opti
                 merged["dinner_status"] = "Completed" if "dinner" in str(imp.get("private_meeting_impression") or "").lower() else merged.get("dinner_status")
             return merged
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return overlay
 
 
@@ -1015,7 +1018,7 @@ def _revealed_ability_payload(player: Any) -> Dict[str, Any]:
             }
         )
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return out
 
 
@@ -1289,7 +1292,7 @@ def _cpu_select_prospect(
             st["cpu_draft_target_by_team"] = intent
             session.draft_state = st
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     class_entries = list((cache.get("entry_by_key") or {}).values()) or candidates
     return select_cpu_prospect(
@@ -1349,7 +1352,7 @@ def _build_dev_home_index(session: FranchiseSession) -> Dict[str, Tuple[Any, Opt
 
         rebuild_players_by_id(league, only_if_missing=True)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     for block in getattr(league, "development_leagues", None) or []:
         if not isinstance(block, dict):
             continue
@@ -1408,7 +1411,7 @@ def _sync_row_live_stats(
             cal_iso = _calendar_iso_for_day(session, int(getattr(session, "calendar_cursor", 0) or 0))
             season_year = int(getattr(session, "season_calendar_year", 0) or 0) or None
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         if not cal_iso and str(getattr(session, "phase", "") or "").lower() == "offseason":
             year = int(getattr(session, "season_calendar_year", 0) or 2026)
             cal_iso = f"{year}-06-25"
@@ -1482,9 +1485,9 @@ def _sync_row_live_stats(
                         if out.get(k) is None and merged.get(k) is not None:
                             out[k] = merged[k]
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return out
 
 
@@ -1602,7 +1605,7 @@ def _hydrate_completed_pick(
                 if isinstance(payload, dict) and payload.get("chapters"):
                     row["chapter_profile"] = payload
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
 
     nhl_team_name = out.get("team_name")
     junior_team = (
@@ -1667,7 +1670,7 @@ def _hydrate_completed_pick(
                 out["dossier"] = {**dossier, **built}
                 dossier = out["dossier"]
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     if junior_team and isinstance(out.get("dossier"), dict):
         out["dossier"].setdefault("team", junior_team)
         out["dossier"].setdefault("club", junior_team)
@@ -1683,7 +1686,7 @@ def _hydrate_completed_pick(
             if not out.get("rights_card"):
                 out["rights_card"] = rights_card_payload(player)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     stats = out.get("actual_stats") if isinstance(out.get("actual_stats"), dict) else {}
     chapters = (out.get("chapter_profile") or {}).get("chapters") if isinstance(out.get("chapter_profile"), dict) else None
@@ -1761,7 +1764,7 @@ def _assign_drafted_prospect(
 
         calculate_nhl_readiness_score(player)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     hist = getattr(session, "draft_stock_history", None) or {}
     pid = str(getattr(player, "id", "") or ent.get("key") or "")
@@ -1825,7 +1828,7 @@ def _assign_drafted_prospect(
             added_season=int(getattr(session, "season_calendar_year", draft_year) or draft_year),
         )
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     legacy = getattr(team, "prospects", None)
     if isinstance(legacy, list) and all(getattr(p, "id", None) != getattr(player, "id", object()) for p in legacy):
@@ -1907,7 +1910,7 @@ def _rollback_assigned_prospect(
         try:
             setattr(player, attr, False if attr == "drafted" else None)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _prospect_entry_key(entry: Dict[str, Any]) -> str:
@@ -1951,7 +1954,7 @@ def _draft_live_eligible(
             for ppid, p in reg.items():
                 player_index.setdefault(str(ppid), p)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     # Empty live pool (tests / early bootstrap): board availability is authoritative.
     if not player_index:
@@ -2074,7 +2077,6 @@ def _build_round_recap(session: FranchiseSession, rnd: int, picks: List[Dict[str
     steals = sorted(round_picks, key=lambda p: int(p.get("final_rank") or 99) - int(p.get("overall_pick") or 0), reverse=True)
     reaches = [p for p in round_picks if p.get("was_reach")]
     goalies = [p for p in round_picks if str(p.get("position") or "").upper() == "G"]
-    available_rank = {str(p.get("prospect_id")): int(p.get("final_rank") or 0) for p in picks}
     headline = ""
     if steals:
         s = steals[0]
@@ -2110,7 +2112,7 @@ def initialize_entry_draft(session: FranchiseSession) -> Dict[str, Any]:
 
         ensure_team_scouting_profiles(session)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     board = finalize_draft_class_for_event(session)
     order = build_full_draft_order(session)
     draft_year = int(session.season_calendar_year) + 1
@@ -2621,11 +2623,11 @@ def _execute_pick_locked(
         try:
             _rollback_assigned_prospect(session, player, owner, pick_meta)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         try:
             _unmark_pick_resolved(session, slot)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         raise
 
     prev_round = int(slot.get("round") or 1)
@@ -2757,7 +2759,7 @@ def _execute_pick_locked(
             cache["team_needs"] = cache_needs
             state["_cache"] = cache
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     session.draft_state = state
     session.draft_completed = done
     if done:
@@ -3077,7 +3079,7 @@ def _maybe_cpu_draft_day_pick_swap(session: FranchiseSession) -> Optional[Dict[s
     try:
         setattr(league, "_franchise_user_team_id", user_id)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     team_by_id = dict(getattr(session, "team_by_id", None) or {})
     package = {
@@ -3233,7 +3235,7 @@ def accept_draft_day_trade_offer(session: FranchiseSession, offer: Dict[str, Any
     try:
         setattr(league, "_franchise_user_team_id", user_id)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     from app.sim_engine.trades.trade_evaluator import evaluate_trade_package
     from app.sim_engine.trades.trade_executor import execute_validated_trade
@@ -3339,7 +3341,7 @@ def _batch_cpu_picks(
     try:
         refresh_draft_order_ownership(session)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     while safety < TOTAL_PICKS:
         safety += 1
@@ -3362,7 +3364,7 @@ def _batch_cpu_picks(
                     if overall > len(order):
                         break
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         slot = order[overall - 1]
         if start_round is None:
             start_round = int(slot.get("round") or 1)
@@ -3478,7 +3480,7 @@ def complete_entry_draft(session: FranchiseSession) -> Dict[str, Any]:
 
             invalidate_session_payload_caches(session, "draft_pick")
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     recap = get_draft_recap(session)
     state["draft_recap"] = recap
     session.draft_state = state

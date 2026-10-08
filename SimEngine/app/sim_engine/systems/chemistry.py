@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
 import random
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 
 PERSONALITIES = (
@@ -556,7 +558,7 @@ def usage_satisfaction_score(player: Any) -> float:
             ov = ov / 99.0
         expect = 0.6 if ov >= 0.86 else 1.4 if ov >= 0.80 else 2.2 if ov >= 0.74 else 3.0
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     if deployed is not None:
         gap = abs(float(deployed) - float(expect))
         role = clamp(role - gap * 8.0, 0.0, 100.0)
@@ -1193,7 +1195,7 @@ def apply_daily_chemistry_tick(team: Any, session: Optional[Any] = None, rng: Op
     try:
         setattr(team, "_world_chemistry", clamp(room_after.get("overall", 50) / 100.0, 0.08, 0.96))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return {
         "updated": updated,
         "room_delta": round(room_after["overall"] - room_before["overall"], 2),
@@ -1286,7 +1288,7 @@ def build_public_chemistry_report(session: Any) -> Dict[str, Any]:
             session._cached_state_roster_rows = None
             session._cached_chemistry_report = None
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     rep = calculate_team_chemistry_report(team, session=session)
     storylines = list(getattr(session, "storyline_events", None) or [])[-40:]
     pressure = []

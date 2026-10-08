@@ -11,7 +11,9 @@ Selects best lineup using:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 
 def _safe_float(x: Any, default: float = 0.0) -> float:
@@ -115,7 +117,7 @@ class LineupAI:
         try:
             team.current_lineup = out
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         return out
 
 

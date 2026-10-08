@@ -5,6 +5,8 @@ Roles: elite, top_line, top_4, middle_6, bottom_6, depth, prospect.
 """
 
 from typing import Any
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 ROLES_FWD = ["elite", "top_line", "middle_6", "bottom_6", "depth", "prospect"]
 ROLES_D = ["elite", "top_4", "middle_6", "bottom_6", "depth", "prospect"]
@@ -17,7 +19,7 @@ def _ovr(player: Any) -> float:
         try:
             return float(ovr_fn())
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     return getattr(player, "ovr", 0.5)
 
 

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from app.sim_engine.franchise._shared import *  # noqa: F401,F403
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 class _FranchiseLifecycleLogger:
     """Satisfies run_sim career pass: no console spam, optional capture later."""
@@ -58,11 +60,11 @@ def _franchise_nhl_age_and_phase_tick(session: FranchiseSession, teams: List[Any
                         development_modifier=dev_mod * age_damp + sys_dev,
                     )
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
             try:
                 assign_career_phase_from_age(player)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
 def _run_franchise_season_end_progression(session: FranchiseSession) -> Dict[str, Any]:
     """
     After the regular-season calendar: NHL roster aging + the same progression stack as the
@@ -90,7 +92,7 @@ def _run_franchise_season_end_progression(session: FranchiseSession) -> Dict[str
             },
         )
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     _franchise_nhl_age_and_phase_tick(session, teams)
 
@@ -98,7 +100,7 @@ def _run_franchise_season_end_progression(session: FranchiseSession) -> Dict[str
         try:
             rs._run_player_progression_pass(teams, rng, None)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     if getattr(rs, "_run_career_lifecycle_pass", None):
         try:
@@ -118,7 +120,7 @@ def _run_franchise_season_end_progression(session: FranchiseSession) -> Dict[str
 
         apply_league_ovr_soft_regression_if_needed(teams, rng, avg_trigger=74.5)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     out["retired_removed"] = int(_strip_retired_from_nhl_rosters(teams))
     # Season calendar year advances only in generate_next_season (authoritative transition).

@@ -15,6 +15,8 @@ import zlib
 from typing import Any, Dict, List, Optional, Tuple
 
 from services.lineup_integrity import empty_lines, player_key, player_name, player_ovr, position_bucket
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 SEASON_START = (10, 10)
 SEASON_END = (4, 19)
@@ -49,7 +51,7 @@ def _affiliate_name(team: Any) -> str:
         if name:
             return str(name)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return f"{getattr(team, 'city', '')} AHL".strip()
 
 
@@ -525,9 +527,9 @@ def build_ahl_lines_payload(session: Any) -> Dict[str, Any]:
         try:
             from app.sim_engine.generation.player_headshots import merge_headshot_into_row
 
-            merge_headshot_into_row(roster[-1], p)
+            roster[-1] = merge_headshot_into_row(roster[-1], p) or roster[-1]
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     roster.sort(key=lambda x: x["ovr"], reverse=True)
     return {"ok": True, "team_name": _affiliate_name(team), "lines": lines, "roster": roster,
             "custom": bool(session.ahl_lines.get(str(session.user_team_id))), "toi_by_line": {"forwards": F_TOI, "defense": D_TOI}}

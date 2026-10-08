@@ -4,6 +4,8 @@ import { SCREENS, normalizeNhlAbbr } from "../game/constants";
 import {
   evaluateTradePackage,
   findTradeOffers,
+  getInboundTradeOffers,
+  declineInboundTradeOffer,
   getTradeAssets,
   getTradeHistory,
   getTradeMarket,
@@ -14,6 +16,7 @@ import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
 import { ensurePlayerHeadshotFields, nationalityCode } from "../utils/playerHeadshots";
 import { nearestFlagApiSize } from "../utils/countryFlags";
 import PlayerHeadshot from "../components/PlayerHeadshot";
+import { TeamIdentityTag } from "../components/teamIdentity/TeamIdentity";
 import PS1PlayerPortrait from "../components/portraits/PS1PlayerPortrait";
 import { getTeamPortraitColors } from "../components/portraits/ps1PortraitUtils";
 import { normalizeRosterBrowserPlayer } from "./RosterScreen";
@@ -311,19 +314,6 @@ function TradeFlagBadge({ player, size = "sm" }) {
   return null;
 }
 
-function TradeValueChip({ item, compact = false, className = "" }) {
-  const label = assetValueLabel(item);
-  const pct = assetValuePct(item);
-  const tierClass = assetValueTierClass(item);
-  return (
-    <div className={`trade-value-chip ${tierClass} ${compact ? "compact" : ""} ${className}`.trim()}>
-      <span className="trade-value-chip-label">{label}</span>
-      <div className="trade-value-chip-track" aria-hidden="true">
-        <div className="trade-value-chip-fill" style={{ width: `${pct}%` }} />
-      </div>
-    </div>
-  );
-}
 
 const TRADE_VALUE_FORMULA_VERSION = 12;
 
@@ -423,25 +413,6 @@ function resolveBackendTradeValue(row, tradeAssets, teamId) {
   };
 }
 
-function tradeBreakdownChips(breakdown) {
-  const b = breakdown || {};
-  const labels = [
-    ["talent", "Talent", b.talent ?? b.base],
-    ["age", "Age", b.age],
-    ["contract", "Contract", b.contract],
-    ["team_need", "Need", b.team_need],
-    ["potential", "Potential", b.potential],
-    ["prospect_upside", "Upside", b.prospect_upside],
-    ["rental", "Rental", b.rental],
-    ["elc", "ELC", b.elc],
-    ["cap_dump", "Cap dump", b.cap_dump],
-    ["injury", "Injury", b.injury],
-    ["risk", "Risk", b.risk],
-  ];
-  return labels
-    .filter(([, , v]) => v != null && Number(v) !== 0)
-    .map(([key, label, v]) => ({ key, label, value: Number(v) }));
-}
 
 function computeFanReaction({ userTeam, userOutgoing, evaluation, franchiseState }) {
   const baseRaw =
@@ -1418,13 +1389,6 @@ function formatCapCompact(value) {
   return n < 0 ? `-${abs}` : abs;
 }
 
-function ovrRingTone(ovr) {
-  if (ovr >= 90) return "elite";
-  if (ovr >= 84) return "strong";
-  if (ovr >= 78) return "normal";
-  if (ovr >= 70) return "muted";
-  return "warn";
-}
 
 function contenderStatusLabel(direction, row, franchiseState) {
   // Frontend fallback when backend outlook_label is unavailable.
@@ -1802,30 +1766,7 @@ function tagReason(reason) {
   return { tag: "INFO", text: reason };
 }
 
-function verdictLabel(verdict) {
-  const v = String(verdict || "").toLowerCase();
-  const map = {
-    accepted: "ACCEPTED",
-    rejected: "REJECTED",
-    needs_adjustment: "NEEDS ADJUSTMENT",
-    cap_illegal: "CAP ILLEGAL",
-    roster_illegal: "ROSTER ILLEGAL",
-    player_unavailable: "PLAYER UNAVAILABLE",
-    asset_not_owned: "ASSET NOT OWNED",
-    ntc_nmc_conflict: "NTC/NMC CONFLICT",
-    trade_value_too_low: "TRADE VALUE TOO LOW",
-    blocked: "BLOCKED",
-  };
-  return map[v] || (v ? v.replace(/_/g, " ").toUpperCase() : "PENDING");
-}
 
-function verdictTone(verdict) {
-  const v = String(verdict || "").toLowerCase();
-  if (v === "accepted") return "good";
-  if (v === "needs_adjustment") return "warn";
-  if (v === "rejected" || v.includes("illegal") || v.includes("conflict") || v === "blocked") return "bad";
-  return "neutral";
-}
 
 function getEvaluationReasons(evaluation) {
   const blocking = safeArray(evaluation?.rejection_reasons);
@@ -1936,20 +1877,6 @@ function findAssetInPackage(asset, leftAssets, rightAssets) {
   return null;
 }
 
-function assetMiniTags(item) {
-  const tags = [];
-  if (item.locker_room_cancer || item.brady_tkachuk_chaos || String(item.name || "").toUpperCase().includes("CANCER")) {
-    tags.push("CANCER");
-  }
-  if (item.tradeable === false) tags.push("Blocked");
-  else if (item.protection && item.protection !== "None") tags.push(item.protection);
-  const ct = String(item.contractType || "").toLowerCase();
-  if (ct.includes("entry")) tags.push("ELC");
-  if (item.is_injured) tags.push("Injured");
-  if (item.tradeValue != null && item.tradeValue < 0) tags.push("Toxic");
-  else if (item.tradeValue != null && item.tradeValue >= 75) tags.push("High Value");
-  return tags.slice(0, 3);
-}
 
 function emptySlots(n = SLOTS) {
   return Array.from({ length: n }, () => null);
@@ -1996,16 +1923,6 @@ function PickIcon({ round, year, className = "" }) {
   );
 }
 
-function RatingPill({ label, value, accent }) {
-  return (
-    <div className="trade-rating-pill">
-      <span className="trade-rating-label">{label}</span>
-      <span className="trade-rating-value" style={accent ? { color: accent } : undefined}>
-        {value ?? "—"}
-      </span>
-    </div>
-  );
-}
 
 function parseDragPayload(event) {
   try {
@@ -2180,9 +2097,6 @@ function TradeSlot({
   );
 }
 
-function TradeValueBadge({ item }) {
-  return <TradeValueChip item={item} compact />;
-}
 
 function assetSortValue(item) {
   const tv = Number(item?.tradeValue ?? item?.value_hint);
@@ -2416,15 +2330,6 @@ function gmInterestQualitative(evaluation, partnerTeamId) {
   return "Low";
 }
 
-function proposalStatusQualitative(evaluation) {
-  if (!evaluation) return "—";
-  const reasons = safeArray(evaluation.rejection_reasons).join(" ").toLowerCase();
-  if (evaluation.accepted && evaluation.can_execute) return "Accepted";
-  if (!evaluation.can_execute) return "Blocked";
-  if (!evaluation.accepted) return "Rejected";
-  if (reasons.includes("reject")) return "Rejected";
-  return "Rejected";
-}
 
 function shortReviewVerdict(evaluation) {
   if (!evaluation) return "PENDING";
@@ -2557,11 +2462,6 @@ function partnerSoftProtectedConflict(partnerOutgoing, softNames) {
     .map((a) => a.name);
 }
 
-function capReviewStatus(userCap) {
-  const after = Number(userCap?.after_usable ?? userCap?.projectedCapSpace);
-  if (!Number.isFinite(after)) return "—";
-  return after >= 0 ? "OK" : "BAD";
-}
 
 function gmReviewShort(evaluation, partnerTeamId) {
   const raw = gmInterestQualitative(evaluation, partnerTeamId);
@@ -2583,30 +2483,7 @@ function fansReviewTone(fanMeter) {
   return "good";
 }
 
-function fanFactorReviewChips(factors) {
-  const out = [];
-  safeArray(factors).slice(0, 3).forEach((f) => {
-    const s = String(f || "").toLowerCase();
-    if (s.includes("star")) out.push("STAR");
-    else if (s.includes("pick") || s.includes("1st") || s.includes("first")) out.push("PICK");
-    else if (s.includes("captain")) out.push("CAP");
-    else if (s.includes("fan")) out.push("FANS");
-    else if (s.includes("rental")) out.push("RENT");
-    else if (s.includes("rival")) out.push("RIVAL");
-  });
-  return [...new Set(out)].slice(0, 2);
-}
 
-function riskReviewChip(evaluation) {
-  const reasons = getEvaluationReasons(evaluation);
-  const text = reasons.map((r) => String(r.text || r.tag || r)).join(" ").toLowerCase();
-  if (text.includes("cap")) return "CAP";
-  if (text.includes("clause") || text.includes("ntc") || text.includes("nmc")) return "CLAUSE";
-  if (text.includes("pick")) return "PICK";
-  if (text.includes("value")) return "VALUE";
-  if (text.includes("roster") || text.includes("slot")) return "ROSTER";
-  return "LOW";
-}
 
 function reviewReasonChips(evaluation) {
   const chips = [];
@@ -2623,21 +2500,8 @@ function reviewReasonChips(evaluation) {
   return [...new Set(chips)].slice(0, 3);
 }
 
-function leagueReviewStatus(tradeHistory, tradeMarket) {
-  const recent = safeArray(tradeHistory).length
-    ? safeArray(tradeHistory)
-    : safeArray(tradeMarket?.recent_trades);
-  return recent.length ? "ACTIVE" : "QUIET";
-}
 
-function capReviewTone(userCap) {
-  return capReviewStatus(userCap) === "BAD" ? "bad" : "good";
-}
 
-function riskReviewTone(evaluation) {
-  const chip = riskReviewChip(evaluation);
-  return chip === "LOW" ? "good" : "bad";
-}
 
 function sortPoolByValue(list) {
   return [...safeArray(list)].sort(compareAssetsByTradeValue);
@@ -3106,234 +2970,11 @@ function AssetPool({
   );
 }
 
-function CompactBackendFeedback({ evaluation, expanded, onToggle }) {
-  const reasons = getEvaluationReasons(evaluation);
-  if (!reasons.length) return null;
-  const visible = reasons.slice(0, 3);
-  const extra = reasons.length - visible.length;
 
-  return (
-    <div className="trade-hub-feedback">
-      {visible.map((r, i) => (
-        <span key={`${r.tag}-${i}`} className={`trade-hub-tag trade-hub-tag-${r.tag.toLowerCase()}`}>
-          [{r.tag}] {r.text}
-        </span>
-      ))}
-      {extra > 0 && !expanded && (
-        <button type="button" className="trade-hub-tag-more" onClick={onToggle}>
-          +{extra} MORE
-        </button>
-      )}
-      {expanded &&
-        reasons.slice(3).map((r, i) => (
-          <span key={`x-${r.tag}-${i}`} className={`trade-hub-tag trade-hub-tag-${r.tag.toLowerCase()}`}>
-            [{r.tag}] {r.text}
-          </span>
-        ))}
-    </div>
-  );
-}
 
-function TradeReportPanel({ evaluation, userTeamId, partnerTeam }) {
-  if (!evaluation || !userTeamId) return null;
-  const verdict = evaluation.verdict || (evaluation.accepted ? "accepted" : evaluation.can_execute ? "rejected" : "blocked");
-  const tone = verdictTone(verdict);
-  const userBd = evaluation.asset_breakdown?.user || {};
-  const conf = Math.round((Number(evaluation.scouting_confidence) || 1) * 100);
-  const counters = safeArray(evaluation.suggested_counteroffers);
 
-  return (
-    <div className="trade-hub-report-panel">
-      <div className={`trade-hub-verdict trade-hub-verdict-${tone}`}>
-        {verdictLabel(verdict)}
-      </div>
-      <p className="trade-hub-explanation">{evaluation.explanation || "Add assets to evaluate this trade."}</p>
-      <div className="trade-hub-report-grid">
-        <div className="trade-hub-report-stat">
-          <span className="trade-hub-report-label">YOU GET</span>
-          <span className="trade-hub-report-value">{Math.round(Number(userBd.incoming_total) || 0)}</span>
-        </div>
-        <div className="trade-hub-report-stat">
-          <span className="trade-hub-report-label">YOU GIVE</span>
-          <span className="trade-hub-report-value">{Math.round(Number(userBd.outgoing_total) || 0)}</span>
-        </div>
-        <div className="trade-hub-report-stat">
-          <span className="trade-hub-report-label">NET</span>
-          <span className={`trade-hub-report-value ${Number(userBd.net) >= 0 ? "pos" : "neg"}`}>
-            {Number(userBd.net) >= 0 ? "+" : ""}{Math.round(Number(userBd.net) || 0)}
-          </span>
-        </div>
-        <div className="trade-hub-report-stat">
-          <span className="trade-hub-report-label">SCOUT CONF</span>
-          <span className="trade-hub-report-value">{conf}%</span>
-        </div>
-      </div>
-      {counters.length > 0 && (
-        <div className="trade-hub-counteroffers">
-          <div className="trade-hub-counter-title">SUGGESTED ADJUSTMENTS</div>
-          {counters.map((c, i) => (
-            <div key={i} className="trade-hub-counter-chip">
-              <strong>{c.label}</strong> — {c.explanation}
-            </div>
-          ))}
-        </div>
-      )}
-      {partnerTeam && evaluation.immersion?.partner_needs?.length > 0 && (
-        <div className="trade-hub-immersion-line">
-          {partnerTeam.abbr} needs: {evaluation.immersion.partner_needs.join(", ")}
-        </div>
-      )}
-    </div>
-  );
-}
 
-function CapImpactPanel({ evaluation, userTeamId, partnerId }) {
-  if (!evaluation?.cap_impact) return null;
-  const userCap = evaluation.cap_impact[userTeamId];
-  const partnerCap = evaluation.cap_impact[partnerId];
-  if (!userCap && !partnerCap) return null;
 
-  const Card = ({ label, cap }) => {
-    if (!cap) return null;
-    const ok = Number(cap.after_usable ?? cap.projectedCapSpace) >= 0;
-    const incoming = cap.incoming_cap_m ?? cap.incoming;
-    const outgoing = cap.outgoing_cap_m ?? cap.outgoing;
-    return (
-      <div className={`trade-hub-cap-card ${ok ? "" : "bad"}`}>
-        <div className="trade-hub-cap-card-label">{label}</div>
-        <div className="trade-hub-cap-big">{formatMoneyM(cap.after_usable ?? cap.projectedCapSpace)}</div>
-        <div className="trade-hub-cap-sub">
-          {formatMoneyM(cap.before_usable ?? cap.snapshot?.usableCapSpace)} → after trade
-          {cap.delta != null && (
-            <span className={Number(cap.delta) >= 0 ? "pos" : "neg"}>
-              {" "}({Number(cap.delta) >= 0 ? "+" : ""}{formatMoneyShort(cap.delta)})
-            </span>
-          )}
-        </div>
-        {cap.after_deadline_space != null && (
-          <div className="trade-hub-cap-sub muted">
-            Deadline accrual: {formatMoneyM(cap.after_deadline_space)}
-            {cap.proration_factor != null && cap.proration_factor < 0.99 && (
-              <span> · prorate {(Number(cap.proration_factor) * 100).toFixed(0)}%</span>
-            )}
-          </div>
-        )}
-        {cap.ltir_relief_used && (
-          <div className="trade-hub-cap-sub warn">Fits under LTIR effective limit</div>
-        )}
-        {(incoming != null || outgoing != null) && (
-          <div className="trade-hub-cap-flow">
-            {outgoing != null && <span>Out {formatMoneyShort(outgoing)}</span>}
-            {incoming != null && <span>In {formatMoneyShort(incoming)}</span>}
-            {cap.retained_m != null && Number(cap.retained_m) > 0 && (
-              <span>Retained {formatMoneyShort(cap.retained_m)}</span>
-            )}
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  return (
-    <div className="trade-hub-cap-panel">
-      <div className="trade-hub-panel-title">CAP IMPACT</div>
-      <div className="trade-hub-cap-cards">
-        <Card label="YOUR TEAM" cap={userCap} />
-        <Card label="PARTNER" cap={partnerCap} />
-      </div>
-    </div>
-  );
-}
-
-function TeamNeedsPanel({ team, evaluation }) {
-  if (!team) return null;
-  const summary = team.needsSummary || {};
-  const needs = safeArray(summary.needs_short);
-  const shopping = safeArray(summary.shopping);
-  const values = safeArray(summary.values);
-  const impact = evaluation?.team_needs_impact?.[team.id];
-
-  return (
-    <div className="trade-hub-needs-panel">
-      <div className="trade-hub-panel-title">{team.abbr} PROFILE</div>
-      <div className="trade-hub-chip-row">
-        <span className="trade-hub-chip trade-hub-chip-window">{team.direction}</span>
-        {needs.map((n) => (
-          <span key={n} className="trade-hub-chip trade-hub-chip-need">NEED: {n}</span>
-        ))}
-      </div>
-      {shopping.length > 0 && (
-        <div className="trade-hub-needs-line">Shopping: {shopping.join(" · ")}</div>
-      )}
-      {values.length > 0 && (
-        <div className="trade-hub-needs-line">Values: {values.join(" · ")}</div>
-      )}
-      {impact?.strengthens?.length > 0 && (
-        <div className="trade-hub-needs-line ok">Strengthens: {impact.strengthens.join(", ")}</div>
-      )}
-      {impact?.weakens?.length > 0 && (
-        <div className="trade-hub-needs-line warn">Weakens: {impact.weakens.join(", ")}</div>
-      )}
-    </div>
-  );
-}
-
-function ValueBreakdownPanel({ evaluation, userTeamId }) {
-  const assets = evaluation?.asset_breakdown?.user;
-  if (!assets) return null;
-
-  const renderAsset = (a, sign) => {
-    const valueItem = {
-      tradeValue: a.trade_value ?? a.total,
-      valueTier: a.value_tier,
-    };
-    return (
-      <div key={`${sign}-${a.asset_id || a.name}`} className={`trade-hub-breakdown-row ${sign === "+" ? "in" : "out"}`}>
-        <span>{sign} {a.name}</span>
-        <TradeValueChip item={valueItem} compact />
-      </div>
-    );
-  };
-
-  return (
-    <div className="trade-hub-breakdown-panel">
-      <div className="trade-hub-panel-title">PACKAGE ASSETS</div>
-      <div className="trade-hub-breakdown-list">
-        {safeArray(assets.outgoing).map((a) => renderAsset(a, "−"))}
-        {safeArray(assets.incoming).map((a) => renderAsset(a, "+"))}
-      </div>
-    </div>
-  );
-}
-
-function LeaguePulsePanel({ market, partnerTeam }) {
-  if (!market) return null;
-  const recent = safeArray(market.recent_trades).slice(0, 3);
-  return (
-    <div className="trade-hub-league-panel">
-      <div className="trade-hub-panel-title">LEAGUE PULSE</div>
-      <div className="trade-hub-chip-row">
-        <span className={`trade-hub-chip trade-hub-chip-market-${String(market.market_temperature || "cool").toLowerCase()}`}>
-          MARKET: {market.market_temperature || "Cool"}
-        </span>
-        {partnerTeam && (
-          <span className="trade-hub-chip">{partnerTeam.abbr} · {partnerTeam.direction}</span>
-        )}
-      </div>
-      {recent.length > 0 ? (
-        <div className="trade-hub-recent-trades">
-          {recent.map((t, i) => (
-            <div key={i} className="trade-hub-recent-line">
-              {t.headline || t.summary || "League trade completed"}
-            </div>
-          ))}
-        </div>
-      ) : (
-        <div className="trade-hub-recent-line muted">No recent trades on record</div>
-      )}
-    </div>
-  );
-}
 
 function FanReactionBadge({ score, compact = true }) {
   const s = Number(score) || 0;
@@ -3390,11 +3031,6 @@ function FanVitriolMeter({ fanData, score, hasAssets, compact = false }) {
   );
 }
 
-function TradeOutcomeBadge({ evaluation, hasAssets }) {
-  const label = tradeOutcomeLabel(evaluation, hasAssets);
-  const tone = tradeOutcomeTone(evaluation, hasAssets);
-  return <span className={`trade-outcome-badge trade-outcome-${tone}`}>{label}</span>;
-}
 
 function tradeValueComparisonLabel(userGive, partnerGive, partnerAbbr) {
   const left = Number(userGive) || 0;
@@ -3598,169 +3234,8 @@ function DynamicTradeAnalysis({
   );
 }
 
-function CapManagementPanel({ team, capImpact, evaluation, teamId, label }) {
-  if (!team) return null;
-  const capAfter = capImpact?.after_usable;
-  const capDelta = capImpact?.delta;
-  const roster = evaluation?.roster_impact?.[teamId];
-  const capDetail = team.capDetail || {};
-  const retUsed = capDetail.retained_slots_used ?? capDetail.retainedSlotsUsed;
-  const retMax = capDetail.retained_slots_max ?? capDetail.retainedSlotsMax ?? 3;
 
-  const rows = [
-    { label: "Cap Space", value: formatMoneyM(team.capSpace), tone: team.capSpace >= 0 ? "good" : "bad" },
-    { label: "After Trade", value: capAfter != null ? formatMoneyM(capAfter) : "—", tone: capAfter == null ? "" : capAfter >= 0 ? "good" : "bad" },
-    { label: "Delta", value: capDelta != null ? `${capDelta >= 0 ? "+" : ""}${formatMoneyShort(capDelta)}` : "—", tone: capDelta == null ? "" : capDelta <= 0 ? "good" : "bad" },
-    {
-      label: "NHL Roster",
-      value: roster
-        ? `${roster.after}/23${Number(roster.send_downs) > 0 ? ` · ${roster.send_downs} to AHL` : ""}`
-        : `${team.rosterCount}/23`,
-      tone: roster?.after > 23 ? "bad" : Number(roster?.send_downs) > 0 ? "" : "good",
-    },
-  ];
-  if (capDetail.projected_deadline_space != null) {
-    rows.push({
-      label: "Deadline Room",
-      value: formatMoneyM(capDetail.projected_deadline_space),
-      tone: Number(capDetail.projected_deadline_space) >= 0 ? "good" : "bad",
-    });
-  }
-  if (capDetail.is_using_ltir || Number(capDetail.ltir_pool) > 0) {
-    rows.push({
-      label: "LTIR Pool",
-      value: formatMoneyM(capDetail.ltir_pool || 0),
-      tone: "warn",
-    });
-  }
-  if (retUsed != null) {
-    rows.push({
-      label: "Retained Slots",
-      value: `${retUsed}/${retMax}`,
-      tone: Number(retUsed) >= Number(retMax) ? "bad" : "good",
-    });
-  }
 
-  return (
-    <div className="trade-cap-mgmt-panel">
-      <div className="trade-hub-panel-title">{label} CAP</div>
-      <div className="trade-cap-mgmt-grid trade-cap-mgmt-grid-compact">
-        {rows.map((row) => (
-          <div key={row.label} className={`trade-cap-mgmt-row ${row.tone}`}>
-            <span>{row.label}</span>
-            <strong>{row.value}</strong>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function TradeLegacyRevisitedCards({ franchiseState }) {
-  const history = safeArray(franchiseState?.team?.fan_profile?.trade_reaction_history);
-  const cards = history
-    .filter((e) => e && (e.review_notes?.length || e.current_verdict !== "Too Early"))
-    .slice(-4)
-    .reverse();
-  if (!cards.length) return null;
-  return (
-    <>
-      <div className="trade-war-subtitle">TRADE REVISITED</div>
-      {cards.map((entry, i) => {
-        const verdict = entry.current_verdict || entry.verdict || "Too Early";
-        const delta = Number(entry.legacy_score_delta ?? (
-          Number(entry.current_fan_reaction ?? 0) - Number(entry.initial_fan_reaction ?? 0)
-        ));
-        const note = safeArray(entry.review_notes).slice(-1)[0] || entry.incoming_assets_summary || "";
-        const deltaText = Number.isFinite(delta) && delta !== 0 ? `Fan reaction ${delta > 0 ? "+" : ""}${delta}` : "";
-        return (
-          <div key={entry.trade_id || i} className="trade-legacy-card">
-            <div className="trade-legacy-verdict">{verdict}</div>
-            {note ? <div className="trade-war-line muted">{note}</div> : null}
-            {deltaText ? <div className="trade-war-line trade-legacy-delta">{deltaText}</div> : null}
-          </div>
-        );
-      })}
-    </>
-  );
-}
-
-function WarRoomPanel({
-  market,
-  tradeHistory,
-  partnerTeam,
-  meta,
-  partnerId,
-  userTeam,
-  userOutgoing,
-  evaluation,
-  franchiseState,
-}) {
-  const recent = safeArray(tradeHistory).length
-    ? safeArray(tradeHistory).slice(-6).reverse()
-    : safeArray(market?.recent_trades).slice(0, 4);
-  const picks = safeArray(meta?.picks?.[partnerId]).slice(0, 6);
-  const prospects = safeArray(meta?.prospects?.[partnerId]).slice(0, 3);
-  const fanReaction = resolveFanReaction({
-    userTeam,
-    userOutgoing,
-    evaluation,
-    franchiseState,
-    hasProposed: Boolean(evaluation),
-  });
-  const fanScore = fanReaction.score;
-
-  return (
-    <div className="trade-war-room">
-      <div className="trade-war-room-col">
-        <div className="trade-hub-panel-title">RECENT TRADES</div>
-        {recent.length ? recent.map((t, i) => (
-          <div key={t.trade_id || i} className="trade-war-line">
-            {t.headline || t.summary || "Trade completed"}
-            {t.season_year ? <span className="trade-war-meta"> · {t.season_year}</span> : null}
-          </div>
-        )) : <div className="trade-war-line muted">No recent trades</div>}
-        <div className="trade-war-subtitle">PARTNER PICKS</div>
-        {picks.length ? picks.map((p) => (
-          <div key={p.id} className="trade-war-line">
-            {p.year} {roundLabel(p.round)}
-            {" · "}{p.originalTeamAbbr || inferLogoAbbr(p.original_team_id, p.original_team_id)}
-            {pickRangeDisplay(p) ? ` · ${pickRangeDisplay(p)}` : ""}
-          </div>
-        )) : <div className="trade-war-line muted">No picks loaded</div>}
-      </div>
-      <div className="trade-war-room-col">
-        <div className="trade-hub-panel-title">FAN PULSE</div>
-        <div className={`trade-war-meter ${fanScore < 40 ? "low" : fanScore >= 70 ? "high" : ""}`}>
-          <span>Reaction</span>
-          <div className="trade-war-meter-bar">
-            <div className={fanScore < 40 ? "low" : ""} style={{ width: `${fanScore}%` }} />
-          </div>
-          <strong>{fanScore}%</strong>
-        </div>
-        <FanReasonChips factors={fanReaction.factors} />
-        <TradeLegacyRevisitedCards franchiseState={franchiseState} />
-        <p className="trade-war-line muted trade-fan-hint">
-          {fanReaction.summary || (fanScore < 40
-            ? "Fans may push back — trading popular or young core pieces."
-            : fanScore >= 70
-              ? "Marketable move — fan base likely supportive."
-              : "Neutral — no major fan backlash expected.")}
-        </p>
-        {prospects.length > 0 && (
-          <>
-            <div className="trade-war-subtitle">TOP YOUTH (≤21)</div>
-            {prospects.map((p) => (
-              <div key={p.id} className="trade-war-line">
-                {p.name} · {displayOvr(p)} · {assetValueLabel(p)}
-              </div>
-            ))}
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
 
 function AssetContextMenu({
   asset,
@@ -4248,12 +3723,6 @@ function humanizeFanFactor(raw) {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-function fanBacklashScaleLabel(heat) {
-  const h = Number(heat) || 0;
-  if (h >= 66) return "HIGH";
-  if (h >= 33) return "MEDIUM";
-  return "LOW";
-}
 
 function gmReadDisplayLabel(gmRead, evaluation, partnerTeamId) {
   const raw = String(gmRead?.label || gmReviewShort(evaluation, partnerTeamId) || "").toUpperCase();
@@ -4263,9 +3732,6 @@ function gmReadDisplayLabel(gmRead, evaluation, partnerTeamId) {
   return "Interest unclear";
 }
 
-function gmReadExplainer(label) {
-  return gmReadDisplayLabel({ label }, null, null);
-}
 
 function playerLastName(name) {
   const parts = String(name || "").trim().split(/\s+/);
@@ -4279,15 +3745,6 @@ function isFranchisePlayer(player) {
   return ovr >= 88 || tier.includes("FRANCHISE");
 }
 
-function untouchableReasonIcon(reason) {
-  const r = String(reason || "").toLowerCase();
-  if (r.includes("no-movement") || r.includes("nmc")) return "NMC";
-  if (r.includes("no-trade") || r.includes("ntc")) return "NTC";
-  if (r.includes("young core")) return "CORE";
-  if (r.includes("captain")) return "C";
-  if (r.includes("franchise") || r.includes("elite") || r.includes("cornerstone")) return "STAR";
-  return "LOCK";
-}
 
 function resolvePickOriginTeam(asset, meta) {
   const teamLookup = Object.fromEntries(safeArray(meta?.teams).map((t) => [String(t.id), t]));
@@ -4394,15 +3851,6 @@ function gmReadDetail(mainProblem, gmRead, evaluation, partnerTeamId) {
   return "";
 }
 
-function resolveFanTradeSubject(userOutgoing, fanReasons) {
-  const players = safeArray(userOutgoing).filter((a) => a?.type === "player");
-  const star = players.find((p) => Number(p.ovr) >= 88)
-    || players.find((p) => Number(p.ovr) >= 82);
-  if (star?.name) return `Fans erupt if ${playerLastName(star.name)} moves`;
-  const first = safeArray(userOutgoing).find((a) => a?.type === "pick" && Number(a.round) === 1);
-  if (first) return "Fans hate moving a 1st";
-  return fanReasons[0] || "";
-}
 
 function valueGapQualitativeLabel(netGap, balanceLabel, isRejected, primaryKey = "") {
   const bal = String(balanceLabel || "").toUpperCase();
@@ -4864,10 +4312,11 @@ function buildFixActions(evaluation, rd, noTouchConflict, partnerOutgoing, userO
     safeArray(evaluation?.suggested_counteroffers).slice(0, 1).forEach((c) => {
       actions.push({
         action: "counter",
-        label: "Add Pick",
+        label: c.add_asset ? shortenReviewHint(c.label, 28) : "Add Pick",
         hint: shortenReviewHint(c.explanation || c.summary || "Closes value gap", 36),
         rank: 1,
         fixType: "pick",
+        addAsset: c.add_asset || null,
       });
     });
     if (!actions.length) {
@@ -4962,6 +4411,7 @@ function buildFixSuggestions(evaluation, rd) {
     playerName: a.playerName,
     side: a.side,
     rank: a.rank,
+    addAsset: a.addAsset || null,
   }));
 }
 
@@ -4976,12 +4426,6 @@ function isHardProtectedTradeAsset(player) {
   return false;
 }
 
-function partnerUntouchableConflict(partnerOutgoing, untouchableNames) {
-  const blocked = new Set(untouchableNames.map((n) => String(n).toLowerCase()));
-  return safeArray(partnerOutgoing)
-    .filter((a) => a?.type === "player" && blocked.has(String(a.name).toLowerCase()))
-    .map((a) => a.name);
-}
 
 function formatReviewBulletLabel(raw) {
   const s = String(raw || "").trim();
@@ -5036,96 +4480,8 @@ function lookupReviewPlayer(name, lookup) {
   return lookup[name] || lookup[String(name).toLowerCase()] || null;
 }
 
-function splitReviewBullets(...parts) {
-  const out = [];
-  parts.forEach((p) => {
-    if (Array.isArray(p)) {
-      p.forEach((x) => {
-        String(x || "").split(" · ").forEach((s) => {
-          const t = s.trim();
-          if (t) out.push(t);
-        });
-      });
-      return;
-    }
-    if (typeof p === "string" && p.trim()) {
-      p.split(" · ").forEach((s) => {
-        const t = s.trim();
-        if (t) out.push(t);
-      });
-    }
-  });
-  return dedupeReviewLines(out);
-}
 
-function TradeReviewInsightItem({ text, playerLookup, showHeadshot }) {
-  const label = formatReviewBulletLabel(text);
-  const player = isLikelyPlayerName(label) ? lookupReviewPlayer(label, playerLookup) : null;
-  const ovr = player ? displayOvr(player) : null;
-  if (player && showHeadshot) {
-    return (
-      <li className="trade-review-insight-player">
-        <PlayerHeadshot
-          player={ensurePlayerHeadshotFields(player)}
-          size="sm"
-          className="trade-review-insight-headshot"
-          flag={null}
-          number={null}
-        />
-        <span className="trade-review-insight-player-name">{label}</span>
-        {ovr && ovr !== "—" ? <strong className="trade-review-insight-ovr">{ovr}</strong> : null}
-      </li>
-    );
-  }
-  return <li>{label}</li>;
-}
 
-function TradeReviewInsight({
-  label,
-  value,
-  subline = "",
-  lines = [],
-  chips = [],
-  valueClass = "",
-  playerLookup = null,
-  showPlayerHeadshots = false,
-  meter,
-  spread = false,
-}) {
-  const items = dedupeReviewLines(Array.isArray(lines) ? lines : splitReviewBullets(lines));
-  const chipList = safeArray(chips).filter(Boolean).slice(0, 4);
-  const pct = clamp(Math.round(Number(meter) || 0), 0, 100);
-  const showMeter = Number.isFinite(Number(meter));
-  return (
-    <div className={`trade-review-insight ${valueClass} ${spread ? "spread" : ""}`}>
-      <div className="trade-hub-panel-title">{label}</div>
-      {value ? <div className={`trade-review-insight-value ${valueClass}`}>{value}</div> : null}
-      {showMeter ? (
-        <div className="trade-review-insight-meter">
-          <div className="trade-review-insight-meter-fill" style={{ width: `${pct}%` }} />
-        </div>
-      ) : null}
-      {subline ? <div className="trade-review-insight-sub">{subline}</div> : null}
-      {items.length ? (
-        <ul className="trade-review-insight-list">
-          {items.map((item) => (
-            <TradeReviewInsightItem
-              key={item}
-              text={item}
-              playerLookup={playerLookup}
-              showHeadshot={showPlayerHeadshots && isLikelyPlayerName(item)}
-            />
-          ))}
-        </ul>
-      ) : null}
-      {chipList.length ? (
-        <div className="trade-hub-chip-row trade-review-insight-chips">
-          {chipList.map((c) => <span key={c} className="trade-hub-chip trade-hub-chip-need">{c}</span>)}
-        </div>
-      ) : null}
-    </div>
-  );
-}
 
 function reviewDisplayChips(block, preferPlayers = true) {
   const players = dedupeReviewLines(safeArray(block?.players).map(formatReviewBulletLabel));
@@ -5383,118 +4739,10 @@ function resolveTradeReviewData({
   return draft;
 }
 
-function TradeReviewReadout({ label, value, meter, subline, tone = "neutral" }) {
-  const pct = clamp(Math.round(Number(meter) || 0), 0, 100);
-  const showMeter = Number.isFinite(Number(meter));
-  return (
-    <div className={`trade-review-readout ${tone}`}>
-      <div className="trade-review-readout-head">
-        <span>{label}</span>
-        <strong>{value}</strong>
-      </div>
-      {subline ? <p className="trade-review-readout-sub">{subline}</p> : null}
-      {showMeter ? (
-        <div className="trade-review-readout-meter">
-          <div className="trade-review-readout-meter-fill" style={{ width: `${pct}%` }} />
-        </div>
-      ) : null}
-    </div>
-  );
-}
 
-function TradeReviewTextCard({ label, summary, chips, tone = "neutral" }) {
-  const list = safeArray(chips).filter(Boolean).slice(0, 4);
-  return (
-    <div className={`trade-review-text-card ${tone}`}>
-      <div className="trade-review-text-head">
-        <span>{label}</span>
-      </div>
-      {summary ? <p className="trade-review-text-summary">{summary}</p> : null}
-      {list.length > 0 && (
-        <div className="trade-review-chip-row">
-          {list.map((c) => <span key={c}>{c}</span>)}
-        </div>
-      )}
-    </div>
-  );
-}
 
-function TradeReviewMeter({ label, value, tone = "neutral", text }) {
-  const pct = clamp(Math.round(Number(value) || 0), 0, 100);
-  return (
-    <div className={`trade-review-meter-card ${tone}`}>
-      <div className="trade-review-meter-head">
-        <span>{label}</span>
-        <strong>{text}</strong>
-      </div>
-      <div className="trade-review-meter-track">
-        <div className="trade-review-meter-fill" style={{ width: `${pct}%` }} />
-      </div>
-    </div>
-  );
-}
 
-function TradeReviewInfoCard({ label, main, chips, tone = "neutral", emptyFallback = "UNKNOWN" }) {
-  const list = safeArray(chips).filter(Boolean).slice(0, 4);
-  return (
-    <div className={`trade-review-info-card ${tone}`}>
-      <div className="trade-review-info-head">
-        <span>{label}</span>
-      </div>
-      {main ? <strong className="trade-review-info-main">{main}</strong> : null}
-      <div className="trade-review-info-chips">
-        {list.length ? list.map((c) => (
-          <span key={c}>{c}</span>
-        )) : <span>{emptyFallback}</span>}
-      </div>
-    </div>
-  );
-}
 
-function TradeReviewCapCard({ data, userCap, userTeam, userOutgoing, partnerOutgoing }) {
-  let afterText = "—";
-  let deltaText = "—";
-  let tone = "neutral";
-
-  if (data && (data.projected_space_m != null || data.label)) {
-    const after = Number(data.projected_space_m);
-    const delta = Number(data.delta_m);
-    tone = data.tone || (Number.isFinite(after) ? (after >= 0 ? "good" : "bad") : "neutral");
-    afterText = Number.isFinite(after) ? formatMoneyShort(after) : "—";
-    deltaText = data.label && data.label !== "—"
-      ? data.label
-      : Number.isFinite(delta)
-        ? `${delta >= 0 ? "+" : "-"}${formatMoneyShort(Math.abs(delta))}`
-        : "—";
-  } else {
-    const explicitAfter = Number(userCap?.after_usable ?? userCap?.projectedCapSpace);
-    const explicitDelta = Number(userCap?.delta);
-    const baseCap = Number(userTeam?.capSpace);
-    const fallbackProjected = Number.isFinite(baseCap)
-      ? baseCap + packageCapDelta(userOutgoing) - packageCapDelta(partnerOutgoing)
-      : null;
-    const fallbackDelta = Number.isFinite(baseCap) && Number.isFinite(fallbackProjected)
-      ? fallbackProjected - baseCap
-      : null;
-    const after = Number.isFinite(explicitAfter) ? explicitAfter : fallbackProjected;
-    const delta = Number.isFinite(explicitDelta) ? explicitDelta : fallbackDelta;
-    const good = Number.isFinite(after) ? after >= 0 : Number.isFinite(delta) ? delta >= 0 : true;
-    tone = good ? "good" : "bad";
-    afterText = Number.isFinite(after) ? formatMoneyShort(after) : "—";
-    deltaText = Number.isFinite(delta)
-      ? `${delta >= 0 ? "+" : "-"}${formatMoneyShort(Math.abs(delta))}`
-      : "—";
-  }
-
-  return (
-    <TradeReviewInsight
-      label="CAP AFTER"
-      value={afterText}
-      lines={[`Trade impact ${deltaText}`]}
-      valueClass={tone}
-    />
-  );
-}
 
 function TradeReviewValueBar({ asset, evaluation, breakdownSide, breakdownDirection, compact }) {
   const valueItem = resolveReviewAssetValueItem(asset, evaluation, breakdownSide, breakdownDirection);
@@ -5620,20 +4868,6 @@ function TradeReviewAnchorAsset({
   );
 }
 
-function TradeReviewMiniAsset({ asset, protectedNames, meta, evaluation, breakdownSide, breakdownDirection, onClick }) {
-  return (
-    <TradeReviewAnchorAsset
-      asset={asset}
-      protectedNames={protectedNames}
-      meta={meta}
-      evaluation={evaluation}
-      breakdownSide={breakdownSide}
-      breakdownDirection={breakdownDirection}
-      onClick={onClick}
-      compact
-    />
-  );
-}
 
 function TradeReviewPackageSide({
   label,
@@ -5793,6 +5027,7 @@ function TradeReviewDrawer({
   onReset,
   onRemoveIncoming,
   onRemoveOutgoing,
+  onAddUserAsset,
   onViewTeamNeeds,
   onAssetClick,
   proposeDisabled,
@@ -5852,6 +5087,9 @@ function TradeReviewDrawer({
     if (suggestion.action === "retain") {
       onClose();
       return;
+    }
+    if (suggestion.addAsset && onAddUserAsset) {
+      onAddUserAsset(suggestion.addAsset);
     }
     onClose();
   };
@@ -6199,6 +5437,7 @@ function MarketTeamRow({ team, onOpenTalks, isPartner, info }) {
           <em className={`th-side-pill side-${side}`}>{team.tradeDirectionLabel || team.direction || "—"}</em>
         </div>
         <div className="th-mrow-meta">
+          <TeamIdentityTag teamId={team.id} abbr={team.abbr} name={team.name} compact />
           <span>{team.gmPersonality || "—"}</span>
           <NeedChips info={info} limit={2} />
         </div>
@@ -6762,6 +6001,24 @@ function TradeFinder({ meta, partnerId, onLoadOffer }) {
   const [status, setStatus] = useState("idle");
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
+  const [inbound, setInbound] = useState([]);
+
+  useEffect(() => {
+    let alive = true;
+    getInboundTradeOffers()
+      .then((d) => { if (alive) setInbound(safeArray(d?.offers)); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
+
+  const declineInbound = async (offerId) => {
+    try {
+      const d = await declineInboundTradeOffer(offerId);
+      setInbound(safeArray(d?.offers));
+    } catch (e) {
+      setInbound((rows) => rows.filter((r) => r.offer_id !== offerId));
+    }
+  };
 
   const teamById = useMemo(() => {
     const m = {};
@@ -6867,6 +6124,24 @@ function TradeFinder({ meta, partnerId, onLoadOffer }) {
       </aside>
 
       <section className="th-tfinder-results">
+        {inbound.length > 0 && (
+          <div className="th-inbound">
+            <div className="th-section-head">
+              <h3>Incoming calls</h3>
+              <span className="th-num">{inbound.length} open</span>
+            </div>
+            <p className="th-section-meta">CPU clubs phoned about your players. Each offer stays open for a few days.</p>
+            <div className="th-offer-grid has-offers">
+              {inbound.map((o) => (
+                <div key={o.offer_id} className="th-inbound-item">
+                  <p className="th-section-meta"><strong>{o.headline}</strong> · expires day {o.expires_day}</p>
+                  <FinderOfferCard offer={o} team={teamById[String(o.partner_team_id)]} onLoad={onLoadOffer} />
+                  <button type="button" className="th-ghost-btn" onClick={() => declineInbound(o.offer_id)}>Decline</button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
         <div className="th-section-head">
           <h3>{mode === "sell" ? "Offers for your asset" : "Packages they'd accept"}</h3>
           {result ? <span className="th-num">{offers.length} accepted · {result.evaluated} checked</span> : null}
@@ -6921,6 +6196,7 @@ function TeamDetailDrawer({ team, meta, partnerId, onClose }) {
           <TradeLogo team={team} size={56} />
           <div>
             <strong>{team.name}</strong>
+            <TeamIdentityTag teamId={team.id} abbr={team.abbr} name={team.name} className="is-block" />
             <span>{team.record} · {team.direction}</span>
           </div>
           <button type="button" className="trade-drawer-close" onClick={onClose}>×</button>
@@ -6981,70 +6257,8 @@ function TeamDetailDrawer({ team, meta, partnerId, onClose }) {
   );
 }
 
-function resolveTeamCardOvr(team) {
-  const base = Number.isFinite(Number(team?.ratings?.overall))
-    ? Math.round(Number(team.ratings.overall))
-    : null;
-  const health = team?.healthAdjustedRating != null && Number.isFinite(Number(team.healthAdjustedRating))
-    ? Math.round(Number(team.healthAdjustedRating))
-    : null;
-  if (base == null) return health;
-  if (health == null || health > base + 2) return base;
-  return health;
-}
 
-function TeamOvrRing({ value }) {
-  const n = Number(value);
-  const display = Number.isFinite(n) ? Math.round(n) : null;
-  const pct = display != null ? clamp(display, 0, 99) : 0;
-  const tone = display != null ? ovrRingTone(display) : "muted";
-  return (
-    <div
-      className={`trade-team-ovr-ring trade-team-ovr-${tone}`}
-      style={{ "--ovr-pct": `${pct}%` }}
-      title={display != null ? `OVR ${display}` : "OVR —"}
-    >
-      <div className="trade-team-ovr-ring-fill" />
-      <div className="trade-team-ovr-ring-inner">
-        <span className="trade-team-ovr-number">{display ?? "—"}</span>
-        <span className="trade-team-ovr-label">OVR</span>
-      </div>
-    </div>
-  );
-}
 
-function TeamIdentityCard({ team, onClick }) {
-  if (!team) return null;
-  const ovrDisplay = resolveTeamCardOvr(team);
-  const po = team.playoffOdds;
-  const hasPo = po != null && Number.isFinite(Number(po));
-  const poPct = hasPo ? clamp(Math.round(Number(po)), 0, 100) : 0;
-  const status = team.statusLabel || "—";
-
-  return (
-    <button type="button" className="trade-team-compact-card" onClick={onClick}>
-      <div className="trade-team-logo-lifted">
-        <TradeLogo team={team} size={82} />
-      </div>
-      <div className="trade-team-mainline">
-        <div className="trade-team-abbr-big">{team.abbr || team.name}</div>
-        <div className="trade-team-meta-strip">
-          <TeamOvrRing value={ovrDisplay} />
-          <div className="trade-team-meta-col">
-            <span className={`trade-team-cap-mini ${team.capSpace >= 0 ? "ok" : "bad"}`}>
-              {team.capSpace != null ? formatCapCompact(team.capSpace) : "—"}
-            </span>
-            <span className="trade-team-status-pill">{status}</span>
-            <span className="trade-team-po-pill" title={hasPo ? `${poPct}% playoff odds` : "Playoff odds unavailable"}>
-              {hasPo ? `${poPct}% PO` : "PO —"}
-              {hasPo && <span className="trade-team-po-meter" style={{ width: `${poPct}%` }} />}
-            </span>
-          </div>
-        </div>
-      </div>
-    </button>
-  );
-}
 
 function formatRosterCapacityLine(team) {
   const rc = team?.rosterCapacity || {};
@@ -7245,6 +6459,7 @@ function TeamPlayersDrawer({
           <TradeLogo team={team} size={72} />
           <div className="trade-players-header-main">
             <strong>{team.name}</strong>
+            <TeamIdentityTag teamId={team.id} abbr={team.abbr} name={team.name} className="is-block" />
             <span>{team.abbr} · Roster Assets · Click a line to add it to the package</span>
             <div className="trade-players-intel-strip">
               <span className="trade-players-intel-pill"><span>REC</span> {team.record || "—"}</span>
@@ -7678,6 +6893,7 @@ export default function TradeHub() {
 
   const [retMenu, setRetMenu] = useState(null);
   const [toast, setToast] = useState("");
+  const [confirmDeal, setConfirmDeal] = useState(null);
   const [decisionToast, setDecisionToast] = useState(null);
   const [dropTarget, setDropTarget] = useState(null);
 
@@ -8124,7 +7340,6 @@ export default function TradeHub() {
     [meta, partnerId],
   );
 
-  const partnerProtectedNames = partnerProtection.displayNames;
 
   const protectedConflict = useMemo(
     () => partnerHardProtectedConflict(partnerOutgoing, partnerProtection.hardNames),
@@ -8318,7 +7533,7 @@ export default function TradeHub() {
 
     let ev = null;
     try {
-      const evalRes = await evaluateTradePackage({ assets_by_team: assetsPayload });
+      const evalRes = await evaluateTradePackage({ assets_by_team: assetsPayload, proposal: true });
       ev = evalRes?.evaluation || evalRes;
       setEvaluation(ev);
       if (ev?.trade_id) {
@@ -8353,6 +7568,18 @@ export default function TradeHub() {
         const sentLine = userOutgoing.map(assetToastLabel).filter(Boolean).join(" · ");
         const gotLine = partnerOutgoing.map(assetToastLabel).filter(Boolean).join(" · ");
 
+        // U23: they said yes — confirm before the deal is final.
+        const confirmed = await new Promise((resolve) => {
+          setConfirmDeal({ sentLine, gotLine, partnerName: partnerTeam?.name || partnerTeam?.abbr || "Partner", resolve });
+        });
+        setConfirmDeal(null);
+        if (!confirmed) {
+          setSubmitStatus("idle");
+          setToast("DEAL ON THE TABLE — NOT SIGNED");
+          setTimeout(() => setToast(""), 1800);
+          return;
+        }
+
         const res = await submitTradePackage({ assets_by_team: assetsPayload });
         if (res?.state) {
           setFranchiseState((prev) => (prev ? { ...prev, ...res.state } : res.state));
@@ -8386,6 +7613,13 @@ export default function TradeHub() {
         };
 
         showDecisionToast(acceptedToast);
+        const rosterWarn = res?.trade_result?.roster_warning;
+        if (rosterWarn?.message) {
+          setTimeout(() => {
+            setToast(String(rosterWarn.message).toUpperCase());
+            setTimeout(() => setToast(""), 4200);
+          }, 2200);
+        }
 
         setSubmitStatus("accepted");
         setLeftAssets(emptySlots());
@@ -8510,6 +7744,28 @@ export default function TradeHub() {
   const openTalks = (teamId) => {
     setPartnerId(String(teamId));
     setHubView("negotiate");
+  };
+
+  // U19: a concrete counter ("Add your 2027 2nd-round pick") drops that asset into your side.
+  const addUserAssetFromCounter = (a) => {
+    if (!a || !meta) return;
+    const userTid = String(meta.userTeamId);
+    const { players, picks } = orgAssetsFor(meta, userTid);
+    const pool = a.type === "pick" ? picks : players;
+    const item = pool.find((x) => String(x.id || x.pick_id) === String(a.id));
+    if (!item) return;
+    const prepared = prepareAssetForSide(item, "left", userTid) || { ...item, type: a.type, teamId: userTid };
+    setLeftAssets((prev) => {
+      const list = [...safeArray(prev)];
+      const at = list.findIndex((x) => !x);
+      if (at >= 0) list[at] = prepared;
+      else if (list.length < SLOTS) list.push(prepared);
+      return list;
+    });
+    setEvaluation(null);
+    setHasProposed(false);
+    setToast("COUNTER ADDED — PROPOSE AGAIN");
+    setTimeout(() => setToast(""), 1800);
   };
 
   const loadFinderOffer = (offer) => {
@@ -8916,6 +8172,25 @@ export default function TradeHub() {
         />
       )}
 
+      {confirmDeal && (
+        <div className="trade-ctx-overlay" onClick={() => confirmDeal.resolve(false)}>
+          <div className="trade-ctx-menu trade-confirm-deal" role="dialog" aria-label="Confirm trade" onClick={(e) => e.stopPropagation()}>
+            <div className="trade-ctx-head">
+              <div>
+                <strong>{String(confirmDeal.partnerName).toUpperCase()} ACCEPTED</strong>
+                <span>Confirm to make it official</span>
+              </div>
+            </div>
+            <p className="trade-confirm-line"><b>You send:</b> {confirmDeal.sentLine || "—"}</p>
+            <p className="trade-confirm-line"><b>You get:</b> {confirmDeal.gotLine || "—"}</p>
+            <div className="trade-confirm-actions">
+              <button type="button" className="trade-hub-back-btn" onClick={() => confirmDeal.resolve(false)}>NOT YET</button>
+              <button type="button" className="th-cta-btn" onClick={() => confirmDeal.resolve(true)}>CONFIRM TRADE</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {waiveResult && (
         <div className="trade-ctx-overlay" onClick={() => setWaiveResult(null)}>
           <div className="trade-ctx-menu trade-ntc-waive-result" onClick={(e) => e.stopPropagation()}>
@@ -8990,6 +8265,7 @@ export default function TradeHub() {
           onReset={handleResetPackage}
           onRemoveIncoming={removeIncomingByName}
           onRemoveOutgoing={removeOutgoingByName}
+          onAddUserAsset={addUserAssetFromCounter}
           onViewTeamNeeds={() => {
             setSelectedTradeReview(false);
             setSelectedTeamDetail(partnerTeam);
@@ -11793,6 +11069,11 @@ const TRADE_HUB_CSS = `
   grid-template-columns: repeat(4, 1fr);
   gap: 8px;
 }
+.trade-confirm-deal { padding: 14px 16px; max-width: 420px; }
+.trade-confirm-line { margin: 6px 0; font-size: 13px; }
+.trade-confirm-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
+.th-inbound { margin-bottom: 18px; }
+.th-inbound-item { display: flex; flex-direction: column; gap: 6px; }
 .trade-hub-counteroffers { margin-top: 10px; }
 .trade-hub-counter-title {
   font-size: 11px;

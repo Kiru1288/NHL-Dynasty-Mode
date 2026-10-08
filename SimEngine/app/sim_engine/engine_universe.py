@@ -25,14 +25,10 @@ No missing modules.
 """
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List
 import random
-import math
 
 from app.sim_engine.entities.league import League
-from app.sim_engine.entities.team import Team
-from app.sim_engine.entities.coach import Coach
-from app.sim_engine.entities.prospect import Prospect
 
 # ============================================================
 # Economy Systems (Waivers)
@@ -42,6 +38,8 @@ from app.sim_engine.economy.waiver_ai import (
     WaiverConfig,
     update_priority_after_claim,
 )
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 
 # ============================================================
@@ -121,7 +119,7 @@ class UniverseEngine:
         parity = league_context.get("parity", {})
         era = league_context.get("era", {})
 
-        salary_cap = economics.get("salary_cap", 88_000_000)
+        economics.get("salary_cap", 88_000_000)
         parity_index = parity.get("parity_index", 0.5)
         active_era = (era.get("state") or {}).get("active_era", "modern")
 
@@ -201,7 +199,7 @@ class UniverseEngine:
                 team.points = points
                 team.point_pct = win_pct
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
 
             standings.append((team.id, win_pct, points))
 
@@ -331,7 +329,7 @@ class UniverseEngine:
                     self.headlines.append(
                         LeagueHeadline(
                             self.year,
-                            f"A notable waiver player clears unclaimed league-wide",
+                            "A notable waiver player clears unclaimed league-wide",
                             0.30,
                         )
                     )
@@ -427,7 +425,7 @@ class UniverseEngine:
 
         for team_id, win_pct, _ in standings:
 
-            team = self.league.get_team(team_id)
+            self.league.get_team(team_id)
 
             if win_pct < 0.40 and self.rng.random() < 0.4:
                 self.headlines.append(

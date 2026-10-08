@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 
 def _pid(player: Any) -> str:
@@ -136,7 +138,7 @@ def _reattach_to_juniors(league: Any, player: Any) -> bool:
         setattr(player, "development_path", str(block.get("league_code") or path))
         setattr(player, "organizational_status", "signed_junior")
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return True
 
 
@@ -273,7 +275,7 @@ def available_roster_moves(session: Any, player_id: str) -> Dict[str, Any]:
             lineup_mode = "saved"
             lineup_slot = user_lineup_slot_for(session, player) if loc == "nhl" else None
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     return {
         "ok": True,
@@ -364,7 +366,7 @@ def execute_roster_move(session: Any, body: Dict[str, Any]) -> Dict[str, Any]:
                 player.waiver_status = None
                 player.roster_location = "nhl"
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             _append_unique(team, "roster", player)
             sync_team_cap_fields(team, league)
             result = {"ok": True, "player_id": _pid(player), "moved": f"{loc}_to_nhl"}
@@ -378,7 +380,7 @@ def execute_roster_move(session: Any, body: Dict[str, Any]) -> Dict[str, Any]:
             player.is_buried = False
             player.roster_location = "ahl"
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         _append_unique(team, "ahl_roster", player)
         sync_team_cap_fields(team, league)
         result = {"ok": True, "player_id": _pid(player), "moved": "echl_to_ahl"}
@@ -411,7 +413,7 @@ def execute_roster_move(session: Any, body: Dict[str, Any]) -> Dict[str, Any]:
             player.roster_location = "echl"
             player.in_minors = True
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         _append_unique(team, "echl_roster", player)
         sync_team_cap_fields(team, league)
         result = {
@@ -446,7 +448,7 @@ def execute_roster_move(session: Any, body: Dict[str, Any]) -> Dict[str, Any]:
             player.roster_location = "ahl"
             player.in_minors = True
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         sync_team_cap_fields(team, league)
         result = {**buried, "moved": "nhl_to_ahl", "waivers": waived}
     elif action == "call_up_junior":
@@ -470,7 +472,7 @@ def execute_roster_move(session: Any, body: Dict[str, Any]) -> Dict[str, Any]:
             player.organizational_status = "signed_nhl"
             player.status = "nhl"
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         _append_unique(team, "roster", player)
         sync_team_cap_fields(team, league)
         nhl_gp = _nhl_gp(player, session)
@@ -504,7 +506,7 @@ def execute_roster_move(session: Any, body: Dict[str, Any]) -> Dict[str, Any]:
                     c["slide_triggered"] = True
                     c["can_slide"] = True
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         sync_team_cap_fields(team, league)
         result = {
             "ok": True,
@@ -527,7 +529,7 @@ def execute_roster_move(session: Any, body: Dict[str, Any]) -> Dict[str, Any]:
 
         invalidate_session_payload_caches(session, reason="roster_move")
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     avail = available_roster_moves(session, player_id)
     result["available_moves"] = avail.get("actions") or []
     result["location"] = avail.get("location")

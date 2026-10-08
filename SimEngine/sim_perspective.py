@@ -26,6 +26,8 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 # run_sim integration (same package root as run_sim.py)
 # -----------------------------------------------------------------------------
 import run_sim as rs
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 
 # =============================================================================
@@ -264,7 +266,7 @@ def clear_user_draft_hooks(sim: Any) -> None:
         sim.user_draft_pick_callback = None
         sim.user_draft_team_id = None
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def attach_user_draft_hooks(sim: Any, *, user_team: Any, mem: "FranchisePerspectiveMemory", enabled: bool) -> None:
@@ -480,7 +482,7 @@ def cap_pressure_phrase(team: Any, ustate: rs.UniverseState) -> str:
         if usage > 0:
             return "comfortable"
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return f"league cap ~${float(ustate.salary_cap_m):.1f}M — team-level usage unavailable"
 
 
@@ -564,7 +566,7 @@ def narrative_season_beat(
     made_playoffs: bool,
 ) -> str:
     """Single paragraph internal beat — grounded, not melodrama."""
-    cut = _playoff_cut(n_teams)
+    _playoff_cut(n_teams)
     parts: List[str] = []
     if pts_delta is None:
         parts.append("Season baseline established for the org chart.")
@@ -1342,7 +1344,7 @@ def enforce_strategy_coherence(
     prof = str(diagnosis.get("profile") or "")
     age_curve = str(diagnosis.get("age_curve_position") or "")
     trend = str(trajectory.get("trajectory_trend") or "neutral")
-    mean_top5 = float(diagnosis.get("mean_top5_age") or 27.0)
+    float(diagnosis.get("mean_top5_age") or 27.0)
 
     def bump(msg: str) -> None:
         notes.append(f"COHERENCE ADJUSTMENT: {msg}")
@@ -2195,7 +2197,7 @@ def format_year_block(
                 if str(getattr(aw, "winner_team_id", "")) == user_tid:
                     hits.append(f"{aname}: {getattr(aw, 'winner_name', '?')}")
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         if hits:
             lines_out.append("  Internal highlight reel (awards tied to our roster):\n")
             for h in hits[:8]:
@@ -2329,7 +2331,7 @@ def run_perspective(
     sink_out.open()
     sink_logger = _QuietRunnerLogger(out=sink_out, log_level="minimal", flush_each_year=True)
 
-    master_rng = rs.rng_from_seed(seed)
+    rs.rng_from_seed(seed)
     meta_rng = rs.rng_from_seed(rs.split_seed(seed, "meta"))
 
     sim = None
@@ -2355,14 +2357,14 @@ def run_perspective(
                 elif sim and hasattr(sim, "setup_league"):
                     sim.setup_league()
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     league = getattr(sim, "league", None) if sim else None
     if league is not None:
         try:
             setattr(league, "_runner_sim_engine", sim)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     teams = rs._get_league_teams(league)
     if not teams:
@@ -2416,7 +2418,7 @@ def run_perspective(
     pov_lines.append("=" * 72 + "\n")
     pov_lines.append("FRANCHISE PERSPECTIVE SIMULATION (GM / front-office POV)\n")
     pov_lines.append("=" * 72 + "\n")
-    pov_lines.append(f"Mode          : perspective\n")
+    pov_lines.append("Mode          : perspective\n")
     pov_lines.append(f"Seed          : {seed}\n")
     pov_lines.append(f"Years         : {years}\n")
     pov_lines.append(f"Start season  : {start_year}\n")
@@ -2463,14 +2465,14 @@ def run_perspective(
         try:
             sink_out.close()
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     text = "".join(pov_lines)
     out_path.write_text(text, encoding="utf-8")
     try:
         latest_path.write_text(text, encoding="utf-8")
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return exit_code, out_path
 
 

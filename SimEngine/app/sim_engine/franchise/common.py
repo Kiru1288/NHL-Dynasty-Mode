@@ -21,6 +21,8 @@ from app.sim_engine.franchise.schedule import (  # noqa: E402
     _finalize_schedule_after_generation,
     _schedule_quality_summary,
 )
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 try:
     from app.sim_engine.world import calendar as world_calendar  # noqa: E402
@@ -40,6 +42,13 @@ except Exception:
     world_calendar = None  # type: ignore
 
 _startup_log = logging.getLogger("uvicorn.error")
+
+
+def _stable_hash(value):
+    """Process-stable replacement for built-in hash() (salted per process via PYTHONHASHSEED)."""
+    import hashlib as _hl
+
+    return int.from_bytes(_hl.sha256(str(value).encode("utf-8")).digest()[:8], "big", signed=True)
 
 
 def _display_team(t: Any) -> str:
@@ -532,7 +541,7 @@ def _franchise_tick_conduct_and_resolve(session: FranchiseSession, calendar_idx:
                                 },
                             )
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
 
             res = None
             if isinstance(inc, dict) and str(inc.get("status") or "") in ("cleared", "disciplined"):
@@ -548,7 +557,7 @@ def _franchise_tick_conduct_and_resolve(session: FranchiseSession, calendar_idx:
                     try:
                         setattr(pl, "_conduct_resolve_notified", True)
                     except Exception:
-                        pass
+                        _swallowed_log.debug("suppressed exception", exc_info=True)
             else:
                 res = resolve_conduct_if_cleared(pl)
 
@@ -612,7 +621,7 @@ def _franchise_tick_conduct_and_resolve(session: FranchiseSession, calendar_idx:
             setattr(league, REGISTRY_KEY, getattr(session, REGISTRY_KEY, {}) or {})
             setattr(league, "_conduct_org_pressure", getattr(session, "_conduct_org_pressure", {}) or {})
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _legal_gm_choice_options() -> List[Dict[str, Any]]:
@@ -664,7 +673,7 @@ def _franchise_fanout_player_storylines(session: FranchiseSession, calendar_idx:
             0.98,
         )
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     consequences = list(raw.get("narrative_consequences") or [])
     if not consequences:
         return
@@ -747,7 +756,7 @@ def _franchise_fanout_player_storylines(session: FranchiseSession, calendar_idx:
                     o *= 99.0
                 fame = max(0.15, min(1.0, (o - 65.0) / 30.0))
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             meta = apply_conduct_suspension(
                 pl,
                 severity=sev,
@@ -876,11 +885,11 @@ def _franchise_fanout_player_storylines(session: FranchiseSession, calendar_idx:
         is_legal = event_type == "legal_trouble" or pool == "legal_crime"
         priority = "HIGH" if tier == "major" or is_legal else "MEDIUM"
         notif_type = "legal_trouble" if is_legal else "storyline"
-        base_id = f"storyline:{cur_date}:{tid}:{abs(hash(st + pname)) % 10_000_000}"
+        base_id = f"storyline:{cur_date}:{tid}:{abs(_stable_hash(st + pname)) % 10_000_000}"
 
         conduct_meta: Dict[str, Any] = {}
         conduct_fields: Dict[str, Any] = {}
-        ret_est, ret_iso = "", ""
+        ret_est = ""
         conduct_meta, conduct_fields = _apply_row_player_impact(
             row,
             tid=tid,
@@ -892,7 +901,7 @@ def _franchise_fanout_player_storylines(session: FranchiseSession, calendar_idx:
         )
         if conduct_fields.get("games_remaining"):
             ret_est = str(conduct_fields.get("return_estimate") or "")
-            ret_iso = str(conduct_fields.get("return_date") or "")
+            str(conduct_fields.get("return_date") or "")
 
         notif_extra = {
             "player_name": pname,
@@ -1156,7 +1165,7 @@ def apply_coach_archetype(coach: Any, archetype: str, rng: random.Random) -> Non
             # balanced: small random identity nudge
             coach.tactics.risk_tolerance = _clamp(float(coach.tactics.risk_tolerance) + rng.uniform(-0.03, 0.03))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 def _chaos_index(sim: Any, league: Any) -> float:
     ctx = getattr(league, "_tuning_context", None) or {}
     return float(ctx.get("chaos_index", getattr(league, "_chaos_index", 0.5)) or 0.5)
@@ -1181,7 +1190,7 @@ def start_franchise(
     try:
         setattr(league, "_runner_sim_engine", sim)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     teams = list(getattr(league, "teams", None) or [])
     if not teams:
@@ -1364,6 +1373,6 @@ def start_franchise(
     try:
         snapshot_draft_rank_prev(session, sim)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     _franchise_startup_stage("start_franchise complete; returning session")
     return session

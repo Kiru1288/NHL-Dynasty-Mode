@@ -820,8 +820,6 @@ function WjcBody({ pop }) {
   const [openRr, setOpenRr] = useState(false);
   const standings = pop.standings || [];
   const medals = pop.medal_labels || {};
-  const po = pop.playoffs || {};
-  const prospects = pop.user_prospects || [];
   const complete = Boolean(pop.medals_final || pop.wjc_phase === "complete");
   const dayNum = pop.wjc_day;
   const dayTot = pop.wjc_days_total;

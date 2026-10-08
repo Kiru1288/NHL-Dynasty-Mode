@@ -4,7 +4,6 @@ Franchise offseason phase controller — year-over-year continuation after Stanl
 
 from __future__ import annotations
 
-import random
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -16,6 +15,8 @@ from services.nhl_season_calendar import (
     map_abstract_schedule_to_calendar,
     season_anchor_event_markers,
 )
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 OFFSEASON_STAGES: Tuple[str, ...] = (
     "awards",
@@ -74,6 +75,13 @@ POST_DRAFT_STAGES: Tuple[str, ...] = (
 SIGNING_BONUS_REVENUE_FLOOR_M = 155.0
 OWN_FA_MORATORIUM_DAYS = 6
 INSTANT_ACCEPT_INTEREST = 88.0
+
+
+def _stable_hash(value):
+    """Process-stable replacement for built-in hash() (salted per process via PYTHONHASHSEED)."""
+    import hashlib as _hl
+
+    return int.from_bytes(_hl.sha256(str(value).encode("utf-8")).digest()[:8], "big", signed=True)
 
 
 def _bonus_gov(league: Any, key: str) -> float:
@@ -245,7 +253,7 @@ def invalidate_offseason_decision_payloads(session: FranchiseSession, *, reason:
             from services.franchise_sim import invalidate_session_payload_caches
             invalidate_session_payload_caches(session, f"offseason_decision_{reason}")
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def team_signing_bonus_eligibility(session: FranchiseSession, team_id: Optional[str] = None) -> Dict[str, Any]:
@@ -275,7 +283,7 @@ def team_signing_bonus_eligibility(session: FranchiseSession, team_id: Optional[
             )
             _terms["min_salary_m"] = round(float(league_minimum_aav(_lg)), 3)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     except Exception:
         _terms = {"max_term_own": 7, "max_term_ufa": 6}
     try:
@@ -520,7 +528,7 @@ def _serialize_award(award: Any) -> Dict[str, Any]:
 
         return _canon_serialize(award)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return {
         "name": str(getattr(award, "name", "") or ""),
         "award_id": str(getattr(award, "award_id", "") or ""),
@@ -619,7 +627,7 @@ def _build_playoff_payload(session: FranchiseSession) -> Dict[str, Any]:
 
         matchups = sanitize_first_round_matchups(matchups)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return {
         "first_round": matchups,
         "first_round_matchups": matchups,
@@ -630,10 +638,28 @@ def _build_playoff_payload(session: FranchiseSession) -> Dict[str, Any]:
     }
 
 
+def run_year_end_progression_once(session: FranchiseSession) -> Dict[str, Any]:
+    """Season-end aging + development, once per season, after the playoffs."""
+    if getattr(session, "_year_end_progression_done", False):
+        return {"skipped": True}
+    from services.franchise_sim import _run_franchise_season_end_progression
+
+    prog = _run_franchise_season_end_progression(session)
+    sp = (prog.get("lifecycle") or {}).get("special_events", 0) if isinstance(prog.get("lifecycle"), dict) else 0
+    session.timeline.append(
+        f"YEAR-END: Roster aging + progression ({int(sp)} major career events league-wide)."
+    )
+    if int(prog.get("retired_removed", 0) or 0) > 0:
+        session.notifications.append(
+            f"{prog['retired_removed']} player(s) left active NHL rosters (retirement)."
+        )
+    setattr(session, "_year_end_progression_done", True)
+    return prog
+
+
 def _transition_to_playoff_ready(session: FranchiseSession) -> Dict[str, Any]:
     """Regular season finished — show playoff bracket UI before simulating the postseason."""
     from services.franchise_sim import invalidate_session_payload_caches
-    from services.franchise_sim import _run_franchise_season_end_progression
 
     if session.playoffs_simulated:
         _sync_phase_fields(session)
@@ -643,18 +669,9 @@ def _transition_to_playoff_ready(session: FranchiseSession) -> Dict[str, Any]:
             "champion_id": session.champion_id,
         }
 
-    if not getattr(session, "_year_end_progression_done", False):
-        prog = _run_franchise_season_end_progression(session)
-        sp = (prog.get("lifecycle") or {}).get("special_events", 0) if isinstance(prog.get("lifecycle"), dict) else 0
-        session.timeline.append(
-            f"YEAR-END: Roster aging + progression ({int(sp)} major career events league-wide)."
-        )
-        if int(prog.get("retired_removed", 0) or 0) > 0:
-            session.notifications.append(
-                f"{prog['retired_removed']} player(s) left active NHL rosters (retirement)."
-            )
-        setattr(session, "_year_end_progression_done", True)
-
+    # Year-end aging/development now runs after the Cup (run_year_end_progression_once),
+    # not here: ratings used to jump right before the playoffs, and the offseason
+    # Development Report then had nothing left to show.
     session.regular_season_complete = True
     session.phase = "playoff_ready"
     session.season_phase = "playoff_ready"
@@ -799,7 +816,7 @@ def complete_playoffs_from_live_result(session: FranchiseSession, live: Dict[str
     try:
         apply_career_award_history(teams, awards, season_year, result_id=result_id)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     ch_name = session.team_by_id.get(champion)
     ch_disp = _display_team(ch_name) if ch_name else champion
@@ -845,7 +862,7 @@ def complete_playoffs(session: FranchiseSession) -> Dict[str, Any]:
                     "champion_id": session.champion_id,
                 }
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     from app.sim_engine.league import compute_awards, simulate_playoffs
     from app.sim_engine.league.awards import apply_career_award_history, build_awards_payload
@@ -966,7 +983,7 @@ def complete_playoffs(session: FranchiseSession) -> Dict[str, Any]:
     try:
         apply_career_award_history(teams, awards, season_year, result_id=result_id)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     ch_name = session.team_by_id.get(session.champion_id)
     ch_disp = _display_team(ch_name) if ch_name else session.champion_id
@@ -1043,6 +1060,7 @@ def advance_season_phase(session: FranchiseSession, target: Optional[str] = None
         return complete_playoffs(session)
 
     if phase == "post_cup":
+        run_year_end_progression_once(session)
         session.phase = "offseason"
         session.season_phase = "offseason"
         session.offseason_stage = "awards"
@@ -1201,7 +1219,7 @@ def _ensure_franchise_awards_computed(session: FranchiseSession) -> bool:
     try:
         apply_career_award_history(teams, awards, season_year, result_id=result_id)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     invalidate_session_payload_caches(session, "offseason_awards_compute")
     return _franchise_awards_are_complete(session)
 
@@ -1290,7 +1308,30 @@ def _stage_handler(session: FranchiseSession, stage: str) -> Dict[str, Any]:
     fn = handlers.get(stage)
     if fn is None:
         raise ValueError(f"Unknown offseason stage: {stage!r}")
-    return fn(session)
+    # Draft-floor deals go in before the draft board is built (pick ownership changes);
+    # the other windows open once the stage itself has run.
+    deals: List[Dict[str, Any]] = []
+    if stage == "draft":
+        try:
+            from services.trade_service import run_offseason_cpu_trade_window
+
+            deals = run_offseason_cpu_trade_window(session, stage)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    out = fn(session)
+    try:
+        from services.trade_service import run_offseason_cpu_trade_window
+
+        if stage != "draft":
+            deals = run_offseason_cpu_trade_window(session, stage)
+        if deals and isinstance(out, dict):
+            out.setdefault("cpu_trades", [
+                {k: v for k, v in d.items() if isinstance(v, (str, int, float, bool, list, dict, type(None)))}
+                for d in deals
+            ])
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    return out
 
 
 def continue_offseason(
@@ -1305,7 +1346,17 @@ def continue_offseason(
     the client may still be on awards — we re-deliver retirements instead of
     skipping ahead to salary_cap.
     """
+    try:
+        from services.team_identity_service import refresh_team_identities as _rti
+
+        _rti(session)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     from services.franchise_sim import invalidate_session_payload_caches
+    try:
+        run_year_end_progression_once(session)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     _sync_phase_fields(session)
     client_stage = str(from_stage or "").strip().lower()
@@ -1494,7 +1545,7 @@ def build_free_agency_desk(session: FranchiseSession, *, open_market: bool = Fal
                 ensure_overseas_fa_pool(league, rng, min_count=120)
             sync_all_team_cap_fields(league, getattr(session, "sim", None), season_year=sy)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     ensure_fa_market_book(session)
     office = build_contract_office(session)
@@ -1708,7 +1759,7 @@ def _enrich_awards_headshots(session: FranchiseSession, payload: Any) -> None:
                     if sweater and not node.get("jersey_number"):
                         node["jersey_number"] = sweater
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
             if node.get("team_id") and not node.get("team_abbr"):
                 ab = _abbr(node.get("team_id"))
                 if ab:
@@ -1829,7 +1880,7 @@ def _tick_league_contracts(session: FranchiseSession) -> Dict[str, Any]:
             except Exception:
                 continue
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     session.contracts_ticked = True
     return {
@@ -1938,7 +1989,7 @@ def _advance_salary_cap(session: FranchiseSession) -> Dict[str, Any]:
         try:
             cleanup_league_retained_salary_records(league)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     cap_row: Dict[str, Any] = {}
     # Next season's cap comes from the same projection League Operations shows
     # (announced range when one exists, else the revenue model), and is persisted
@@ -1958,7 +2009,7 @@ def _advance_salary_cap(session: FranchiseSession) -> Dict[str, Any]:
             if _board_adj:
                 target_reason = f"Board of Governors adjustment {_board_adj:+.2f}M on top of the league projection."
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         _growth = (_ops.get("cap") or {}).get("model_growth_pct")
         target_reason = (
             f"League revenue model: {_ops.get('cap_change_type', '')} "
@@ -1976,7 +2027,7 @@ def _advance_salary_cap(session: FranchiseSession) -> Dict[str, Any]:
 
             refresh_offer_sheet_compensation_tiers(league)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     except Exception:
         fallback_cap = float(getattr(league, "salary_cap_m", 88.0) or 88.0)
         cap_row = {
@@ -2283,7 +2334,7 @@ def _dev_player_potential_display(player: Any) -> float:
         if ratings.get("dev_potential") is not None:
             return float(display_rating(normalize_rating(ratings["dev_potential"])))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         from services.franchise_sim import _player_ovr99
 
@@ -2426,7 +2477,7 @@ def _dev_games_played(player: Any, session: Optional[FranchiseSession]) -> int:
         if gp > 0:
             return gp
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     if session is not None:
         pid = _dev_player_id(player)
         row = dict((getattr(session, "player_season_stats", None) or {}).get(pid) or {})
@@ -3018,7 +3069,7 @@ def _run_user_org_depth_progression(session: FranchiseSession, season_id: int) -
                 source_path=f"org_{pool}",
             )
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _dev_stamp_season_production(session: FranchiseSession, player: Any) -> None:
@@ -3032,7 +3083,7 @@ def _dev_stamp_season_production(session: FranchiseSession, player: Any) -> None
         setattr(player, "games_played", int(gp))
         setattr(player, "gp", int(gp))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     toi_sec = int(stats.get("toi_sec") or stats.get("toi_total_sec") or 0)
     if toi_sec > 0:
         avg_min = toi_sec / float(gp) / 60.0
@@ -3046,7 +3097,7 @@ def _dev_stamp_season_production(session: FranchiseSession, player: Any) -> None
             setattr(player, "toi_quality", round(toi_q, 3))
             setattr(player, "_toi_quality", round(toi_q, 3))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     if _dev_is_goalie(player):
         sv = float(stats.get("save_pct") or stats.get("sv_pct") or 0.0)
         if sv > 1.5:
@@ -3089,19 +3140,19 @@ def _dev_stamp_season_production(session: FranchiseSession, player: Any) -> None
                 )
                 setattr(player, "_dev_breakout_momentum", max(prev_mom, bump))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     score = max(0.22, min(0.98, float(score)))
     for key in ("production_score", "recent_performance_score", "points_signal", "production"):
         try:
             setattr(player, key, score)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         from app.sim_engine.generation.prospect_identity import refresh_player_identity
 
         refresh_player_identity(player, stats=stats, min_gp=8)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _dev_season_gap_ovr(player: Any) -> float:
@@ -3178,7 +3229,7 @@ def _dev_needs_growth_catchup(player: Any) -> bool:
 
             actual = float(_player_ovr99(player)) - float(start)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     expected = _dev_expected_display_growth(player)
     # Catch up when shortfall is large (design §12) — not a universal +1.5 gate.
     if expected <= 1.0:
@@ -3233,17 +3284,17 @@ def _run_development_growth_catchup(session: FranchiseSession, season_id: int) -
             try:
                 ledger["ovr_after"] = float(player_current_ovr_01(player))
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             ledger["source_path"] = "apply_player_development:catchup_v5"
             ledger["catchup_applied"] = True
             ledger["development_applied"] = True
             try:
                 setattr(player, "development_ledger", ledger)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             touched += 1
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     league = getattr(getattr(session, "sim", None), "league", None)
     for team in list(getattr(league, "teams", None) or []):
@@ -3312,7 +3363,7 @@ def _run_offseason_development(session: FranchiseSession) -> Dict[str, Any]:
         try:
             _dev_stamp_season_production(session, entry["player"])
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     before_snapshots: Dict[str, Dict[str, Any]] = {}
     for entry in org_entries:
@@ -3335,12 +3386,12 @@ def _run_offseason_development(session: FranchiseSession) -> Dict[str, Any]:
             try:
                 _dev_stamp_season_production(session, p)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             league_before[pid] = _player_ovr99(p)
             try:
                 setattr(p, "_active_dev_season", season_id)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
 
     if getattr(rs, "_run_player_progression_pass", None) and not getattr(
         session, "_year_end_progression_done", False
@@ -3348,19 +3399,19 @@ def _run_offseason_development(session: FranchiseSession) -> Dict[str, Any]:
         try:
             rs._run_player_progression_pass(teams, rng, None)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     try:
         _run_user_org_depth_progression(session, season_id)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     # Year-end often already applied weak/zero growth under the old formula.
     # Catch up high-runway players (e.g. 84 OVR / 94 POT) so the review isn't flat.
     try:
         _run_development_growth_catchup(session, season_id)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     unsigned_dev: Dict[str, Any] = {}
     try:
@@ -3394,7 +3445,7 @@ def _run_offseason_development(session: FranchiseSession) -> Dict[str, Any]:
                 if start is not None:
                     before_v = float(start)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             # Year-end progression often already applied — recover true delta from ledger.
             ledger = getattr(p, "development_ledger", None) or {}
             lp, lc = _dev_ovr_from_ledger(ledger if isinstance(ledger, dict) else {})
@@ -3501,7 +3552,7 @@ def _run_offseason_development(session: FranchiseSession) -> Dict[str, Any]:
 
         payload = json_safe(payload)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     session.development_report_payload = payload if isinstance(payload, dict) else {}
     session.development_report_done = True
     session.development_report_completed_season = season_id
@@ -3533,7 +3584,7 @@ def _run_draft_lottery(session: FranchiseSession) -> Dict[str, Any]:
                 payload["ownership_annotated"] = True
                 session.draft_lottery_payload = payload
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         return {"draft_lottery": payload}
 
     sim = session.sim
@@ -3553,7 +3604,7 @@ def _run_draft_lottery(session: FranchiseSession) -> Dict[str, Any]:
 
     picks: List[Dict[str, Any]] = []
     draw_results: List[Dict[str, Any]] = []
-    seed = hash(
+    seed = _stable_hash(
         (
             int(session.season_calendar_year),
             int(getattr(sim.rng, "getstate", lambda: (0,))()[1][0] if hasattr(sim.rng, "getstate") else 0),
@@ -3618,7 +3669,7 @@ def _run_draft_lottery(session: FranchiseSession) -> Dict[str, Any]:
                 lottery_order=[str(p.get("lottery_team_id") or p["team_id"]) for p in picks],
             )
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     # Resolve traded ownership so lottery UI shows selecting team via original owner.
     try:
@@ -3626,7 +3677,7 @@ def _run_draft_lottery(session: FranchiseSession) -> Dict[str, Any]:
 
         picks = annotate_lottery_picks_with_ownership(session, picks)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     payload = {
         "lottery_seed": seed,
@@ -4530,7 +4581,7 @@ def _dr_development_plan(
             else ("Middle-six centre" if pos == "C" else ("NHL defence depth / 2nd pair upside" if not is_g else "NHL depth / tandem upside"))
         )
         nhl_conf = "Medium"
-        nhl_reason = f"First-round capital supports a regular NHL role if development holds."
+        nhl_reason = "First-round capital supports a regular NHL role if development holds."
         obj = "Produce in a top-six junior role without sheltered usage"
     elif overall <= 96:
         jr_role = f"Top-six {pos}" if pos != "D" and not is_g else ("Second-pair defence" if not is_g else "Split starter")
@@ -5496,7 +5547,7 @@ def _prepare_resign_payload(session: FranchiseSession, *, force: bool = False) -
     try:
         _warn_expiring_goalies(session, user_team, expiring)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     def _enrich_demand(row: Dict[str, Any]) -> Dict[str, Any]:
         pid = str(row.get("player_id") or "")
@@ -5627,7 +5678,7 @@ def _prepare_resign_payload(session: FranchiseSession, *, force: bool = False) -
                     row["last_counter"] = last
             row["legal_contract_types"] = _resign_legal_contract_types(row, player)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         row["expiry_type"] = row.get("expiry_status") or row.get("rights_status") or row.get("expiry_type")
         row["current_cap_hit"] = row.get("aav_m") or row.get("cap_hit_m")
         row["current_salary"] = row.get("aav_m") or row.get("cap_hit_m")
@@ -5944,12 +5995,12 @@ def _open_free_agency(session: FranchiseSession, *, force: bool = False) -> Dict
                 maybe_spawn_overseas_star(league, session.sim.rng, sy)
                 sync_all_team_cap_fields(league, session.sim, season_year=sy)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         ensure_fa_market_book(session)
         try:
             _warn_user_fa_holes(session)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         if wave < 1:
             # Opening day: offers circulate; only a couple fringe deals may close.
             tick = tick_free_agency_market(
@@ -5973,9 +6024,9 @@ def _open_free_agency(session: FranchiseSession, *, force: bool = False) -> Dict
                     try:
                         setattr(p, "ufa_exclusive", False)
                     except Exception:
-                        pass
+                        _swallowed_log.debug("suppressed exception", exc_info=True)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     try:
         league = getattr(session.sim, "league", None)
@@ -5988,7 +6039,7 @@ def _open_free_agency(session: FranchiseSession, *, force: bool = False) -> Dict
             sync_all_team_cap_fields(league, session.sim, season_year=sy)
             resync_league_ages_to_session(session)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     ensure_fa_market_book(session)
     office = build_contract_office(session)
@@ -6169,7 +6220,7 @@ def advance_contract_negotiation_day(session: FranchiseSession, *, days: int = 1
                         reason="player_missing",
                     )
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
                 continue
             offer = {
                 "aav_m": pending.get("aav_m"),
@@ -6214,7 +6265,7 @@ def advance_contract_negotiation_day(session: FranchiseSession, *, days: int = 1
                         last_offer=dict(pending),
                     )
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
             else:
                 entry["status"] = "lapsed"
                 entry["pending_offer"] = None
@@ -6229,7 +6280,7 @@ def advance_contract_negotiation_day(session: FranchiseSession, *, days: int = 1
                         last_offer=dict(pending),
                     )
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
 
     invalidate_offseason_decision_payloads(session, reason="advance_negotiation_day")
     refreshed = _prepare_resign_payload(session, force=True)
@@ -6356,7 +6407,7 @@ def resolve_user_fa_pending_offers(session: FranchiseSession, *, days: int = 1) 
                         status="accepted",
                     )
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
                 cpu = getattr(session, "cpu_fa_signings", None)
                 if not isinstance(cpu, dict):
                     cpu = {"signings": []}
@@ -6417,7 +6468,7 @@ def advance_free_agency_day(session: FranchiseSession, *, days: int = 1) -> Dict
         run_cpu_offer_sheet_pass(session, max_sheets=2)
         tick_offer_sheets(session)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     tick = tick_free_agency_market(session, days=days)
     session._last_fa_market_tick = tick
     refreshed = _open_free_agency(session, force=False)
@@ -6677,7 +6728,7 @@ def _roll_development_league_draft_class(session: FranchiseSession, season_year:
 
         set_spawn_as_of_year(int(season_year))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     aged = 0
     reset_stats = 0
     injected = 0
@@ -6713,7 +6764,7 @@ def _roll_development_league_draft_class(session: FranchiseSession, season_year:
                             p.age = int(getattr(p, "age", 17) or 17) + 1
                         aged += 1
                     except Exception:
-                        pass
+                        _swallowed_log.debug("suppressed exception", exc_info=True)
                 age_now = 99
                 try:
                     age_now = int(getattr(ident, "age", 99) or 99) if ident else int(getattr(p, "age", 99) or 99)
@@ -6724,7 +6775,7 @@ def _roll_development_league_draft_class(session: FranchiseSession, season_year:
 
                     progress_season_body_and_identity(p, rng, min_gp=6)
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
                 # Age out undrafted overagers from junior clubs. NCAA players stay draft-eligible
                 # to 24 (the draft board's own cut-off) — culling them at 21 deleted eligible players.
                 drafted = bool(getattr(p, "drafted", False)) or bool(
@@ -6749,7 +6800,7 @@ def _roll_development_league_draft_class(session: FranchiseSession, season_year:
                         setattr(p, "_prospect_season_year", int(season_year))
                         setattr(p, "_prospect_last_stat_update_iso", "")
                     except Exception:
-                        pass
+                        _swallowed_log.debug("suppressed exception", exc_info=True)
                 kept.append(p)
 
             # Target ~18 skaters + 2 goalies per junior club; refill with new draft-age kids.
@@ -6802,7 +6853,7 @@ def _roll_development_league_draft_class(session: FranchiseSession, season_year:
                     try:
                         newbie.context.current_team_id = str(tm.get("team_id") or "")
                     except Exception:
-                        pass
+                        _swallowed_log.debug("suppressed exception", exc_info=True)
                     try:
                         initialize_prospect_season(
                             newbie,
@@ -6813,18 +6864,18 @@ def _roll_development_league_draft_class(session: FranchiseSession, season_year:
                             force=True,
                         )
                     except Exception:
-                        pass
+                        _swallowed_log.debug("suppressed exception", exc_info=True)
                     kept.append(newbie)
                     league_players.append(newbie)
                     injected += 1
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
             tm["players"] = kept
 
     try:
         league.players = league_players
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     # Rebuild NHL-scale star tiers from junior-raw injects (same as franchise start).
     try:
@@ -6832,14 +6883,14 @@ def _roll_development_league_draft_class(session: FranchiseSession, season_year:
 
         _shape_draft_class_pipeline(league, rng)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     # Keep the unsigned global pool aging so future drafts aren't a stale cohort.
     try:
         if hasattr(sim, "_advance_global_prospect_season"):
             sim._advance_global_prospect_season(int(season_year), rng)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     session._prospect_stats_synced_iso = ""
     session._prospect_sync_rows = None
@@ -6852,7 +6903,7 @@ def _roll_development_league_draft_class(session: FranchiseSession, season_year:
         _bump_prospect_revision(session)
         invalidate_session_payload_caches(session, reason="season_reset")
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     return {
         "ok": True,
@@ -6905,7 +6956,7 @@ def _ensure_undrafted_draft_depth(session: FranchiseSession, season_year: int) -
 
         set_spawn_as_of_year(int(season_year))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     used_names: set = set()
     league_players = list(getattr(league, "players", None) or [])
     for p in league_players:
@@ -6947,13 +6998,13 @@ def _ensure_undrafted_draft_depth(session: FranchiseSession, season_year: int) -
             try:
                 newbie.context.current_team_id = str(tm.get("team_id") or "")
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             try:
                 initialize_prospect_season(
                     newbie, code, rng=rng, season_year=int(season_year), force=True
                 )
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             roster = list(tm.get("players") or [])
             roster.append(newbie)
             tm["players"] = roster
@@ -6964,20 +7015,20 @@ def _ensure_undrafted_draft_depth(session: FranchiseSession, season_year: int) -
     try:
         league.players = league_players
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         from app.sim_engine.league_hierarchy_bootstrap import _shape_draft_class_pipeline
 
         _shape_draft_class_pipeline(league, rng)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         from services.franchise_sim import _bump_prospect_revision, invalidate_session_payload_caches
 
         _bump_prospect_revision(session)
         invalidate_session_payload_caches(session, reason="season_reset")
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return {"ok": True, "undrafted": undrafted, "injected": injected}
 
 
@@ -7053,14 +7104,14 @@ def _retune_inflated_underage_prospects(session: FranchiseSession) -> Dict[str, 
         try:
             _shape_draft_class_pipeline(league, rng)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         try:
             from services.franchise_sim import _bump_prospect_revision, invalidate_session_payload_caches
 
             _bump_prospect_revision(session)
             invalidate_session_payload_caches(session, reason="underage_ovr_retune")
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     setattr(session, "_underage_ovr_retune_v1", True)
     return {"ok": True, "fixed": fixed}
@@ -7073,7 +7124,6 @@ def generate_next_season(session: FranchiseSession) -> Dict[str, Any]:
     sync_hub_compliance_warnings(session)
     run_cap_compliance_before_season(session)
     from app.sim_engine.league import generate_regular_season_schedule
-    from app.sim_engine.league.schedule_generator import _safe_team_id
     from app.sim_engine.league.standings import StandingsTable
     from services.franchise_sim import (
         _finalize_schedule_after_generation,
@@ -7114,7 +7164,7 @@ def generate_next_season(session: FranchiseSession) -> Dict[str, Any]:
                 })
                 session.timeline.append(f"Expansion: {names} joined the league.")
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
     except Exception as _exp_err:  # expansion must never block the season
         import logging
 
@@ -7189,7 +7239,7 @@ def generate_next_season(session: FranchiseSession) -> Dict[str, Any]:
             games=int(getattr(session, "games_per_team_schedule", 82) or 82),
         )
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     session.player_season_stats = {}
     session.game_results = []
     session.processed_game_ids = set()
@@ -7226,7 +7276,7 @@ def generate_next_season(session: FranchiseSession) -> Dict[str, Any]:
                 except Exception:
                     setattr(team, "_gm_goalie_usage_strategy", None)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     # Clear stamped season production so year-2 GP cannot inherit year-1 totals.
     try:
         from services.franchise_sim import _iter_league_players_for_aging
@@ -7245,9 +7295,9 @@ def generate_next_season(session: FranchiseSession) -> Dict[str, Any]:
                     if hasattr(pl, attr):
                         setattr(pl, attr, 0)
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     # Keep next_season_generated False until payload is ready below; cleared again
     # when the new season actually starts (_finalize_next_season_reveal).
     session.season_calendar_year = next_sy
@@ -7264,9 +7314,9 @@ def generate_next_season(session: FranchiseSession) -> Dict[str, Any]:
 
                 progress_season_body_and_identity(pl, body_rng, min_gp=6)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     session.draft_completed = False
     session.draft_lottery_done = False
     session.draft_lottery_payload = {}
@@ -7294,7 +7344,7 @@ def generate_next_season(session: FranchiseSession) -> Dict[str, Any]:
             setattr(league, "season_is_calendar", True)
             ensure_franchise_pick_registry(league, season_calendar_year=next_sy, years_ahead=4)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     session.cpu_fa_signings = {}
     session.cpu_rfa_decisions = {}
     session.cpu_fa_wave = 0
@@ -7326,7 +7376,7 @@ def generate_next_season(session: FranchiseSession) -> Dict[str, Any]:
             )
         ]
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     # Age juniors, inject a fresh undrafted draft-age class, and zero prospect
     # season lines so the Prospect Board is not last year's class with 60+ GP.
@@ -7343,7 +7393,7 @@ def generate_next_season(session: FranchiseSession) -> Dict[str, Any]:
     try:
         session.playoff_live = None
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     if hasattr(session, "playoff_live"):
         try:
             delattr(session, "playoff_live")
@@ -7354,7 +7404,7 @@ def generate_next_season(session: FranchiseSession) -> Dict[str, Any]:
         from services.league_operations import invalidate_league_ops_cache
         invalidate_league_ops_cache(session)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     first_opp = ""
     uid = str(session.user_team_id)
@@ -7684,7 +7734,6 @@ def build_offseason_state_extras(session: FranchiseSession, *, lean: bool = Fals
         and phase not in ("post_cup", "offseason")
     )
     can_continue_offseason = phase in ("post_cup", "offseason")
-    roster_payload = session.roster_cleanup_payload or {}
     can_generate = (
         phase == "offseason"
         and stage == "free_agency"

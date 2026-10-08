@@ -1017,7 +1017,7 @@
 
 .cap-dossier-tile__label {
   font-family: var(--cap-ed-head, var(--font-broadcast-display));
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 900;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -1817,7 +1817,7 @@
 }
 
 .cap-nego-desk__ask span {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 900;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -1851,18 +1851,14 @@
 }
 
 .cap-nego__sync {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 800;
   color: var(--cap-cyan);
   margin-left: 8px;
   font-style: normal;
 }
 
-.cap-nego__agent-id {
-  display: flex;
-  gap: 10px;
-  align-items: flex-start;
-}
+
 
 .cap-nego-meter-mark {
   position: absolute;
@@ -1953,7 +1949,7 @@
 .cap-nego__agent-tier {
   display: inline-block;
   margin-top: 4px;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 900;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -2026,7 +2022,7 @@
 }
 
 .cap-nego-thread__badge {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 900;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -2042,7 +2038,7 @@
 }
 
 .cap-nego-thread__round {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 800;
   color: rgba(160, 200, 220, 0.7);
   font-style: normal;
@@ -2165,7 +2161,6 @@
 }
 
 .cap-nego__term > span {
-  font-size: 11px;
   font-weight: 800;
   text-transform: uppercase;
   color: rgba(160, 200, 220, 0.85);
@@ -2269,7 +2264,7 @@
     linear-gradient(145deg, rgba(19, 216, 231, 0.16), rgba(233, 168, 60, 0.12)),
     var(--ops-panel);
   font-family: var(--font-broadcast-display);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 400;
   letter-spacing: 0.08em;
   line-height: 1.05;
@@ -2390,13 +2385,7 @@
   filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.75)) drop-shadow(0 0 12px rgba(233, 168, 60, 0.32));
 }
 
-.cap-office-edraft .cap-num-pop.tone-green {
-  background: linear-gradient(180deg, #e8fff2 0%, #52df94 48%, #1f9a5c 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.72)) drop-shadow(0 0 10px rgba(82, 223, 148, 0.28));
-}
+
 
 .cap-office-edraft .cap-num-pop.tone-blue {
   background: linear-gradient(180deg, #eef4ff 0%, #8ab4ff 48%, #3d6fbf 100%);
@@ -2406,13 +2395,7 @@
   filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.72)) drop-shadow(0 0 10px rgba(138, 180, 255, 0.24));
 }
 
-.cap-office-edraft .cap-num-pop.tone-danger {
-  background: linear-gradient(180deg, #ffe8ea 0%, #ff606d 48%, #b81e2c 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.72)) drop-shadow(0 0 10px rgba(255, 96, 109, 0.26));
-}
+
 
 .cap-office-edraft .cap-num-pop.tone-muted {
   background: linear-gradient(180deg, #f0f6fa 0%, #9eb4c4 48%, #5a7080 100%);
@@ -2512,15 +2495,12 @@
 .cap-office-edraft .cap-board-head {
   background: linear-gradient(180deg, rgba(11, 31, 45, 0.72), rgba(7, 22, 34, 0.72));
   font-family: var(--cap-ed-head);
-  font-size: 11px;
   letter-spacing: 0.14em;
 }
 
 .cap-office-edraft .cap-photo-well {
   display: grid;
   place-items: center;
-  width: 44px;
-  height: 44px;
   flex: none;
   border-radius: 8px;
   border: 1px solid var(--cap-line);
@@ -2531,14 +2511,10 @@
 
 .cap-office-edraft .cap-card-headshot,
 .cap-office-edraft .cap-contract-headshot {
-  width: 40px;
-  height: 40px;
   border-radius: 6px;
 }
 
 .cap-office-edraft .cap-contract-row {
-  min-height: 58px;
-  padding: 8px 16px;
   background: rgba(255, 255, 255, 0.015);
   transition: background 0.18s ease, box-shadow 0.18s ease;
 }
@@ -2555,7 +2531,6 @@
 
 .cap-office-edraft .cap-contract-row__name {
   font-family: var(--cap-ed-head);
-  font-size: 16px;
   font-weight: 800;
   letter-spacing: 0.02em;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
@@ -2566,9 +2541,6 @@
   align-items: center;
   justify-content: center;
   gap: 4px;
-  min-width: 52px;
-  min-height: 34px;
-  padding: 4px 10px;
   border-radius: 8px;
   border: 1px solid rgba(148, 185, 205, 0.16);
   background: rgba(4, 16, 26, 0.55);
@@ -2590,14 +2562,11 @@
   box-shadow: var(--depth-registered), 0 0 8px rgba(138, 180, 255, 0.1);
 }
 
-.cap-office-edraft .cap-stat-well .cap-num-pop {
-  font-size: 20px;
-}
+
 
 .cap-office-edraft .cap-stat-well__unit {
   display: inline !important;
   font-family: var(--cap-ed-head);
-  font-size: 11px;
   font-style: normal;
   font-weight: 900;
   letter-spacing: 0.12em;
@@ -2609,9 +2578,6 @@
 }
 
 .cap-office-edraft .cap-contract-row__pos .cap-icon-well {
-  width: 36px;
-  height: 32px;
-  font-size: 10px;
   letter-spacing: 0.06em;
 }
 
@@ -2797,7 +2763,7 @@
 }
 
 .cap-nego__clause-tag {
-  font-size: 8px;
+  font-size: 11px;
   font-style: normal;
   font-weight: 900;
   letter-spacing: 0.1em;
@@ -2878,7 +2844,7 @@
 }
 
 .cap-office-edraft .cap-board-layout--desk .cap-contract-list .cap-stat-well__unit {
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .cap-office-edraft .cap-board-layout--desk .cap-contract-row__name {

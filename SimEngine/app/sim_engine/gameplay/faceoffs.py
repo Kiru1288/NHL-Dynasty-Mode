@@ -37,6 +37,13 @@ import random
 # Enums / constants
 # ---------------------------
 
+def _stable_hash(value):
+    """Process-stable replacement for built-in hash() (salted per process via PYTHONHASHSEED)."""
+    import hashlib as _hl
+
+    return int.from_bytes(_hl.sha256(str(value).encode("utf-8")).digest()[:8], "big", signed=True)
+
+
 class DraftMood(str, Enum):
     CONFIDENT = "confident"
     CONSERVATIVE = "conservative"
@@ -175,7 +182,7 @@ class DraftBoard:
     def __init__(self, team: TeamProfile, ctx: DraftContext, rng: Optional[random.Random] = None):
         self.team = team
         self.ctx = ctx
-        self.rng = rng or random.Random(ctx.seed ^ hash(team.team_id))
+        self.rng = rng or random.Random(ctx.seed ^ _stable_hash(team.team_id))
 
         self.items: List[BoardItem] = []
         self.by_id: Dict[str, BoardItem] = {}

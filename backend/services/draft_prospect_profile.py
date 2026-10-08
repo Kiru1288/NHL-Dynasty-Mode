@@ -4,6 +4,8 @@ from __future__ import annotations
 import re
 
 from typing import Any, Dict, List, Optional
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 
 def _f(v: Any, default: float = 0.0) -> float:
@@ -467,14 +469,14 @@ def _evidence_strengths(row: Dict[str, Any]) -> List[Dict[str, Any]]:
         if pot >= 84 and not hidden_ceiling:
             out.append({
                 "title": "Ceiling tools",
-                "fact": f"Scouted ceiling band supports starter projection",
+                "fact": "Scouted ceiling band supports starter projection",
                 "context": "Athletic profile grades among stronger goalie prospects",
                 "confidence": "Medium" if conf < 70 else "High",
             })
         if ovr >= 70:
             out.append({
                 "title": "Current readiness",
-                "fact": f"Scouted current ability already projects NHL backup floor",
+                "fact": "Scouted current ability already projects NHL backup floor",
                 "context": "Higher present ability than most draft goalies",
                 "confidence": "High" if conf >= 60 else "Medium",
             })
@@ -534,14 +536,14 @@ def _evidence_strengths(row: Dict[str, Any]) -> List[Dict[str, Any]]:
         if pot >= 82 and gap >= 12 and not hidden_ceiling:
             out.append({
                 "title": "Ceiling runway",
-                "fact": f"Scouted ceiling well above current ability band",
+                "fact": "Scouted ceiling well above current ability band",
                 "context": "Large development gap with upside tools intact",
                 "confidence": "Medium" if conf < 65 else "High",
             })
         elif ovr >= 72 and gap < 10 and conf >= 60:
             out.append({
                 "title": "Present ability",
-                "fact": f"Current ability grades among the more NHL-ready in class",
+                "fact": "Current ability grades among the more NHL-ready in class",
                 "context": "Narrower outcome range than raw projects",
                 "confidence": "High",
             })
@@ -1166,7 +1168,7 @@ def _projection_notes(row: Dict[str, Any]) -> List[Dict[str, Any]]:
     elif age <= 17 and gap >= 12:
         notes.append({
             "title": "Long runway",
-            "fact": f"One of the younger players; development timeline stretches out",
+            "fact": "One of the younger players; development timeline stretches out",
             "context": "Ceiling depends on multi-year growth",
         })
     if risk == "High" and not notes:
@@ -2550,7 +2552,7 @@ def build_prospect_profile(
         _derive_dossier_identity(row, row.get("_player"))
         _apply_character_integrity(row, row.get("_player"))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     actual = row.get("actual_stats") if isinstance(row.get("actual_stats"), dict) else {}
     gp = _i(actual.get("gp") or actual.get("games_played") or row.get("gp") or row.get("games_played"))
     goals = _i(actual.get("goals") if actual else row.get("goals"))
@@ -2691,7 +2693,7 @@ def build_prospect_profile(
                 pot_low = int(round(max(50.0, center - max_span * 0.48)))
                 pot_high = int(round(min(99.0, center + max_span * 0.52)))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     headroom_delta = None
     if not ceiling_hidden and ovr_high is not None and pot_high is not None:

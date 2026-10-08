@@ -9,6 +9,8 @@ from __future__ import annotations
 import hashlib
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 HEADSHOT_MIN = 1
 HEADSHOT_MAX = 60
@@ -382,7 +384,7 @@ def apply_headshot_to_player(player: Any, meta: Dict[str, Any]) -> None:
         try:
             setattr(player, key, value)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def ensure_player_headshot(player: Any) -> Dict[str, Any]:

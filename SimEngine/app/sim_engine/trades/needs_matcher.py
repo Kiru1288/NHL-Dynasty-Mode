@@ -41,6 +41,8 @@ from app.sim_engine.trades.team_assessment import (
     position_group,
 )
 from app.sim_engine.trades.trade_asset import team_id_of
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 MIN_PLAN_SCORE = 0.32
 MIN_NEED_FILL = 0.18  # a deal must meaningfully fill the buyer's hole (was 0.12 — sideways churn)
@@ -74,7 +76,7 @@ def save_entropy_salt(league: Any) -> int:
     try:
         setattr(league, "_cpu_gm_taste_salt", int(salt))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return int(salt)
 
 
@@ -104,8 +106,10 @@ def gm_taste(league: Any, team_id: str, player: Any) -> float:
 
 #: Lopsided deals: one front office reads the market worse than the other. Base odds per
 #: plan, raised by the sharpness gap between the two GMs, deadline heat and desperation.
-LOPSIDED_BASE_CHANCE = 0.12
-LOPSIDED_MAX_CHANCE = 0.32
+LOPSIDED_BASE_CHANCE = 0.06  # was 0.12 — fleecings stay, just rarer
+LOPSIDED_MAX_CHANCE = 0.18  # was 0.32
+LOPSIDED_SWAP_GAP_CAP = 0.40  # a lopsided swap never keeps more than 40% of the target's value
+LOPSIDED_SEASON_LOSSES_MAX = 2  # a GM fleeced twice this season wises up
 LOPSIDED_MIN_SWING = 0.12  # below this a "lopsided" swap is just noise — treat as balanced
 
 
@@ -146,6 +150,11 @@ def _lopsided_roll(
         chance += 0.05
     if r.random() >= min(LOPSIDED_MAX_CHANCE, chance):
         return None
+    losses = {}
+    try:
+        losses = dict((getattr(league, "cpu_market_runtime", None) or {}).get("season_lopsided_losses") or {})
+    except Exception:
+        losses = {}
     # The weaker GM usually loses; desperation on either side tilts it.
     lean = s_ac - b_ac  # > 0 → buyer is the weaker GM
     if ba.panic_buyer:
@@ -153,7 +162,12 @@ def _lopsided_roll(
     if plan.motivated_seller:
         lean -= 0.5
     p_buyer_loses = max(0.1, min(0.9, 0.5 + 0.35 * lean))
+    # Memory: a club that keeps getting burned gets tilted out of the loser seat.
+    lb, ls = int(losses.get(bid, 0) or 0), int(losses.get(sid, 0) or 0)
+    p_buyer_loses = max(0.1, min(0.9, p_buyer_loses - 0.15 * lb + 0.15 * ls))
     loser = "buyer" if r.random() < p_buyer_loses else "seller"
+    if int(losses.get(bid if loser == "buyer" else sid, 0) or 0) >= LOPSIDED_SEASON_LOSSES_MAX:
+        return None
     swing = r.uniform(0.45, 0.65) if r.random() < 0.15 else r.uniform(0.20, 0.42)
     if loser == "buyer":
         cause = "panic_overpay" if ba.panic_buyer else "gm_overpay"
@@ -198,6 +212,9 @@ class DealPlan:
     lopsided_loser: str = ""
     lopsided_swing: float = 0.0
     lopsided_cause: str = ""
+    # Shape variety (C4): a second player going back (2-for-1) and planned seller retention.
+    return_player_2: Optional[Any] = None
+    retain_pct: float = 0.0
 
 
 @dataclass
@@ -295,6 +312,12 @@ def _reason_text(plan: DealPlan, tools: MatcherTools, buyer_a: TeamAssessment, s
     s = tools.team_abbr(plan.seller)
     name = str(getattr(plan.target, "name", None) or "the player")
     slot = SLOT_LABELS.get(plan.need_slot, "depth")
+    tovr = float(player_ovr(plan.target) or 0.0)
+    if tovr >= 82.0 and any(k in slot.lower() for k in ("bottom", "depth", "third")):
+        # A top-of-the-lineup player isn't a depth buy, whatever hole he fills.
+        slot = "lineup with a top-six forward" if position_group(plan.target) in ("C", "W") else (
+            "blue line with a top-four defenceman" if position_group(plan.target) in ("LD", "RD", "D") else "lineup"
+        )
     over = f" — paid a {int(round(plan.premium * 100))}% deadline premium" if plan.premium >= 0.1 else ""
     m = plan.motive
     if m == "panic_buy":
@@ -314,7 +337,8 @@ def _reason_text(plan: DealPlan, tools: MatcherTools, buyer_a: TeamAssessment, s
     if m == "depth_add":
         return f"{b} added {name} as {slot} insurance for the stretch run."
     ret = str(getattr(plan.return_player, "name", None) or "")
-    tail = f" for {ret}" if ret else ""
+    ret2 = str(getattr(plan.return_player_2, "name", None) or "")
+    tail = f" for {ret} and {ret2}" if ret and ret2 else (f" for {ret}" if ret else "")
     return f"{b} filled their {slot} with {name}{tail} — a surplus-for-need swap."
 
 
@@ -359,7 +383,7 @@ def _pick_bundle(
 def _spare_roster_players(team: Any, a: TeamAssessment) -> List[Tuple[Any, str]]:
     """NHL players a club can part with in a hockey trade: beyond its top guys at a
     position, and not at a slot where the club itself has a real need."""
-    from app.sim_engine.trades.team_assessment import SLOTS, slot_for_player
+    from app.sim_engine.trades.team_assessment import slot_for_player
 
     keep = {"C": 2, "W": 3, "LD": 1, "RD": 1, "G": 1}
     by_group: Dict[str, List[Any]] = {}
@@ -742,6 +766,48 @@ def generate_plans(
     return diverse
 
 
+def _shape_roll(league: Any, plan: DealPlan, ctx: Dict[str, Any], tag: str) -> float:
+    import zlib
+
+    salt = getattr(league, "_cpu_gm_taste_salt", None) or 0
+    day = int(ctx.get("calendar_cursor", 0) or 0)
+    key = f"{tag}|{salt}|{day}|{team_id_of(plan.buyer)}|{team_id_of(plan.seller)}|{player_pid(plan.target)}"
+    return (zlib.crc32(key.encode("utf-8")) & 0xFFFFFFFF) / 0xFFFFFFFF
+
+
+def _two_for_one_roll(league: Any, plan: DealPlan, ctx: Dict[str, Any]) -> bool:
+    return _shape_roll(league, plan, ctx, "two4one") < 0.45
+
+
+def _add_second_return(plan: DealPlan, tools: MatcherTools, ba: TeamAssessment, gap: float, used: set) -> bool:
+    best = None
+    for p, _ in _spare_roster_players(plan.buyer, ba):
+        if p is plan.return_player or player_pid(p) in used:
+            continue
+        if not tools.tradeable(p, team_id_of(plan.seller)):
+            continue
+        v = tools.player_value(p, plan.buyer, plan.seller)
+        if 0.4 * gap <= v <= 1.15 * gap and (best is None or abs(v - gap) < abs(best[1] - gap)):
+            best = (p, v)
+    if best is None:
+        return False
+    plan.return_player_2 = best[0]
+    return True
+
+
+def _planned_retention(league: Any, plan: DealPlan, ctx: Dict[str, Any]) -> float:
+    """Sellers retain on pricier rentals to lift the return (only NHL contracts, ≥ $3.5M)."""
+    cap = float(cap_hit_m(plan.target) or 0.0)
+    if cap < 3.5:
+        return 0.0
+    used = len(list(getattr(plan.seller, "retained_salary_records", None) or []))
+    if used >= 3:
+        return 0.0
+    if _shape_roll(league, plan, ctx, "retain") >= 0.45:
+        return 0.0
+    return 50.0 if cap >= 6.0 else 25.0
+
+
 def build_package_for_plan(
     plan: DealPlan,
     league: Any,
@@ -768,16 +834,42 @@ def build_package_for_plan(
         if not tools.tradeable(plan.return_player, team_id_of(plan.seller)):
             return False
         rv = tools.player_value(plan.return_player, plan.buyer, plan.seller)
-        if value <= 0.0 or rv <= 0.0 or not (0.40 * value <= rv <= 1.6 * value):
+        if value <= 0.0 or rv <= 0.0 or not (0.55 * value <= rv <= 1.55 * value):
             plan.fail_reason = "values_too_far_apart"
             return False
         diff = value - rv
         swing = abs(diff) / value
-        if lop is not None and swing >= LOPSIDED_MIN_SWING:
-            # One GM misreads the swap: no pick top-up, the gap stands.
-            plan.lopsided_loser = "seller" if diff > 0 else "buyer"
-            plan.lopsided_swing = round(min(0.65, swing), 3)
+        natural_loser = "seller" if diff > 0 else "buyer"
+        if lop is not None and swing >= LOPSIDED_MIN_SWING and lop[0] == natural_loser:
+            # The weaker GM (per the roll) misreads the swap. Part of the gap stands,
+            # capped so a fleecing is a story, not a franchise-wrecker.
+            kept = min(swing, LOPSIDED_SWAP_GAP_CAP, max(LOPSIDED_MIN_SWING, lop[1]))
+            plan.lopsided_loser = natural_loser
+            plan.lopsided_swing = round(kept, 3)
             plan.lopsided_cause = "gm_fleeced" if diff > 0 else "gm_overpay"
+            leftover = abs(diff) - kept * value
+            if leftover >= 5.0:
+                if diff > 0:
+                    picks, _ = _pick_bundle(
+                        tools, league, plan.buyer, ctx, target=leftover, protect_first=True, max_picks=1,
+                        max_firsts=0, acquirer=plan.seller,
+                    )
+                    plan.buyer_picks = picks
+                else:
+                    row, _ = tools.pick_for_value(league, plan.seller, ctx=ctx, target=leftover, protect_first=True, acquirer=plan.buyer)
+                    if row is not None:
+                        plan.seller_pick = row
+        elif diff >= 12.0 and _two_for_one_roll(league, plan, ctx) and _add_second_return(
+            plan, tools, ba, diff, used_players,
+        ):
+            # 2-for-1: a second roster player covers the gap instead of picks.
+            short = diff - tools.player_value(plan.return_player_2, plan.buyer, plan.seller)
+            if short >= 5.0:
+                picks, _ = _pick_bundle(
+                    tools, league, plan.buyer, ctx, target=short, protect_first=True, max_picks=1,
+                    max_firsts=0, acquirer=plan.seller,
+                )
+                plan.buyer_picks = picks
         elif diff >= 5.0:
             # Light side tops up — up to two picks, no firsts for a depth-level gap.
             picks, _ = _pick_bundle(
@@ -814,6 +906,10 @@ def build_package_for_plan(
         pay = max(0.0, value) * (1.0 + plan.premium)
         if plan.motive == "locker_room":
             pay *= 0.85  # moving a problem — the club takes a little less
+        if sa.is_seller and plan.motive in SELLOFF_MOTIVES:
+            plan.retain_pct = _planned_retention(league, plan, ctx)
+            if plan.retain_pct > 0:
+                pay *= 1.0 + 0.3 * plan.retain_pct / 100.0  # retained salary is worth a better return
         if lop is not None:
             plan.lopsided_loser, plan.lopsided_swing, plan.lopsided_cause = lop
             if plan.lopsided_loser == "buyer":
@@ -840,7 +936,9 @@ def build_package_for_plan(
                 plan.return_player = prospect[0]
                 remaining -= prospect[1]
             # A full roster sends a depth player back — that's part of the payment.
-            remaining -= tools.filler_value(plan.seller, plan.buyer, plan.target, plan.return_player)
+            # Sell-offs are pure futures: the buyer sends its extra body down instead.
+            selloff = plan.motive in SELLOFF_MOTIVES
+            remaining -= 0.0 if selloff else tools.filler_value(plan.seller, plan.buyer, plan.target, plan.return_player)
             picks, total = _pick_bundle(
                 tools, league, plan.buyer, ctx, target=remaining,
                 protect_first=ba.protects_first,
@@ -849,7 +947,7 @@ def build_package_for_plan(
                 acquirer=plan.seller,
             )
             plan.buyer_picks = picks
-            filler_v = tools.filler_value(plan.seller, plan.buyer, plan.target, plan.return_player)
+            filler_v = 0.0 if selloff else tools.filler_value(plan.seller, plan.buyer, plan.target, plan.return_player)
             paid = total + filler_v + (prospect[1] if prospect is not None else 0.0)
             if paid < 0.8 * pay and prospect is None:
                 # Short on picks (spent earlier in the season): pay the gap with youth.
@@ -857,7 +955,7 @@ def build_package_for_plan(
                 if young is not None:
                     plan.return_player, yv = young
                     prospect = young
-                    filler_v = tools.filler_value(plan.seller, plan.buyer, plan.target, plan.return_player)
+                    filler_v = 0.0 if selloff else tools.filler_value(plan.seller, plan.buyer, plan.target, plan.return_player)
                     paid = total + filler_v + yv
             if plan.return_player is None and not picks and filler_v <= 0.0:
                 return False
@@ -916,7 +1014,7 @@ def build_package_for_plan(
             "gm_fleeced": f" {wa} fleeced {la} — the return is roughly {pct}% light.",
         }.get(plan.lopsided_cause, "")
         plan.reason_text = (plan.reason_text + tail).strip()
-        if plan.lopsided_swing >= 0.3:
+        if plan.lopsided_swing >= 0.3 or plan.lopsided_swing * max(0.0, plan.target_value) >= 25.0:
             plan.trade_category = "lopsided_trade"
     return True
 

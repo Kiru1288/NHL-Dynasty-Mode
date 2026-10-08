@@ -44,12 +44,7 @@ def _cpu_demand_stage(demand: Dict[str, Any]) -> int:
     except (TypeError, ValueError):
         return 1
 
-from app.sim_engine.trades.trade_value import (
-    evaluate_asset_value,
-    evaluate_package_value,
-    evaluate_player_asset_value,
-    evaluate_pick_asset_value,
-)
+from app.sim_engine.trades.trade_value import evaluate_asset_value, evaluate_package_value, evaluate_pick_asset_value
 from app.sim_engine.trades.trade_pick_registry import get_pick_by_id
 from app.sim_engine.trades.trade_asset import find_player_on_team_roster, player_display_name
 from app.sim_engine.economy.team_needs import TeamNeeds
@@ -158,7 +153,7 @@ def _pick_sale_guardrails(
     team = team_by_id.get(team_id)
     if team is None:
         return reasons
-    season_year = int((context or {}).get("season_year", 2025) or 2025)
+    int((context or {}).get("season_year", 2025) or 2025)
     draft_year = int(draft_year_from_context(context, league=league))
     window = _team_window(team)
     outgoing = package.outgoing_by_team.get(team_id, [])
@@ -271,6 +266,11 @@ def _ai_interest_for_team(
         # Ambient CPU market: near-even hockey swaps should not die on float noise.
         if (context or {}).get("cpu_ambient_trade") and net >= -1.25:
             interest = 0.55
+        # U7: a GM pays a little over market for a player who fills a real hole, so a
+        # seller (including you) can come out ahead when the fit is genuine.
+        fit = max([float(x.get("buyer_fit_premium") or 0.0) for x in (val.get("incoming") or [])] or [0.0])
+        if fit >= 0.04 and net >= -25.0 * fit * scale:
+            interest = 0.56
     else:
         interest = 0.18
         reasons.append(f"Package net value ({net:.1f}) is too unfavorable")
@@ -280,27 +280,36 @@ def _ai_interest_for_team(
         if any(isinstance(a, DraftPickTradeAsset) for a in incoming_assets):
             interest = max(interest, 0.64)
 
+    # U17: pick-lock decisions are tracked as flags, not by scanning reason text.
+    pick_lock_reasons: List[str] = []
     # Rebuilder pick protection — soften when the return is a clear premium NHL piece.
+    # U16: the bars scale with deal size like every other margin here.
     if window == "rebuild":
         for asset in package.outgoing_by_team.get(team_id, []):
             if isinstance(asset, DraftPickTradeAsset):
                 row = get_pick_by_id(league, asset.pick_id) or {}
                 rnd = int(row.get("round", asset.round) or 7)
                 if rnd == 1:
-                    if net >= 12:
-                        interest = min(interest, 0.58)
-                    elif net >= 5:
+                    if net >= 12 * scale:
+                        interest = min(interest, 0.62)
+                    elif net >= 5 * scale:
                         interest = min(interest, 0.42)
-                        reasons.append(
-                            "Team is rebuilding and needs a premium return for a first-round pick"
-                        )
+                        msg = "Team is rebuilding and needs a premium return for a first-round pick"
+                        reasons.append(msg)
+                        pick_lock_reasons.append(msg)
                     else:
                         interest = min(interest, 0.22)
-                        reasons.append(
-                            "Team is rebuilding and will not move a first-round pick without a premium return"
-                        )
+                        msg = "Team is rebuilding and will not move a first-round pick without a premium return"
+                        reasons.append(msg)
+                        pick_lock_reasons.append(msg)
                 elif rnd == 2:
-                    interest = min(interest, 0.48 if net >= 5 else 0.42)
+                    # U15: a clear win now clears the acceptance bar (was capped at 0.48 < 0.58).
+                    if net >= 8 * scale:
+                        interest = min(interest, 0.66)
+                    elif net >= 3 * scale:
+                        interest = min(interest, 0.58)
+                    else:
+                        interest = min(interest, 0.42)
             if isinstance(asset, PlayerTradeAsset):
                 src = team_by_id.get(team_id)
                 if src:
@@ -314,10 +323,13 @@ def _ai_interest_for_team(
                             ovr *= 99
                         if age <= 22 and ovr >= 78:
                             interest = min(interest, 0.30)
-                            reasons.append("Rebuilding team reluctant to move elite young prospect")
+                            pnm = str(getattr(p, "name", None) or "him")
+                            # U18: an established young NHLer isn't a "prospect".
+                            what = "a young star" if ovr >= 85 else "a young core player"
+                            reasons.append(f"Rebuilding team won't move {pnm} — {what} is who they're building around")
 
     # Anti-quantity-spam guardrails for premium draft capital.
-    reasons.extend(
+    _guard = list(
         _pick_sale_guardrails(
             team_id,
             package,
@@ -325,7 +337,10 @@ def _ai_interest_for_team(
             league,
             context=context,
         )
+        or []
     )
+    reasons.extend(_guard)
+    pick_lock_reasons.extend(_guard)
     # Contender deadline boost for fit
     if window == "contender" and _deadline_phase(context) > 0.35:
         if net >= -3:
@@ -336,17 +351,11 @@ def _ai_interest_for_team(
     incoming = val.get("incoming") or []
     severe_overpay = _is_severe_overpay(net, incoming)
     if severe_overpay:
-        pick_lock_tokens = (
-            "rebuilding team will not move",
-            "non-contender heavily protects",
-            "likely lottery first requires",
-            "premium pick requires",
-            "first-round",
-            "first round",
-        )
-        reasons = [r for r in reasons if not any(tok in r.lower() for tok in pick_lock_tokens)]
+        lock = set(pick_lock_reasons)
+        reasons = [r for r in reasons if r not in lock]
+        pick_lock_reasons = []
 
-    if any("premium" in r.lower() or "first" in r.lower() for r in reasons):
+    if pick_lock_reasons:
         interest = min(interest, 0.18)
     elif severe_overpay and window != "contender":
         # Non-contenders should still engage on clear overpays.
@@ -364,6 +373,23 @@ def _ai_interest_for_team(
     cap_tier = str(getattr(team, "cap_pressure_tier", getattr(team, "cap_pressure", "")) or "").lower()
     if cap_tier in ("cap_hell", "critical") and net >= -5:
         interest = min(1.0, interest + 0.08)
+
+    # Lineup check: does this deal make tonight's lineup better or worse? (CPU GMs used
+    # to judge on asset value alone, so a contender could hand over its starting goalie
+    # or gut its bottom six for "value".)
+    lineup_delta = _lineup_delta_for_team(team_id, package, team_by_id)
+    if lineup_delta is not None:
+        rebuilding = window == "rebuild" or bool(getattr(team, "_franchise_tank_mode", "none") not in ("none", "", None))
+        if rebuilding:
+            lineup_delta *= 0.25  # rebuilders trade today for tomorrow on purpose
+        elif window == "contender":
+            lineup_delta *= 1.4
+        if lineup_delta <= -0.006:
+            interest = max(0.0, interest - min(0.35, -lineup_delta * 20.0))
+            if lineup_delta <= -0.012:
+                reasons.append("Makes their lineup worse right now")
+        elif lineup_delta >= 0.004:
+            interest = min(1.0, interest + min(0.12, lineup_delta * 7.0))
 
     tank_map = (context or {}).get("tank_pressure_by_team") or {}
     tank_row = tank_map.get(str(team_id)) or {}
@@ -387,7 +413,7 @@ def _ai_interest_for_team(
     if tank_pressure >= 50 and window != "contender" and _deadline_phase(context) > 0.25:
         incoming_players = [a for a in package.incoming_by_team.get(team_id, []) if isinstance(a, PlayerTradeAsset)]
         for asset in incoming_players:
-            src = team_by_id.get(str(asset.team_id or "")) or team
+            src = team_by_id.get(str(asset.source_team_id or "")) or team
             p, _ = find_player_on_team_roster(src, asset.player_id)
             if p is None:
                 continue
@@ -456,6 +482,43 @@ def _ai_interest_for_team(
         reasons.append("Package does not meet team valuation threshold")
 
     return interest, reasons
+
+
+def _lineup_delta_for_team(team_id: str, package: TradePackage, team_by_id: Dict[str, Any]) -> Optional[float]:
+    """Lineup-strength change for this club from the players in the deal (None if no players move)."""
+    try:
+        from app.sim_engine.trades.lineup_impact import roster_delta  # noqa: WPS433
+
+        team = team_by_id.get(str(team_id))
+        if team is None:
+            return None
+        out_players, in_players = [], []
+        for asset in package.outgoing_by_team.get(team_id, []):
+            if isinstance(asset, PlayerTradeAsset):
+                p, _ = find_player_on_team_roster(team, asset.player_id)
+                if p is not None:
+                    out_players.append(p)
+        for asset in package.incoming_by_team.get(team_id, []):
+            if isinstance(asset, PlayerTradeAsset):
+                src = team_by_id.get(str(asset.source_team_id or ""))
+                p = None
+                if src is not None:
+                    p, _ = find_player_on_team_roster(src, asset.player_id)
+                if p is None:
+                    for tm in team_by_id.values():
+                        p, _ = find_player_on_team_roster(tm, asset.player_id)
+                        if p is not None:
+                            break
+                if p is not None:
+                    in_players.append(p)
+        if not out_players and not in_players:
+            return None
+        return float(roster_delta(team, add=in_players, remove=out_players))
+    except Exception:
+        import logging  # noqa: WPS433
+
+        logging.getLogger(__name__).debug("lineup delta failed", exc_info=True)
+        return None
 
 
 def _accept_threshold_for_team(team: Any) -> float:
@@ -598,7 +661,18 @@ def _suggest_counteroffers(
     if partner is None:
         return suggestions
     window = _team_window(partner)
-    if partner_net < -4:
+    # U19: a real counter — the one asset from your org that closes the partner's gap.
+    try:
+        concrete = _concrete_counter(
+            package, user_team_id=str(user_team_id), partner=partner, partner_id=str(partner_id),
+            team_by_id=team_by_id, league=league, gap=-partner_net, context=context,
+            prefer_picks=window == "rebuild",
+        ) if partner_net < -1.0 else None
+    except Exception:
+        concrete = None
+    if concrete is not None:
+        suggestions.append(concrete)
+    if partner_net < -4 and concrete is None:
         if window == "rebuild":
             suggestions.append({
                 "label": "Add a draft pick",
@@ -625,13 +699,75 @@ def _suggest_counteroffers(
         ovr = float(ovr_fn() if callable(ovr_fn) else ovr_fn or 0)
         if ovr <= 1.5:
             ovr *= 99
-        if ovr >= 84:
+        if ovr >= 84 and partner_net < 0:
+            # U19: this is the player YOU receive — the partner wants a premium for him.
             suggestions.append({
-                "label": f"Request more for {player_display_name(p)}",
-                "explanation": "Elite outgoing talent rarely moves without a premium return.",
+                "label": f"Expect to pay a premium for {player_display_name(p)}",
+                "explanation": f"{_team_name_of(partner)} won't move an elite player at market value.",
             })
             break
     return suggestions[:3]
+
+
+def _team_name_of(team: Any) -> str:
+    return str(getattr(team, "abbreviation", None) or getattr(team, "name", None) or "They")
+
+
+def _concrete_counter(
+    package: TradePackage,
+    *,
+    user_team_id: str,
+    partner: Any,
+    partner_id: str,
+    team_by_id: Dict[str, Any],
+    league: Any,
+    gap: float,
+    context: Optional[Dict[str, Any]],
+    prefer_picks: bool,
+) -> Optional[Dict[str, Any]]:
+    from app.sim_engine.trades.trade_pick_registry import get_team_owned_picks
+    from app.sim_engine.trades.trade_value import evaluate_player_asset_value, pick_value_hint
+
+    ctx = context or {}
+    user = team_by_id.get(user_team_id)
+    if user is None or gap <= 0:
+        return None
+    in_pkg = {str(getattr(a, "player_id", "") or getattr(a, "pick_id", "")) for a in package.normalized_assets}
+    need = gap * 1.3 + 3.0  # package totals have diminishing returns — leave headroom
+    cands: List[tuple] = []
+    min_year = int(ctx.get("tradeable_draft_year") or ctx.get("draft_year") or 0) or None
+    for row in get_team_owned_picks(league, user_team_id, min_year=min_year):
+        pid = str(row.get("pick_id") or "")
+        if not pid or pid in in_pkg:
+            continue
+        if min_year and int(row.get("year") or 0) > min_year + 2:
+            continue
+        v = pick_value_hint(row, league, user, ctx)
+        rnd = int(row.get("round") or 7)
+        n = {1: "1st", 2: "2nd", 3: "3rd"}.get(rnd, f"{rnd}th")
+        cands.append((v, {"type": "pick", "id": pid, "team": user_team_id}, f"your {row.get('year')} {n}-round pick"))
+    for attr in ("prospect_pool", "ahl_roster"):
+        for p in list(getattr(user, attr, None) or []):
+            pid = str(getattr(p, "id", "") or "")
+            if not pid or pid in in_pkg:
+                continue
+            try:
+                v = float(evaluate_player_asset_value(p, user, partner, league, context=ctx).get("total", 0.0))
+            except Exception:
+                continue
+            cands.append((v, {"type": "player", "id": pid, "team": user_team_id}, player_display_name(p)))
+    fits = [c for c in cands if c[0] >= need]
+    if not fits:
+        return None
+    # Smallest asset that clears the bar; rebuilders lean to picks on near-ties.
+    fits.sort(key=lambda c: (c[0] - (2.0 if prefer_picks and c[1]["type"] == "pick" else 0.0)))
+    v, asset, label = fits[0]
+    return {
+        "label": f"Add {label}",
+        "explanation": f"{_team_name_of(partner)} is about {gap:.0f} value short. Adding {label} (~{v:.0f}) should get it done.",
+        "add_asset": asset,
+        "kind": "concrete",
+    }
 
 
 def _team_needs_impact_for_trade(

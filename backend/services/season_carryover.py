@@ -12,6 +12,8 @@ At rollover the finished season is archived instead of thrown away:
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 ARCHIVE_SEASONS = 6
 
@@ -44,7 +46,7 @@ def _players_by_id(session: Any) -> Dict[str, Any]:
             if pid:
                 out[pid] = p
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return out
 
 
@@ -94,7 +96,7 @@ def archive_player_lines(session: Any, season_year: int) -> int:
             setattr(p, "career_stats", cs)
             n += 1
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     arch = dict(getattr(session, "player_season_archive", None) or {})
     arch[str(season_year)] = compact
     for k in sorted(arch.keys())[:-ARCHIVE_SEASONS]:
@@ -174,7 +176,7 @@ def archive_completed_season(session: Any, history_entry: Dict[str, Any]) -> Dic
                 winners.append({k: a.get(k) for k in ("award_id", "id", "name", "winner_name", "player_name", "winner_id", "player_id", "team_id", "team_abbr")})
         history_entry["awards"] = winners
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     session.team_luck_carryover = {t: {"season": sy, "pdo": r.get("pdo"), "luck_goals": r.get("luck_goals"), "regression_pts": r.get("regression_pts"),
                                         "luck_label": r.get("luck_label"), "xgf_pct": r.get("xgf_pct"), "pts": r.get("pts")} for t, r in teams.items()}
     session._season_archived_year = sy
@@ -197,7 +199,7 @@ def _franchise_first_season(session: Any, season_year: int) -> int:
     try:
         session._franchise_first_season_year = first
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return first
 
 

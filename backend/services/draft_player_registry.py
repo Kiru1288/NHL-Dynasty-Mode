@@ -8,6 +8,8 @@ through league.players_by_id rather than searching rosters ad hoc.
 from __future__ import annotations
 
 from typing import Any, Dict, Iterable, Optional
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 
 def ensure_players_by_id(league: Any) -> Dict[str, Any]:
@@ -16,7 +18,7 @@ def ensure_players_by_id(league: Any) -> Dict[str, Any]:
         try:
             league.players_by_id = {}
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         reg = getattr(league, "players_by_id", None)
         if not isinstance(reg, dict):
             return {}

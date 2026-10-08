@@ -20,6 +20,10 @@ Major goals:
 
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # pragma: no cover - typing only (avoids a circular import)
+    from .playoffs import PlayoffSeries
 
 
 POINTS_FOR_WIN = 2

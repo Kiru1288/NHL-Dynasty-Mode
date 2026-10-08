@@ -15,6 +15,8 @@ import sys
 import time
 from collections import defaultdict
 from typing import Any, Callable, Dict, List, Tuple
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 SIM = os.path.join(ROOT, "SimEngine")
@@ -68,7 +70,7 @@ def _clone_session(session: Any) -> Any:
             try:
                 delattr(session, attr)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         return copy.deepcopy(session)
     except Exception:
@@ -123,7 +125,7 @@ def _install_wrappers(fs_module: Any, board: TimerBoard) -> Dict[str, Any]:
                 originals[f"se.{attr}"] = getattr(se, attr)
                 setattr(se, attr, board.wrap(label, originals[f"se.{attr}"]))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     return originals
 

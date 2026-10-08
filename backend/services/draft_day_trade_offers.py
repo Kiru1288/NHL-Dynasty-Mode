@@ -11,7 +11,16 @@ from __future__ import annotations
 
 import hashlib
 import random
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
+
+
+def _stable_hash(value):
+    """Process-stable replacement for built-in hash() (salted per process via PYTHONHASHSEED)."""
+    import hashlib as _hl
+
+    return int.from_bytes(_hl.sha256(str(value).encode("utf-8")).digest()[:8], "big", signed=True)
 
 
 def _team_name(session: Any, team_id: str) -> str:
@@ -414,7 +423,7 @@ def generate_draft_day_trade_offers(
     team_by_id = dict(getattr(session, "team_by_id", None) or {})
     rng = getattr(getattr(session, "sim", None), "rng", None)
     if rng is None:
-        rng = random.Random(int(overall) * 997 + hash(on_clock) % 10007)
+        rng = random.Random(int(overall) * 997 + _stable_hash(on_clock) % 10007)
 
     ctx: Dict[str, Any] = {}
     try:
@@ -668,5 +677,5 @@ def generate_draft_day_trade_offers(
     try:
         session.draft_state = state
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return offers

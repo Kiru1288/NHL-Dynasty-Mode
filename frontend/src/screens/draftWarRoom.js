@@ -40,88 +40,6 @@ export const BOARD_SOURCES = [
   { id: "pronman", label: "Corey Pronman" },
 ];
 
-const CHARACTER_INCIDENTS = [
-  {
-    id: "locker_fight",
-    title: "Locker-room haymaker",
-    stockHit: 14,
-    hitPctHit: 11,
-    story: (name) =>
-      `${name} swung a Bauer bag at a linemate after a missed empty-netter in Kamloops. The bag won. Teammates now call him Carry-On, and two NHL clubs quietly moved him off their top-20.`,
-  },
-  {
-    id: "hot_head",
-    title: "Hot head vs. the clock",
-    stockHit: 10,
-    hitPctHit: 8,
-    story: (name) =>
-      `${name} earned a misconduct arguing with a timekeeper who said the period was over. It was. Scouts noted the compete; GMs noted the lawyer fees.`,
-  },
-  {
-    id: "diva",
-    title: "Walk-up-song standoff",
-    stockHit: 12,
-    hitPctHit: 10,
-    story: (name) =>
-      `${name} refused a defensive-zone faceoff until the PA played his walk-up song — a 47-second TikTok remix of his own last name. Coach sat him. Twitter did not.`,
-  },
-  {
-    id: "curfew",
-    title: "Billet curfew, nacho edition",
-    stockHit: 8,
-    hitPctHit: 6,
-    story: (name) =>
-      `${name} was clocked sneaking into the billet house at 2:14 a.m. with a family-size nacho tray and a goldfish in a souvenir cup. The goldfish is fine. The development curve is not.`,
-  },
-  {
-    id: "bus_nickelback",
-    title: "Ninety-minute Nickelback set",
-    stockHit: 6,
-    hitPctHit: 5,
-    story: (name) =>
-      `After a 1–8 road swing, ${name} led the team bus in a 90-minute Nickelback set. Leadership, technically. Several scouts asked if “presence” can be a red flag.`,
-  },
-  {
-    id: "gps_own_goal",
-    title: "GPS caption, own-goal follow-through",
-    stockHit: 9,
-    hitPctHit: 7,
-    story: (name) =>
-      `${name} posted “refs in this league couldn’t find the net with GPS,” then scored an own-goal that night. Analytics still like the shot volume. The room does not.`,
-  },
-  {
-    id: "stick_rack",
-    title: "Three-stick tantrum",
-    stockHit: 11,
-    hitPctHit: 9,
-    story: (name) =>
-      `${name} snapped three sticks on the bench after a shift, then asked the trainer for a fourth. Trainer said no. ${name} said, quote, “this is why we don’t make playoffs.” They were 8 points up in the standings.`,
-  },
-  {
-    id: "stipend_diva",
-    title: "Stipend hierarchy",
-    stockHit: 13,
-    hitPctHit: 10,
-    story: (name) =>
-      `${name} told a linemate he wouldn’t pass to anyone making less than him. He is on a $50 weekly stipend. The linemate has 18 more points.`,
-  },
-  {
-    id: "hotel_iron",
-    title: "Hotel iron incident",
-    stockHit: 7,
-    hitPctHit: 6,
-    story: (name) =>
-      `Team staff found ${name} ironing a playoff beard onto a pillowcase at 1 a.m. “Visualization,” he called it. The hotel called it a fire hazard. Scouts called it a character follow-up.`,
-  },
-  {
-    id: "ref_dad",
-    title: "Asked if dad was working",
-    stockHit: 8,
-    hitPctHit: 7,
-    story: (name) =>
-      `${name} asked the referee if his dad was working the game — the referee’s dad was in the stands. In a suit. As the league’s discipline chair. Combine interviews got spicier.`,
-  },
-];
 
 export function hashSeed(input) {
   const s = String(input ?? "");
@@ -203,10 +121,6 @@ export function resolvePyramidTier(player) {
   return pick;
 }
 
-function pickIncident(player) {
-  const idx = hashSeed(`${player?.id || player?.name}-incident`) % CHARACTER_INCIDENTS.length;
-  return CHARACTER_INCIDENTS[idx];
-}
 
 export function resolveCharacterFile(player, profile = null) {
   const charRead = profile?.character_read || null;

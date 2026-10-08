@@ -6,7 +6,9 @@ share of the gap to potential, scaled by age, and never passes potential.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 AGE_FACTOR = {17: 1.0, 18: 1.0, 19: 1.0, 20: 1.0, 21: 0.9, 22: 0.8, 23: 0.6, 24: 0.45, 25: 0.3}
 MAX_GAIN = 6.0
@@ -45,7 +47,7 @@ def _raise_ovr(p: Any, gain: float) -> float:
         persist_recomputed_ovr(p)
         p._invalidate_ovr_memo()
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return _ovr99(p) - before
 
 
@@ -81,6 +83,11 @@ def ahl_gain(age: int, ovr: float, pot: float, line: Dict[str, Any]) -> float:
 
 
 def apply_season_ice_time_development(session: Any) -> Dict[str, Any]:
+    """Retired as a separate growth source: it added up to +6 OVR on top of the in-season
+    pulses and the year-end budget (growth stacked ~1.5x a year). Ice time now feeds the
+    single annual budget through ``toi_quality`` (stamped by _dev_stamp_season_production)."""
+    if not getattr(session, "_legacy_ice_time_growth", False):
+        return {"skipped": True, "reason": "folded_into_development_budget"}
     sy = int(getattr(session, "season_calendar_year", 0) or 0)
     if int(getattr(session, "_ice_dev_applied_year", 0) or 0) == sy:
         return {"skipped": True}

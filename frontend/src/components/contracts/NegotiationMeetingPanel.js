@@ -150,9 +150,11 @@ export default function NegotiationMeetingPanel({ playerId, onChanged, compact =
           {hometown ? (
             <div className="nmp__block">
               <span className="nmp__label">Hometown discount</span>
-              {hometown.active_discount_pct ? (
+              {hometown.active_discount_m || hometown.active_discount_pct ? (
                 <p className="nmp__result is-pos">
-                  Agreed: about {Math.round(Number(hometown.active_discount_pct))}% under market on his next deal with you.
+                  {hometown.active_discount_m
+                    ? `Agreed: about $${Number(hometown.active_discount_m).toFixed(2)}M a year under his number on his next deal with you.`
+                    : `Agreed: about ${Math.round(Number(hometown.active_discount_pct))}% under market on his next deal with you.`}
                 </p>
               ) : hometown.used ? (
                 <p className="nmp__result">

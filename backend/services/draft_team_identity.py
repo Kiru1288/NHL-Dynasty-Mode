@@ -26,6 +26,8 @@ from __future__ import annotations
 import hashlib
 import math
 from typing import Any, Dict, List, Optional, Tuple
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 RANK_K = 5.0  # log-rank offset: ln(rank + K)
 UNRANKED_RANK = 330
@@ -269,9 +271,23 @@ def team_draft_identity(
     elif private_weight <= 0.22:
         tags.append("Follows consensus")
 
+    # Club playing identity (services/team_identity_service) steers which prospect
+    # styles this room falls for: a run-and-gun club leans to finishers and speed.
+    style_targets: List[str] = []
+    try:
+        _ti = getattr(team, "team_identity", None)
+        if isinstance(_ti, dict):
+            style_targets = [str(s) for s in (_ti.get("target_styles") or [])][:4]
+            _lab = str((_ti.get("primary") or {}).get("label") or "")
+            if _lab and _lab != "Balanced" and len(tags) < 3:
+                tags.append(f"{_lab} fits")
+    except Exception:
+        style_targets = []
+
     identity = {
         "team_id": tid,
         "draft_year": int(draft_year),
+        "style_targets": style_targets,
         "philosophy": phil,
         "scouting_quality": round(q, 1),
         "private_weight": round(private_weight, 3),
@@ -326,6 +342,19 @@ def _identity_adjustment(identity: Dict[str, Any], entry: Dict[str, Any], talent
     pos = str(entry.get("position") or "").upper()
     pkey = "G" if pos == "G" else ("D" if pos.endswith("D") or pos == "D" else ("C" if pos == "C" else "W"))
     adj += 0.05 * identity["pos_pref"].get(pkey, 0.0)
+
+    targets = identity.get("style_targets") or []
+    if targets and style:
+        try:
+            from services.team_identity_service import DRAFT_STYLE_MAP
+
+            mapped = DRAFT_STYLE_MAP.get(style)
+            if mapped == "two_way" and pkey == "D":
+                mapped = "two_way_d"
+            if mapped in targets:
+                adj += 0.05 if targets.index(mapped) < 2 else 0.03
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     return adj
 
 

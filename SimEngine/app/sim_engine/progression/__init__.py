@@ -20,6 +20,8 @@ from app.sim_engine.progression.development import (
     resolve_development_profile,
 )
 from app.sim_engine.progression.potential import apply_potential_drift, ensure_development_ledger
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 
 def run_player_progression(
@@ -48,14 +50,14 @@ def run_player_progression(
         setattr(player, "_active_dev_season", sid)
         setattr(player, "_dev_source_path", source_path)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     ledger = ensure_development_ledger(player, sid)
     # Ensure profile exists before growth math.
     try:
         resolve_development_profile(player)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     development.apply_player_development(player, rng)
     potential.update_player_potential(player, rng)
@@ -65,7 +67,7 @@ def run_player_progression(
 
         persist_recomputed_ovr(player)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     role_changes.update_player_role(player)
     retired = retirement.should_player_retire(player, rng)
     if ledger.get("source_path") in (None, "", "near_ceiling", "no_ratings", "outside_window"):

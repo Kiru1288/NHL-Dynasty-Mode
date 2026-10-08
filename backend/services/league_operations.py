@@ -8,6 +8,8 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 
 from services.franchise_session import FranchiseSession
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 # Tunable revenue bases (millions USD, annual)
 _MARKET_BASE_REVENUE_M = {
@@ -121,7 +123,7 @@ def _revenue_yoy_delta(
         try:
             session.market_revenue_history_v2 = history
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     if summer:
         prior_full = (history.get(str(team_id)) or {}).get(str(int(season_year) - 1))
         return {"revenue_yoy_delta": 0.0, "revenue_yoy_direction": "flat",
@@ -335,7 +337,7 @@ def _team_abbr_for_value(team: Any) -> str:
         if v:
             return v
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     for key in ("abbreviation", "abbr", "abbrev"):
         v = str(getattr(team, key, "") or "").upper()
         if v:
@@ -990,7 +992,7 @@ def calculate_team_revenue(
         honey_m = honeymoon_m(session, team_id, sy_rev)
         fee_m = fee_share_m(session, sy_rev)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     playoff_m = _playoff_revenue_bonus(session, team_id) * max(0.0, 1.0 + _gov(session, "playoff_rev") / 100.0)
     revenue = base * perf_mult * fan_mult * arena_mult * rev_mult
@@ -1249,7 +1251,7 @@ def calculate_escrow_progress(
             try:
                 session.escrow_ledger = ledger
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         sy = str(int(getattr(session, "season_calendar_year", 2025) or 2025))
         season_row = ledger.get(sy)
         if not isinstance(season_row, dict):
@@ -1490,7 +1492,7 @@ def _build_cba_block(session: FranchiseSession, pressure: float) -> Dict[str, An
 
 
 def _build_rule_changes(pressure: float, session: FranchiseSession) -> List[Dict[str, Any]]:
-    sy = int(getattr(session, "season_calendar_year", 2025) or 2025)
+    int(getattr(session, "season_calendar_year", 2025) or 2025)
     out: List[Dict[str, Any]] = []
     for name, faction, base_support in _RULE_CHANGE_TEMPLATES:
         support = base_support + (pressure - 0.5) * 0.12
@@ -1641,7 +1643,7 @@ def _build_league_operations_payload_impl(session: FranchiseSession) -> Dict[str
     try:
         _sync_session_phase_from_calendar(session)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     ensure_session_nhl_salary_cap(session)
 
     uid = str(session.user_team_id or "")

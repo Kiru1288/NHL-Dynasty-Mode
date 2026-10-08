@@ -13,24 +13,7 @@ import os
 import random
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from app.sim_engine.entities.player import (
-    Player,
-    Position,
-    Shoots,
-    IdentityBio,
-    BackstoryUpbringing,
-    BackstoryType,
-    UpbringingType,
-    SupportLevel,
-    PressureLevel,
-    DevResources,
-    ATTRIBUTE_KEYS,
-    clamp_rating,
-    assign_skater_archetype,
-    random_height_cm,
-    enforce_minimum_player_ovr,
-    get_ovr_floor_for_pool,
-)
+from app.sim_engine.entities.player import Player, Position, Shoots, IdentityBio, BackstoryUpbringing, BackstoryType, UpbringingType, SupportLevel, PressureLevel, DevResources, clamp_rating, assign_skater_archetype, enforce_minimum_player_ovr, get_ovr_floor_for_pool
 from app.sim_engine.generation.name_generator import generate_human_identity
 from app.sim_engine.generation.prospect_body import (
     apply_body_tradeoffs_to_ratings,
@@ -38,6 +21,8 @@ from app.sim_engine.generation.prospect_body import (
     generate_realistic_weight_kg,
 )
 from app.sim_engine.generation.prospect_identity import spawn_youth_baseline_profile
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 TRANSCENDENT_CLASS_PROB = 0.0001
 _BUILD_ROLE_SHAPED_RATINGS = None
@@ -229,18 +214,18 @@ def reanchor_generated_junior_dobs(league: Any, as_of_year: int) -> int:
                     ident.birth_month = 7
                     ident.birth_day = 1
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
                 try:
                     p.age = spawn_age
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
                 setattr(p, "_dob_anchor_year", year)
                 fixed += 1
     try:
         setattr(league, "_junior_dobs_reanchored", True)
         setattr(league, "season_start_year", year)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return fixed
 
 
@@ -275,7 +260,7 @@ def _spawn_player(
         from app.sim_engine.engine import pop_generation_profile
         from app.sim_engine.entities.player import archetype_from_generation_profile
 
-        youth_profile = spawn_youth_baseline_profile(pos)
+        youth_profile = spawn_youth_baseline_profile(pos, rng)
         ratings = build_role_shaped_ratings(
             position=pos, target_ovr=target_ovr, rng=rng, profile=youth_profile
         )
@@ -330,7 +315,7 @@ def _spawn_player(
         identity.birth_month = 7
         identity.birth_day = 1
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     backstory = BackstoryUpbringing(
         backstory=BackstoryType.GRINDER,
         upbringing=UpbringingType.STABLE_MIDDLE_CLASS,
@@ -354,7 +339,7 @@ def _spawn_player(
     try:
         player.age = age
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     apply_body_tradeoffs_to_ratings(player, rng)
     floor = get_ovr_floor_for_pool(pool_context)
     if floor > 0:
@@ -365,14 +350,14 @@ def _spawn_player(
         try:
             ensure_player_chemistry_profile(player, rng)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     ensure_player_headshot = _ensure_player_headshot_cached()
     if ensure_player_headshot:
         try:
             ensure_player_headshot(player)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     if str(pool_context or "").lower() in ("junior", "college", "european_junior"):
         # Draft picks (rounds 1-7) are all made expecting the prospect to play NHL
@@ -503,7 +488,7 @@ def ensure_development_leagues_for_draft_board(
 
                     initialize_prospect_season(p, code, rng=rng)
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
                 roster.append(p)
             teams_out.append({"team_id": tid_j, "name": club_name, "city": city, "players": roster})
         display = str(LEAGUE_REGISTRY.get(code, {}).get("display") or title)
@@ -547,7 +532,7 @@ def ensure_development_leagues_for_draft_board(
 
         apply_player_bios_to_league(league, as_of_year=year)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return True
 
 
@@ -575,7 +560,7 @@ def bootstrap_full_league_hierarchy(
     try:
         setattr(league, "season_start_year", year)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     if not hasattr(league, "players") or league.players is None:
         league.players = []
@@ -693,11 +678,11 @@ def bootstrap_full_league_hierarchy(
                 p.buried = True
                 p.roster_location = "ahl"
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             try:
                 p.context.current_team_id = f"AHL_{tid}"
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             _set_assignment(p, org_nhl_team_id=tid, level="ahl", club=_team_label(team))
             if p not in team.ahl_roster:
                 team.ahl_roster.append(p)
@@ -730,7 +715,7 @@ def bootstrap_full_league_hierarchy(
                         p.rights_team_id = tid
                         p.signed = False
                     except Exception:
-                        pass
+                        _swallowed_log.debug("suppressed exception", exc_info=True)
                     _set_assignment(p, org_nhl_team_id=tid, level="prospect", club=_team_label(team))
                     team.prospect_pool.append(p)
             except Exception:
@@ -753,7 +738,7 @@ def bootstrap_full_league_hierarchy(
                 p.in_minors = True
                 p.roster_location = "echl"
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             if p not in team.echl_roster:
                 team.echl_roster.append(p)
 
@@ -842,7 +827,7 @@ def bootstrap_full_league_hierarchy(
 
             apply_player_bios_to_league(league, as_of_year=year)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         return
 
     def _add_league(code: str, title: str, f: int, d: int, g: int, age_lo: int, age_hi: int, ovr_lo: float, ovr_hi: float) -> None:
@@ -887,7 +872,7 @@ def bootstrap_full_league_hierarchy(
 
                         initialize_prospect_season(p, code, rng=rng)
                     except Exception:
-                        pass
+                        _swallowed_log.debug("suppressed exception", exc_info=True)
                 roster.append(p)
             teams_out.append({"team_id": tid_j, "name": club_name, "city": city, "players": roster})
         display = str(LEAGUE_REGISTRY.get(code, {}).get("display") or title)
@@ -954,7 +939,7 @@ def bootstrap_full_league_hierarchy(
 
         apply_player_bios_to_league(league, as_of_year=year)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 # Star-power tiers: (label, weight, franchise/elite/top slot counts, top target ovr)
@@ -1012,7 +997,7 @@ def _player_ovr_frac(player: Any) -> float:
 
                 return max(0.0, min(1.0, float(normalize_rating(ovr_fn()))))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         return 0.45
 
 
@@ -1044,7 +1029,7 @@ def _apply_shaped_player(
 
             persist_recomputed_ovr(p)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         from app.sim_engine.engine import pop_generation_profile
         from app.sim_engine.entities.player import archetype_from_generation_profile, assign_skater_archetype
 
@@ -1074,7 +1059,7 @@ def _apply_shaped_player(
 
         ensure_player_chemistry_profile(p, rng_inst)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     if rng_inst.random() < 0.12:
         setattr(p, "character_concerns", True)
     code = code_by_id.get(id(p), "JUNIOR")
@@ -1083,7 +1068,7 @@ def _apply_shaped_player(
 
         initialize_prospect_season(p, code, rng=rng_inst, force=True, preserve_actual=True)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _boost_defensive_tools(player: Any, rng: random.Random) -> None:
@@ -1607,7 +1592,7 @@ def maybe_spawn_overseas_star(league: Any, rng: random.Random, season_year: int)
     try:
         league._overseas_star_rolls = done
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     if rng.random() >= 0.25:
         return None
     used_names: set = set()

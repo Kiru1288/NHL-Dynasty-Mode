@@ -8,6 +8,8 @@ storyline focus, and a soft teammate rating hit while he is on the roster.
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 BRADY_NHL_ID = 8480801
 BRADY_TARGET_OVR = 55.0 / 99.0  # display 55
@@ -33,7 +35,7 @@ def is_brady_tkachuk(player: Any) -> bool:
         if ext.isdigit() and int(ext) == BRADY_NHL_ID:
             return True
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     ident = getattr(player, "identity", None)
     name = str(getattr(ident, "name", "") or getattr(player, "name", "") or "").lower()
     clean = name.replace(CANCER_SUFFIX.lower(), "").strip()
@@ -73,7 +75,7 @@ def force_brady_overall(player: Any) -> float:
     try:
         setattr(player, "potential", BRADY_TARGET_OVR)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         psych = getattr(player, "psych", None)
         if psych is not None:
@@ -87,7 +89,7 @@ def force_brady_overall(player: Any) -> float:
                 if hasattr(psych, attr):
                     setattr(psych, attr, val)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         traits = getattr(player, "traits", None)
         if traits is not None:
@@ -101,7 +103,7 @@ def force_brady_overall(player: Any) -> float:
                 if hasattr(traits, attr):
                     setattr(traits, attr, val)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return float(align_attribute_ovr_to_target(player, BRADY_TARGET_OVR, rounds=14))
 
 
@@ -130,7 +132,7 @@ def degrade_teammates_for_brady(team: Any, *, scale: float = TEAMMATE_RATING_SCA
             if tgt >= 0.84 or cur >= 0.84:
                 continue
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         try:
             _scale_player_ratings(p, float(scale))
             persist_recomputed_ovr(p)
@@ -320,7 +322,7 @@ def inject_brady_storylines(session: Any, *, team_abbr: str = "OTT") -> int:
                 "Teammates playing worse. Trade value negative."
             )
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return n
 
 

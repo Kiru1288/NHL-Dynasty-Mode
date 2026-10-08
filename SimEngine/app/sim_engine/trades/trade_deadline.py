@@ -19,7 +19,7 @@ DEADLINE_RAMP_DAYS = 35
 DEADLINE_WEEK_DAYS = 7
 
 #: Phases where the deadline freeze applies (regular season after Mar 10, playoffs).
-_FREEZE_PHASES = frozenset({"regular", "regular_season", "in_season", "playoffs", "postseason"})
+_FREEZE_PHASES = frozenset({"regular", "regular_season", "in_season", "playoff_ready", "playoffs", "postseason"})
 
 POST_DEADLINE_BLOCK_REASON = "After the trade deadline only AHL players can be traded until the season ends."
 

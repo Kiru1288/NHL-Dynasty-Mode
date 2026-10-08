@@ -8,6 +8,8 @@ league.draft_pick_registry before executing a selection or after a mid-draft tra
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 
 def resolve_current_pick_owner(league: Any, pick_id: str) -> Optional[str]:
@@ -165,11 +167,6 @@ def refresh_draft_order_ownership(session: Any) -> List[Dict[str, Any]]:
         return []
     draft_year = int(state.get("draft_year") or int(getattr(session, "season_calendar_year", 2025)) + 1)
     order = list(state.get("draft_order") or [])
-    completed_ids = {
-        str(p.get("prospect_id") or "")
-        for p in (state.get("completed_picks") or [])
-        if p.get("prospect_id")
-    }
     # Ensure/reconcile the registry ONCE up front — ownership can't change mid-loop,
     # so redoing this (a full registry scan) inside apply_registry_owner_to_slot for
     # every one of the up-to-224 remaining slots was pure O(slots) duplicate work.
@@ -180,7 +177,7 @@ def refresh_draft_order_ownership(session: Any) -> List[Dict[str, Any]]:
 
             ensure_draft_pick_registry(league, start_year=draft_year)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     refreshed: List[Dict[str, Any]] = []
     overall = int(state.get("overall_pick") or 1)
     for idx, slot in enumerate(order):
@@ -216,12 +213,12 @@ def refresh_draft_order_ownership(session: Any) -> List[Dict[str, Any]]:
 
         invalidate_session_payload_caches(session, "draft_pick_trade")
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         if getattr(session, "draft_payload", None) is not None:
             session.draft_payload = None
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return refreshed
 
 

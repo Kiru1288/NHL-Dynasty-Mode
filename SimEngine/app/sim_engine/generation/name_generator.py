@@ -13,7 +13,9 @@ All functions accept a `random.Random` instance for determinism.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 
 def _safe_choice(rng, items: List[str]) -> str:
@@ -461,7 +463,7 @@ try:
 
     _merge_name_pools(NAME_POOLS)
 except Exception:  # pragma: no cover - pools are optional
-    pass
+    _swallowed_log.debug("suppressed exception", exc_info=True)
 
 # Surname usage this process has handed out — draws prefer the less-used names so a
 # league doesn't fill up with twelve Smiths and nine Ivanovs.

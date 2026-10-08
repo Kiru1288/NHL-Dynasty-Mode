@@ -36,6 +36,8 @@ from services.league_rule_catalog import (
     RULE_BY_ID,
     RULES,
 )
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 PROPOSALS_PER_MEETING = 5
 LOBBY_TOKENS_PER_MEETING = 2
@@ -199,7 +201,7 @@ def _news(session: Any, headline: str, details: str, *, team_id: str = "", kind:
             "date": str(sy),
         })
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def ensure_governance(session: Any) -> Dict[str, Any]:
@@ -209,7 +211,7 @@ def ensure_governance(session: Any) -> Dict[str, Any]:
         try:
             session.league_governance = gov
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     gov.setdefault("rulebook", {})  # rule_id → {season, title, cat, effects}
     gov.setdefault("meetings", {})  # str(season) → meeting
     gov.setdefault("history", [])  # flattened decided proposals, newest last
@@ -265,7 +267,7 @@ def sync_governance_to_league(session: Any) -> Dict[str, float]:
             league.governance_modifiers = dict(mods)
             league.governance_floor_delta = float(mods.get("floor_ratio", 0.0))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     return mods
 
 
@@ -1024,7 +1026,7 @@ def _decide(session: Any, meeting: Dict[str, Any], prop: Dict[str, Any], user_vo
 
         invalidate_league_ops_cache(session)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _apply_passed(session: Any, prop: Dict[str, Any]) -> None:
@@ -1282,7 +1284,7 @@ def apply_revenue_scouting_budget(session: Any, rows: Optional[Dict[str, Dict[st
         state["budget"] = float(budget)
         state["budget_source"] = "revenue"
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return budget
 
 
@@ -1326,13 +1328,13 @@ def relocate_team(session: Any, team_id: str, market: Dict[str, Any]) -> Dict[st
     try:
         team.abbreviation = market["abbr"]
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         mp = getattr(team, "market", None)
         if mp is not None:
             mp.market_size = market["tier"]
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     sy = _season(session)
     vals = ensure_franchise_values(session)
     row = vals.get(str(team_id))
@@ -1349,7 +1351,7 @@ def relocate_team(session: Any, team_id: str, market: Dict[str, Any]) -> Dict[st
         prof = _ensure_team_fan_profile(session, str(team_id))
         prof["fan_confidence"] = 68.0
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     demands = _relocation_trade_demands(session, team)
     rec = {"season": sy, "team_id": str(team_id), "from_city": old_city, "from_abbr": old_abbr, "to_city": market["city"], "to_abbr": market["abbr"], "demands": demands}
     gov["relocations"].append(rec)
@@ -1393,7 +1395,7 @@ def _relocation_trade_demands(session: Any, team: Any) -> List[Dict[str, Any]]:
                 calendar_idx=int(getattr(session, "calendar_cursor", 0) or 0), force_formal=True,
             )
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         out.append({"player_id": _player_id(p), "name": str(getattr(getattr(p, "identity", None), "name", "") or getattr(p, "name", ""))})
     return out
 
@@ -1490,7 +1492,7 @@ def run_pending_expansion(session: Any, next_season_year: int) -> List[Dict[str,
                 team.abbreviation = c["abbr"]
                 team.market.market_size = c.get("tier", "medium")
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             new_teams.append(team)
         # Expansion draft: each new club takes one unprotected contracted player per club.
         picks_log: List[Dict[str, Any]] = []
@@ -1519,7 +1521,7 @@ def run_pending_expansion(session: Any, next_season_year: int) -> List[Dict[str,
                     try:
                         setattr(p, field, nt.team_id)
                     except Exception:
-                        pass
+                        _swallowed_log.debug("suppressed exception", exc_info=True)
                 need[_pos_group(p)] = need.get(_pos_group(p), 0) - 1
                 picks_log.append({"team": c_abbr(nt), "player": str(getattr(getattr(p, "identity", None), "name", "") or ""), "from": _team_abbr(src), "ovr": round(_ovr(p), 1)})
         for nt in new_teams:
@@ -1558,7 +1560,7 @@ def run_pending_expansion(session: Any, next_season_year: int) -> List[Dict[str,
 
         ensure_franchise_pick_registry(league, season_calendar_year=int(next_season_year), years_ahead=4)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return joined
 
 
@@ -1586,7 +1588,7 @@ def _user_impact(session: Any) -> Dict[str, Any]:
         out["annual_revenue_m"] = fin.get("revenue")
         out["annual_profit_m"] = fin.get("profit")
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         from services.franchise_offseason import team_signing_bonus_eligibility
 
@@ -1595,13 +1597,13 @@ def _user_impact(session: Any) -> Dict[str, Any]:
         out["bonus_max_pct"] = elig.get("max_bonus_pct")
         out["bonus_floor_m"] = elig.get("floor_m")
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         from services.franchise_scouting import _ensure_scouting_state
 
         out["scouting_budget"] = float(_ensure_scouting_state(session).get("budget") or 0)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     row = (ensure_governance(session).get("franchise_values") or {}).get(uid)
     if isinstance(row, dict):
         hist = row.get("history") or []

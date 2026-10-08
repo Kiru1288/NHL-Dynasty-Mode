@@ -10,36 +10,7 @@ from __future__ import annotations
 import random
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.sim_engine.franchise.storyline_engine import (
-    PLAYER_AGENTS,
-    _AGENT_BY_ID,
-    _can_fire,
-    _league_points_rank,
-    _mark_fired,
-    _player_age,
-    _player_from_roster,
-    _player_ovr99,
-    _pos_bucket,
-    _stat_int,
-    _team_display,
-    _team_games_played,
-    _team_record,
-    _u_add_social_post,
-    _u_all_players,
-    _u_clip,
-    _u_current_meta,
-    _u_name,
-    _u_personality,
-    _u_position,
-    _u_psych_value,
-    _enqueue_storyline_followup,
-    _u_record_storyline,
-    _u_sync_player_entities,
-    apply_universe_matchup_context,
-    apply_universe_postgame,
-    build_universe_matchup_context,
-    _u_push_morale_to_player,
-)
+from app.sim_engine.franchise.storyline_engine import PLAYER_AGENTS, _AGENT_BY_ID, _can_fire, _league_points_rank, _mark_fired, _player_age, _player_from_roster, _player_ovr99, _pos_bucket, _stat_int, _team_display, _team_games_played, _team_record, _u_add_social_post, _u_all_players, _u_clip, _u_current_meta, _u_name, _u_personality, _u_position, _u_psych_value, _enqueue_storyline_followup, _u_record_storyline, _u_sync_player_entities, apply_universe_matchup_context, build_universe_matchup_context, _u_push_morale_to_player
 
 BEAT_WRITERS: List[Dict[str, Any]] = [
     {"id": "morin", "name": "Rachel Morin", "outlet": "Team Ledger", "role": "beat_reporter", "specialty": "local", "markets": "user"},

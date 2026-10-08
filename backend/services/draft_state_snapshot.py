@@ -11,7 +11,9 @@ Authorities preserved:
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 
 def snapshot_draft_moment(session: Any) -> Dict[str, Any]:
@@ -111,7 +113,7 @@ def restore_draft_moment(session: Any, snapshot: Dict[str, Any]) -> Dict[str, An
                 k: dict(v) for k, v in snapshot["draft_pick_registry"].items() if isinstance(v, dict)
             }
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     from services.draft_player_registry import get_player, find_development_home, register_player
 
@@ -130,7 +132,7 @@ def restore_draft_moment(session: Any, snapshot: Dict[str, Any]) -> Dict[str, An
             try:
                 setattr(player, key, val)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         register_player(league, player)
 
     for tid, ids in (snapshot.get("org_prospect_ids") or {}).items():
@@ -145,7 +147,7 @@ def restore_draft_moment(session: Any, snapshot: Dict[str, Any]) -> Dict[str, An
         try:
             team.prospect_pool = pool
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     for tid, rows in (snapshot.get("reserve_lists") or {}).items():
         team = (getattr(session, "team_by_id", None) or {}).get(str(tid))
@@ -155,7 +157,7 @@ def restore_draft_moment(session: Any, snapshot: Dict[str, Any]) -> Dict[str, An
         try:
             team.reserve_list = cleaned
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     # Refresh live ownership markers after restore
     try:
@@ -163,7 +165,7 @@ def restore_draft_moment(session: Any, snapshot: Dict[str, Any]) -> Dict[str, An
 
         refresh_draft_order_ownership(session)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     restored = getattr(session, "draft_state", None) or {}
     return {

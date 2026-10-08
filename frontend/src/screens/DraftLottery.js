@@ -1,7 +1,6 @@
-﻿import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useGameUI } from "../game/GameUIContext";
 import { SCREENS } from "../game/constants";
-import { getApiBaseUrl } from "../services/api";
 import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
 
 const LOTTERY_ODDS = [
@@ -236,53 +235,6 @@ function readLocalUniverse() {
   return null;
 }
 
-async function fetchFirstWorkingEndpoint() {
-  const endpoints = [
-    "/api/standings",
-    "/standings",
-    "/api/franchise/universe",
-    "/api/sim/universe",
-    "/api/universe",
-  ];
-
-  for (const endpoint of endpoints) {
-    try {
-      const response = await fetch(`${getApiBaseUrl()}${endpoint}`);
-
-      if (!response.ok) continue;
-
-      const data = await response.json();
-      const standings = normalizeStandings(data);
-
-      if (standings.length) {
-        return data;
-      }
-    } catch {
-      continue;
-    }
-  }
-
-  return null;
-}
-
-function weightedPick(teams, blockedIds = new Set()) {
-  const available = teams.filter((team) => !blockedIds.has(String(team.id)));
-  const totalWeight = available.reduce((sum, team) => sum + safeNumber(team.odds), 0);
-
-  if (!available.length || totalWeight <= 0) return null;
-
-  let roll = Math.random() * totalWeight;
-
-  for (const team of available) {
-    roll -= safeNumber(team.odds);
-
-    if (roll <= 0) {
-      return team;
-    }
-  }
-
-  return available[available.length - 1];
-}
 
 function mapBackendLotteryToBoard(payload, standingsBoard) {
   if (!payload) return null;
@@ -392,10 +344,10 @@ export default function DraftLottery({
         return;
       }
 
-      const apiData = await fetchFirstWorkingEndpoint();
-
+      // The backend has no standalone standings route; standings arrive with the
+      // franchise payload, so use it directly instead of probing dead endpoints.
       if (active) {
-        setSimData(apiData || franchisePayload);
+        setSimData(franchisePayload);
         setLoading(false);
       }
     }

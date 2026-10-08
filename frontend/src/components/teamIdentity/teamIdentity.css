@@ -1,0 +1,80 @@
+/* Team identity — quiet header line + hover card (DESIGN.md broadcast-ops tokens). */
+.tid-tag {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 2px;
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #8096a8;
+  white-space: nowrap;
+  cursor: help;
+  outline: none;
+}
+.tid-tag:focus-visible { color: #e9f7fb; }
+.tid-tag.is-compact { font-size: 0.62rem; letter-spacing: 0.08em; }
+.tid-tag.is-block { display: flex; width: fit-content; margin: 3px 0 2px; }
+.tid-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--tid-accent, #8096a8);
+  flex: 0 0 auto;
+}
+.tid-style-run_and_gun { --tid-accent: #ff606d; }
+.tid-style-speed_transition { --tid-accent: #13d8e7; }
+.tid-style-heavy_forecheck { --tid-accent: #e9a83c; }
+.tid-style-defensive_structure { --tid-accent: #8ab4ff; }
+.tid-style-skill_possession { --tid-accent: #52df94; }
+.tid-style-goaltending_fortress { --tid-accent: #c9a86a; }
+.tid-style-balanced { --tid-accent: #8096a8; }
+
+.tid-card {
+  position: absolute;
+  z-index: 60;
+  top: calc(100% + 6px);
+  left: 0;
+  width: 260px;
+  padding: 12px 14px;
+  border: 1px solid rgba(73, 231, 240, 0.5);
+  border-top: 3px solid var(--tid-accent, #13d8e7);
+  border-radius: 8px;
+  background: rgba(9, 25, 38, 0.98);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+  color: #e9f7fb;
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 400;
+  white-space: normal;
+  cursor: default;
+}
+.tid-card-head { display: flex; align-items: baseline; gap: 8px; }
+.tid-card-head strong {
+  font-family: "Barlow Condensed", "Archivo Black", "Arial Narrow", sans-serif;
+  font-size: 1.05rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.tid-card-head span { color: #8096a8; font-size: 0.75rem; }
+.tid-card-blurb { margin: 4px 0 10px; color: #b9cad5; font-size: 0.78rem; line-height: 1.35; }
+.tid-bars { display: grid; gap: 4px; margin-bottom: 8px; }
+.tid-bar-row { display: grid; grid-template-columns: 74px 1fr 26px; align-items: center; gap: 8px; font-size: 0.7rem; }
+.tid-bar-row span { color: #8096a8; }
+.tid-bar-row i { height: 5px; border-radius: 999px; background: rgba(156, 218, 236, 0.14); overflow: hidden; }
+.tid-bar-row b { display: block; height: 100%; background: var(--tid-accent, #13d8e7); }
+.tid-bar-row em { font-style: normal; text-align: right; color: #e9f7fb; font-variant-numeric: tabular-nums; }
+.tid-card-line { margin: 3px 0 0; font-size: 0.75rem; line-height: 1.35; }
+.tid-card-line span {
+  display: inline-block;
+  min-width: 68px;
+  color: #8096a8;
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.tid-card-foot { margin: 8px 0 0; color: #5f7486; font-size: 0.66rem; }

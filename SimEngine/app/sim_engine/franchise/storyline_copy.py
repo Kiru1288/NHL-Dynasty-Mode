@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import random
 import re
-from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
-GOALIE_HEATER_SV_FLOOR = 0.880
-GOALIE_MELTDOWN_SV_CEILING = 0.940
+GOALIE_HEATER_SV_FLOOR = 0.915  # P6: a hot goalie is above league average (was .880)
+GOALIE_MELTDOWN_SV_CEILING = 0.890  # P6: a meltdown is below average (was .940)
 
 # window_days, max league public stories in that window
 _HIGH_VOLUME_CAPS: Dict[str, Tuple[int, int]] = {
@@ -242,7 +243,7 @@ def claim_league_story_slot(session: Any, event: Dict[str, Any], *, user_club: b
             try:
                 session._story_fp_days = dict(list(fp_days.items())[-200:])
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
     return True
 
 

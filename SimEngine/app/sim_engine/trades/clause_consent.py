@@ -38,6 +38,8 @@ from app.sim_engine.trades.trade_rules import (
     _stable_unit_roll,
     _team_strength_proxy,
 )
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 #: Minimum sim days before a declined waiver can be asked again (even across windows).
 REASK_MIN_DAYS = 30
@@ -182,7 +184,7 @@ def _consent_store(session: Any) -> Dict[str, Any]:
         try:
             session.ntc_waivers = store
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     return store
 
 
@@ -193,7 +195,7 @@ def _ask_store(session: Any) -> Dict[str, Any]:
         try:
             session.clause_waiver_asks = store
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     return store
 
 
@@ -201,7 +203,7 @@ def _bump_revision(session: Any) -> None:
     try:
         session._clause_consent_revision = int(getattr(session, "_clause_consent_revision", 0) or 0) + 1
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def consent_revision(session: Any) -> int:

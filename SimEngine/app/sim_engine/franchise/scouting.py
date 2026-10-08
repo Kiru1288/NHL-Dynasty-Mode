@@ -16,6 +16,13 @@ DRAFT_OVR_REVEAL_THRESHOLD = 72.0
 DEFAULT_SCOUTING_BUDGET = 2_500_000
 
 
+def _stable_hash(value):
+    """Process-stable replacement for built-in hash() (salted per process via PYTHONHASHSEED)."""
+    import hashlib as _hl
+
+    return int.from_bytes(_hl.sha256(str(value).encode("utf-8")).digest()[:8], "big", signed=True)
+
+
 def _draft_franchise_date_context(session: FranchiseSession) -> Dict[str, Any]:
     month: Optional[int] = None
     phase = str(getattr(session, "phase", "regular") or "regular")
@@ -69,7 +76,7 @@ def _draft_scout_completion(rank: int, month: Optional[int], key: str) -> float:
         8: 0, 9: 4, 10: 8, 11: 12, 12: 16, 1: 20,
         2: 28, 3: 36, 4: 48, 5: 58, 6: 68, 7: 12,
     }.get(int(month) if month is not None else 0, 0)
-    jitter = (abs(hash(str(key))) % 11) - 5
+    jitter = (abs(_stable_hash(str(key))) % 11) - 5
     return float(max(8.0, min(88.0, base + month_bonus + jitter)))
 
 
@@ -166,7 +173,7 @@ def _intensity_mult(intensity: str) -> float:
 
 def _scout_pool(session: FranchiseSession) -> List[Dict[str, Any]]:
     """Procedural scout staff tied to franchise session (no fixed player identities)."""
-    seed = abs(hash(str(session.session_id))) % 10_000
+    seed = abs(_stable_hash(str(session.session_id))) % 10_000
     regions = [
         ("North America", "NA"),
         ("Europe", "EU"),
@@ -443,7 +450,7 @@ def _aggregate_world(prospects: List[Dict[str, Any]]) -> Dict[str, Any]:
     for cid, row in sorted(by_country.items(), key=lambda x: -x[1]["prospect_count"]):
         cnt = max(1, row["prospect_count"])
         avg = row["scouted_sum"] / cnt
-        seed = abs(hash(cid)) % 1000
+        seed = abs(_stable_hash(cid)) % 1000
         countries.append(
             {
                 "id": cid,

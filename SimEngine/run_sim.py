@@ -25,15 +25,15 @@ from dataclasses import dataclass, field, asdict, is_dataclass
 import datetime as _dt
 import hashlib
 import json
-import math
-import os
 from pathlib import Path
 import random
 import sys
 import traceback
 import uuid
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Union, Callable
+from typing import Any, Dict, List, Optional, Set, Tuple, Callable
 from collections import deque
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 # =============================================================================
 # Optional engine imports (defensive)
@@ -528,7 +528,7 @@ def _emit_identity_trajectory_logs(
     logger.emit("IDENTITY TRAJECTORY:", "normal")
     for s in sorted(standings, key=lambda x: x.team_id):
         tid = s.team_id
-        t = _team_archetype(state, tid)
+        _team_archetype(state, tid)
         prev = prev_map.get(tid)
         tr = _identity_trajectory_label(prev, int(s.points))
         logger.emit(f"  team={tid} trend={tr}", "normal")
@@ -692,7 +692,7 @@ def _execute_league_cap_consequence_pass(
             try:
                 setattr(state, "runner_contract_inflation", 1.0)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
     rows: List[Dict[str, Any]] = []
     numeric_by_tid: Dict[str, float] = {}
     strategy_by_tid: Dict[str, str] = {}
@@ -703,7 +703,7 @@ def _execute_league_cap_consequence_pass(
         try:
             setattr(team, "_runner_team_archetype", arche)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         target_usage: Optional[float] = None
         if _ENGINE_ECON is not None:
             try:
@@ -723,7 +723,7 @@ def _execute_league_cap_consequence_pass(
             setattr(team, "total_salary", float(payroll))
             setattr(team, "salary_cap_m", float(cap_m))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         numeric_p = 0.0
         tier = "moderate"
         if _ENGINE_ECON is not None:
@@ -788,7 +788,7 @@ def _execute_league_cap_consequence_pass(
                 )
                 _ENGINE_ECON.apply_cap_pressure_effects(tm, salary_cap_m=cap_m)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         r["strategy"] = strategy
         strategy_by_tid[tid] = strategy
 
@@ -801,7 +801,7 @@ def _execute_league_cap_consequence_pass(
                 0.94,
             )
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     pressure_map = {str(r["team_id"]): str(r["pressure"]) for r in rows}
     usage_pct_map = {str(r["team_id"]): round(100.0 * float(r["ratio"]), 1) for r in rows}
@@ -1075,7 +1075,7 @@ def safe_to_primitive(obj: Any, _depth: int = 0, _max_depth: int = 6) -> Any:
             try:
                 return str(obj.name)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
 
         # dict
         if isinstance(obj, dict):
@@ -1304,7 +1304,7 @@ class RunnerLogger:
             if self.out._timeline_fp:
                 self.out._timeline_fp.flush()
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     def last_lines(self) -> List[str]:
         return list(self.ring)
@@ -1346,7 +1346,7 @@ def _get_league_teams(league: Any) -> List[Any]:
             if isinstance(val, dict):
                 return list(val.values())
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     # 3) team_map
     tm = _safe_getattr(league, "team_map", None)
@@ -1400,14 +1400,14 @@ def _team_expected_win_pct(team: Any) -> float:
             v = float(m())
             return clamp(v, 0.25, 0.75)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     m2 = _safe_getattr(team, "expected_win_pct", None)
     if callable(m2):
         try:
             v = float(m2())
             return clamp(v, 0.25, 0.75)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     v = _safe_getattr(team, "expected_win_pct", None)
     if isinstance(v, (int, float)):
         return clamp(float(v), 0.25, 0.75)
@@ -1673,7 +1673,7 @@ def _run_league_retirements(
                 p.retired = False
                 p.retirement_reason = None
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         carried = sum(
             1
             for tm in teams
@@ -1765,7 +1765,7 @@ def _run_league_retirements(
                     "normal",
                 )
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     projected_raw = sum(float(c["prob"]) for c in cand)
     prob_adjusted = False
@@ -1817,7 +1817,7 @@ def _run_league_retirements(
             try:
                 player.retirement_reason = reason
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         league.retired_players.append(player)
         _emit_retirement(player, tid, reason)
 
@@ -1853,7 +1853,7 @@ def _run_league_retirements(
                     try:
                         player.retirement_reason = "demographic_floor"
                     except Exception:
-                        pass
+                        _swallowed_log.debug("suppressed exception", exc_info=True)
                 league.retired_players.append(player)
                 _emit_retirement(player, tid, "demographic_floor")
 
@@ -1869,7 +1869,7 @@ def _run_league_retirements(
                 logger.emit("RETIREMENT CAP APPLIED:", "normal")
                 logger.emit(f"  reduced_from={reduced_from} to={len(winners)}", "normal")
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     # --- remove retired from rosters ---
     for team in teams:
@@ -1904,7 +1904,7 @@ def _run_player_progression_pass(teams: List[Any], rng: random.Random, logger: A
                         try:
                             player.retirement_reason = "progression"
                         except Exception:
-                            pass
+                            _swallowed_log.debug("suppressed exception", exc_info=True)
                 for attr in ("_dev_report_pending_line", "_bust_steal_pending_line"):
                     ln = getattr(player, attr, None)
                     if ln:
@@ -1915,16 +1915,16 @@ def _run_player_progression_pass(teams: List[Any], rng: random.Random, logger: A
                             try:
                                 setattr(player, attr, None)
                             except Exception:
-                                pass
+                                _swallowed_log.debug("suppressed exception", exc_info=True)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
     if dev_log and logger is not None:
         try:
             logger.emit("ENVIRONMENT / DEVELOPMENT (roster pass excerpts)", "normal")
             for ln in dev_log[:60]:
                 logger.emit(f"  {ln}", "normal")
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _prime_lifecycle_event_caps(league: Any, state: UniverseState) -> None:
@@ -1938,7 +1938,7 @@ def _prime_lifecycle_event_caps(league: Any, state: UniverseState) -> None:
         setattr(league, "_lifecycle_used_breakouts", 0)
         setattr(league, "_lifecycle_used_declines", 0)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _run_career_lifecycle_pass(
@@ -1965,7 +1965,7 @@ def _run_career_lifecycle_pass(
             try:
                 logger.emit(line, "normal")
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
 
     if league is not None and _ENGINE_ECON is not None:
         try:
@@ -1980,7 +1980,7 @@ def _run_career_lifecycle_pass(
             )
             _ENGINE_ECON.reset_career_breakout_season_flags(teams)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     for team in teams:
         roster = getattr(team, "roster", None) or []
@@ -2003,7 +2003,7 @@ def _run_career_lifecycle_pass(
                     if any(k in ln for k in ("BREAKOUT:", "BUST TREND:", "LATE BLOOM:", "AGING DECLINE:")):
                         stats["special_events"] += 1
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
     return stats
 
 
@@ -2061,20 +2061,20 @@ def _tuning_after_progression(
                 if getattr(p, "role", None) != old:
                     role_moves += 1
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         out["normalize_league"] = _tuning_normalization.normalize_league_stats(ctx)
         _sync_ctx_to_state(state, ctx)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         out["normalize_players"] = _tuning_normalization.normalize_player_ratings(players, ctx)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         out["normalize_teams"] = _tuning_normalization.normalize_team_strengths(teams, ctx)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         rfv = rng if rng is not None else random.Random(int(year) + 4049)
         out["validation"] = _tuning_validators.run_full_validation(
@@ -2082,13 +2082,13 @@ def _tuning_after_progression(
         )
         _sync_ctx_to_state(state, ctx)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     out["role_updates"] = role_moves
     out["chaos_influence"] = float(_tuning_probability_tables.chaos_multiplier(ctx))
     try:
         out["macro_progression_scales"] = _tuning_normalization.macro_progression_scales(ctx)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return out
 
 
@@ -2113,7 +2113,7 @@ def _tuning_end_of_year(
         out["end_validation"] = _tuning_validators.validate_league_state(ctx, league, teams, rng=r, year=int(year))
         _sync_ctx_to_state(state, ctx)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return out
 
 
@@ -2154,12 +2154,12 @@ def _advance_roster_ages_and_development(teams: List[Any], league: Any, state: U
                     if hasattr(player, "identity") and hasattr(player.identity, "age"):
                         player.identity.age += 1
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             if _assign_career_phase_from_age is not None:
                 try:
                     _assign_career_phase_from_age(player)
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _sync_playoff_streaks_and_contender_flags(teams: List[Any], standings: List[TeamStanding]) -> None:
@@ -2223,7 +2223,7 @@ def _dynamic_team_identity_evolution_pass(
                 avg_age = float(sig.get("avg_age", 27.0) or 27.0)
                 frac30 = float(sig.get("frac_30p", 0.0) or 0.0)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         try:
             expw = float(_team_expected_win_pct(team))
         except Exception:
@@ -2340,7 +2340,7 @@ def _dynamic_team_identity_evolution_pass(
                 traj_l = f"{traj} / flexible"
             setattr(team, "_runner_franchise_trajectory", traj_l)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
         if new_arch != cur:
             state.team_archetypes[tid] = new_arch
@@ -2352,14 +2352,14 @@ def _dynamic_team_identity_evolution_pass(
             try:
                 logger.emit(msg, "normal")
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             if new_arch == "rebuild" and cur == "win_now":
                 slam = f"WINDOW STATUS: {_team_name(team)}: window slammed shut (forced teardown)"
                 out.append(slam)
                 try:
                     logger.emit(slam, "normal")
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
         else:
             state.identity_archetype_seasons[tid] = seasons_here + 1
 
@@ -2369,7 +2369,7 @@ def _dynamic_team_identity_evolution_pass(
             try:
                 logger.emit(wmsg, "normal")
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
 
         if panic:
             pmsg = f"PANIC EVENT: {_team_name(team)}: GM under pressure — aggressive retool initiated"
@@ -2377,13 +2377,13 @@ def _dynamic_team_identity_evolution_pass(
             try:
                 logger.emit(pmsg, "normal")
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             try:
                 tm0 = float(getattr(team, "_runner_trade_pressure_mult", 1.0) or 1.0)
                 setattr(team, "_runner_trade_pressure_mult", min(2.75, tm0 * 1.38))
                 setattr(team, "_runner_panic_sell_bias", 1.0)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
 
         if new_arch != cur or window_note or panic:
             tlab = str(getattr(team, "_runner_franchise_trajectory", "") or "")
@@ -2393,13 +2393,13 @@ def _dynamic_team_identity_evolution_pass(
                 try:
                     logger.emit(tmsg, "normal")
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
 
     if league is not None:
         try:
             setattr(league, "_runner_team_archetypes", dict(state.team_archetypes or {}))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     tuning_year["identity_evolution"] = list(out)
     return out
 
@@ -2427,11 +2427,11 @@ def _runner_update_rivalry_narrative(
                     "normal",
                 )
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         setattr(league, "_runner_rivalry_heat", heat)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _emit_awards_media_hof_org_pack(
@@ -2450,7 +2450,7 @@ def _emit_awards_media_hof_org_pack(
             "normal",
         )
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     lead = standings[0]
     try:
         logger.emit(
@@ -2458,14 +2458,14 @@ def _emit_awards_media_hof_org_pack(
             "normal",
         )
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         logger.emit(
             "HALL OF FAME: Induction class forming from veteran tiers + peak résumés (watch list).",
             "normal",
         )
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     for t in (teams or [])[:10]:
         try:
             mkt = getattr(getattr(t, "market", None), "market_size", "medium")
@@ -2479,7 +2479,7 @@ def _emit_awards_media_hof_org_pack(
                 "normal",
             )
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _init_team_identities(teams: List[Any], r: random.Random) -> Tuple[Dict[str, str], Dict[str, str], Dict[str, float]]:
@@ -2566,7 +2566,7 @@ def _economics_advance(state: UniverseState, ucfg: UniverseConfig, r: random.Ran
     try:
         infl_proxy = dataclasses.replace(state, cap_growth_rate=growth, chaos_index=chaos)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     runner_infl = 1.0
     if _ENGINE_ECON is not None:
         try:
@@ -2590,7 +2590,7 @@ def _maybe_era_shift(state: UniverseState, ucfg: UniverseConfig, r: random.Rando
                     injected: List[ScenarioEvent]) -> Tuple[UniverseState, List[UniverseEvent]]:
     events: List[UniverseEvent] = []
     years_in_era = getattr(state, "years_in_era", 0) + 1
-    last_shift = getattr(state, "last_era_shift_year", None)
+    getattr(state, "last_era_shift_year", None)
     state = dataclasses.replace(state, years_in_era=years_in_era)
 
     forced = [e for e in injected if e.type.upper() in ("FORCE_ERA_SHIFT", "ERA_SHIFT")]
@@ -2748,7 +2748,7 @@ def _simulate_standings(
                     0.72,
                 )
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         state.identity_last_year_mod[tid] = sm_log
 
         # noise (identity volatility: win_now steadier, rebuild/chaos swingier)
@@ -3337,7 +3337,7 @@ def _generate_trades(
                 mult = (sum(probs) / len(probs)) / 0.5
                 trade_pressure = clamp(trade_pressure * mult, 0.35, 0.98)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     roll = r.random()
     _trace_roll(state, ucfg, "trade_year_roll", r, roll)
@@ -3681,7 +3681,7 @@ def _fa_player_name(r: random.Random) -> str:
             identity = generate_human_identity(r)
             return identity.full_name
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     return f"UFA_{r.randint(1000, 9999)}"
 
 def _gen_fa_pool(r: random.Random, inflation: float) -> List[FreeAgent]:
@@ -3867,7 +3867,7 @@ def _fa_signings(
                     )
                     score *= clamp(0.97 + (ef - 1.0) * 0.45, 0.93, 1.08)
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
             # sprinkle chaos
             score += r.uniform(-0.05, 0.05) * (0.5 + state.chaos_index)
             scored.append((score, tm))
@@ -3920,7 +3920,7 @@ def _fa_signings(
                 if not _ENGINE_ECON.can_afford(tm_ent, contract_m, salary_cap_m=state.salary_cap_m):
                     continue
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
 
         pres_tm = str((getattr(state, "runner_cap_pressure_by_team", None) or {}).get(tm.team_id, "moderate")).lower()
         if fa_signed_by_team.get(tm.team_id, 0) >= _fa_cap_signing_cap(pres_tm):
@@ -4223,13 +4223,13 @@ def simulate_universe_year(
                     league, narrative_context, int(year), rng, max_trace_lines=36
                 )
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         try:
             from app.sim_engine.progression import development as _dev_prime
 
             _dev_prime.prime_development_environment_for_rosters(teams, rng)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         tuning_year["era_start"] = _tuning_start_of_season(league, teams, state)
         if _ENGINE_ECON is not None:
             try:
@@ -4237,7 +4237,7 @@ def simulate_universe_year(
                 dch = float(_ENGINE_ECON.league_chaos_delta_from_team_systems(teams))
                 state.chaos_index = clamp(state.chaos_index + dch, 0.08, 0.98)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         _advance_roster_ages_and_development(teams, league, state, rng)
         if sim is not None:
             rlc = getattr(sim, "restore_line_chemistry_ratings", None)
@@ -4245,12 +4245,12 @@ def simulate_universe_year(
                 try:
                     rlc()
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
         _run_player_progression_pass(teams, rng, logger)
         try:
             setattr(league, "_tuning_context", _tuning_ctx_from_state(state))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         _prime_lifecycle_event_caps(league, state)
         tuning_year["career_lifecycle"] = _run_career_lifecycle_pass(
             teams, rng, logger, league=league, state=state, season_year=int(year)
@@ -4259,7 +4259,7 @@ def simulate_universe_year(
             try:
                 _ENGINE_ECON.apply_league_ovr_soft_regression_if_needed(teams, rng)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         _cl = tuning_year.get("career_lifecycle") or {}
         if int(_cl.get("special_events", 0) or 0) > 0:
             try:
@@ -4269,7 +4269,7 @@ def simulate_universe_year(
                     "normal",
                 )
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         if _ENGINE_ECON is not None:
             try:
                 def _tid_emit(line: str) -> None:
@@ -4291,7 +4291,7 @@ def simulate_universe_year(
                 try:
                     reb(rng)
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
         if sim is not None and teams:
             dpp = getattr(sim, "run_player_distribution_pass", None)
             if callable(dpp):
@@ -4357,13 +4357,13 @@ def simulate_universe_year(
                 if getattr(sim, "league_balance_check", None) is not None:
                     sim.league_balance_check(league, rng, year)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         if sim is not None:
             if league is not None:
                 try:
                     setattr(league, "_runner_team_archetypes", dict(getattr(state, "team_archetypes", None) or {}))
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
             alc = getattr(sim, "apply_forward_line_chemistry_pass", None)
             if callable(alc):
                 try:
@@ -4430,7 +4430,7 @@ def simulate_universe_year(
                 {"pct_u24": float(pct_u), "roster_fill_ratio": fill_ratio, "n_active": int(n_active_pre_ret)},
             )
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
         retired_list = _run_league_retirements(teams, league, rng, year, events, logger=logger)
         try:
@@ -4444,7 +4444,7 @@ def simulate_universe_year(
                 try:
                     ydev(rng)
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
         setattr(league, "_age_balance_dev_strength", 0.0)
 
         if sim is not None:
@@ -4466,7 +4466,7 @@ def simulate_universe_year(
                     for _eln in eco_fn(teams, rng, year)[:12]:
                         logger.emit(f"ECOSYSTEM REPAIR (U24 stress): {_eln}", "normal")
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
 
     # Phase 1: economics
     state, econ_events = _economics_advance(state, uni_cfg, rng, year, injected)
@@ -4670,7 +4670,7 @@ def simulate_universe_year(
                     examples.append(f"{ident.full_name} ({ident.nationality})")
                 draft_details["example_prospects"] = examples
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         events.append(
             UniverseEvent(
                 event_id=str(uuid.uuid4()),
@@ -5475,7 +5475,6 @@ def print_year_header(
     # ---------- DYNASTY / POWER STRUCTURE ----------
     L("POWER STRUCTURE", "normal")
     power_states = getattr(state, "power_states", None) or {}
-    cup_wins = getattr(state, "cup_wins_by_team", None) or {}
     dynasties = [tid for tid, ps in power_states.items() if ps == "dynasty"]
     powerhouses = [tid for tid, ps in power_states.items() if ps == "powerhouse"]
     repeat = [tid for tid, ps in power_states.items() if ps == "repeat_contender"]
@@ -5552,7 +5551,7 @@ def print_year_header(
             for line in _sanitize_narrative_lines(narrative_lines, ctx):
                 L(line, "normal")
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     # ---------- MAJOR HEADLINES (legacy) ----------
     major = [e for e in events if getattr(e, "impact_score", 0) >= 0.60]
@@ -5746,7 +5745,7 @@ def run_simulation_core(
                     try:
                         sim._pipeline_log_buffer = []
                     except Exception:
-                        pass
+                        _swallowed_log.debug("suppressed exception", exc_info=True)
 
             # Prospect pipeline: structured draft tiers via generation.draft_class_generator; SimEngine.generate_prospect_class
             # consumes pipeline_boost_elite when league._boost_next_draft_class (set by validators on thin pools).
@@ -5793,7 +5792,7 @@ def run_simulation_core(
                         try:
                             sim._pipeline_log_buffer = []
                         except Exception:
-                            pass
+                            _swallowed_log.debug("suppressed exception", exc_info=True)
                     non_playoff = [(s.team_id, s.points) for s in sorted(uni_result.standings, key=lambda s: (s.points, getattr(s, "goal_diff", 0)))[:16]]
                     run_draft = getattr(sim, "run_universe_draft", None)
                     if callable(run_draft):
@@ -5831,7 +5830,6 @@ def run_simulation_core(
                             tid = rec.get("team_id", "?")
                             name = rec.get("prospect_name", "Unknown")
                             payload = rec.get("player_payload") or {}
-                            proj = (payload.get("projection") or {})
                             dvr = payload.get("draft_value_range") or (0.5, 0.6)
                             pot = (float(dvr[0]) + float(dvr[1])) / 2.0 if len(dvr) >= 2 else 0.55
                             pos = "?"
@@ -5841,7 +5839,7 @@ def run_simulation_core(
                                 if hasattr(pos, "value"):
                                     pos = getattr(pos, "value", pos)
                             except Exception:
-                                pass
+                                _swallowed_log.debug("suppressed exception", exc_info=True)
                             logger.emit(f"  {pick}. {tid} -> {pos} {name} (POT {pot:.2f})", "normal")
                         logger.emit("", "normal")
                         logger.emit("DRAFT COMPLETE", "normal")
@@ -5865,7 +5863,7 @@ def run_simulation_core(
                                     if dr and len(dr) >= 2:
                                         pool_pot.append((float(dr[0]) + float(dr[1])) / 2.0)
                         except Exception:
-                            pass
+                            _swallowed_log.debug("suppressed exception", exc_info=True)
                         if pool_sizes:
                             logger.emit(f"  Team prospect pool size: min={min(pool_sizes)}, max={max(pool_sizes)}, total={sum(pool_sizes)}", "normal")
                         if pool_pot:
@@ -5896,7 +5894,7 @@ def run_simulation_core(
                                 )[-18:]:
                                     logger.emit(f"  ECOSYSTEM / PIPELINE HEALTH: {_el}", "normal")
                         except Exception:
-                            pass
+                            _swallowed_log.debug("suppressed exception", exc_info=True)
                         if n_drafted < 2 and n_prospects >= 120:
                             logger.emit(
                                 "  [ECOSYSTEM NOTE] NHL rookie promotions below typical floor — "
@@ -5923,14 +5921,14 @@ def run_simulation_core(
                                     )
                                     _tn += 1
                         except Exception:
-                            pass
+                            _swallowed_log.debug("suppressed exception", exc_info=True)
                         _post_draft_buf = list(getattr(sim, "_pipeline_log_buffer", None) or [])
                         for _pdl in _post_draft_buf[:240]:
                             logger.emit(_pdl, "normal")
                         try:
                             sim._pipeline_log_buffer = []
                         except Exception:
-                            pass
+                            _swallowed_log.debug("suppressed exception", exc_info=True)
                         try:
                             _gpp_n = getattr(_league, "global_player_pool", None) or getattr(
                                 _league, "global_prospect_pool", None
@@ -5947,7 +5945,7 @@ def run_simulation_core(
                                         "normal",
                                     )
                         except Exception:
-                            pass
+                            _swallowed_log.debug("suppressed exception", exc_info=True)
                         if n_drafted > pool_before + drafted_ct + 2:
                             logger.emit(
                                 f"PIPELINE CHECK WARN: promoted={n_drafted} exceeds pipeline+draft headroom (pool_before={pool_before}, drafted={drafted_ct})",
@@ -5970,7 +5968,7 @@ def run_simulation_core(
                                 if max(picks_per) > 7 or (len(results) < 32 and min(picks_per) < 7):
                                     logger.emit(f"  [CHECK] Draft picks per team: min={min(picks_per)}, max={max(picks_per)} (expected up to 7 each)", "normal")
                         except Exception:
-                            pass
+                            _swallowed_log.debug("suppressed exception", exc_info=True)
                 except Exception as e:
                     logger.emit(f"[WARN] Prospect/draft pipeline failed: {type(e).__name__}: {e}", "normal")
                 # Track consecutive years with no rookies for critical warning
@@ -5981,12 +5979,12 @@ def run_simulation_core(
                     try:
                         sim._last_zero_rookies_year = year
                     except Exception:
-                        pass
+                        _swallowed_log.debug("suppressed exception", exc_info=True)
                 elif n_drafted > 0:
                     try:
                         setattr(sim, "_last_zero_rookies_year", None)
                     except Exception:
-                        pass
+                        _swallowed_log.debug("suppressed exception", exc_info=True)
 
             # League talent metrics (diagnostics each season)
             if sim is not None and uni_result is not None:
@@ -6009,7 +6007,7 @@ def run_simulation_core(
                         logger.emit(f"  Free Agent Signings: {len(signings)}", "normal")
                         logger.emit("", "normal")
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
 
             # Write universe JSON
             if run_cfg.write_json:
@@ -6082,7 +6080,7 @@ def run_simulation_core(
                                 }
                             )
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
                 smeta["validation_warnings"] = validation_warnings
                 smeta.setdefault("stat_source", "game_ledger")
 
@@ -6160,7 +6158,7 @@ def run_simulation_core(
                     league=league,
                 )
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
         if run_cfg.flush_each_year:
             logger.flush()
@@ -6173,7 +6171,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
 
-    seed = args.seed if args.seed is not None else int(_safe_getattr(time_module := __import__("time"), "time_ns")())
+    seed = args.seed if args.seed is not None else int(_safe_getattr(__import__("time"), "time_ns")())
     run_cfg = RunConfig(
         seed=seed,
         years=int(args.years),
@@ -6250,8 +6248,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         out.write_json("waivers_import_warning.json", {"Waivers_import_error": WAIVERS_IMPORT_ERROR})
 
     # master rng + split rngs
-    master_rng = rng_from_seed(run_cfg.seed)
-    uni_rng = rng_from_seed(split_seed(run_cfg.seed, "universe"))
+    rng_from_seed(run_cfg.seed)
+    rng_from_seed(split_seed(run_cfg.seed, "universe"))
     career_rng = rng_from_seed(split_seed(run_cfg.seed, "career"))
     meta_rng = rng_from_seed(split_seed(run_cfg.seed, "meta"))
 
@@ -6322,7 +6320,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             try:
                 setattr(league, "_runner_sim_engine", sim)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
 
     # If no league available, runner still works in limited mode (career-only may still run)
     teams = _get_league_teams(league)
@@ -6437,7 +6435,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             out.write_text("last_200_lines.log", "\n".join(logger.last_lines()))
         except Exception:
             # last resort: don't re-crash
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
         print(f"[FATAL] Crash details written to: {out.run_dir}")
         return 1

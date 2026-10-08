@@ -9,10 +9,12 @@ Expose:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, List, Optional, Tuple
+from typing import Any, List, Tuple
 
 from app.sim_engine.economy.player_value import PlayerValue, player_economy_ability_01, estimate_fa_market_aav_m
 from app.sim_engine.economy.team_needs import TeamNeeds
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 
 def _safe_float(x: Any, default: float = 0.0) -> float:
@@ -40,7 +42,7 @@ def _player_ovr(player: Any) -> float:
 
         return float(player_current_ovr_01(player))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     fn = getattr(player, "ovr", None)
     if callable(fn):
         try:
@@ -79,7 +81,7 @@ class SigningAI:
         self, team: Any, free_agent_pool: List[Any], league: Any = None,
     ) -> List[Any]:
         needs = getattr(team, "needs", None) or self.needs_model.evaluate(team)
-        roster = list(getattr(team, "roster", None) or [])
+        list(getattr(team, "roster", None) or [])
 
         # competitive posture influences preference (GM window + legacy labels)
         arche = str(getattr(team, "status", getattr(team, "archetype", "")) or "").lower()
@@ -157,17 +159,17 @@ class SigningAI:
                     try:
                         p.cap_hit_m = aav
                     except Exception:
-                        pass
+                        _swallowed_log.debug("suppressed exception", exc_info=True)
                 logs.append(f"SIGNING: {getattr(team, 'name', getattr(team, 'team_id', 'Team'))} signs {getattr(p, 'name', 'UFA')} at ${aav:.1f}M AAV")
             try:
                 team.roster = roster
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
 
         try:
             league.free_agents = free_agents
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         return logs
 
 

@@ -25,12 +25,9 @@ from services.franchise_sim import build_draft_class_rankings  # noqa: E402
 from services.draft_ranking_logic import compute_tank_pressure_for_team  # noqa: E402
 from services.draft_audit_session import create_audit_session  # noqa: E402
 import run_sim as rs  # noqa: E402
-from app.sim_engine.trades.trade_pick_registry import (  # noqa: E402
-    ensure_draft_pick_registry,
-    team_owns_own_first,
-    transfer_pick,
-    canonical_pick_id,
-)
+from app.sim_engine.trades.trade_pick_registry import ensure_draft_pick_registry, transfer_pick, canonical_pick_id
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 GOALIE_CLASS_FORCE_VALUES = ("weak", "normal", "strong", "elite", "generational")
 
@@ -172,7 +169,7 @@ def _forced_transcendent_checks() -> Dict[str, Any]:
 
         lhb.TRANSCENDENT_FORCE_DEBUG = True
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     session = create_audit_session(99991, fast=True)
     league = session.sim.league

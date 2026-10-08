@@ -18,36 +18,8 @@ import {
   PerformanceStrip,
   LeagueBadge,
 } from "../components/franchise/commandVisuals";
-import {
-  BOARD_SOURCES,
-  PUBLICATIONS,
-  WORKSPACE_TABS,
-  confMeaning,
-  enrichProspectsForWarRoom,
-  groupByPyramid,
-  overageStockNote,
-  rankProspectsForSource,
-  skillDevelopmentNotes,
-  sourceCaption,
-  weeklyStockMovers,
-  weeklyTrajectoryPoints,
-} from "./draftWarRoom";
-import {
-  resolveProjectedRangeLabel,
-  resolveOvrBands,
-  resolveCreaseZoneGrades,
-  resolveGoalieToolRows,
-  resolveBottomStatStrip,
-  buildScoutingDeskEntries,
-  outcomeRibbonSegmentsForPosition,
-  zoneGradeWord,
-  formatDeskGrade,
-  dossierFileNotes,
-  zoneTierMeta,
-  humanizePlayStyleLabel,
-  buildStubProspectProfile,
-  resolveWjcDossierBlock,
-} from "./prospectDossierHelpers";
+import { BOARD_SOURCES, WORKSPACE_TABS, confMeaning, enrichProspectsForWarRoom, groupByPyramid, overageStockNote, rankProspectsForSource, skillDevelopmentNotes, sourceCaption, weeklyStockMovers, weeklyTrajectoryPoints } from "./draftWarRoom";
+import { resolveProjectedRangeLabel, resolveOvrBands, resolveCreaseZoneGrades, resolveGoalieToolRows, resolveBottomStatStrip, buildScoutingDeskEntries, outcomeRibbonSegmentsForPosition, zoneGradeWord, formatDeskGrade, dossierFileNotes, zoneTierMeta, buildStubProspectProfile, resolveWjcDossierBlock } from "./prospectDossierHelpers";
 
 let TRANSCENDENT_BOSS_AUDIO_URL = null;
 try {
@@ -88,11 +60,6 @@ function formatNhlEta(value, fallback = "TBD") {
   return String(value);
 }
 
-function displaySafeText(value) {
-  if (value == null || value === "") return null;
-  if (typeof value === "object") return formatNhlEta(value, null);
-  return value;
-}
 
 
 const BOARD_NAV_ITEMS = [
@@ -121,33 +88,11 @@ function isGoaliePosition(pos) {
   return p === "G" || p.includes("GOAL");
 }
 
-const PROFILE_TABS = ["OVERVIEW", "STATS", "ATTRIBUTES", "SCOUT REPORT", "CHARACTER"];
-const LEAGUES = ["OHL", "WHL", "QMJHL", "NCAA", "USHL", "SHL", "LIIGA", "DEL", "CZECHIA"];
-const COUNTRIES = ["Canada", "United States", "Sweden", "Finland", "Czechia", "Slovakia", "Germany", "Switzerland"];
 const SCOUT_NAMES = [
   "Mike Brennan", "Sarah Chen", "Erik Lindholm", "Marc Dubois",
   "James Okafor", "Anna Kowalski", "Tyler Morrison", "Lisa Bergstrom",
 ];
-const REPORT_TYPES = [
-  { key: "potential", label: "Potential Comparison" },
-  { key: "skills", label: "Skills Assessment" },
-  { key: "style", label: "Playing Style" },
-  { key: "strengths", label: "Strengths/Weaknesses" },
-  { key: "character", label: "Character/Interviews" },
-];
 /** Client fallback when backend stats missing — mirrors junior inflation vs pro leagues. */
-const LEAGUE_PPG_FALLBACK = {
-  OHL: { min: 0.48, max: 2.4 },
-  WHL: { min: 0.45, max: 2.2 },
-  QMJHL: { min: 0.5, max: 2.5 },
-  USHL: { min: 0.4, max: 1.7 },
-  NCAA: { min: 0.32, max: 1.4 },
-  SHL: { min: 0.18, max: 0.98 },
-  LIIGA: { min: 0.22, max: 1.08 },
-  DEL: { min: 0.2, max: 0.95 },
-  CZECHIA: { min: 0.2, max: 0.95 },
-  DEFAULT: { min: 0.38, max: 1.85 },
-};
 
 const LEAGUE_TEAMS = {
   OHL: ["London Knights", "Ottawa 67's", "Windsor Spitfires", "Saginaw Spirit", "Kitchener Rangers", "Guelph Storm"],
@@ -237,9 +182,6 @@ function seededNumber(seed) {
   return Math.abs(value);
 }
 
-function pick(list, seed) {
-  return list[seededNumber(seed) % list.length];
-}
 
 function projectionForRank(rank) {
   if (rank <= 3) return "TOP 3";
@@ -269,47 +211,6 @@ function talentGrade(rank, seed) {
  * platform-dependent flag glyph. Flag artwork is handled separately by
  * flagApiUrl where a real image is available.
  */
-function countryFlag(country) {
-  const map = {
-    Canada: "CAN",
-    CAN: "CAN",
-    CA: "CAN",
-    USA: "USA",
-    US: "USA",
-    "United States": "USA",
-    "United States of America": "USA",
-    Sweden: "SWE",
-    SWE: "SWE",
-    SE: "SWE",
-    Finland: "FIN",
-    FIN: "FIN",
-    FI: "FIN",
-    Czechia: "CZE",
-    "Czech Republic": "CZE",
-    CZE: "CZE",
-    CZ: "CZE",
-    Slovakia: "SVK",
-    SVK: "SVK",
-    SK: "SVK",
-    Germany: "GER",
-    GER: "GER",
-    DE: "GER",
-    Switzerland: "SUI",
-    SUI: "SUI",
-    CH: "SUI",
-    Russia: "RUS",
-    RUS: "RUS",
-    RU: "RUS",
-  };
-  const raw = String(country || "").trim();
-  if (!raw) return "—";
-  if (map[raw]) return map[raw];
-  if (map[raw.toUpperCase()]) return map[raw.toUpperCase()];
-  const iso = resolveCountryCode(raw);
-  if (iso && map[iso]) return map[iso];
-  if (iso && /^[A-Z]{2,3}$/.test(iso)) return iso;
-  return "—";
-}
 
 function humanizeScoutReason(raw) {
   if (raw == null || raw === "") return null;
@@ -538,31 +439,12 @@ function getPlayerTags(player, profile) {
   return tags.slice(0, 5);
 }
 
-function movementIndicator(stock) {
-  const tone = getStockTone(stock);
-  if (tone === "rise") return { glyph: "↑", text: stockBadgeText(stock), cls: "is-rise" };
-  if (tone === "fall") return { glyph: "↓", text: stockBadgeText(stock), cls: "is-fall" };
-  if (tone === "new") return { glyph: "◎", text: stockBadgeText(stock), cls: "is-new" };
-  if (stock?.available && tone === "stable") return { glyph: "—", text: stockBadgeText(stock), cls: "is-stable" };
-  return { glyph: "—", text: "—", cls: "is-muted" };
-}
 
 function movementDisplayText(stock) {
   if (!stock?.available && stock?.direction === "UNKNOWN") return "—";
   return stockBadgeText(stock, { compact: true });
 }
 
-function ProspectMetric({ label, value, align = "left", tone = "", valueStyle = null, title = null }) {
-  return (
-    <div
-      className={`dc-prospect-metric dc-prospect-metric--${align}${tone ? ` ${tone}` : ""}`}
-      title={title || undefined}
-    >
-      <span className="dc-prospect-metric__value" style={valueStyle || undefined}>{value}</span>
-      <span className="dc-prospect-metric__label">{label}</span>
-    </div>
-  );
-}
 
 function prospectPublicPct(player) {
   const n = Number(coalesce(
@@ -585,9 +467,6 @@ function prospectEffectivePct(player) {
   return prospectDedicatedPct(player) ?? prospectPublicPct(player);
 }
 
-function prospectScoutingPct(player) {
-  return prospectEffectivePct(player);
-}
 
 function prospectIntelTier(pct) {
   if (pct == null) return null;
@@ -673,11 +552,6 @@ function resolvePotentialEstimate(player) {
   return blank("Ceiling not scouted");
 }
 
-function ScoutConfidenceMetric({ player }) {
-  const pub = prospectPublicPct(player);
-  const you = prospectDedicatedPct(player);
-  return <ScoutingFileSplit player={player} compact />;
-}
 
 function ScoutingFileSplit({ player, compact = false }) {
   const pub = prospectPublicPct(player);
@@ -857,34 +731,8 @@ function getMaxCompletionForMonth(month) {
   return 48;
 }
 
-function maxCompletionForRank(rank, monthMax) {
-  if (rank <= 5) return Math.min(95, monthMax + 8);
-  if (rank <= 15) return Math.min(90, monthMax);
-  if (rank <= 32) return Math.min(82, monthMax - 6);
-  return Math.min(70, monthMax - 14);
-}
 
-function formatFranchiseFileDate(franchiseState) {
-  const raw = getFranchiseDateRaw(franchiseState);
-  if (/^\d{4}-\d{2}-\d{2}/.test(String(raw))) {
-    const d = new Date(`${String(raw).slice(0, 10)}T12:00:00`);
-    if (!Number.isNaN(d.getTime())) {
-      return d.toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "2-digit" }).replace(/\//g, ".");
-    }
-  }
-  return new Date().toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "2-digit" }).replace(/\//g, ".");
-}
 
-function chapterScoreFromPlayer(player, key, fallback = null) {
-  const chapters = player?.chapterProfile?.chapters;
-  if (chapters?.[key] != null && Number.isFinite(Number(chapters[key]))) {
-    return Math.round(Number(chapters[key]));
-  }
-  if (player?.[key] != null && Number.isFinite(Number(player[key]))) {
-    return Math.round(Number(player[key]));
-  }
-  return fallback;
-}
 
 function buildDateContext(franchiseState) {
   const raw = getFranchiseDateRaw(franchiseState);
@@ -912,26 +760,6 @@ function pickTeamName(league, seed) {
   return teams[seededNumber(seed + 99) % teams.length];
 }
 
-function generatePartialStats(position, rank, gp, seed, league = "OHL") {
-  if (position === "G") {
-    const wins = clamp(Math.floor(gp * 0.52) + (seededNumber(seed + 14) % 4) - 1, 0, gp);
-    const savePct = (0.885 + (seededNumber(seed + 15) % 45) / 1000).toFixed(3);
-    const gaa = (2.05 + (seededNumber(seed + 16) % 85) / 100).toFixed(2);
-    return { gp, goals: 0, assists: 0, points: 0, wins, savePct, gaa };
-  }
-  const profile = LEAGUE_PPG_FALLBACK[league] || LEAGUE_PPG_FALLBACK.DEFAULT;
-  const rankBoost = (100 - rank) / 120;
-  const rate = clamp(
-    0.42 + rankBoost + (seededNumber(seed + 12) % 30) / 100,
-    profile.min,
-    profile.max
-  );
-  const points = clamp(Math.round(gp * rate), 0, Math.round(gp * profile.max));
-  const goalShare = 0.38 + (seededNumber(seed + 13) % 18) / 100;
-  const goals = clamp(Math.round(points * goalShare), 0, points);
-  const assists = Math.max(0, points - goals);
-  return { gp, goals, assists, points, wins: 0, savePct: null, gaa: null };
-}
 
 function addPositionRanks(prospects) {
   const counters = {};
@@ -943,13 +771,6 @@ function addPositionRanks(prospects) {
     });
 }
 
-function confidenceLabel(completion) {
-  if (completion <= 30) return "Unknown";
-  if (completion <= 55) return "Preliminary";
-  if (completion <= 80) return "Moderate Confidence";
-  if (completion < 95) return "High Confidence";
-  return "Fully Scouted";
-}
 
 function attributeDisplay(exactValue, completion, attrSeed = 0, { wideFog = false } = {}) {
   const v = Number(exactValue);
@@ -982,25 +803,6 @@ function attributeDisplay(exactValue, completion, attrSeed = 0, { wideFog = fals
   return { text: String(Math.round(base)), range: [base, base], width: base, locked: false, confidence: "Fully Scouted" };
 }
 
-function inferTeamNeeds(franchiseState) {
-  const roster = franchiseState?.roster;
-  if (!Array.isArray(roster) || !roster.length) return null;
-  const counts = { C: 0, W: 0, D: 0, G: 0 };
-  roster.forEach((p) => {
-    const pos = String(p.position || p.pos || "").toUpperCase();
-    if (pos === "G" || pos.includes("GOAL")) counts.G += 1;
-    else if (pos === "D" || pos.includes("DEF")) counts.D += 1;
-    else if (pos === "C") counts.C += 1;
-    else if (pos === "LW" || pos === "RW" || pos === "W") counts.W += 1;
-  });
-  const needs = [];
-  if (counts.G < 2) needs.push("Goalie");
-  if (counts.D < 6) needs.push("Defensive D");
-  if (counts.C < 3) needs.push("C");
-  if (counts.W < 4) needs.push("Scoring Winger");
-  if (counts.D < 8) needs.push("RHD");
-  return needs.length ? needs : null;
-}
 
 function defaultProspectStub(rank) {
   const seed = seededNumber(`stub-${rank}`);
@@ -1358,7 +1160,7 @@ function mapBackendDraftBoard(entries, dateContext) {
     const base = defaultProspectStub(rank);
     const nm = splitName(coalesce(row?.name, `${base.firstName} ${base.lastName}`));
     const pos = String(coalesce(row?.position, base.position) || "C").toUpperCase();
-    const trend = String(row?.trend || "").toUpperCase();
+    String(row?.trend || "").toUpperCase();
     const backendStockRaw = coalesce(row?.stock_change, row?.stockChange, row?.stock_delta, row?.stockDelta);
     const backendStock = backendStockRaw != null && Number.isFinite(Number(backendStockRaw))
       ? Number(backendStockRaw)
@@ -1695,89 +1497,9 @@ function getStockTone(stock) {
   return "neutral";
 }
 
-function stockMoverDirection(stock) {
-  const dir = String(stock?.direction || "UNKNOWN").toUpperCase();
-  const delta = Number(stock?.deltaRank);
-  const numericDelta = Number.isFinite(delta) ? delta : 0;
-  if (dir === "NEW") return "NEW";
-  if (numericDelta > 0) return "UP";
-  if (numericDelta < 0) return "DOWN";
-  if (dir === "UP" || dir === "DOWN" || dir === "STABLE") return dir;
-  return "UNKNOWN";
-}
 
-function buildStockMoversFromProspects(prospects) {
-  const risers = [];
-  const fallers = [];
-  const list = Array.isArray(prospects) ? prospects : [];
 
-  for (const p of list) {
-    const stock = p?.draftStock;
-    if (!stock) continue;
-    if (!stock.available && String(stock.direction || "UNKNOWN").toUpperCase() === "UNKNOWN") continue;
 
-    const movement = stockMoverDirection(stock);
-    const delta = Number(stock.deltaRank);
-    const numericDelta = Number.isFinite(delta) ? delta : 0;
-    if (movement === "UP" && numericDelta <= 0) continue;
-    if (movement === "DOWN" && numericDelta >= 0) continue;
-    if (movement !== "UP" && movement !== "DOWN") continue;
-
-    const item = {
-      key: p.id,
-      name: `${p.firstName || ""} ${p.lastName || ""}`.trim() || p.name || "Unknown",
-      rank: Number(p.rank) || 0,
-      delta_rank: numericDelta,
-      deltaRank: numericDelta,
-      label: stock.label || "",
-    };
-
-    if (movement === "UP") risers.push(item);
-    else fallers.push(item);
-  }
-
-  risers.sort((a, b) => a.rank - b.rank || b.delta_rank - a.delta_rank);
-  fallers.sort((a, b) => a.rank - b.rank || a.delta_rank - b.delta_rank);
-
-  return {
-    risers,
-    fallers,
-    source: "client",
-  };
-}
-
-function getTierTone(tier) {
-  const key = String(tier?.key || "unclassified");
-  const map = {
-    franchise_swing: "gold",
-    core_upside: "cyan",
-    debate_room: "purple",
-    safe_depth: "blue",
-    mystery_box: "warn",
-    late_flyer: "muted",
-    unclassified: "neutral",
-  };
-  return map[key] || "neutral";
-}
-
-function groupProspectsByBackendTier(prospects) {
-  const groups = new Map();
-  const sorted = [...prospects].sort((a, b) => {
-    const oa = a.franchiseTier?.order ?? 999;
-    const ob = b.franchiseTier?.order ?? 999;
-    if (oa !== ob) return oa - ob;
-    return a.rank - b.rank;
-  });
-  sorted.forEach((p) => {
-    const key = p.franchiseTier?.key || "unclassified";
-    const label = p.franchiseTier?.label || FRANCHISE_TIER_LABELS[key] || "Unclassified";
-    if (!groups.has(key)) {
-      groups.set(key, { key, label, order: p.franchiseTier?.order ?? 999, prospects: [] });
-    }
-    groups.get(key).prospects.push(p);
-  });
-  return [...groups.values()].sort((a, b) => a.order - b.order);
-}
 
 function stockBadgeText(stock, options = {}) {
   const compact = options === true || options?.compact;
@@ -1791,40 +1513,9 @@ function stockBadgeText(stock, options = {}) {
   return "+0";
 }
 
-function recommendedAction(player, meta) {
-  if (meta.doNotDraft) return "Remove from board — marked Do Not Draft.";
-  if (meta.target) return "Pin maintained — prioritize in war room and schedule final viewings.";
-  if (player.completion < 45) return "Request skills assessment and schedule in-person viewing.";
-  if (player.isBustRisk || player.characterConcerns) return "Cross-check character report before committing pick capital.";
-  if (player.rank <= 16) return "Maintain top-tier tracking — align with lottery positioning.";
-  return "Monitor late-season production and regional scout updates.";
-}
 
-function ratingLabel(value) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return "—";
-  if (n < 50) return "Disastrous attitude";
-  if (n >= 90) return "Elite";
-  if (n >= 82) return "Excellent";
-  if (n >= 74) return "Good";
-  if (n >= 64) return "Average";
-  return "Concern";
-}
 
-function gradeFromValue(value) {
-  if (value >= 94) return "A+";
-  if (value >= 88) return "A";
-  if (value >= 82) return "A-";
-  if (value >= 76) return "B+";
-  if (value >= 70) return "B";
-  if (value >= 64) return "B-";
-  if (value >= 58) return "C+";
-  return "C";
-}
 
-function initials(player) {
-  return `${player.firstName?.[0] || ""}${player.lastName?.[0] || ""}`.toUpperCase();
-}
 
 function fullName(player) {
   return `${player.firstName} ${player.lastName}`;
@@ -1952,28 +1643,6 @@ function resolveTeamToken(franchiseState) {
   return "TM";
 }
 
-function matchesPickOwner(pick, teamIdentity) {
-  const ownerFields = [
-    pick?.owner_team_id,
-    pick?.owning_team_id,
-    pick?.current_owner_team_id,
-    pick?.original_owner_team_id,
-    pick?.team_id,
-    pick?.current_team_id,
-    pick?.to_team_id,
-    pick?.owner_id,
-    pick?.owner,
-    pick?.team_abbreviation,
-    pick?.team_abbrev,
-    pick?.owner_abbreviation,
-    pick?.owner_abbrev,
-  ];
-  return ownerFields.some((v) => {
-    const id = normalizeId(v);
-    if (!id) return false;
-    return id === teamIdentity.id || id === normalizeId(teamIdentity.abbr);
-  });
-}
 
 function matchesPickYear(pick, draftYear) {
   const raw = (
@@ -2062,17 +1731,7 @@ function resolveOwnedPickCount(franchiseState, draftYear) {
   return ownedForYear.length;
 }
 
-function stockClass(stock) {
-  if (stock > 0) return "draft-trend-flag--up";
-  if (stock < 0) return "draft-trend-flag--down";
-  return "draft-trend-flag--same";
-}
 
-function stockText(stock) {
-  if (stock > 0) return `↟ +${stock}`;
-  if (stock < 0) return `↡ ${stock}`;
-  return "—";
-}
 
 function formatLeaderValue(value, { decimals = 0, suffix = "" } = {}) {
   if (value == null || value === "") return "—";
@@ -2454,40 +2113,6 @@ function buildLeaderDisplayRow(player, profilesById) {
   };
 }
 
-function buildLeadersModalSummary(leaders, leaderMode) {
-  if (!leaders?.length) return null;
-  const top = leaders[0];
-  const meta = LEADER_MODE_META[leaderMode] || LEADER_MODE_META.points;
-  const skaters = leaders.filter((r) => r.position !== "G");
-  const gpSkaters = skaters.filter((r) => r.gp > 0);
-  const avgPpg = gpSkaters.length
-    ? gpSkaters.reduce((sum, r) => sum + (r.ppg || 0), 0) / gpSkaters.length
-    : null;
-  const scoutVals = leaders.map((r) => r.scoutPct).filter((v) => v != null && Number.isFinite(Number(v)));
-  const avgScout = scoutVals.length
-    ? scoutVals.reduce((sum, v) => sum + Number(v), 0) / scoutVals.length
-    : null;
-
-  let leaderValue = "—";
-  if (leaderMode === "goalies") leaderValue = top.savePct != null ? `SV% ${top.savePct}` : formatLeaderValue(top.wins, { suffix: " W" });
-  else if (leaderMode === "goals") leaderValue = `${formatLeaderValue(top.goals)} G`;
-  else if (leaderMode === "assists") leaderValue = `${formatLeaderValue(top.assists)} A`;
-  else if (leaderMode === "ppg") leaderValue = top.ppg != null ? `${Number(top.ppg).toFixed(2)} PPG` : "—";
-  else if (leaderMode === "stock") leaderValue = formatLeaderStockDisplay(top, { emphasize: true }).text;
-  else if (leaderMode === "analytics") {
-    const a = top.analytics || {};
-    leaderValue = a.war != null ? `WAR ${formatLeaderSigned(a.war, 2)}` : a.xgf_pct != null ? `xGF% ${formatLeaderPct(a.xgf_pct)}` : `${formatLeaderValue(top.points)} PTS`;
-  } else leaderValue = `${formatLeaderValue(top.points)} PTS`;
-
-  return {
-    meta,
-    count: leaders.length,
-    leaderName: top.name,
-    leaderValue,
-    avgPpg,
-    avgScout,
-  };
-}
 
 function LeaderStatPill({
   metricKey,
@@ -2648,141 +2273,14 @@ function LeaderModalRow({
   );
 }
 
-function strengthList(player) {
-  if (player.completion < 45) {
-    return ["Insufficient scouting — strengths not confirmed yet."];
-  }
-  const pool = [
-    player.hockeyIQ >= 78 && "High-end hockey IQ and reads pressure early",
-    player.passing >= 78 && "Creates offense through seams and controlled entries",
-    player.shooting >= 78 && "Dangerous release from the slot and circles",
-    player.skating >= 78 && "Strong acceleration and edge control",
-    player.defense >= 78 && "Reliable defensive habits away from the puck",
-    player.physical >= 78 && "Competes hard on walls and around the crease",
-    player.workEthic >= 78 && "High work rate with clear development habits",
-    player.poise >= 78 && "Composed under pressure in late-game situations",
-  ].filter(Boolean);
 
-  return pool.length ? pool.slice(0, 5) : [
-    "Projectable frame with room to develop",
-    "Shows flashes of high-end processing",
-    "Useful habits in transition",
-  ];
-}
 
-function weaknessList(player) {
-  if (player.completion < 45) {
-    return ["More viewings needed before weaknesses can be confirmed."];
-  }
-  const pool = [
-    player.skating < 70 && "Needs another gear in open ice",
-    player.physical < 70 && "Could add strength before NHL minutes",
-    player.defense < 70 && "Defensive reads are still inconsistent",
-    player.shooting < 70 && "Shot selection can be predictable",
-    player.passing < 70 && "Can force plays through traffic",
-    player.consistency < 70 && "Game-to-game impact can fluctuate",
-    player.coachability < 70 && "Scouts want quicker adjustments after feedback",
-    player.leadership < 70 && "Still developing a louder presence in the room",
-  ].filter(Boolean);
-
-  return pool.length ? pool.slice(0, 4) : [
-    "Needs pro pace adjustment",
-    "Could become more consistent shift-to-shift",
-    "Strength gains will decide ceiling",
-  ];
-}
-
-function scoutReportSections(player, meta, profile) {
-  const name = fullName(player);
-  const charDone = meta?.requestedReports?.character === "complete" || player.completion >= 82;
-  const p = profile || player?.profile || null;
-
-  // Real backend evidence when available, otherwise the preliminary templated fallback.
-  const strengths = Array.isArray(p?.strengths) ? p.strengths.filter(Boolean) : [];
-  const concerns = Array.isArray(p?.concerns) ? p.concerns.filter((c) => c && c !== "Clear") : [];
-  const projLabel = p?.projection?.label || null;
-  const potRating = p?.potential?.rating != null ? Math.round(Number(p.potential.rating)) : null;
-  const nhlProb = p?.potential?.probability != null ? Math.round(Number(p.potential.probability)) : null;
-  const etaLabel = p?.eta?.label || p?.estimatedNhlArrival || null;
-  const compLabel = p?.player_comparison?.label || p?.player_comparison?.summary || null;
-  const volatility = p?.developmentVolatility || null;
-
-  return {
-    projection: projLabel
-      ? `${name} projects as ${projLabel}${potRating ? ` (ceiling ~${potRating} OVR${nhlProb ? `, ${nhlProb}% NHL odds` : ""})` : ""}.`
-      : (player.completion >= 40
-        ? `${name} currently projects as ${player.projection} with ${player.talent} tier tools.`
-        : "Projection remains preliminary — central scouting has limited viewings."),
-    upside: strengths.length
-      ? `Strengths: ${strengths.slice(0, 3).join(", ")}.`
-      : (player.rank <= 16
-        ? "Ceiling profiles as a top-six / top-pair contributor if development accelerates."
-        : player.rank <= 32
-        ? "Upside tied to whether standout tools become repeatable at pro pace."
-        : "Longer runway with role-player floor and moderate upside."),
-    risk: concerns.length
-      ? `Concerns: ${concerns.slice(0, 3).join(", ")}${volatility ? ` · ${volatility} volatility` : ""}.`
-      : (volatility === "High" || player.isBustRisk || player.riskLabel === "High"
-        ? "Scouts flag volatility in consistency and translation risk."
-        : (volatility === "Low" || player.riskLabel === "Low" || player.rank <= 10)
-        ? "Low variance relative to tier — main risk is injury or stagnation."
-        : "Medium variance — needs continued viewings through spring."),
-    notes: scoutSummary(player, p),
-    timeline: etaLabel
-      || formatNhlEta(player.nhlEta, null)
-      || (player.rank <= 8 ? "1–2 years to NHL readiness" : player.rank <= 32 ? "2–3 years development runway" : "3–5 years with AHL seasoning likely"),
-    comparable: compLabel || `${player.playerType} — ${player.league} pace`,
-    nextScout: player.completion < 55
-      ? "Schedule in-person viewings and request skills assessment."
-      : charDone
-      ? "Monitor late-season production and interview at combine."
-      : "Request character report and cross-check with regional scout.",
-  };
-}
 
 function getScoutingMeta(store, id) {
   return store[id] || EMPTY_SCOUTING_META;
 }
 
-function nextReportDue(completion) {
-  if (completion < 40) return "2–3 weeks";
-  if (completion < 70) return "4–6 weeks";
-  return "Post-season review";
-}
 
-function scoutSummary(player, profile) {
-  const p = profile || player?.profile || null;
-  // Prefer the backend's evidence-based micro summary; then synthesize from real
-  // strengths/concerns/projection; only then fall back to rank-templated boilerplate.
-  if (p) {
-    const micro = typeof p.micro_summary === "string" ? p.micro_summary.trim() : "";
-    if (micro) return micro;
-    const strengths = Array.isArray(p.strengths) ? p.strengths.filter(Boolean) : [];
-    const concerns = Array.isArray(p.concerns) ? p.concerns.filter((c) => c && c !== "Clear") : [];
-    const proj = p.projection?.label || p.developmentProfile || null;
-    const eta = p.eta?.label || p.estimatedNhlArrival || null;
-    const parts = [];
-    if (proj) parts.push(`projects as ${proj}`);
-    if (strengths.length) parts.push(strengths.slice(0, 2).join(" and ").toLowerCase());
-    if (concerns.length) parts.push(`must clean up ${concerns[0].toLowerCase()}`);
-    if (eta && eta !== "Now") parts.push(`NHL arrival ${eta}`);
-    if (parts.length) return `${fullName(player)} ${parts.join("; ")}.`;
-  }
-
-  if (player.rank <= 5) {
-    return `${fullName(player)} grades as a potential franchise-level piece with high-end tools, strong detail, and a profile that should translate quickly if development stays on track.`;
-  }
-
-  if (player.rank <= 16) {
-    return `${fullName(player)} projects as a top-half first-round talent with enough translatable traits to become a major NHL contributor.`;
-  }
-
-  if (player.rank <= 32) {
-    return `${fullName(player)} has first-round upside, but the final projection depends on whether the weaker parts of the profile catch up to the standout tools.`;
-  }
-
-  return `${fullName(player)} is a longer-view prospect with useful traits, development variance, and enough upside to justify serious scouting attention.`;
-}
 
 /** CSS-only fallback avatar — PlayerHeadshot.js → PlayerHeadshot.css (not styles/playerHeadshot.css). */
 function DraftClassHeadshot({ player, size = "md", board = false }) {
@@ -2993,79 +2491,9 @@ function CommandStatStrip({ franchiseState, onOpenWjc }) {
   );
 }
 
-function ProspectBadges({ player, meta, showStockTier = false }) {
-  const badges = [];
-  if (meta.watchlist) badges.push({ key: "wl", text: "★ Watchlist", cls: "dc-badge--watch" });
-  if (meta.target) badges.push({ key: "tg", text: "◎ Target", cls: "dc-badge--target" });
-  if (meta.doNotDraft) badges.push({ key: "dnd", text: "⚠ DND", cls: "dc-badge--dnd" });
-  if (showStockTier) {
-    const stockTone = getStockTone(player.draftStock);
-    if (stockTone === "rise") badges.push({ key: "up", text: player.draftStock?.label || "↑ Rising", cls: "dc-badge--rise" });
-    if (stockTone === "fall") badges.push({ key: "dn", text: player.draftStock?.label || "↓ Falling", cls: "dc-badge--fall" });
-    if (player.franchiseTier?.available) badges.push({ key: "tier", text: player.franchiseTier.label, cls: `dc-badge--tier-${getTierTone(player.franchiseTier)}` });
-  }
-  if (player.isGem) badges.push({ key: "gem", text: "◆ Gem", cls: "dc-badge--gem" });
-  if (player.isBustRisk) badges.push({ key: "bust", text: "▲ Risk", cls: "dc-badge--bust" });
-  if (player.characterConcerns) badges.push({ key: "char", text: "⚠ Character", cls: "dc-badge--bust" });
-  if (!badges.length) return null;
-  return (
-    <div className="dc-badges">
-      {badges.map((b) => <span key={b.key} className={`dc-badge ${b.cls}`}>{b.text}</span>)}
-    </div>
-  );
-}
 
-function StockBadge({ stock, compact = false }) {
-  const tone = getStockTone(stock);
-  const text = stockBadgeText(stock);
-  return (
-    <span className={`dc-stock-badge dc-stock-badge--${tone}`} title={stock?.reason || ""}>
-      {compact ? text : text}
-    </span>
-  );
-}
 
-function TierBadge({ tier, compact = false }) {
-  const tone = getTierTone(tier);
-  return (
-    <span className={`dc-tier-badge dc-tier-badge--${tone}`} title={tier?.reason || ""}>
-      {compact ? (tier?.label || "Unclassified") : (tier?.label || "Unclassified")}
-    </span>
-  );
-}
 
-function ProspectIdentityBlock({ player }) {
-  const countryLabel = player.country || player.nationality || normalizeCountryCode(player) || "";
-  const flag = countryFlag(countryLabel);
-  const flagUrl = flagApiUrl(countryLabel, 64);
-  const [flagBroken, setFlagBroken] = useState(false);
-
-  return (
-    <div className="dc-prospect-identity">
-      <div className="dc-prospect-identity__avatar-wrap">
-        <DraftClassHeadshot player={player} size="md" board />
-        {flagUrl && !flagBroken ? (
-          <img
-            className="dc-prospect-identity__flag-badge"
-            src={flagUrl}
-            alt={countryLabel || "Nationality"}
-            title={countryLabel || "Nationality unknown"}
-            loading="lazy"
-            onError={() => setFlagBroken(true)}
-          />
-        ) : (
-          <span
-            className="dc-prospect-identity__flag-fallback"
-            title={countryLabel || "Nationality unknown"}
-            aria-label={countryLabel || "Nationality unknown"}
-          >
-            {flag}
-          </span>
-        )}
-      </div>
-    </div>
-  );
-}
 
 function wrNumClassForRank(rank) {
   const n = Number(rank);
@@ -3080,13 +2508,6 @@ function wrNumClassForTier(tierKey) {
   return "wr-num-slate";
 }
 
-function estimateNumericMid(text) {
-  if (text == null || text === "—") return null;
-  const range = String(text).match(/(\d+)\s*[–-]\s*(\d+)/);
-  if (range) return (Number(range[1]) + Number(range[2])) / 2;
-  const n = Number(String(text).replace(/[^\d.]/g, ""));
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
 
 function outcomeRibbonSegments(outcomes, isGoalie = false, outcomeDistribution = null) {
   return outcomeRibbonSegmentsForPosition(outcomes, isGoalie, outcomeDistribution);
@@ -3114,8 +2535,6 @@ function ProspectCreaseZoneMap({ tools, profile, compact = false }) {
           : { locked: true, value: null },
       }
     : resolveCreaseZoneGrades({}, profile, tools);
-  const numClass = (v) => wrNumClassForTier(v >= 85 ? "elite" : v >= 75 ? "high" : "depth");
-  const barPct = (v) => `${Math.max(8, Math.min(100, Math.round(v || 0)))}%`;
   return (
     <div className={`wr-rink wr-rink--crease${compact ? " wr-rink--dossier-compact" : ""}`}>
       <span className="dc-profile-tags__label">
@@ -3345,45 +2764,13 @@ function ProspectStatGradeStrip({ rows }) {
   );
 }
 
-function OffIcePipStrip({ player, tools }) {
-  const physicalTool = tools?.find((t) => t.label === "Physical");
-  const mentalTool = tools?.find((t) => t.label === "IQ");
-  const physical = physicalTool?.locked ? null : Number(player?.physical ?? physicalTool?.mid);
-  const mental = mentalTool?.locked ? null : Number(player?.poise ?? player?.hockeyIQ ?? mentalTool?.mid);
-  const character = Number(player?.character ?? player?.compete);
-  const leadership = Number(player?.leadership);
-  const rows = [
-    ["Physical", physical],
-    ["Mental", mental],
-    ["Character", character],
-    ["Leadership", leadership],
-  ];
-  const pips = (v) => {
-    if (!Number.isFinite(v) || v <= 0) return 0;
-    return Math.max(0, Math.min(10, Math.round(v / 10)));
-  };
-  return (
-    <div className="wr-office-strip">
-      {rows.map(([label, value]) => (
-        <div className="wr-office-strip__item" key={label}>
-          <span>{label}</span>
-          <div className="wr-office-pips" aria-label={`${label} ${pips(value)} of 10`}>
-            {Array.from({ length: 10 }, (_, i) => (
-              <i key={i} className={i < pips(value) ? "is-on" : ""} />
-            ))}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
 
 function ProspectBoardRow({ player, index, selected, expanded, onSelect, onPrefetch, meta, showConsensus }) {
   const rank = player.boardRank || prospectRank(player, index);
   const countryCode = normalizeCountryCode(player);
   const scoutPct = prospectEffectivePct(player);
   const dedicatedPct = prospectDedicatedPct(player);
-  const fogClass = prospectConfidenceFogClass(scoutPct);
+  prospectConfidenceFogClass(scoutPct);
   const ceilingHidden = Boolean(player?.ceilingHidden);
   const profile = player?.profile || null;
   const ovr = resolveCurrentEstimate(player, profile, ceilingHidden, Boolean(profile?.dedicatedScoutFile));
@@ -3403,7 +2790,7 @@ function ProspectBoardRow({ player, index, selected, expanded, onSelect, onPrefe
   const lo = pot.exact ? pot.value : (player?.potentialRange?.low ?? null);
   const hi = pot.exact ? pot.value : (player?.potentialRange?.high ?? null);
   const mid = pot.value;
-  const conf = confMeaning(scoutPct);
+  confMeaning(scoutPct);
   const tier = player.pyramidTier;
 
   const reasonCode = Array.isArray(player.draftRankReasonCodes) ? player.draftRankReasonCodes[0] : null;
@@ -3694,113 +3081,20 @@ function ModalCloseButton({ onClick, label = "Close" }) {
 }
 
 /** @deprecated Prefer ModalCloseButton — kept so older call sites keep working if reintroduced. */
-function HockeySticksCloseButton(props) {
-  return <ModalCloseButton {...props} />;
-}
 
-function ProfileMeter({ label, value, display, max = 100, tone = "cyan", title, note }) {
-  const num = Number(value);
-  if (!Number.isFinite(num)) return null;
-  const barPct = max > 100 ? Math.max(0, Math.min(100, (num / max) * 100)) : Math.max(0, Math.min(100, num));
-  const valueLabel = display ?? (max > 100 ? String(Math.round(num)) : `${Math.round(num)}%`);
-  return (
-    <div className={`dc-profile-meter dc-profile-meter--${tone}`} title={title || undefined}>
-      <div className="dc-profile-meter__head">
-        <span>{label}</span>
-        <strong>{valueLabel}</strong>
-      </div>
-      <div className="dc-profile-meter__track">
-        <i style={{ width: `${barPct}%` }} />
-      </div>
-      {note ? <p className="dc-profile-meter__note">{note}</p> : null}
-    </div>
-  );
-}
 
 function ProfileChip({ children, tone = "neutral" }) {
   if (!children) return null;
   return <span className={`dc-profile-chip dc-profile-chip--${tone}`}>{children}</span>;
 }
 
-function ProfileFactRow({ label, value, sub, title }) {
-  const safeValue = displaySafeText(value);
-  const safeSub = displaySafeText(sub);
-  if (safeValue == null || safeValue === "") return null;
-  return (
-    <div className="dc-profile-fact" title={title || undefined}>
-      <span className="dc-profile-fact__label">{label}</span>
-      <div className="dc-profile-fact__body">
-        <strong>{safeValue}</strong>
-        {safeSub ? <small>{safeSub}</small> : null}
-      </div>
-    </div>
-  );
-}
 
-function formatIdentityLine(player, profile) {
-  const badges = getPlayerIdentityBadges(player, profile);
-  const parts = [];
-  if (badges.position && badges.position !== "—") parts.push(badges.position);
-  if (badges.handedness) {
-    const shoot = String(badges.handedness).toUpperCase().startsWith("L") ? "Shoots L" : "Shoots R";
-    parts.push(shoot);
-  }
-  if (badges.height) parts.push(badges.height);
-  if (badges.weight) {
-    const wt = String(badges.weight).replace(/\s*LBS$/i, " lbs");
-    parts.push(wt);
-  }
-  if (badges.age) {
-    const age = String(badges.age).replace(/Y$/i, "");
-    parts.push(`${age} yrs`);
-  }
-  return parts.join(" · ");
-}
 
 // Displayed tools use real scouted attributes — no cosmetic lift toward ceiling.
 function prospectAttributeLift(profile) {
   return 0;
 }
 
-function ProspectAttributeStrip({ player, profile }) {
-  const lift = prospectAttributeLift(profile);
-  const ceilingHidden = Boolean(profile?.ceilingHidden || profile?.potential?.hidden);
-  const dedicatedFile = Boolean(profile?.dedicatedScoutFile);
-  const wideFog = ceilingHidden && !dedicatedFile;
-  const ambient = Number(profile?.scout_confidence ?? player.completion ?? player.scoutingConfidence ?? 55);
-  const completion = wideFog ? Math.min(Math.max(ambient, 52), 66) : Math.max(ambient, 40);
-  const bump = (val) => {
-    const n = Number(val);
-    if (!Number.isFinite(n)) return val;
-    return Math.min(94, Math.round(n + lift));
-  };
-  const attrs = [
-    ["Skating", bump(player.skating), 1],
-    ["Shot", bump(player.shooting), 2],
-    ["Pass", bump(player.passing), 3],
-    ["Defend", bump(player.defense), 4],
-    ["Physical", bump(player.physical), 5],
-    ["IQ", bump(player.hockeyIQ), 6],
-  ];
-  const hasAny = attrs.some(([, val]) => Number.isFinite(Number(val)));
-  if (!hasAny) return null;
-  return (
-    <div className="dc-profile-attr-strip">
-        <span className="dc-profile-tags__label">Tools</span>
-      <div className="dc-profile-attr-strip__grid">
-        {attrs.map(([label, val, seed]) => {
-          const display = attributeDisplay(val, completion, seed, { wideFog });
-          return (
-            <div key={label} className={`dc-profile-attr-mini${display.locked ? " is-locked" : ""}`}>
-              <span>{label}</span>
-              <strong>{display.text}</strong>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
 
 // NHL readiness — driven by current ability / ETA, never rank alone.
 function nhlReadinessLabel(rank, ceiling, currentOvr, profile) {
@@ -3827,66 +3121,8 @@ function nhlReadinessLabel(rank, ceiling, currentOvr, profile) {
 }
 
 // Compact season-line stats only — no prose ("small sample", stock blurbs, league names).
-function seasonAnalyticsLine(analytics, gp, { ppg = null } = {}) {
-  const games = Number(gp);
-  const parts = [];
-  const pushRaw = (label, text) => {
-    if (text != null && text !== "" && parts.length < 4) parts.push(`${label} ${text}`);
-  };
-  const push = (obj, key, label, fmt) => {
-    if (!obj || typeof obj !== "object") return;
-    const v = Number(obj[key]);
-    if (!Number.isFinite(v) || v === 0) return;
-    pushRaw(label, fmt(v));
-  };
-  const pct = (v) => `${Math.round(v <= 1 ? v * 100 : v)}%`;
-
-  if (Number.isFinite(Number(ppg)) && Number(ppg) > 0 && Number.isFinite(games) && games > 0) {
-    pushRaw("PPG", Number(ppg).toFixed(2));
-  }
-
-  const sampleOk = Number.isFinite(games) && games >= 15;
-  if (sampleOk && analytics && typeof analytics === "object") {
-    push(analytics, "xgf_pct", "xGF", pct);
-    push(analytics, "cf_pct", "CF", pct);
-    push(analytics, "war", "WAR", (v) => v.toFixed(1));
-  }
-  if (analytics && typeof analytics === "object") {
-    push(analytics, "shots", "SOG", (v) => String(Math.round(v)));
-    push(analytics, "primary_points", "1stP", (v) => String(Math.round(v)));
-    push(analytics, "shooting_pct", "SH%", (v) => `${Number(v).toFixed(1)}%`);
-    push(analytics, "plus_minus", "+/-", (v) => (v > 0 ? `+${Math.round(v)}` : String(Math.round(v))));
-  }
-  return parts.length ? parts.join(" · ") : null;
-}
 
 /** Collapse consecutive same-rank samples so early movement isn't crushed onto the left edge. */
-function compressTrajectoryPoints(points) {
-  if (!Array.isArray(points) || points.length <= 2) return points || [];
-  const out = [];
-  for (let i = 0; i < points.length; i += 1) {
-    const pt = points[i];
-    const prev = out[out.length - 1];
-    const isLast = i === points.length - 1;
-    if (!prev || prev.rank !== pt.rank || isLast) {
-      if (isLast && prev && prev.rank === pt.rank) {
-        // Keep a single end marker; refresh label toward "Current".
-        out[out.length - 1] = { ...pt, label: pt.label || prev.label };
-      } else {
-        out.push(pt);
-      }
-    }
-  }
-  // Cap length but always keep first + last.
-  if (out.length <= 8) return out;
-  const mid = out.slice(1, -1);
-  const step = Math.ceil(mid.length / 6);
-  const kept = [out[0]];
-  for (let i = 0; i < mid.length; i += step) kept.push(mid[i]);
-  const last = out[out.length - 1];
-  if (kept[kept.length - 1] !== last) kept.push(last);
-  return kept;
-}
 
 /** Weekly value trail — stored board history only. */
 function buildValueTrajectoryPoints(profile, player) {
@@ -4177,176 +3413,10 @@ function resolveToolRows(player, profile) {
   });
 }
 
-function SkillDnaRadar({ tools, compositeText, developOdds, skatingWeak }) {
-  const size = 360;
-  const cx = size / 2;
-  const cy = size / 2;
-  const rMax = 112;
-  const n = 6;
-  const angleAt = (i) => (-Math.PI / 2) + (i * 2 * Math.PI) / n;
-  const pt = (i, radius) => {
-    const a = angleAt(i);
-    return [cx + Math.cos(a) * radius, cy + Math.sin(a) * radius];
-  };
-  const rings = [0.35, 0.6, 0.85, 1];
-  const values = tools.map((t) => {
-    const n = t.raw != null ? t.raw : t.mid;
-    return n != null ? Math.max(0, Math.min(99, n)) / 99 : 0;
-  });
-  const hasSignal = tools.some((t) => t.mid != null && !t.locked);
-  const poly = values
-    .map((v, i) => {
-      const [x, y] = pt(i, rMax * (hasSignal ? Math.max(0.12, v) : 0.12));
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    })
-    .join(" ");
-  return (
-    <div className="dc-skill-dna dc-skill-dna--xl">
-      <span className="dc-profile-tags__label">Skill DNA</span>
-      <p className="dc-skill-dna__dev">
-        {developOdds != null
-          ? `${developOdds}% likely to develop into the expected outcome${skatingWeak ? " — skating is the drag on the rest of the tools." : "."}`
-          : "Development odds still forming."}
-      </p>
-      <div className="dc-skill-dna__stage">
-        <svg viewBox={`0 0 ${size} ${size}`} className="dc-skill-dna__svg" aria-hidden="true">
-          {rings.map((scale) => (
-            <polygon
-              key={scale}
-              className="dc-skill-dna__ring"
-              points={Array.from({ length: n }, (_, i) => pt(i, rMax * scale).map((v) => v.toFixed(1)).join(",")).join(" ")}
-            />
-          ))}
-          {tools.map((t, i) => {
-            const [x2, y2] = pt(i, rMax);
-            return <line key={t.label} className="dc-skill-dna__spoke" x1={cx} y1={cy} x2={x2} y2={y2} />;
-          })}
-          {hasSignal ? (
-            <polygon className="dc-skill-dna__fill" points={poly} />
-          ) : null}
-          {tools.map((t, i) => {
-            const [x, y] = pt(i, rMax + 22);
-            return (
-              <text key={`lab-${t.label}`} x={x} y={y} className="dc-skill-dna__label" textAnchor="middle" dominantBaseline="middle">
-                {t.label}
-              </text>
-            );
-          })}
-          {tools.map((t, i) => {
-            const n = t.raw != null ? t.raw : t.mid;
-            if (n == null) return null;
-            const [x, y] = pt(i, rMax * (Math.max(0, Math.min(99, n)) / 99));
-            return <circle key={`n-${t.label}`} cx={x} cy={y} r="3.4" className="dc-skill-dna__node" />;
-          })}
-        </svg>
-        <div className="dc-skill-dna__core">
-          <strong className={String(compositeText || "").length > 3 ? "is-range" : ""}>
-            {compositeText || "—"}
-          </strong>
-          <span>OVERALL</span>
-        </div>
-      </div>
-      <div className="dc-skill-dna__ranges">
-        {tools.map((t) => (
-          <div key={t.label} className={`${t.locked ? "is-locked" : ""}${t.weak ? " is-weak" : ""}${t.plus ? " is-plus" : ""}`}>
-            <span>{t.label}</span>
-            <strong>
-              {t.locked
-                ? ""
-                : (t.low != null && t.high != null
-                  ? `${t.low}-${t.high}`
-                  : t.text)}
-            </strong>
-            <em>{t.reach || (t.locked || t.mid == null ? "OVR —" : `OVR ${Math.round(t.mid)}`)}</em>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
 
-function ProjectionEngineBar({ label, value, display, tone = "cyan", max = 100 }) {
-  const n = Number(value);
-  const ok = Number.isFinite(n);
-  const pct = ok ? Math.max(0, Math.min(100, (n / max) * 100)) : 0;
-  return (
-    <div className={`dc-proj-engine__bar dc-proj-engine__bar--${tone}${ok ? "" : " is-empty"}`}>
-      <div className="dc-proj-engine__bar-head">
-        <span>{label}</span>
-        <strong>{ok ? (display ?? Math.round(n)) : "—"}</strong>
-      </div>
-      <div className="dc-proj-engine__track">
-        <i style={{ width: `${pct}%` }} />
-      </div>
-    </div>
-  );
-}
 
-function SegmentDots({ filled = 0, tone = "cyan", total = 10 }) {
-  const n = Math.max(0, Math.min(total, Math.round(Number(filled) || 0)));
-  return (
-    <div className={`dc-segment-dots dc-segment-dots--${tone}`} aria-hidden="true">
-      {Array.from({ length: total }, (_, i) => (
-        <i key={i} className={i < n ? "is-on" : ""} />
-      ))}
-    </div>
-  );
-}
 
-function DecisionLensRow({ label, value, dots, tone = "cyan" }) {
-  const empty = value == null || value === "" || value === "—";
-  return (
-    <div className={`dc-lens-row${empty ? " is-empty" : ""}`}>
-      <div className="dc-lens-row__copy">
-        <span>{label}</span>
-        <strong>{empty ? "—" : value}</strong>
-      </div>
-      <SegmentDots filled={empty ? 0 : dots} tone={tone} />
-    </div>
-  );
-}
 
-function ScoutingTrail({ points, confPct }) {
-  const nodes = (points || []).slice(-6);
-  const completed = nodes.length;
-  const target = 6;
-  if (!nodes.length) {
-    return (
-      <div className="dc-scout-trail dc-scout-trail--empty">
-        <span className="dc-profile-tags__label">Scouting trail</span>
-        <p>No viewing trail recorded</p>
-        <div className="dc-scout-trail__progress">
-          <span>Viewings completed — / {target}</span>
-        </div>
-      </div>
-    );
-  }
-  return (
-    <div className="dc-scout-trail">
-      <div className="dc-scout-trail__head">
-        <span className="dc-profile-tags__label">Scouting trail</span>
-        <span className="dc-scout-trail__progress">
-          Viewings completed {Math.min(completed, target)} / {target}
-        </span>
-      </div>
-      <div className="dc-scout-trail__track">
-        {nodes.map((n, i) => (
-          <div key={`${n.label}-${i}`} className={`dc-scout-trail__node${i === nodes.length - 1 ? " is-active" : ""}`}>
-            <i />
-            <span>{n.label}</span>
-            <strong>#{n.rank}</strong>
-          </div>
-        ))}
-      </div>
-      <div className="dc-scout-trail__bar">
-        <i style={{ width: `${Math.round((Math.min(completed, target) / target) * 100)}%` }} />
-      </div>
-      {confPct != null ? (
-        <small className="dc-scout-trail__conf">{confPct}% file clarity</small>
-      ) : null}
-    </div>
-  );
-}
 
 function upsideImpactFromProfile(ceilingOvr, franchiseTier, rank, ceilingHidden) {
   const band = peakProjectionBand(ceilingOvr, ceilingHidden);
@@ -4471,14 +3541,6 @@ function prospectDisplayName(player) {
   return `${player?.firstName || ""} ${player?.lastName || ""}`.trim();
 }
 
-function mediaHeatPhrase(heat) {
-  const n = Number(heat);
-  if (!Number.isFinite(n) || n <= 0) return null;
-  if (n < 20) return "Quiet coverage";
-  if (n < 45) return "Building buzz";
-  if (n < 75) return "Hot topic";
-  return "League-wide obsession";
-}
 
 function mediaCredPhrase(v) {
   const n = Number(v);
@@ -4549,54 +3611,7 @@ function groupProspectStoryArcs(events) {
     .sort((a, b) => b.heat - a.heat || b.beats.length - a.beats.length);
 }
 
-function buildProspectPublicImage(player, profile, characterFile, stock) {
-  const labels = [];
-  const hype = String(profile?.draft_hype_tier || player?.draftHypeTier || "").toLowerCase();
-  if (player?.isTranscendent || profile?.transcendent_talent || hype === "mythic") {
-    labels.push("Generational draft obsession");
-  }
-  if (player?.characterConcerns || player?.character_concerns) labels.push("Character questions circulating");
-  if (player?.pyramidTier?.key === "transcendent" || player?.pyramidTier?.key === "generational") {
-    labels.push("Lottery-night name");
-  }
-  const delta = Number(stock?.weeklyDelta ?? stock?.delta ?? stock?.movement);
-  if (Number.isFinite(delta)) {
-    if (delta >= 8) labels.push("Rising fast on boards");
-    else if (delta <= -8) labels.push("Sliding in draft conversation");
-  }
-  if (player?.isOverager) labels.push("Overager scrutiny");
-  if (!labels.length) {
-    if (Number(player?.rank) <= 5) labels.push("Top-tier prospect spotlight");
-    else if (Number(player?.rank) <= 15) labels.push("First-round buzz");
-    else labels.push("Under-the-radar file");
-  }
-  return labels.slice(0, 4);
-}
 
-function buildPublicationMentions(player, allProspects) {
-  if (!Array.isArray(allProspects) || !allProspects.length) return [];
-  const scoutRanked = rankProspectsForSource(allProspects, "scout");
-  const scoutIdx = scoutRanked.findIndex((p) => p.id === player.id);
-  const scoutRank = scoutIdx >= 0 ? scoutIdx + 1 : Number(player?.rank) || null;
-  const mentions = [];
-
-  PUBLICATIONS.forEach((pub) => {
-    const ranked = rankProspectsForSource(allProspects, pub.id);
-    const pubIdx = ranked.findIndex((p) => p.id === player.id);
-    if (pubIdx < 0) return;
-    const pubRank = pubIdx + 1;
-    const spread = scoutRank ? pubRank - scoutRank : 0;
-    let note = `${pub.label} lists him #${pubRank}`;
-    if (Math.abs(spread) >= 4) {
-      note = spread < 0
-        ? `${pub.author} has him ${Math.abs(spread)} spots higher than your scouts`
-        : `${pub.author} ${spread} spots lower — disagreement worth watching`;
-    }
-    mentions.push({ outlet: pub.label, author: pub.author, rank: pubRank, note, spread });
-  });
-
-  return mentions.sort((a, b) => Math.abs(b.spread) - Math.abs(a.spread)).slice(0, 4);
-}
 
 function prospectSocialKeys(player) {
   const id = String(player?.id || player?.key || "").trim();
@@ -4933,12 +3948,10 @@ function ProspectProfileModal({
 
   const pot = profile?.potential;
   const fit = profile?.team_fit || profile?.teamFit;
-  const proj = profile?.projection;
   const gem = profile?.gem;
-  const comparison = profile?.player_comparison;
   const competition = profile?.competition;
   const strengths = Array.isArray(profile?.strengths) ? profile.strengths : [];
-  const tags = getPlayerTags(player, profile).filter((t) => {
+  getPlayerTags(player, profile).filter((t) => {
     const primary = String(strengths[0] || "").toLowerCase();
     return !primary || String(t).toLowerCase() !== primary;
   });
@@ -4971,8 +3984,7 @@ function ProspectProfileModal({
         : confPct >= 56
           ? `${String(intelTier || "SOLID").toUpperCase()} COVERAGE`
           : "LIMITED LOOKS";
-  const compareFull = (compareIds || []).length >= 3;
-  const inCompare = (compareIds || []).includes(player.id);
+  (compareIds || []).includes(player.id);
 
   const ceilingRating = Number(pot?.rating);
   const currentOvr = Number(profile?.scoutedOverall ?? profile?.currentOvrEstimate);
@@ -5032,7 +4044,6 @@ function ProspectProfileModal({
     ? profile.concerns
     : (Array.isArray(profile?.weaknessesEvidence) ? profile.weaknessesEvidence.map((e) => (typeof e === "string" ? e : `${e.title} — ${e.fact}`)) : []);
   const characterRead = profile?.character_read;
-  const characterFile = player.characterFile;
   const charReadConf = Number(characterRead?.confidence ?? 0);
   const traitsKnown = (Array.isArray(characterRead?.traits) ? characterRead.traits : []).some(
     (t) => t?.tier && t.tier !== "Unknown",
@@ -5049,22 +4060,18 @@ function ProspectProfileModal({
   const shoots = handRaw
     ? (String(handRaw).toUpperCase().startsWith("L") ? "SHOOTS LEFT" : "SHOOTS RIGHT")
     : "—";
-  const ageNum = badges.age ? String(badges.age).replace(/Y$/i, "") : (player.age != null ? String(player.age) : "—");
   const posName = positionDisplayName(badges.position || player.position);
   const peakVal = !ceilingHidden && pot?.rating != null ? Number(pot.rating) : null;
   const volatilityRaw = !ceilingHidden ? String(profile?.developmentVolatility || "").trim() : "";
   const volatilityDisplay = (!volatilityRaw || volatilityRaw.toLowerCase() === "unknown")
     ? "—"
     : volatilityRaw.toUpperCase();
-  const floorVal = !ceilingHidden && pot?.floor != null ? Number(pot.floor) : null;
   const boardYear = profile?.draft_year || player?.draftYear || null;
-  const upside = upsideImpactFromProfile(peakVal ?? ceilingRating, player.franchiseTier, rank, ceilingHidden);
+  upsideImpactFromProfile(peakVal ?? ceilingRating, player.franchiseTier, rank, ceilingHidden);
   const roleLens = projectedRoleFromPeak(peakVal ?? ceilingRating, player.position, ceilingHidden);
   const draftWindow = draftWindowFromRank(rank);
-  const riskTemp = riskTemperatureFromGem(gem, riskLabel, volatility);
-  const compLens = competitionLens(competition);
-  const roleDots = roleLens.dots;
-  const confDots = confPct != null ? Math.max(0, Math.min(10, Math.round(confPct / 10))) : 0;
+  riskTemperatureFromGem(gem, riskLabel, volatility);
+  competitionLens(competition);
   const confBand = confPct == null
     ? "—"
     : confPct >= 72
@@ -5491,184 +4498,7 @@ function ProspectProfileModal({
   );
 }
 
-function SelectedProspectCommandCard({
-  player, meta, dateContext, draftYear, allProspects, scoutingActions, compareIds, onRemoveCompare, onClearCompare,
-}) {
-  const [tab, setTab] = useState("OVERVIEW");
-  const [openFile, setOpenFile] = useState(false);
-  if (!player) {
-    return (
-      <section className="dc-selected-file dc-selected-file--empty">
-        <p>Select a prospect from the tier board.</p>
-      </section>
-    );
-  }
 
-  const isGoalie = player.position === "G";
-  const ppg = player.gp > 0 ? (player.points / player.gp).toFixed(2) : "—";
-  const concern = player.characterConcerns
-    ? "Character concerns flagged by backend scouting."
-    : player.isBustRisk
-    ? "Bust risk flagged — variance in projection."
-    : player.riskLabel === "High"
-    ? "High risk profile per backend risk label."
-    : "No major red flags in current file.";
-
-  return (
-    <section className="dc-selected-file">
-      <header className="dc-selected-file__hero">
-        <DraftClassHeadshot player={player} size="lg" />
-        <div className="dc-selected-file__identity">
-          <span className="dc-selected-file__rank">#{player.rank}</span>
-          <h2>{player.firstName} {player.lastName}</h2>
-          <p>{player.position} · {countryFlag(player.country)} · {player.league}</p>
-        </div>
-        <div className="dc-selected-file__quick">
-          <div><span>Top</span><strong>{player.projection}</strong></div>
-          <div><span>Grade</span><strong>{player.talent}</strong></div>
-          <div><span>Scout</span><strong>{player.completion}%</strong></div>
-        </div>
-      </header>
-
-      <div className="dc-selected-file__grid">
-        <article className="dc-glass-card">
-          <h3>Stats</h3>
-          {!isGoalie ? (
-            <p>{player.gp} GP · {player.points} PTS · {ppg} P/GP</p>
-          ) : (
-            <p>{player.gp} GP · {player.wins} W · SV% {player.savePct || "—"}</p>
-          )}
-        </article>
-        <article className="dc-glass-card">
-          <h3>Tier</h3>
-          <TierBadge tier={player.franchiseTier} />
-        </article>
-        <article className="dc-glass-card">
-          <h3>Stock</h3>
-          <StockBadge stock={player.draftStock} />
-          <p>{player.draftStock?.available ? stockBadgeText(player.draftStock) : "—"}</p>
-        </article>
-        <article className="dc-glass-card">
-          <h3>Concern</h3>
-          <p>{player.characterConcerns ? "⚠ Character" : player.isBustRisk ? "⚠ Risk" : "✓ Clear"}</p>
-        </article>
-        <article className="dc-glass-card">
-          <h3>Next</h3>
-          <p>{meta.doNotDraft ? "Hold" : meta.target ? "Pin locked" : "Scout"}</p>
-        </article>
-      </div>
-
-      <div className="dc-action-strip">{scoutingActions}</div>
-
-      <div className="dc-file-toggle-wrap">
-        <button type="button" className={`dc-btn dc-btn--secondary ${openFile ? "is-active" : ""}`} onClick={() => setOpenFile((v) => !v)}>
-          {openFile ? "Close File" : "Open File"}
-        </button>
-      </div>
-
-      {openFile ? (
-        <>
-          <div className="dc-selected-file__tabs">
-            {PROFILE_TABS.map((t) => (
-              <button key={t} type="button" className={`dc-profile-tab ${tab === t ? "is-active" : ""}`} onClick={() => setTab(t)}>
-                {t}
-              </button>
-            ))}
-          </div>
-
-          <ComparisonTray compareIds={compareIds} prospects={allProspects} onRemove={onRemoveCompare} onClear={onClearCompare} />
-
-          <div className="dc-selected-file__detail dc-scroll-surface">
-            {tab === "OVERVIEW" && <OverviewTab player={player} meta={meta} dateContext={dateContext} draftYear={draftYear} />}
-            {tab === "STATS" && <StatsTab player={player} dateContext={dateContext} allProspects={allProspects} />}
-            {tab === "ATTRIBUTES" && <AttributesTab player={player} />}
-            {tab === "SCOUT REPORT" && <ScoutReportTab player={player} meta={meta} profile={player.profile} />}
-            {tab === "CHARACTER" && <CharacterTab player={player} meta={meta} profile={player.profile} />}
-          </div>
-        </>
-      ) : null}
-    </section>
-  );
-}
-
-function StockExchangeRail({ boardMeta, prospects, onSelectPlayer, leadersProps }) {
-  const summary = useMemo(() => {
-    const movers = buildStockMoversFromProspects(prospects);
-    if (movers.risers.length || movers.fallers.length) return movers;
-    const backend = boardMeta?.stock_market_summary || boardMeta?.stockMarketSummary;
-    if (backend?.source === "backend") return backend;
-    return movers;
-  }, [prospects, boardMeta?.stock_market_summary, boardMeta?.stockMarketSummary]);
-  const breakouts = (prospects || []).filter((p) => {
-    const d = Number(p?.draftStock?.deltaRank) || 0;
-    return d >= 8;
-  }).slice(0, 5).map((p) => ({
-    key: p.id,
-    name: `${p.firstName || ""} ${p.lastName || ""}`.trim(),
-    rank: p.rank,
-    deltaRank: p.draftStock?.deltaRank,
-  }));
-  const injured = (prospects || []).filter((p) => p?.injured || p?.injury || p?.availability === "injured").slice(0, 5).map((p) => ({
-    key: p.id,
-    name: `${p.firstName || ""} ${p.lastName || ""}`.trim(),
-    rank: p.rank,
-    deltaRank: 0,
-  }));
-  const watched = (prospects || []).filter((p) => p?.watchlist || p?.target).slice(0, 6).map((p) => ({
-    key: p.id,
-    name: `${p.firstName || ""} ${p.lastName || ""}`.trim(),
-    rank: p.rank,
-    deltaRank: p.draftStock?.deltaRank,
-  }));
-  const hasSummary = Boolean(summary?.risers?.length || summary?.fallers?.length || breakouts.length || injured.length || watched.length);
-
-  const renderList = (title, items, tone) => {
-    if (!items?.length) return null;
-    return (
-      <div className={`dc-stock-card dc-stock-card--${tone}`}>
-        <h4>{title}</h4>
-        {items.slice(0, 6).map((item) => {
-          const id = item.key;
-          const deltaRaw = item.delta_rank ?? item.deltaRank;
-          const delta = Number.isFinite(Number(deltaRaw)) ? Number(deltaRaw) : 0;
-          return (
-            <button key={`${title}-${id}`} type="button" className="dc-stock-row" onClick={() => id && onSelectPlayer(id)}>
-              <span>#{item.rank}</span>
-              <span className="dc-stock-row__name">{item.name}</span>
-              <span className={`dc-stock-row__delta ${delta > 0 ? "is-up" : delta < 0 ? "is-down" : ""}`}>
-                {delta > 0 ? `+${delta}` : delta < 0 ? delta : "—"}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-    );
-  };
-
-  return (
-    <aside className="dc-stock-rail dc-scroll-surface">
-      <header className="dc-stock-rail__head">
-        <h2>Scouting Ticker</h2>
-      </header>
-      <div className="dc-stock-rail__movement">
-        {!hasSummary ? (
-          <p className="dc-empty-note dc-stock-rail__empty">+0</p>
-        ) : (
-          <>
-            {renderList("Risers", summary.risers, "rise")}
-            {renderList("Fallers", summary.fallers, "fall")}
-            {renderList("Breakouts", breakouts, "rise")}
-            {renderList("Injured", injured, "fall")}
-            {renderList("Watched", watched, "stable")}
-          </>
-        )}
-      </div>
-      <div className="dc-stock-rail__leaders">
-        <LeagueLeaders {...leadersProps} compact />
-      </div>
-    </aside>
-  );
-}
 
 function IntelFeed({ prospects }) {
   const movers = useMemo(() => weeklyStockMovers(prospects, { minAbs: 1, limit: 80 }), [prospects]);
@@ -5954,637 +4784,20 @@ function LeagueLeadersModal({
   );
 }
 
-function LeagueLeaders({
-  prospects,
-  dateContext,
-  leaderMode,
-  setLeaderMode,
-  onSelectPlayer,
-  onOpenFullLeaders,
-  regionFilter,
-  compact = false,
-}) {
-  const filtered = useMemo(() => {
-    let list = prospects;
-    if (regionFilter && regionFilter !== "ALL PLAYERS") list = list.filter((p) => p.region === regionFilter);
-    return list;
-  }, [prospects, regionFilter]);
 
-  const previewModes = LEADER_MODE_OPTIONS.filter((m) => m.key !== "defense" && m.key !== "analytics");
 
-  const leaders = useMemo(() => {
-    return sortProspectsForLeaderMode(filtered, leaderMode).slice(0, 8);
-  }, [filtered, leaderMode]);
 
-  return (
-    <div className={`dc-leaders-panel${compact ? " dc-leaders-panel--compact" : ""}`}>
-      <div className="dc-side-title">
-        <h2>LEAGUE LEADERS</h2>
-        {!compact && dateContext?.statsThrough ? (
-          <span className="dc-leaders-date">through {dateContext.statsThrough}</span>
-        ) : null}
-      </div>
-      <div className="dc-leader-tabs">
-        {previewModes.map((m) => (
-          <button key={m.key} type="button" className={`dc-leader-tab ${leaderMode === m.key ? "is-active" : ""}`} onClick={() => setLeaderMode(m.key)}>
-            {m.label}
-          </button>
-        ))}
-      </div>
-      <div className="dc-leader-scroll">
-        {!leaders.length ? (
-          <p className="dc-empty-note">Not enough tracked data for this view yet.</p>
-        ) : (
-          leaders.map((p, index) => (
-            <button type="button" key={p.id} className="dc-leader-row" onClick={() => onSelectPlayer(p)}>
-              <span className="dc-leader-row__name">{index + 1}. {p.firstName[0]}. {p.lastName}</span>
-              <span className="dc-leader-meta">{p.league}</span>
-              {leaderMode === "goalies" ? (
-                <strong>{p.wins}W · {p.savePct || "—"}</strong>
-              ) : leaderMode === "goals" ? (
-                <strong>{p.goals}G · {p.gp} GP</strong>
-              ) : leaderMode === "assists" ? (
-                <strong>{p.assists}A · {p.gp} GP</strong>
-              ) : leaderMode === "ppg" ? (
-                <strong>{leaderPpg(p) != null ? `${Number(leaderPpg(p)).toFixed(2)} PPG` : "—"}</strong>
-              ) : leaderMode === "stock" ? (
-                <strong>{stockText(Number(p.draftStock?.deltaRank ?? p.stock) || 0)}</strong>
-              ) : (
-                <strong>{p.points} PTS · {p.gp} GP</strong>
-              )}
-            </button>
-          ))
-        )}
-      </div>
-      <button type="button" className="dc-view-full dc-view-full--leaders" onClick={onOpenFullLeaders}>
-        View Full Leaders
-      </button>
-    </div>
-  );
-}
 
-function ScoutingPanel({ player, meta, onAssignScout, showAssign, setShowAssign }) {
-  if (!player) return null;
-  const pub = prospectPublicPct(player);
-  const you = prospectDedicatedPct(player);
-  const conf = confidenceLabel(prospectEffectivePct(player) ?? 0);
-  return (
-    <div className="dc-scouting-panel">
-      <h3>SCOUTING DOSSIER</h3>
-      <div className="dc-scout-grid">
-        <div><span>Public file</span><strong>{pub != null ? `${pub}%` : "—"}</strong></div>
-        <div><span>Your file</span><strong>{you != null ? `${you}%` : "—"}</strong></div>
-        <div><span>Confidence</span><strong>{conf}</strong></div>
-        <div><span>Assigned Scout</span><strong>{meta.assignedScout || "Unassigned"}</strong></div>
-        <div><span>Last Viewed</span><strong>{meta.lastViewed || "—"}</strong></div>
-        <div><span>Next Report</span><strong>{nextReportDue(prospectEffectivePct(player) ?? 0)}</strong></div>
-      </div>
-      {!meta.assignedScout && (
-        <p className="dc-scout-prompt" title="Passive files cap at 62% without an assigned scout. After 14 days assigned, passive growth can reach 100%.">
-          Assign a scout for passive file growth (~3%/week). Use <strong>Deploy coverage</strong> for bulk regional sweeps (+6% each).
-        </p>
-      )}
-      {meta.assignedScout ? (
-        <p className="dc-scout-prompt dc-scout-prompt--active">Scout assigned — file grows daily while they stay on your shortlist.</p>
-      ) : null}
-      {showAssign && (
-        <div className="dc-scout-assign">
-          {SCOUT_NAMES.map((name) => (
-            <button key={name} type="button" className={meta.assignedScout === name ? "is-active" : ""} onClick={() => { onAssignScout(name); setShowAssign(false); }}>
-              {name}
-            </button>
-          ))}
-        </div>
-      )}
-      <div className="dc-report-list">
-        <h4>Report Status</h4>
-        {REPORT_TYPES.map((rt) => {
-          const status = meta.requestedReports[rt.key];
-          const autoComplete = rt.key !== "character" && player.completion >= 78;
-          const charComplete = rt.key === "character" && (status === "complete" || player.completion >= 88);
-          const label = charComplete || (autoComplete && status !== "pending") ? "Complete" : status === "pending" ? "Pending" : status === "requested" ? "Requested" : "Not Requested";
-          return (
-            <div key={rt.key} className={`dc-report-row dc-report-row--${label.toLowerCase().replace(/\s/g, "-")}`}>
-              <span>{rt.label}</span>
-              <em>{label}</em>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
 
-function TeamNeedsPanel({ needs, strategy, player }) {
-  return (
-    <div className="dc-needs-panel">
-      <h3>ORGANIZATIONAL CONTEXT</h3>
-      {needs?.length ? (
-        <p><span>Team Needs:</span> {needs.join(", ")}</p>
-      ) : (
-        <p className="dc-empty-note">Team need context unavailable.</p>
-      )}
-      <p><span>Draft Strategy:</span> {strategy || "BPA"}</p>
-      {player && (
-        <p className="dc-fit-note">
-          <span>{fullName(player)} fit:</span> {player.fit >= 72 ? "Strong organizational fit" : player.fit >= 58 ? "Moderate fit — addresses depth" : "Peripheral fit at current rank"}
-        </p>
-      )}
-    </div>
-  );
-}
 
-function ScoutingPriorities({ onFilterAction }) {
-  const items = [
-    { label: "Review top 32", action: "top32" },
-    { label: "Assign scouts to low-confidence targets", action: "lowconf" },
-    { label: "Scout players near projected pick", action: "midround" },
-    { label: "Check league leaders", action: "leaders" },
-    { label: "Revisit risers/fallers", action: "movers" },
-  ];
-  return (
-    <div className="dc-priorities-panel">
-      <h3>SCOUTING PRIORITIES</h3>
-      <ul>
-        {items.map((item) => (
-          <li key={item.action}>
-            <button type="button" onClick={() => onFilterAction(item.action)}>{item.label}</button>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
 
-function ComparisonTray({ compareIds, prospects, onRemove, onClear }) {
-  if (!compareIds.length) return null;
-  const players = compareIds.map((id) => prospects.find((p) => p.id === id)).filter(Boolean);
-  return (
-    <div className="dc-compare-tray">
-      <div className="dc-compare-head">
-        <strong>Compare ({players.length}/3)</strong>
-        <button type="button" onClick={onClear}>Clear</button>
-      </div>
-      <div className="dc-compare-grid">
-        {players.map((p) => (
-          <div key={p.id} className="dc-compare-card">
-            <button type="button" className="dc-compare-remove" onClick={() => onRemove(p.id)}>×</button>
-            <b>{p.firstName} {p.lastName}</b>
-            <span>#{p.rank} · {p.position}</span>
-            <span>{p.projection} · {p.talent}</span>
-            <span>Scout {p.completion}%</span>
-            <span>{p.position !== "G" ? `${p.points} PTS / ${p.gp} GP` : `${p.wins}W · ${p.savePct}`}</span>
-            <span>Fit {p.fit}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
 
-function ScoutingActions({ meta, onToggleWatchlist, onToggleTarget, onToggleDND, onAssignToggle, onRequestReport, onCompare, compareFull, showAssign }) {
-  const [scoutOpen, setScoutOpen] = useState(false);
-  return (
-    <div className="dc-scout-actions">
-      <button type="button" className={`dc-btn dc-btn--primary ${scoutOpen ? "is-active" : ""}`} onClick={() => setScoutOpen((v) => !v)}>
-        ◎ Scout
-      </button>
-      {scoutOpen ? (
-        <div className="dc-scout-menu">
-          <button type="button" className="dc-btn dc-btn--sub" onClick={onAssignToggle}>{showAssign ? "Close" : "Assign"}</button>
-          <button type="button" className="dc-btn dc-btn--sub" onClick={() => onRequestReport("potential")}>Potential</button>
-          <button type="button" className="dc-btn dc-btn--sub" onClick={() => onRequestReport("skills")}>Skills</button>
-          <button type="button" className="dc-btn dc-btn--sub" onClick={() => onRequestReport("character")}>Character</button>
-        </div>
-      ) : null}
-      <button type="button" className={`dc-btn dc-btn--secondary ${meta.watchlist ? "is-active" : ""}`} onClick={onToggleWatchlist}>
-        ★ Watch
-      </button>
-      <button type="button" className={`dc-btn dc-btn--secondary ${meta.target ? "is-active" : ""}`} onClick={onToggleTarget}>
-        ◉ Pin
-      </button>
-      <button type="button" className={`dc-btn dc-btn--secondary ${compareFull ? "is-disabled" : ""}`} onClick={onCompare} disabled={compareFull}>
-        ⚖ Compare
-      </button>
-      <button type="button" className={`dc-btn dc-btn--danger ${meta.doNotDraft ? "is-active" : ""}`} onClick={onToggleDND}>
-        ⚠ DND
-      </button>
-    </div>
-  );
-}
 
-function RightSidePanel(props) {
-  const [sideTab, setSideTab] = useState("leaders");
-  return (
-    <aside className="dc-right-panel">
-      <div className="dc-side-tabs">
-        {["leaders", "scouting", "context", "priorities"].map((t) => (
-          <button key={t} type="button" className={sideTab === t ? "is-active" : ""} onClick={() => setSideTab(t)}>
-            {t === "leaders" ? "Leaders" : t === "scouting" ? "Scouting" : t === "context" ? "Team" : "Tasks"}
-          </button>
-        ))}
-      </div>
-      {sideTab === "leaders" && <LeagueLeaders {...props.leadersProps} />}
-      {sideTab === "scouting" && <ScoutingPanel {...props.scoutingProps} />}
-      {sideTab === "context" && <TeamNeedsPanel {...props.contextProps} />}
-      {sideTab === "priorities" && <ScoutingPriorities onFilterAction={props.onFilterAction} />}
-    </aside>
-  );
-}
 
-function OverviewTab({ player, meta, dateContext, draftYear }) {
-  return (
-    <div className="dc-profile-body">
-      <div className="dc-profile-left">
-        <DraftClassHeadshot player={player} size="lg" />
-        <div className="dc-profile-name">
-          <span>{player.firstName}</span>
-          <strong>{player.lastName}</strong>
-          <p>{player.position} · {player.playerType}</p>
-          <small>{countryFlag(player.country)} {player.country}</small>
-          <small>{player.team} ({player.league})</small>
-          <small>{player.height} · {player.weight} lbs · Shoots {player.handedness} · Age {player.age}</small>
-          <ProspectBadges player={player} meta={meta} />
-        </div>
-      </div>
 
-      <div className="dc-profile-card dc-draft-projection">
-        <span>DRAFT PROJECTION</span>
-        <strong>{player.projection}</strong>
-        <p>{confidenceLabel(player.completion)}</p>
-        <small>Scout: {meta.assignedScout || "Unassigned"}</small>
-      </div>
 
-      <div className="dc-info-card">
-        <h3>PLAYER INFO</h3>
-        <div className="dc-info-grid">
-          <span>Birthdate</span><b>{player.birthday}</b>
-          <span>Hometown</span><b>{player.birthCity || player.country}</b>
-          <span>Draft Eligible</span><b>{draftYear}</b>
-          <span>Overall Rank</span><b>{player.rank}</b>
-          <span>Position Rank</span><b>{player.position}-{player.positionRank}</b>
-          <span>Partial Stats</span><b>{player.gp} GP through {dateContext.statsThrough || "season"}</b>
-          <span>Height</span><b>{player.height}</b>
-          <span>Weight</span><b>{player.weight} lbs</b>
-        </div>
-      </div>
 
-      <div className="dc-list-card dc-list-card--good">
-        <h3>STRENGTHS</h3>
-        <ul>{strengthList(player).map((s) => <li key={s}>{s}</li>)}</ul>
-      </div>
 
-      <div className="dc-list-card dc-list-card--bad">
-        <h3>WEAKNESSES</h3>
-        <ul>{weaknessList(player).map((s) => <li key={s}>{s}</li>)}</ul>
-      </div>
-
-      <div className="dc-summary-card">
-        <h3>SCOUT SUMMARY</h3>
-        <p>{scoutSummary(player)}</p>
-        {dateContext.isPartialSeason && <small className="dc-partial-note">Partial-season view — reports still developing.</small>}
-      </div>
-    </div>
-  );
-}
-
-function StatsTab({ player, dateContext, allProspects }) {
-  const isGoalie = player.position === "G";
-  const ppg = player.gp > 0 ? (player.points / player.gp).toFixed(2) : "—";
-  const hasProjection = player.projectedGp != null || player.projectedPoints != null;
-  const leagueRank = useMemo(() => {
-    const peers = allProspects.filter((p) => p.league === player.league && p.position !== "G");
-    if (!peers.length || isGoalie) return null;
-    const sorted = [...peers].sort((a, b) => b.points - a.points);
-    const idx = sorted.findIndex((p) => p.id === player.id);
-    return idx >= 0 ? idx + 1 : null;
-  }, [allProspects, player, isGoalie]);
-
-  return (
-    <div className="dc-stat-layout">
-      <div className="dc-stat-card">
-        <h3>CURRENT SEASON STATS</h3>
-        <p className="dc-stats-context">Actual stats through {dateContext.statsThrough || "current date"}</p>
-        {player.hasNoGames ? (
-          <p className="dc-sample-warn">No games yet — stats will populate as the prospect league season begins.</p>
-        ) : null}
-        {!isGoalie ? (
-          <div className="dc-big-stat-grid">
-            <div><span>GP</span><strong>{player.gp}</strong></div>
-            <div><span>G</span><strong>{player.goals}</strong></div>
-            <div><span>A</span><strong>{player.assists}</strong></div>
-            <div><span>PTS</span><strong>{player.points}</strong></div>
-            <div><span>P/GP</span><strong>{ppg}</strong></div>
-            <div><span>STOCK</span><strong>{stockBadgeText(player.draftStock)}</strong></div>
-          </div>
-        ) : (
-          <div className="dc-big-stat-grid">
-            <div><span>GP</span><strong>{player.gp}</strong></div>
-            <div><span>W</span><strong>{player.wins}</strong></div>
-            <div><span>SV%</span><strong>{player.savePct || "—"}</strong></div>
-            <div><span>GAA</span><strong>{player.gaa || "—"}</strong></div>
-            <div><span>STOCK</span><strong>{stockBadgeText(player.draftStock)}</strong></div>
-            <div><span>FIT</span><strong>{player.fit}</strong></div>
-          </div>
-        )}
-        {player.gp > 0 && player.gp < 12 && <p className="dc-sample-warn">Small sample warning — stats may not be representative yet.</p>}
-        {player.recentForm?.last_5_gp > 0 ? (
-          <p className="dc-stats-context">
-            Recent form: {player.recentForm.last_5_points} PTS in last {player.recentForm.last_5_gp} GP
-          </p>
-        ) : null}
-      </div>
-
-      <div className="dc-stat-card">
-        <h3>SEASON PROJECTION</h3>
-        <p className="dc-stats-context">
-          {hasProjection ? "Full-season pace based on talent, role, and league environment" : "Based on preseason scouting"}
-        </p>
-        {!isGoalie ? (
-          <div className="dc-big-stat-grid">
-            <div><span>GP PACE</span><strong>{player.projectedGp ?? "—"}</strong></div>
-            <div><span>G PACE</span><strong>{player.projectedGoals ?? "—"}</strong></div>
-            <div><span>A PACE</span><strong>{player.projectedAssists ?? "—"}</strong></div>
-            <div><span>PTS PACE</span><strong>{player.projectedPoints ?? "—"}</strong></div>
-            <div><span>P/GP PACE</span><strong>{player.projectedPpg != null ? Number(player.projectedPpg).toFixed(2) : "—"}</strong></div>
-            <div><span>CONF</span><strong>{player.scoutingConfidence != null ? `${player.scoutingConfidence}%` : `${player.completion}%`}</strong></div>
-          </div>
-        ) : (
-          <div className="dc-big-stat-grid">
-            <div><span>GP PACE</span><strong>{player.projectedGp ?? "—"}</strong></div>
-            <div><span>W PACE</span><strong>{player.projectedWins ?? "—"}</strong></div>
-            <div><span>SV% PACE</span><strong>{player.projectedSavePct ?? "—"}</strong></div>
-            <div><span>GAA PACE</span><strong>{player.projectedGaa ?? "—"}</strong></div>
-          </div>
-        )}
-      </div>
-
-      <div className="dc-stat-card">
-        <h3>LEAGUE CONTEXT</h3>
-        {(player.productionContext || player.translationRisk || player.scoringEnvironment) ? (
-          <div className="dc-scoring-tags" style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
-            {player.productionContext ? <span className="dc-tag">{player.productionContext}</span> : null}
-            {player.scoringEnvironment ? <span className="dc-tag">{player.scoringEnvironment}</span> : null}
-            {player.leagueDifficulty ? <span className="dc-tag">{player.leagueDifficulty} league</span> : null}
-            {player.translationRisk ? <span className="dc-tag dc-tag--warn">Translation risk: {player.translationRisk}</span> : null}
-          </div>
-        ) : null}
-        <p>
-          {leagueRank
-            ? `Ranks ${leagueRank}${leagueRank === 1 ? "st" : leagueRank === 2 ? "nd" : leagueRank === 3 ? "rd" : "th"} in ${player.league} scoring among tracked draft-eligible skaters.`
-            : `Tracked in ${player.league} with ${player.completion}% scouting confidence.`}
-          {" "}Production will shift as the season progresses.
-        </p>
-        {player.productionAdjustedScore != null && !isGoalie ? (
-          <p className="dc-stats-context">Adjusted production score: {Number(player.productionAdjustedScore).toFixed(2)} (league + age context)</p>
-        ) : null}
-      </div>
-
-      <div className="dc-stat-card">
-        <h3>DEVELOPMENT ETA</h3>
-        <div className="dc-eta">
-          {(() => {
-            const etaLabel = formatNhlEta(player.nhlEta, null);
-            const fallback = player.rank <= 8 ? "1-2 YEARS" : player.rank <= 32 ? "2-3 YEARS" : "3-5 YEARS";
-            return (
-              <>
-                <strong>{etaLabel || fallback}</strong>
-                <span>
-                  {etaLabel
-                    ? `${etaLabel} to NHL readiness based on central scouting.`
-                    : player.rank <= 8
-                    ? "Could challenge for NHL minutes quickly."
-                    : player.rank <= 32
-                    ? "Likely needs one or two years of development."
-                    : "Longer runway with higher variance."}
-                </span>
-              </>
-            );
-          })()}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function AttributeBar({ label, value, completion, seed }) {
-  const display = attributeDisplay(value, completion, seed);
-  return (
-    <div className={`dc-attribute ${display.locked ? "is-locked" : ""}`}>
-      <div>
-        <span>{label}</span>
-        <b>{display.locked ? "" : display.text}</b>
-        <em>{display.confidence}</em>
-      </div>
-      <div className="dc-attribute__track">
-        <div style={{ width: display.locked ? "0%" : `${display.width}%` }} />
-      </div>
-    </div>
-  );
-}
-
-function AttributesTab({ player }) {
-  const attrs = [
-    ["Skating", player.skating, 1],
-    ["Shooting", player.shooting, 2],
-    ["Passing", player.passing, 3],
-    ["Defense", player.defense, 4],
-    ["Physical", player.physical, 5],
-    ["Hockey IQ", player.hockeyIQ, 6],
-  ];
-  return (
-    <div className="dc-attributes-layout">
-      <div className="dc-attribute-card">
-        <h3>PLAYER ATTRIBUTES</h3>
-        <p className="dc-fog-note">Attributes shown as ranges until scouting completion is high ({confidenceLabel(player.completion)}).</p>
-        {attrs.map(([label, val, seed]) => (
-          <AttributeBar key={label} label={label} value={val} completion={player.completion} seed={seed} />
-        ))}
-      </div>
-
-      <div className="dc-attribute-card">
-        <h3>SCOUTING GRADES</h3>
-        <div className="dc-grade-grid">
-          {attrs.map(([label, val, seed]) => {
-            const display = attributeDisplay(val, player.completion, seed);
-            const grade = display.locked ? "?" : gradeFromValue(display.width);
-            return (
-              <div key={label} className={display.locked ? "is-locked" : ""}>
-                <span>{label}</span>
-                <strong className={display.locked ? "" : "wr-num-cyan"}>{grade === "?" ? "" : grade}</strong>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ScoutReportTab({ player, meta, profile }) {
-  const p = profile || player?.profile || null;
-  const sections = scoutReportSections(player, meta, p);
-  const teamFitScore = p?.team_fit?.score ?? p?.teamFit?.score ?? player.fit;
-  const teamFitLabel = p?.team_fit?.label ?? p?.teamFit?.label ?? null;
-  return (
-    <div className="dc-scout-layout">
-      <div className="dc-scout-card">
-        <h3>CURRENT PROJECTION</h3>
-        <p>{sections.projection}</p>
-        <h4>Upside</h4>
-        <p>{sections.upside}</p>
-        <h4>Scout Notes</h4>
-        <p>{sections.notes}</p>
-      </div>
-      <div className="dc-scout-card">
-        <h3>RISK</h3>
-        <p>{sections.risk}</p>
-        <h4>Development Timeline</h4>
-        <p>{sections.timeline}</p>
-        <h4>Comparable Role</h4>
-        <p>{sections.comparable}</p>
-      </div>
-      <div className="dc-scout-card">
-        <h3>WHAT TO SCOUT NEXT</h3>
-        <p>{sections.nextScout}</p>
-        <ul>
-          <li>Scouting completion: {player.completion}%</li>
-          <li>Confidence: {confidenceLabel(player.completion)}</li>
-          <li>Draft movement: {stockText(player.stock)}{player.stockReason ? ` — ${player.stockReason}` : ""}</li>
-          <li>Team fit score: {teamFitScore != null ? Math.round(Number(teamFitScore)) : "—"}{teamFitLabel ? ` (${teamFitLabel})` : ""}</li>
-        </ul>
-      </div>
-    </div>
-  );
-}
-
-function CharacterTab({ player, meta, profile }) {
-  const p = profile || player?.profile || null;
-  const teamFitScore = p?.team_fit?.score ?? p?.teamFit?.score ?? player.fit;
-  const read = p?.character_read;
-
-  if (read && (read.headline || (read.traits || []).length)) {
-    return (
-      <div className="dc-character-layout">
-        <div className="dc-character-card">
-          <h3>CHARACTER READ</h3>
-          <div className="dc-character-read__head">
-            <strong className={wrNumClassForTier(String(read.headline || "").toLowerCase().includes("elite") ? "elite" : "high")}>
-              {read.headline || "Mixed reports"}
-            </strong>
-            {read.confidence != null ? <span>Scout confidence {read.confidence}%</span> : null}
-          </div>
-          {(read.traits || []).map((trait) => (
-            <div className="dc-character-read__trait" key={trait.label}>
-              <span>{trait.label}</span>
-              <strong className={wrNumClassForTier(String(trait.tier || "").toLowerCase().includes("elite") ? "elite" : "high")}>
-                {trait.tier || "Unknown"}
-              </strong>
-              {trait.confidence != null ? <em>{trait.confidence}%</em> : <em />}
-            </div>
-          ))}
-        </div>
-        <div className="dc-character-card">
-          <h3>MORALE & FIT</h3>
-          <div className="dc-fit-row"><span>Morale</span><strong>{ratingLabel(player.morale)}</strong></div>
-          <div className="dc-fit-row"><span>Character</span><strong>{ratingLabel(player.character)}</strong></div>
-          <div className="dc-fit-row"><span>Willingness To Join Org</span><strong>{ratingLabel(player.fit)}</strong></div>
-          <div className="dc-fit-row"><span>Team Need Fit</span><strong>{teamFitScore != null ? ratingLabel(teamFitScore) : "—"}</strong></div>
-          <div className="dc-fit-row"><span>Potential Impact</span><strong>{player.rank <= 5 ? "Franchise" : player.rank <= 32 ? "Core" : "Depth"}</strong></div>
-        </div>
-      </div>
-    );
-  }
-
-  const charAvailable = meta?.requestedReports?.character === "complete" || meta?.requestedReports?.character === "requested" || player.completion >= 82;
-  if (!charAvailable) {
-    return (
-      <div className="dc-character-layout">
-        <div className="dc-character-card dc-character-card--locked">
-          <h3>CHARACTER REPORT</h3>
-          <p>Character report not complete. Raise scouting completion to unlock the backend character read.</p>
-        </div>
-      </div>
-    );
-  }
-
-  const rows = [
-    ["Competitiveness", "High compete level. Wants to be the difference.", player.compete],
-    ["Leadership", "Teammates respond well to his habits.", player.leadership],
-    ["Work Ethic", "Consistently looks to improve.", player.workEthic],
-    ["Coachability", "Takes feedback and applies it.", player.coachability],
-    ["Consistency", "Performance stability over long sample.", player.consistency],
-    ["Poise", "Calm under pressure. Rarely rattled.", player.poise],
-  ];
-
-  return (
-    <div className="dc-character-layout">
-      <div className="dc-character-card">
-        <h3>PERSONALITY & CHARACTER</h3>
-        {rows.map(([label, note, value]) => (
-          <div className="dc-character-row" key={label}>
-            <span>{label}</span>
-            <p>{player.completion >= 70 ? note : "Preliminary observation — needs follow-up."}</p>
-            <strong className={player.completion >= 70 ? "wr-num-cyan" : "is-locked"}>
-              {player.completion >= 70 ? gradeFromValue(value) : ""}
-            </strong>
-          </div>
-        ))}
-      </div>
-
-      <div className="dc-character-card">
-        <h3>MORALE & FIT</h3>
-        <div className="dc-fit-row"><span>Morale</span><strong>{ratingLabel(player.morale)}</strong></div>
-        <div className="dc-fit-row"><span>Character</span><strong>{ratingLabel(player.character)}</strong></div>
-        <div className="dc-fit-row"><span>Willingness To Join Org</span><strong>{ratingLabel(player.fit)}</strong></div>
-        <div className="dc-fit-row"><span>Team Need Fit</span><strong>{teamFitScore != null ? ratingLabel(teamFitScore) : "—"}</strong></div>
-        <div className="dc-fit-row"><span>Potential Impact</span><strong>{player.rank <= 5 ? "Franchise" : player.rank <= 32 ? "Core" : "Depth"}</strong></div>
-      </div>
-    </div>
-  );
-}
-
-function PlayerProfile({ player, meta, dateContext, draftYear, allProspects, scoutingActions, compareIds, onRemoveCompare, onClearCompare }) {
-  const [tab, setTab] = useState("OVERVIEW");
-  if (!player) {
-    return <section className="dc-profile dc-profile--empty"><p>Select a prospect to view scouting dossier.</p></section>;
-  }
-
-  return (
-    <section className="dc-profile">
-      <div className="dc-profile-header">
-        <h2>PLAYER PROFILE — {player.firstName} {player.lastName}</h2>
-        <div className="dc-profile-tabs">
-          {PROFILE_TABS.map((t) => (
-            <button key={t} type="button" className={`dc-profile-tab ${tab === t ? "is-active" : ""}`} onClick={() => setTab(t)}>
-              {t}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {scoutingActions}
-
-      <ComparisonTray compareIds={compareIds} prospects={allProspects} onRemove={onRemoveCompare} onClear={onClearCompare} />
-
-      {tab === "OVERVIEW" && <OverviewTab player={player} meta={meta} dateContext={dateContext} draftYear={draftYear} />}
-      {tab === "STATS" && <StatsTab player={player} dateContext={dateContext} allProspects={allProspects} />}
-      {tab === "ATTRIBUTES" && <AttributesTab player={player} />}
-      {tab === "SCOUT REPORT" && <ScoutReportTab player={player} meta={meta} profile={player.profile} />}
-      {tab === "CHARACTER" && <CharacterTab player={player} meta={meta} profile={player.profile} />}
-    </section>
-  );
-}
-
-function BottomLegend({ onBack }) {
-  return (
-    <footer className="dc-bottom-legend">
-      <span>Click row to select</span>
-      <button type="button" className="dc-legend-back" onClick={onBack}>← Back to Office</button>
-      <span>Esc to exit</span>
-    </footer>
-  );
-}
 
 export default function DraftClass() {
   const {
@@ -6780,11 +4993,7 @@ export default function DraftClass() {
     });
   }, []);
 
-  const boardMeta = franchiseState?.draft_class_rankings || {};
-  const usingFallback = !boardMeta?.entries?.length;
-  const teamName = franchiseState?.team?.name || "";
-  const strategy = String(franchiseState?.team?.strategy || "BPA").toUpperCase();
-  const teamNeeds = useMemo(() => inferTeamNeeds(franchiseState), [franchiseState]);
+  String(franchiseState?.team?.strategy || "BPA").toUpperCase();
 
   const rawProspects = useMemo(() => {
     const profiles = franchiseState?.draft_class_hud?.prospect_profiles_by_id || {};

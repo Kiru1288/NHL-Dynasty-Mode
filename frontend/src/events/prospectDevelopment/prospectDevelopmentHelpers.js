@@ -13,13 +13,6 @@ const READINESS_ORDER = {
   "Long-Term": 3,
   "At Risk": 4,
 };
-const TREND_ORDER = {
-  Breakout: 0,
-  Improved: 1,
-  Stable: 2,
-  Stalled: 3,
-  Regressed: 4,
-};
 const NOTABLE_ORDER = {
   "Top Riser": 0,
   "Newly NHL Ready": 1,

@@ -9,7 +9,9 @@ the players have moved.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 ACTIVE_MAX = 23
 MAX_AUTO_SEND_DOWNS = 3
@@ -75,8 +77,8 @@ def _waiver_exempt(p: Any) -> bool:
 
 
 def _send_down_order(players: List[Any]) -> List[Any]:
-    """Lowest-rated first; waiver-exempt players get a nudge since sending them is free."""
-    return sorted(players, key=lambda p: _ovr(p) - (4.0 if _waiver_exempt(p) else 0.0))
+    """Waiver-exempt players first (sending them down is free), then lowest-rated."""
+    return sorted(players, key=lambda p: (0 if _waiver_exempt(p) else 1, _ovr(p)))
 
 
 def send_down_candidates(
@@ -127,14 +129,14 @@ def _assign_ahl(team: Any, p: Any) -> None:
         p.in_minors = True
         p.roster_location = "ahl"
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     tid = str(getattr(team, "team_id", None) or getattr(team, "id", "") or "")
     try:
         from app.sim_engine.league_hierarchy_bootstrap import _set_assignment, _team_label
 
         _set_assignment(p, org_nhl_team_id=tid, level="ahl", club=_team_label(team))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def auto_send_down_overflow(team: Any, *, protect_ids: Iterable[str] = (), active_max: int = ACTIVE_MAX) -> List[Dict[str, Any]]:
@@ -148,6 +150,7 @@ def auto_send_down_overflow(team: Any, *, protect_ids: Iterable[str] = (), activ
     cands = send_down_candidates(team, arriving=arriving, protect_ids=protect, count=over)
     moves: List[Dict[str, Any]] = []
     for p in cands:
+        exempt = _waiver_exempt(p)
         _assign_ahl(team, p)
         ident = getattr(p, "identity", None)
         moves.append({
@@ -155,5 +158,8 @@ def auto_send_down_overflow(team: Any, *, protect_ids: Iterable[str] = (), activ
             "player_name": str(getattr(ident, "name", None) or getattr(p, "name", "") or "?"),
             "team_id": str(getattr(team, "team_id", None) or getattr(team, "id", "") or ""),
             "to_level": "ahl",
+            "waiver_exempt": bool(exempt),
+            # Non-exempt players must clear waivers; the franchise layer puts them on the wire.
+            "needs_waivers": not bool(exempt),
         })
     return moves

@@ -25,6 +25,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from app.sim_engine.world import durability as world_durability
 from app.sim_engine.world import fatigue as world_fatigue
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +122,7 @@ def _set_health_status(player: Any, tier: Optional[str]) -> None:
             else:
                 health.injury_status = "INJURED"
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _health_status_name(player: Any) -> str:
@@ -252,7 +254,7 @@ def player_available_for_game(player: Any) -> bool:
                 if not bool(getattr(player, "_conduct_eligible_to_play", False)):
                     return False
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     health_name = _health_status_name(player)
     if health_name not in {"UNKNOWN", "HEALTHY"}:

@@ -388,8 +388,8 @@ def validate_game_integrity(
             issues.append(f"{label}: SOG ({sog}) > FF ({ff})")
         if ff > cf:
             issues.append(f"{label}: FF ({ff}) > CF ({cf})")
-    hg = int(home_agg.get("goals", 0) or 0)
-    ag = int(away_agg.get("goals", 0) or 0)
+    int(home_agg.get("goals", 0) or 0)
+    int(away_agg.get("goals", 0) or 0)
     h_sog = int(home_agg.get("sog", 0) or 0)
     a_sog = int(away_agg.get("sog", 0) or 0)
     h_sa = int(home_agg.get("goalie_sa", 0) or 0)

@@ -18,15 +18,9 @@ Extended systems (franchise-friendly, all self-contained in this module):
 from typing import Any, Dict, List, Optional, Tuple
 
 import random
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
-from app.sim_engine.entities.player import (
-    clamp01,
-    display_rating,
-    normalize_rating,
-    normalize_rating_gap,
-    player_current_ovr_01,
-    persist_recomputed_ovr,
-)
 
 # --- Career arc phases (age bands; assigned each year on player.career_phase) ---
 PHASE_PROSPECT = "prospect"
@@ -114,7 +108,7 @@ def _get_player_ovr(player: Any) -> float:
 
                 return float(normalize_rating(ovr_fn()))
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         from app.sim_engine.entities.player import normalize_rating
 
         return float(normalize_rating(getattr(player, "ovr", 0.5)))
@@ -174,7 +168,7 @@ def _safe_setattr(player: Any, key: str, value: Any) -> None:
     try:
         setattr(player, key, value)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 # Anchor points (display OVR, typical season PPG for a skater of that rating).
@@ -462,7 +456,7 @@ def calculate_development_fit_score(player: Any, context: Optional[Any] = None) 
     0–100 estimate of whether the player is in the right development environment.
     Attaches development_fit_score and development_fit_label.
     """
-    age = _get_player_age(player)
+    _get_player_age(player)
     gp = _get_games_played(player)
     morale = _get_player_morale(player)
     role = _get_player_role(player)
@@ -805,7 +799,7 @@ def generate_development_recommendation(
 ) -> str:
     age = _get_player_age(player)
     gp = _get_games_played(player)
-    role = _get_player_role(player)
+    _get_player_role(player)
     fit_label = str(getattr(player, "development_fit_label", "") or "")
     goalie = _is_goalie(player)
 
@@ -1549,11 +1543,11 @@ def resolve_development_profile(player: Any, context: Optional[Any] = None) -> D
         try:
             setattr(player, "development_profile", profile)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         try:
             setattr(player, "potential", float(expected))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         if isinstance(ratings, dict):
             from app.sim_engine.entities.player import display_rating
 
@@ -1733,7 +1727,7 @@ def calculate_season_growth_budget(
     ensure_displayed_ovr_delta corrects attribute dilution so the visible result
     lands near this target.
     """
-    from app.sim_engine.entities.player import clamp01, normalize_rating_gap
+    from app.sim_engine.entities.player import normalize_rating_gap
 
     if not isinstance(profile, dict):
         profile = resolve_development_profile(player, context)
@@ -1837,7 +1831,9 @@ def calculate_season_growth_budget(
     ovr100 = current * 99.0 if current <= 1.5 else current
     expected_prod = _expected_production_score_for_ovr(ovr100)
     overperf = _clamp((production - expected_prod) * 1.35, -0.25, 0.45)
-    mod *= _clamp(0.88 + (production - 0.5) * 0.42 + overperf * 0.55, 0.72, 1.42)
+    # Production vs. what his rating usually produces is the main lever after age:
+    # a big year can ~1.5x the budget, a bad one roughly halves it.
+    mod *= _clamp(0.85 + overperf * 1.4 + (production - 0.5) * 0.15, 0.55, 1.55)
 
     injury_days = _safe_attr_int(player, ["injury_days", "injured_days", "_injury_days"], 0)
     if injury_days >= 40:
@@ -1918,7 +1914,7 @@ def calculate_season_growth_budget(
 
 
 # Separate mid-season vs season-end pools (design §11).
-_IN_SEASON_POOL_SHARE = 0.45
+_IN_SEASON_POOL_SHARE = 0.40  # share of ONE annual budget spent in-season (year-end pays the rest)
 _SEASON_END_POOL_SHARE = 0.58
 
 
@@ -2104,7 +2100,7 @@ def reevaluate_ceilings_from_performance(player: Any, rng: Any) -> Dict[str, Any
 
     Potential is an evolving evaluation — not a fixed destination (design §3–5, §13).
     """
-    from app.sim_engine.entities.player import clamp01, display_rating, normalize_rating, persist_recomputed_ovr
+    from app.sim_engine.entities.player import clamp01, display_rating
 
     if not isinstance(rng, random.Random):
         rng = random.Random()
@@ -2140,7 +2136,7 @@ def reevaluate_ceilings_from_performance(player: Any, rng: Any) -> Dict[str, Any
     try:
         setattr(player, "_dev_breakout_momentum", new_mom)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     if overperf < 0.08 and new_mom < 0.35:
         return {"applied": False, "reason": "insufficient_evidence", "momentum": new_mom}
@@ -2189,7 +2185,7 @@ def reevaluate_ceilings_from_performance(player: Any, rng: Any) -> Dict[str, Any
             ratings["dev_potential"] = float(display_rating(new_expected))
             ratings["dev_ceiling"] = float(display_rating(new_max))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     # Soft profile reclassification signal for UI / storylines.
     try:
@@ -2202,7 +2198,7 @@ def reevaluate_ceilings_from_performance(player: Any, rng: Any) -> Dict[str, Any
                 f"{display_rating(expected):.0f}→{display_rating(new_expected):.0f}",
             )
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     return {
         "applied": True,
@@ -2239,7 +2235,7 @@ def apply_attribute_deltas(player: Any, attribute_deltas: Dict[str, float]) -> D
             try:
                 inval()
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
     return applied
 
 
@@ -2278,7 +2274,7 @@ def apply_player_development(player: Any, rng: Any) -> None:
         try:
             setattr(player, "development_ledger", ledger)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     ovr_before = float(player_current_ovr_01(player))
     profile = resolve_development_profile(player)
@@ -2449,11 +2445,17 @@ def apply_player_development(player: Any, rng: Any) -> None:
     elif gap_now <= 0.02 and dev_phase == "NORMAL" and budget > 0:
         budget = max(budget, 0.018)
 
-    # Season-end uses its own pool (65–75%). Mid-season pulses do NOT claw this back.
+    # ONE annual budget: the year-end pass pays only what in-season pulses did not
+    # already spend (it used to add its own 65-75% pool on top of a 45% in-season
+    # pool, plus the ice-time boost: ~1.5x a year's growth).
+    _net_in = float(getattr(player, "_in_season_growth_net_01", 0.0) or 0.0)
     if budget > 0:
-        budget = float(budget) * float(_SEASON_END_POOL_SHARE)
+        budget = max(0.0, float(budget) - max(0.0, _net_in))
     elif budget < 0:
-        budget = float(budget) * float(_SEASON_END_POOL_SHARE)
+        budget = min(0.0, float(budget) - min(0.0, _net_in))
+        # Aging decline: about -1 a year at 30-31, -2 at 32-34, steeper after 35.
+        _age_now = _get_player_age(player)
+        budget *= 2.0 if _age_now >= 35 else (1.7 if _age_now >= 32 else (1.3 if _age_now >= 30 else 1.0))
 
     # Prospects already received their in-season pulses: only pay what is still owed.
     _owed = prospect_offseason_leftover(player)
@@ -2470,7 +2472,7 @@ def apply_player_development(player: Any, rng: Any) -> None:
         if start_disp is not None:
             ovr_before = float(start_disp) / 99.0 if float(start_disp) > 1.5 else float(start_disp)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     target_display = float(budget) * 99.0
     deltas = allocate_growth_to_attributes(
@@ -2497,7 +2499,7 @@ def apply_player_development(player: Any, rng: Any) -> None:
     try:
         reevaluate_ceilings_from_performance(player, rng)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     ovr_after = float(persist_recomputed_ovr(player))
     _mark_ledger(
@@ -2511,7 +2513,7 @@ def apply_player_development(player: Any, rng: Any) -> None:
 
         lift_potential_with_growth(player, ovr_before, ovr_after)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     net_growth = (ovr_after - ovr_before) * 99.0
     report_type = "growth"
@@ -2590,8 +2592,10 @@ def apply_player_development(player: Any, rng: Any) -> None:
 
     try:
         setattr(player, "_in_season_growth_spent_01", 0.0)
+        setattr(player, "_in_season_growth_net_01", 0.0)
+        setattr(player, "_nhl_season_plan", None)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def apply_in_season_development_pulse(
@@ -2622,36 +2626,39 @@ def apply_in_season_development_pulse(
     profile = resolve_development_profile(player)
     potential = float(profile.get("expected_ceiling", ovr_before_01))
     gap = float(normalize_rating_gap(ovr_before_01, potential))
-    prod = _safe_attr_float(
+    _safe_attr_float(
         player,
         ["production_score", "recent_performance_score", "points_signal", "production"],
         0.5,
     )
 
-    if age >= 32 or (age >= 29 and gap <= 0.015):
-        if rng.random() > 0.42:
-            return 0.0
-        phase = "REGRESSION"
-        frac = pulse_fraction * rng.uniform(0.55, 1.05)
-    elif age <= 27 and gap >= 0.025:
-        if rng.random() < 0.08 and prod < 0.42:
-            phase = "STALL"
-        elif prod >= 0.82 and gap >= 0.05 and rng.random() < 0.35:
-            phase = "SPIKE"
+    # ONE plan per player per season (phase + annual budget), rolled on the first
+    # pulse and reset at season start. Re-rolling the phase every pulse (SPIKE
+    # 1.55-2.2x) moved the in-season cap around and scattered same-age players
+    # from +1 to +16. The archetype now picks the phase, as for prospects.
+    plan = getattr(player, "_nhl_season_plan", None)
+    if not isinstance(plan, dict):
+        if age >= 32 or (age >= 29 and gap <= 0.015):
+            phase = "REGRESSION"
         else:
-            phase = "NORMAL"
-        frac = pulse_fraction * rng.uniform(0.85, 1.25)
-        if age <= 22 and gap >= 0.06:
-            frac *= 1.25
-    else:
-        if rng.random() < 0.35:
-            return 0.0
-        phase = "NORMAL" if prod >= 0.48 else "STALL"
-        frac = pulse_fraction * rng.uniform(0.55, 0.95)
-
-    annual = calculate_season_growth_budget(
-        player, None, profile, rng=rng, dev_phase=phase
-    )
+            archetype_p = str(getattr(player, "_dev_archetype", "") or "")
+            curve_p = str(getattr(player, "_pipeline_dev_curve", "normal") or "normal")
+            try:
+                phase = _dev_archetype_phase_roll(archetype_p, age, curve_p, rng)
+            except Exception:
+                phase = "NORMAL"
+            if phase == "REGRESSION" and age <= 27:
+                phase = "STALL"
+        plan = {
+            "phase": phase,
+            "annual": float(calculate_season_growth_budget(player, None, profile, rng=rng, dev_phase=phase)),
+        }
+        _safe_setattr(player, "_nhl_season_plan", plan)
+    phase = str(plan.get("phase") or "NORMAL")
+    if phase == "REGRESSION" and rng.random() > 0.55:
+        return 0.0
+    frac = pulse_fraction * rng.uniform(0.85, 1.15)
+    annual = float(plan.get("annual") or 0.0)
     # Pulses draw only from the in-season share of the annual budget.
     season_pool = abs(float(annual)) * float(_IN_SEASON_POOL_SHARE)
     pulse_budget = season_pool * float(frac) * (1.0 if annual >= 0 else -1.0)
@@ -2700,13 +2707,18 @@ def apply_in_season_development_pulse(
 
         lift_potential_with_growth(player, ovr_before_01, ovr_after_01)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         setattr(player, "_in_season_growth_spent_01", spent + abs(float(pulse_budget)))
+        setattr(
+            player,
+            "_in_season_growth_net_01",
+            float(getattr(player, "_in_season_growth_net_01", 0.0) or 0.0) + float(pulse_budget),
+        )
         accum = float(getattr(player, "_in_season_ovr_delta_accum", 0.0) or 0.0)
         setattr(player, "_in_season_ovr_delta_accum", accum + delta_disp)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return float(delta_disp)
 
 
@@ -2833,14 +2845,14 @@ def apply_prospect_in_season_pulse(player: Any, rng: Any, season_id: Any) -> flo
 
         lift_potential_with_growth(player, ovr_before_01, ovr_after_01)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     # What the ratings actually did this season (never over-counts past the plan).
     plan["spent"] = ovr_after_01 - float(plan["start_ovr01"])
     try:
         accum = float(getattr(player, "_in_season_ovr_delta_accum", 0.0) or 0.0)
         setattr(player, "_in_season_ovr_delta_accum", accum + delta_01 * 99.0)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return float(delta_01 * 99.0)
 
 
@@ -2908,10 +2920,14 @@ def apply_prospect_potential_review(player: Any, rng: Any, season_id: Any) -> Di
         display_delta = rng.uniform(0.5, 1.5)
     elif evidence >= 0.2 and rng.random() < 0.5:
         display_delta = rng.uniform(0.3, 0.8)
-    elif evidence <= -0.45:
-        display_delta = -rng.uniform(0.4, 1.4)
-    elif evidence <= -0.3 and rng.random() < 0.5:
-        display_delta = -rng.uniform(0.2, 0.7)
+    # Symmetric with the upside: prospects who keep under-producing lose ceiling
+    # (busts). Previously only extreme evidence could move potential down at all.
+    elif evidence <= -0.6:
+        display_delta = -rng.uniform(1.0, 2.5)
+    elif evidence <= -0.35:
+        display_delta = -rng.uniform(0.5, 1.5)
+    elif evidence <= -0.2 and rng.random() < 0.5:
+        display_delta = -rng.uniform(0.3, 0.8)
     display_delta *= age_mult * sample
     if display_delta > 0:
         display_delta = min(display_delta, max(0.0, cap - gained))
@@ -2949,7 +2965,7 @@ def apply_prospect_potential_review(player: Any, rng: Any, season_id: Any) -> Di
             "delta": round(display_delta, 2),
         })
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     res["evidence"] = round(evidence, 3)
     res["display_delta"] = round(display_delta, 2)
     return res

@@ -9,25 +9,11 @@ calendar time or advances the FA market.
 from __future__ import annotations
 
 import hashlib
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
-from services.contract_economy import (
-    LEAGUE_MINIMUM_AAV_M,
-    CPU_SIGN_MIN_FIT_SCORE,
-    _cpu_negotiate_offer,
-    _player_age,
-    _player_id,
-    _player_name,
-    _player_ovr,
-    _position_bucket,
-    compute_fair_aav,
-    cpu_signing_blocked,
-    evaluate_team_position_needs,
-    generate_contract_terms,
-    score_free_agent_fit,
-    sign_player_to_team,
-    sync_all_team_cap_fields,
-)
+from services.contract_economy import LEAGUE_MINIMUM_AAV_M, _cpu_negotiate_offer, _player_age, _player_id, _player_name, _player_ovr, _position_bucket, compute_fair_aav, cpu_signing_blocked, evaluate_team_position_needs, generate_contract_terms, score_free_agent_fit, sign_player_to_team, sync_all_team_cap_fields
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 
 # Decision states shown in UI / storylines
@@ -203,7 +189,7 @@ def _ask_for_player(player: Any, league: Any, *, days_on_market: int = 0, offer_
     try:
         setattr(player, "asking_aav_m", ask)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return ask
 
 
@@ -215,7 +201,7 @@ def _iter_domestic_fa_pool(league: Any) -> List[Any]:
 
         prune_owned_from_fa_pools(league)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     out: List[Any] = []
     seen: set = set()
     for p in list(_get(league, "free_agents", None) or []):
@@ -357,7 +343,9 @@ def _serious_cpu_offer_aav(
 ) -> Optional[float]:
     """Build a market-credible offer. Cap-strapped clubs skip stars instead of insulting them."""
     space = float(cap_space_m or 0.0)
-    target = float(fair) * float(discount) * float(rng.uniform(0.92, 1.06))
+    # Bids bracket the player's number (caller passes max(fair, board ask)) instead of
+    # sitting ~7% under it, which left every top UFA "comparing offers" for weeks.
+    target = float(fair) * float(discount) * float(rng.uniform(0.95, 1.07))
     floor = LEAGUE_MINIMUM_AAV_M
     days = max(0, int(days_on_market or 0))
     if ovr >= 88:
@@ -381,6 +369,23 @@ def _serious_cpu_offer_aav(
     if offer < floor * 0.98 and ovr >= 80:
         return None
     return round(max(LEAGUE_MINIMUM_AAV_M, offer), 3)
+
+
+def _fa_lineup_gain(team: Any, player: Any) -> Optional[float]:
+    try:
+        from app.sim_engine.trades.lineup_impact import roster_delta  # noqa: WPS433
+
+        return float(roster_delta(team, add=[player]))
+    except Exception:
+        return None
+
+
+def _fa_age(player: Any) -> int:
+    ident = _get(player, "identity", None)
+    try:
+        return int(_get(ident, "age", None) or _get(player, "age", 27) or 27)
+    except (TypeError, ValueError):
+        return 27
 
 
 def _min_fit_for_ovr(ovr: float) -> float:
@@ -427,7 +432,7 @@ def _collect_cpu_offers(
     try:
         sync_all_team_cap_fields(league, sim, season_year=season_year)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     book = ensure_fa_market_book(session)
     day = int(book.get("day") or 0)
     entries = book["entries"]
@@ -548,7 +553,6 @@ def _collect_cpu_offers(
                 continue
 
             need = float(ctx["need_score"].get(pos, 0))
-            counts = ctx.get("counts") or {}
             if ovr >= STAR_FA_OVR and not prior_here and _team_at_star_cap(book, tid, spendable):
                 continue
             value_buy = _is_value_buy(
@@ -582,8 +586,9 @@ def _collect_cpu_offers(
                 discount = max(discount, 1.0)
 
             fair = compute_fair_aav(player, team, league) or fair_base
+            _ask_anchor = float(entry.get("ask_aav_m") or 0) or float(fair)
             offer_aav = _serious_cpu_offer_aav(
-                fair=float(fair),
+                fair=max(float(fair), _ask_anchor),
                 ovr=ovr,
                 cap_space_m=spendable,
                 discount=discount,
@@ -620,6 +625,14 @@ def _collect_cpu_offers(
                 years = min(years, 2)
 
             fit, _reasons = score_free_agent_fit(team, player, ctx, offer_aav, years, league)
+            # Would he actually make the lineup better? A third goalie or a 13th forward
+            # who doesn't beat anyone dressed is money for nothing.
+            lineup_gain = _fa_lineup_gain(team, player)
+            if lineup_gain is not None:
+                young = _fa_age(player) <= 24
+                if lineup_gain < 0.0015 and not value_buy and not (window == "rebuilder" and young):
+                    continue
+                fit += min(0.25, max(0.0, lineup_gain) * 20.0)
             min_fit = _min_fit_for_ovr(ovr)
             if ovr >= 86 and day >= 12:
                 min_fit = max(0.08, min_fit - 0.06)
@@ -753,7 +766,8 @@ def _update_player_decision(entry: Dict[str, Any], book: Dict[str, Any], *, day:
         if days < 2:
             entry["state"] = STATE_AWAITING
             entry["reason"] = "Awaiting opening offers"
-        elif days < 6:
+        elif days < (6 if tier in ("depth", "fringe") else (8 if tier == "mid" else 10)):
+            # Staggered by tier: everyone flipping to "holding out" on day 6 froze the board.
             entry["state"] = STATE_GAUGING
             entry["reason"] = "Gauging the market — no firm offers yet"
         else:
@@ -895,7 +909,7 @@ def _try_sign_leaning_players(
                 setattr(player, "days_on_market", int(entry.get("days_on_market") or 0))
                 setattr(player, "fa_offer_count", int(entry.get("offer_count") or 0))
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             ctx_sign = dict(ctx)
             ctx_sign["spendable_cap_space_m"] = spendable
             ctx_sign["cap_space_m"] = max(space, spendable)
@@ -1158,6 +1172,18 @@ def tick_free_agency_market(
 
     Returns aggregated signings, offer activity, and decision snapshots.
     """
+    try:
+        from services.team_identity_service import refresh_team_identities as _rti
+
+        _rti(session)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    try:
+        from services.contract_economy import sync_live_production_lines as _sync_lpl
+    
+        _sync_lpl(session)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     days = max(1, int(days))
     book = ensure_fa_market_book(session)
     all_signings: List[Dict[str, Any]] = []
@@ -1598,7 +1624,7 @@ def annotate_fa_rows_with_decisions(session: Any, rows: List[Dict[str, Any]]) ->
                     r["bonus_demand_pct"] = round(_want, 3)
                     r["bonus_demand_label"] = f"Wants {_want:.0%} as signing bonus"
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         out.append(r)
     return out
 
@@ -1615,5 +1641,5 @@ def _fa_player_by_id(session: Any, pid: str) -> Any:
         try:
             session._fa_player_lookup_cache = cache
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     return cache.get(str(pid))

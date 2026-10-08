@@ -121,15 +121,12 @@
 
 /* Status bar */
 .fa-root.fa-root--market .fa-fa-bar {
-  gap: 4px 14px;
   padding: 0 0 8px;
   border-bottom: 1px solid var(--line);
-  font-size: 12px;
   font-weight: 500;
 }
 .fa-root.fa-root--market .fa-fa-bar strong {
   font-family: var(--font-broadcast-display);
-  font-size: 18px;
   font-weight: 400;
   letter-spacing: 0.06em;
 }
@@ -152,8 +149,6 @@
   border: 1px solid var(--line);
   background: rgba(0, 0, 0, 0.25);
   border-radius: var(--fa-radius);
-  padding: 5px 8px;
-  font-size: 12px;
 }
 .fa-root.fa-root--market .fa-fa-filters {
   gap: 0;
@@ -167,8 +162,6 @@
   border-radius: 0;
   background: transparent;
   color: var(--muted);
-  padding: 5px 9px;
-  font-size: 11px;
   font-weight: 600;
   letter-spacing: 0;
   text-transform: none;
@@ -207,24 +200,13 @@
   top: 0;
   z-index: 1;
   margin: 0;
-  padding: 6px 8px;
   border-bottom: 1px solid var(--line);
   background: var(--ops-panel);
-  font-size: 11px;
   font-weight: 600;
   letter-spacing: 0;
   text-transform: none;
 }
-.fa-root.fa-root--market .fa-fa-row {
-  /* 500+ rows: let the browser skip layout/paint for rows scrolled out of view */
-  content-visibility: auto;
-  contain-intrinsic-size: auto 52px;
-  margin: 0;
-  padding: 7px 8px;
-  border: 0;
-  border-bottom: 1px solid rgba(156, 178, 196, 0.08);
-  border-radius: 0;
-}
+
 .fa-root.fa-root--market .fa-fa-row:hover {
   background: rgba(255, 255, 255, 0.04);
 }
@@ -246,7 +228,13 @@
   min-width: 70px;
   text-align: right;
 }
-.fa-root.fa-root--market .fa-fa-row { padding: 9px 10px; contain-intrinsic-size: auto 62px; }
+.fa-root.fa-root--market .fa-fa-row {
+  content-visibility: auto;
+  margin: 0;
+  border: 0;
+  border-bottom: 1px solid rgba(156, 178, 196, 0.08);
+  border-radius: 0;
+ padding: 9px 10px; contain-intrinsic-size: auto 62px; }
 .fa-root.fa-root--market .fa-fa-count { font-size: 12.5px; padding: 8px 10px; }
 .fa-root.fa-root--market .fa-fa-chip { font-size: 12.5px; padding: 6px 11px; }
 .fa-root.fa-root--market .fa-fa-search,
@@ -301,17 +289,7 @@
   font-variant-numeric: tabular-nums;
   font-weight: 700;
 }
-.fa-root.fa-root--market .fa-mini-label,
-.fa-root.fa-root--market .fa-field,
-.fa-root.fa-root--market .fa-slider-head span,
-.fa-root.fa-root--market .fa-nego-meter-head span,
-.fa-root.fa-root--market .fa-fa-capbar span,
-.fa-root.fa-root--market .fa-fa-stats span {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  text-transform: none;
-}
+
 .fa-root.fa-root--market .fa-submit-btn,
 .fa-root.fa-root--market .fa-negotiate-actions .fa-cta-btn {
   border-radius: var(--fa-radius);
@@ -333,7 +311,11 @@
 .fa-root.fa-root--market .fa-slider-head span,
 .fa-root.fa-root--market .fa-nego-meter-head span,
 .fa-root.fa-root--market .fa-fa-capbar span,
-.fa-root.fa-root--market .fa-fa-stats span { font-size: 12.5px; }
+.fa-root.fa-root--market .fa-fa-stats span {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: none;
+ font-size: 12.5px; }
 .fa-root.fa-root--market .fa-fa-capbar strong,
 .fa-root.fa-root--market .fa-nego-meter-head strong,
 .fa-root.fa-root--market .fa-fa-stats strong,

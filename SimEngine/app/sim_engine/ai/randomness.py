@@ -16,7 +16,7 @@ Randomness alters HOW things are felt — not WHAT happens.
 
 from __future__ import annotations
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 import random
 
 

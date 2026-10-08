@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import random
 import re
-import uuid
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from app.sim_engine.franchise.storyline_engine import (
     MARKET_MEDIA_PROFILES,
@@ -18,6 +17,8 @@ from app.sim_engine.franchise.storyline_engine import (
     _u_current_meta,
     apply_fan_engagement_delta,
 )
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 RISKY_WORD_WEIGHTS: Dict[str, int] = {
     "trade": 16, "traded": 16, "shop": 18, "shopping": 18, "dump": 20, "deal": 10,
@@ -51,6 +52,18 @@ def _tokenize(text: str) -> List[str]:
     return re.findall(r"[A-Za-z']+", str(text or "").lower())
 
 
+def _storyline_name_parts(session: Any) -> Dict[str, int]:
+    """Name tokens of players in live storylines. Mentioning one makes a post easier to
+    trace, but a name on its own is not criticism (bug U1)."""
+    names: Dict[str, int] = {}
+    for sl in list(getattr(session, "active_cause_storylines", None) or [])[-20:]:
+        pname = str(sl.get("player_name") or "").lower()
+        for part in pname.split():
+            if len(part) > 3:
+                names[part] = 12
+    return names
+
+
 def _contextual_risk_words(session: Any) -> Dict[str, int]:
     extra: Dict[str, int] = {}
     for sl in list(getattr(session, "active_cause_storylines", None) or [])[-20:]:
@@ -63,11 +76,6 @@ def _contextual_risk_words(session: Any) -> Dict[str, int]:
             extra.update({"fire": 28, "coach": 18, "bench": 16})
         if "contract" in blob:
             extra.update({"overpaid": 20, "cheap": 18, "deal": 14})
-        pname = str(sl.get("player_name") or "").lower()
-        if pname:
-            for part in pname.split():
-                if len(part) > 3:
-                    extra[part] = max(extra.get(part, 0), 12)
     return extra
 
 
@@ -84,6 +92,16 @@ def post_tone(session: Any, post_text: str) -> Dict[str, Any]:
     words = _tokenize(post_text)
     neg = sum(weights.get(w, 0) for w in words)
     pos = sum(1 for w in words if w in POSITIVE_WORDS)
+    names = _storyline_name_parts(session)
+    name_hits = sorted({w for w in words if w in names})
+    # A named storyline player raises the stakes of a negative post a lot, and makes
+    # a positive one a little easier to trace.
+    trace = 0
+    if name_hits:
+        if neg > 0:
+            neg += sum(names[w] for w in name_hits)
+        else:
+            trace = 4 * len(name_hits)
     targets = sorted({w for w in words if w in ("coach", "bench", "owner", "ownership", "gm", "management")})
     trade_talk = any(w in ("trade", "traded", "shop", "shopping", "dump", "deal") for w in words)
     if neg > 0:
@@ -92,7 +110,7 @@ def post_tone(session: Any, post_text: str) -> Dict[str, Any]:
         tone = "hype"
     else:
         tone = "noise"
-    return {"tone": tone, "neg": neg, "pos": pos, "targets": targets, "words": len(words)}
+    return {"tone": tone, "neg": neg, "pos": pos, "targets": targets, "words": len(words), "trace": trace, "names": name_hits}
 
 
 def compute_burner_risk(session: Any, post_text: str, market_key: str) -> int:
@@ -100,9 +118,12 @@ def compute_burner_risk(session: Any, post_text: str, market_key: str) -> int:
     t = post_tone(session, post_text)
     length_penalty = 8 if len(post_text) > 200 else 0
     # A plain fan-style post is hard to trace; inside information and attacks are not.
-    base = {"hype": 6, "noise": 8, "trade_talk": 14, "criticism": 12}[t["tone"]] + t["neg"] + length_penalty
+    base = {"hype": 6, "noise": 8, "trade_talk": 14, "criticism": 12}[t["tone"]] + t["neg"] + t.get("trace", 0) + length_penalty
     acct = _ensure_burner_account(session)
     suspicion_bump = int(float(acct.get("suspicion_score") or 0) * 0.10)
+    # An account that does nothing but hype the club starts to look like team PR.
+    if t["tone"] == "hype":
+        suspicion_bump += 4 * max(0, _recent_hype_count(session) - 1)
     return int(_clamp(base * float(market.get("pressure_mult") or 1.0) + suspicion_bump, 3, 94))
 
 
@@ -111,21 +132,48 @@ def catch_probability(risk: int) -> float:
     return round(min(0.65, (max(0, risk) / 100.0) ** 1.6 * 0.62), 3)
 
 
+HYPE_WINDOW_DAYS = 7
+
+
 def _team_losing(session: Any) -> bool:
+    """True when the user's club has played 8+ games and lost more than it won (bug U2:
+    StandingsTable has no .get, the records live on .records)."""
     try:
         utid = str(getattr(session, "user_team_id", "") or "")
-        rec = (getattr(session, "standings", None) or {}).get(utid) or {}
-        w, l = int(rec.get("w") or rec.get("wins") or 0), int(rec.get("l") or rec.get("losses") or 0)
+        st = getattr(session, "standings", None)
+        recs = getattr(st, "records", None)
+        if recs is None and isinstance(st, dict):
+            recs = st
+        rec = (recs or {}).get(utid)
+        if rec is None:
+            return False
+        if isinstance(rec, dict):
+            w = int(rec.get("w") or rec.get("wins") or 0)
+            l = int(rec.get("l") or rec.get("losses") or 0) + int(rec.get("otl") or 0)
+        else:
+            w = int(getattr(rec, "wins", 0) or 0)
+            l = int(getattr(rec, "losses", 0) or 0) + int(getattr(rec, "otl", 0) or 0)
         return (w + l) >= 8 and w < l
     except Exception:
         return False
+
+
+def _recent_hype_count(session: Any) -> int:
+    acct = getattr(session, "gm_burner_account", None) or {}
+    day, _, _ = _u_current_meta(session)
+    return sum(
+        1 for p in list(acct.get("posts") or [])
+        if p.get("tone") == "hype" and not p.get("caught") and day - int(p.get("day") or -999) < HYPE_WINDOW_DAYS
+    )
 
 
 def _projected_effects(session: Any, tone: Dict[str, Any], risk: int) -> Dict[str, Dict[str, int]]:
     scale = risk / 100.0
     losing = _team_losing(session)
     if tone["tone"] == "hype":
-        ok = {"fan_confidence": 3, "team_morale": 1}
+        # Diminishing returns (bug U3): full effect once a week, then fading to nothing.
+        n = _recent_hype_count(session)
+        ok = {"fan_confidence": [3, 2, 1][n] if n < 3 else 0, "team_morale": 1 if n == 0 else 0}
     elif tone["tone"] == "noise":
         ok = {"fan_confidence": 1}
     elif tone["tone"] == "trade_talk":
@@ -172,28 +220,40 @@ def _generate_burner_handle(session: Any, rng: random.Random) -> str:
     return f"@RinkInsider{rng.randint(100, 9999)}{day % 97}"
 
 
+def _days_until_new_burner(session: Any) -> int:
+    acct = _ensure_burner_account(session)
+    if not acct.get("exposed"):
+        return 0
+    day, _, _ = _u_current_meta(session)
+    since = int(acct.get("exposed_day", acct.get("created_day")) or 0)
+    if day < since:  # calendar rolled over to a new season: the offseason covers it
+        return 0
+    return max(0, BURNER_COOLDOWN_DAYS - (day - since))
+
+
 def _can_create_burner(session: Any) -> bool:
     acct = _ensure_burner_account(session)
     if not acct.get("exposed"):
-        return not acct.get("handle")
-    day, _, _ = _u_current_meta(session)
-    created = int(acct.get("created_day") or 0)
-    return (day - created) >= BURNER_COOLDOWN_DAYS
+        return True
+    return _days_until_new_burner(session) <= 0
 
 
 def ensure_burner_handle(session: Any, rng: Optional[random.Random] = None) -> str:
     acct = _ensure_burner_account(session)
-    if acct.get("handle"):
+    if acct.get("handle") and not acct.get("exposed"):
         return str(acct["handle"])
-    if not _can_create_burner(session) and acct.get("exposed"):
+    if not _can_create_burner(session):
         return ""
     r = rng or random.Random()
     day, _, _ = _u_current_meta(session)
     acct["handle"] = _generate_burner_handle(session, r)
     acct["created_day"] = day
     if acct.get("exposed"):
-        acct["suspicion_score"] = max(float(acct.get("suspicion_score") or 0), 18.0)
+        # Fresh account: the old investigation is closed, but the press still remembers.
+        acct["suspicion_score"] = 18.0
         acct["exposed"] = False
+        acct.pop("exposed_day", None)
+        session.gm_burner_investigation = {}
     session.gm_burner_account = acct
     return str(acct["handle"])
 
@@ -222,6 +282,9 @@ def _apply_burner_exposure(session: Any, result: Dict[str, Any], fx: Dict[str, i
     utid = str(getattr(session, "user_team_id") or "")
     acct = _ensure_burner_account(session)
     acct["exposed"] = True
+    day_now, _, _ = _u_current_meta(session)
+    acct["exposed_day"] = day_now
+    acct["burned_handles"] = (list(acct.get("burned_handles") or []) + [acct.get("handle")])[-5:]
     severity = "major" if fx.get("media_pressure", 0) >= 16 else "trade" if tone["tone"] == "trade_talk" else "minor"
     _apply_storyline_effects(session, utid, "", dict(fx))
     apply_fan_engagement_delta(session, utid, -0.12 * (1.0 if severity == "minor" else 2.0), source="burner_exposed")
@@ -239,7 +302,7 @@ def _apply_burner_exposure(session: Any, result: Dict[str, Any], fx: Dict[str, i
                 "team_id": utid,
                 "category": "conduct",
                 "type": "burner_exposure",
-                "cause_type": "TRADE_DEMAND" if severity == "major" else "GM_JOB_SECURITY",
+                "cause_type": "GM_JOB_SECURITY",
                 "priority": "HIGH" if severity != "minor" else "MEDIUM",
                 "heat": 72 if severity == "major" else 58,
                 "reporter_id": "lee",
@@ -248,8 +311,8 @@ def _apply_burner_exposure(session: Any, result: Dict[str, Any], fx: Dict[str, i
             },
         )
     except Exception:
-        pass
-    result["outcome"] = f"Exposed ({severity}): {_fx_text(fx)}."
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    result["outcome"] = f"Exposed ({severity}): {_fx_text(fx)}. The account is burned; a new one can be made in {BURNER_COOLDOWN_DAYS} days."
     inv = dict(getattr(session, "gm_burner_investigation", None) or {})
     inv["progress"] = 100.0
     session.gm_burner_investigation = inv
@@ -259,6 +322,8 @@ def _apply_burner_success(session: Any, result: Dict[str, Any], fx: Dict[str, in
     utid = str(getattr(session, "user_team_id") or "")
     _apply_storyline_effects(session, utid, "", dict(fx))
     delta = {"hype": 0.05, "noise": 0.01, "trade_talk": 0.03, "criticism": 0.03}[tone["tone"]]
+    if tone["tone"] == "hype":
+        delta *= 1.0 / (1 + _recent_hype_count(session))
     apply_fan_engagement_delta(session, utid, delta, source="burner_success")
     result["outcome"] = f"Post landed ({tone['tone'].replace('_', ' ')}): {_fx_text(fx)}."
 
@@ -277,15 +342,25 @@ def _publish_to_feed(session: Any, result: Dict[str, Any], tone: Dict[str, Any])
             controversy=min(1.0, float(result.get("risk") or 0) / 80.0),
         )
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    if not result.get("caught"):
+        try:
+            from services.player_social_engine import react_to_gm_burner  # noqa: WPS433
+
+            react_to_gm_burner(session, str(result.get("text") or ""), tone["tone"])
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def submit_burner_post(session: Any, text: str, market_key: str, rng: Optional[random.Random] = None) -> Dict[str, Any]:
     post_text = str(text or "").strip()
     if not post_text:
-        raise ValueError("Post text required")
+        raise ValueError("Write something first.")
+    if len(post_text) > 280:
+        raise ValueError("Posts are capped at 280 characters.")
     r = rng or random.Random()
-    ensure_burner_handle(session, r)
+    if not ensure_burner_handle(session, r):
+        raise ValueError(f"Your burner was exposed. You can open a new one in {_days_until_new_burner(session)} days.")
     risk = compute_burner_risk(session, post_text, market_key)
     tone = post_tone(session, post_text)
     fxs = _projected_effects(session, tone, risk)
@@ -333,8 +408,11 @@ def burner_state_payload(session: Any) -> Dict[str, Any]:
         "default_market_key": market_key,
         "default_market_label": market.get("label"),
         "investigation": inv,
-        "can_post": bool(acct.get("handle")) or _can_create_burner(session),
-        "risky_words": dict(RISKY_WORD_WEIGHTS),
+        "can_post": (bool(acct.get("handle")) and not acct.get("exposed")) or _can_create_burner(session),
+        "days_until_new_account": _days_until_new_burner(session),
+        "recent_hype_posts": _recent_hype_count(session),
+        "risky_words": {**RISKY_WORD_WEIGHTS, **_contextual_risk_words(session)},
+        "storyline_names": sorted(_storyline_name_parts(session).keys()),
     }
 
 

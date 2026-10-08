@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import random
 import uuid
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 # --- Status vocabularies -------------------------------------------------------
 
@@ -147,7 +149,7 @@ def _get_registry(host: Any) -> Dict[str, Dict[str, Any]]:
         try:
             setattr(host, REGISTRY_KEY, reg)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     return reg
 
 
@@ -208,7 +210,7 @@ def _sync_player_flags(player: Any, incident: Dict[str, Any]) -> None:
         setattr(player, "_world_conduct_status", _safe_str(incident.get("status")))
         setattr(player, "_world_conduct_resolved", _safe_str(incident.get("status")) in ("resolved", "cleared"))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def player_eligible_to_dress(player: Any, host: Any = None) -> bool:
@@ -222,7 +224,7 @@ def player_eligible_to_dress(player: Any, host: Any = None) -> bool:
         if int(getattr(player, "_world_conduct_games_remaining", 0) or 0) > 0:
             return False
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     if host is not None:
         pid = _safe_str(getattr(player, "id", None) or getattr(player, "player_id", None))
         inc = get_active_incident_for_player(host, pid)
@@ -404,7 +406,7 @@ def create_conduct_incident(
     try:
         setattr(host, REGISTRY_KEY, reg)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     # Soft readiness only (temporary).
     _apply_readiness_modifier(player, incident, rng=r)
@@ -443,7 +445,7 @@ def _apply_readiness_modifier(player: Any, incident: Dict[str, Any], *, rng: ran
             modifier_type="conduct_readiness",
         )
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def apply_gm_conduct_choice(
@@ -576,7 +578,7 @@ def _team_org_bucket(host: Any, team_id: str) -> Dict[str, float]:
         try:
             setattr(host, TEAM_ORG_KEY, store)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     tid = _safe_str(team_id) or "_league"
     row = store.get(tid)
     if not isinstance(row, dict):
@@ -671,7 +673,7 @@ def tick_incident_games(host: Any, player: Any) -> Optional[Dict[str, Any]]:
 
             tick_conduct_games_missed(player)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         return None
 
     gr = int(inc.get("games_remaining") or 0)
@@ -682,7 +684,7 @@ def tick_incident_games(host: Any, player: Any) -> Optional[Dict[str, Any]]:
 
         tick_player_ovr_modifiers(player)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     cleared = None
     if int(inc.get("games_remaining") or 0) <= 0 and _safe_str(inc.get("status")) in (
@@ -757,7 +759,7 @@ def resolve_incident_availability(
                     modifier_type="conduct_readiness",
                 )
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     reg = _get_registry(host)
     reg[_safe_str(incident.get("incident_id"))] = incident
     return dict(incident)

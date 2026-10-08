@@ -219,7 +219,6 @@ class PersonalityBehavior:
             lo, hi = hi, lo
 
         center = (lo + hi) / 2.0
-        width = (hi - lo)
 
         # Std grows with volatility, shrinks with confidence
         std = 0.10 + 0.25 * self.p.volatility - 0.15 * self.p.confidence

@@ -5,7 +5,6 @@ Franchise session trade service — bridges API to SimEngine trade module.
 from __future__ import annotations
 import os
 
-import uuid
 from typing import Any, Dict, List, Optional
 
 from app.sim_engine.franchise.paths import ensure_simengine_path
@@ -25,6 +24,8 @@ from app.sim_engine.trades.trade_pick_registry import (  # noqa: E402
 from app.sim_engine.trades.trade_value import evaluate_pick_asset_value, pick_value_hint  # noqa: E402
 from app.sim_engine.economy.cap_engine import calculate_team_cap_snapshot  # noqa: E402
 from app.sim_engine.economy.team_needs import TeamNeeds  # noqa: E402
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 
 def _summarize_team_needs(needs: Dict[str, float], direction: str) -> Dict[str, Any]:
@@ -150,7 +151,7 @@ def _ensure_trade_infrastructure(session: Any) -> None:
         setattr(league, "draft_completed", bool(ctx.get("draft_completed")))
         setattr(league, "season_is_calendar", True)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     ensure_franchise_pick_registry(
         league,
         season_calendar_year=int(ctx["season_year"]),
@@ -190,7 +191,7 @@ def evaluate_franchise_trade(
                         ensure_player_financials(p, league, season_y, team=team)
                         break
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     result = evaluate_trade_package(
         dict(assets_by_team or {}),
         league=ctx["league"],
@@ -225,7 +226,7 @@ def evaluate_franchise_trade(
             fan_reaction=public.get("fan_reaction"),
         )
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     # Evaluation previews must never damage player OVR.
     if record_rumor_fallout:
         try:
@@ -238,7 +239,7 @@ def evaluate_franchise_trade(
                 proposal_submitted=True,
             )
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     return public
 
 
@@ -272,7 +273,7 @@ def execute_franchise_trade(
                 proposal_submitted=True,
             )
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     exec_result = execute_validated_trade(
         evaluation,

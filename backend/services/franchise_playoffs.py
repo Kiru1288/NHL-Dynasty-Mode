@@ -13,6 +13,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from services.franchise_session import FranchiseSession
 from services.json_safe import json_safe
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 try:
     from app.sim_engine.league.playoffs import playoff_game_win_probability
@@ -686,7 +688,7 @@ def _simulate_one_game(
         if stars:
             entry["stars"] = stars
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     log = list(row.get("game_log") or [])
     log.append(entry)
     row["game_log"] = log

@@ -82,8 +82,8 @@ def main() -> None:
 
     after_market = cap_table(league, session.sim, season_year, "AFTER 5 days of FA market ticking")
 
-    ott = getattr(league, "teams", [])
-    ott_team = session.team_by_id.get(str(session.user_team_id))
+    getattr(league, "teams", [])
+    session.team_by_id.get(str(session.user_team_id))
     print(f"\nUser team (Ottawa) usable space: before={before.get('OTT')} after_tick={after_tick.get('OTT')} after_fa_open={after_fa_open.get('OTT')} after_market={after_market.get('OTT')}")
 
 

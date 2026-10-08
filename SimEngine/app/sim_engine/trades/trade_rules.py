@@ -15,16 +15,7 @@ from app.sim_engine.economy.cap_engine import (
     max_retained_slots,
     max_retention_pct,
 )
-from app.sim_engine.trades.trade_asset import (
-    DraftPickTradeAsset,
-    PlayerTradeAsset,
-    TradePackage,
-    find_player_on_ahl_roster,
-    find_player_in_organization,
-    find_player_on_team_roster,
-    player_display_name,
-    resolve_pick_id,
-)
+from app.sim_engine.trades.trade_asset import DraftPickTradeAsset, PlayerTradeAsset, TradePackage, find_player_in_organization, player_display_name, resolve_pick_id
 from app.sim_engine.trades.trade_pick_registry import get_pick_by_id, validate_pick_ownership
 from app.sim_engine.trades.trade_deadline import POST_DEADLINE_BLOCK_REASON, post_deadline_freeze_active
 
@@ -159,13 +150,59 @@ def _player_returning_to_prior_club(player: Any, acquiring_team_id: str, context
         return True
 
 
-def _dest_retained_on_player(team: Any, player_id: Any) -> bool:
+def _team_label(team: Any, fallback: Any = "") -> str:
+    """Readable club name for messages (no raw ids, U20)."""
+    if team is None:
+        return str(fallback or "That club")
+    for attr in ("abbreviation", "abbr", "short_name", "name", "city"):
+        v = getattr(team, attr, None)
+        if v:
+            return str(v)
+    return str(fallback or getattr(team, "team_id", "") or "That club")
+
+
+def _player_label(team_by_id: Dict[str, Any], player_id: Any) -> str:
+    pid = str(player_id or "")
+    for t in (team_by_id or {}).values():
+        for attr in ("roster", "ahl_roster", "prospect_pool", "echl_roster"):
+            for p in list(getattr(t, attr, None) or []):
+                if str(getattr(p, "id", "") or getattr(p, "player_id", "") or "") == pid:
+                    return str(getattr(p, "name", None) or "That player")
+    return "That player"
+
+
+RETAIN_REACQUIRE_DAYS = 365
+RETAIN_SECOND_WAIT_DAYS = 75  # 2025-26 CBA: 75 regular-season days before a second retention
+RETAIN_MAX_PER_CONTRACT = 2
+RETAIN_DEAD_MONEY_CAP_SHARE = 0.15
+
+
+def _dest_retained_on_player(team: Any, player_id: Any, cursor: Optional[int] = None) -> bool:
+    """True while the club's retention on this player is under a year old (U13)."""
     pid = str(player_id or "")
     for rec in list(getattr(team, "retained_salary_records", None) or []) if team is not None else []:
         rid = rec.get("player_id") if isinstance(rec, dict) else getattr(rec, "player_id", None)
-        if str(rid or "") == pid:
+        if str(rid or "") != pid:
+            continue
+        day = rec.get("retained_day") if isinstance(rec, dict) else getattr(rec, "retained_day", None)
+        if day is None or cursor is None:
+            return True  # legacy record without a date: stay conservative
+        if int(cursor) - int(day) < RETAIN_REACQUIRE_DAYS:
             return True
     return False
+
+
+def _retained_dead_money_m(team: Any) -> float:
+    total = 0.0
+    for rec in list(getattr(team, "retained_salary_records", None) or []) if team is not None else []:
+        try:
+            amt = rec.get("amount_m", rec.get("cap_hit_m", 0.0)) if isinstance(rec, dict) else getattr(rec, "retained_cap_hit_m", 0.0)
+            seasons = rec.get("seasons_remaining", 1) if isinstance(rec, dict) else getattr(rec, "seasons_remaining", 1)
+            if int(seasons or 0) > 0:
+                total += float(amt or 0.0)
+        except Exception:
+            continue
+    return total
 
 
 def _clause_summary(player: Any) -> Dict[str, Any]:
@@ -580,7 +617,7 @@ def validate_trade_rules(
 
             if asset.retained_pct < 0 or asset.retained_pct > max_retention_pct(league):
                 blocking.append(
-                    f"Retained salary for {asset.player_id} must be between 0% and {max_retention_pct(league):.0f}% (got {asset.retained_pct}%)"
+                    f"Retained salary for {_player_label(team_by_id, asset.player_id)} must be between 0% and {max_retention_pct(league):.0f}% (got {asset.retained_pct}%)"
                 )
 
             src = team_by_id.get(asset.source_team_id)
@@ -594,7 +631,7 @@ def validate_trade_rules(
 
             player, loc, _i = find_player_in_organization(src, asset.player_id)
             if player is None:
-                blocking.append(f"Player {asset.player_id} not found on source roster {asset.source_team_id}")
+                blocking.append(f"{_player_label(team_by_id, asset.player_id)} isn't on the {_team_label(team_by_id.get(asset.source_team_id), asset.source_team_id)} roster any more")
                 continue
             if post_deadline_freeze_active(ctx) and loc != "ahl":
                 blocking.append(f"{player_display_name(player)} ({loc.upper() or 'NHL'}): {POST_DEADLINE_BLOCK_REASON}")
@@ -669,9 +706,11 @@ def validate_trade_rules(
 
             # NHL rule: no waiting period after a trade. The only re-acquisition limit is that a
             # club that retained salary on a player can't get him back within a year.
-            if _dest_retained_on_player(team_by_id.get(str(asset.acquiring_team_id)), asset.player_id):
+            if _dest_retained_on_player(
+                team_by_id.get(str(asset.acquiring_team_id)), asset.player_id, ctx.get("calendar_cursor"),
+            ):
                 blocking.append(
-                    f"{pname}: {asset.acquiring_team_id} retained salary on him — can't reacquire him within a year."
+                    f"{pname}: {_team_label(team_by_id.get(str(asset.acquiring_team_id)), asset.acquiring_team_id)} retained salary on him — can't reacquire him within a year."
                 )
 
             if asset.retained_pct > 0:
@@ -679,7 +718,7 @@ def validate_trade_rules(
                 slots_used = _retained_slots_used(retaining, season_label) if retaining else 0
                 if slots_used >= max_retained_slots(league):
                     blocking.append(
-                        f"{asset.source_team_id} already uses the maximum of {max_retained_slots(league)} retained-salary slots"
+                        f"{_team_label(retaining, asset.source_team_id)} already uses the maximum of {max_retained_slots(league)} retained-salary slots"
                     )
                 p_years = _contract_years_for_retention(player)
                 # An expiring contract is still running before the deadline — retaining on a
@@ -697,6 +736,32 @@ def validate_trade_rules(
                         f"{pname} has no contract years remaining — cannot retain salary on this trade"
                     )
                 elif asset.retained_pct > 0:
+                    # Same contract only (a new deal resets the history).
+                    c_obj = getattr(player, "contract", None)
+                    expiry = c_obj.get("expiry_year") if isinstance(c_obj, dict) else getattr(c_obj, "expiry_year", None)
+                    same = getattr(player, "retained_share_expiry", None) in (None, expiry)
+                    r_count = int(getattr(player, "retention_count", 0) or 0) if same else 0
+                    if r_count >= RETAIN_MAX_PER_CONTRACT:
+                        blocking.append(f"{pname}: salary on this contract has already been retained twice")
+                    last_day = getattr(player, "retention_last_day", None)
+                    cur = ctx.get("calendar_cursor")
+                    if r_count >= 1 and last_day is not None and cur is not None and int(cur) - int(last_day) < RETAIN_SECOND_WAIT_DAYS:
+                        blocking.append(
+                            f"{pname}: a second retention needs {RETAIN_SECOND_WAIT_DAYS} days after the first "
+                            f"({RETAIN_SECOND_WAIT_DAYS - (int(cur) - int(last_day))} to go)"
+                        )
+                    try:
+                        from app.sim_engine.economy.cap_engine import nhl_upper_limit_millions
+
+                        cap_m = float(nhl_upper_limit_millions(league=league) or 0.0)
+                    except Exception:
+                        cap_m = 0.0
+                    if cap_m > 0 and retaining is not None:
+                        new_m = player_cap_hit_millions(player) * float(asset.retained_pct) / 100.0
+                        if _retained_dead_money_m(retaining) + new_m > RETAIN_DEAD_MONEY_CAP_SHARE * cap_m + 0.001:
+                            blocking.append(
+                                f"{_team_label(retaining)} would carry more than 15% of the cap in retained salary"
+                            )
                     prior = float(getattr(player, "retained_share_pct", 0) or 0)
                     if prior + float(asset.retained_pct) > float(max_retention_pct(league)) + 0.01:
                         blocking.append(
@@ -811,7 +876,7 @@ def validate_trade_rules(
         )
         if int(cap_check.get("rosterSendDowns") or 0) > 0:
             warnings.append(
-                f"{tid}: will assign {int(cap_check['rosterSendDowns'])} player(s) to the AHL to make roster room"
+                f"{_team_label(team_by_id.get(tid), tid)}: will assign {int(cap_check['rosterSendDowns'])} player(s) to the AHL to make roster room"
             )
 
         before_usable = float(snap_before.get("usableCapSpace", 0.0))
@@ -830,15 +895,15 @@ def validate_trade_rules(
         }
 
         if cap_check.get("reason") == "ok_with_ltir":
-            warnings.append(f"{tid}: trade fits under LTIR effective cap limit")
+            warnings.append(f"{_team_label(team_by_id.get(tid), tid)}: trade fits under LTIR effective cap limit")
         elif cap_check.get("reason") == "ok_with_accrual":
-            warnings.append(f"{tid}: trade fits using in-season cap accrual projection")
+            warnings.append(f"{_team_label(team_by_id.get(tid), tid)}: trade fits using in-season cap accrual projection")
 
         if not cap_check.get("ok"):
             cap_casualty = bool(ctx.get("cap_casualty_trade"))
             partial_relief = cap_casualty and delta < -0.001 and after_usable > before_usable + 0.001
             if not partial_relief:
-                blocking.append(f"{tid}: {cap_check.get('reason', 'Cap validation failed')}")
+                blocking.append(f"{_team_label(team_by_id.get(tid), tid)}: {cap_check.get('reason', 'Cap validation failed')}")
 
         proj_raw = int(cap_check.get("projectedRosterCount", snap_before.get("activeRosterCount", 0)))
         send_downs = int(cap_check.get("rosterSendDowns") or 0)
@@ -858,11 +923,11 @@ def validate_trade_rules(
         # Only block trades that push a club over (or further over) the max — a club
         # already carrying 24+ must still be able to make a trade that shrinks its roster.
         if proj_count > ROSTER_MAX and proj_count > before_count:
-            blocking.append(f"{tid} would exceed maximum roster size ({proj_count} > {ROSTER_MAX})")
+            blocking.append(f"{_team_label(team_by_id.get(tid), tid)} would exceed maximum roster size ({proj_count} > {ROSTER_MAX})")
         elif proj_count > ROSTER_MAX:
-            warnings.append(f"{tid} remains over the roster maximum ({proj_count} > {ROSTER_MAX}) after this trade")
+            warnings.append(f"{_team_label(team_by_id.get(tid), tid)} remains over the roster maximum ({proj_count} > {ROSTER_MAX}) after this trade")
         if proj_count < ROSTER_MIN:
-            warnings.append(f"{tid} would drop below recommended roster minimum ({proj_count} < {ROSTER_MIN})")
+            warnings.append(f"{_team_label(team_by_id.get(tid), tid)} would drop below recommended roster minimum ({proj_count} < {ROSTER_MIN})")
 
         # Never leave an NHL club with zero goalies after trading its last one away.
         roster_now = list(getattr(team, "roster", None) or [])
@@ -874,7 +939,7 @@ def validate_trade_rules(
         g_out = sum(1 for p in outgoing if _player_is_goalie(p))
         g_in = sum(1 for p in incoming if _player_is_goalie(p))
         if g_now >= 1 and (g_now - g_out + g_in) < 1:
-            blocking.append(f"{tid} would have no NHL goalies after this trade")
+            blocking.append(f"{_team_label(team_by_id.get(tid), tid)} would have no NHL goalies after this trade")
 
         slot_check = can_trade_contract_slots_fit(team, outgoing, incoming)
         contract_slot_impact[tid] = {
@@ -886,7 +951,7 @@ def validate_trade_rules(
             "ok": bool(slot_check.get("ok")),
         }
         if not slot_check.get("ok"):
-            blocking.append(f"{tid}: {slot_check.get('reason', 'Contract slot validation failed')}")
+            blocking.append(f"{_team_label(team_by_id.get(tid), tid)}: {slot_check.get('reason', 'Contract slot validation failed')}")
 
     ok = len(blocking) == 0
     return {

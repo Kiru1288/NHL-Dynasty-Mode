@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from app.sim_engine.franchise._shared import *  # noqa: F401,F403
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 def _player_cap_hit_millions(player: Any) -> float:
     for key in ("cap_hit_m", "contract_aav_m", "aav_m"):
@@ -11,7 +13,7 @@ def _player_cap_hit_millions(player: Any) -> float:
             if v > 0:
                 return v
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     c = getattr(player, "contract", None)
     if c is not None:
         for key in ("cap_hit_m", "cap_hit", "aav_m", "aav", "salary_aav"):
@@ -24,7 +26,7 @@ def _player_cap_hit_millions(player: Any) -> float:
                     return v / 1_000_000.0
                 return v
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
     return 0.0
 def _team_cap_snapshot(team: Any, sim: Any) -> Dict[str, float]:
     econ = ((getattr(getattr(sim, "league", None), "get_league_context", lambda: {})() or {}).get("economics") or {})

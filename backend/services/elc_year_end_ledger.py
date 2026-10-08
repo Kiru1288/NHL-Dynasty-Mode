@@ -8,6 +8,8 @@ Currency: millions (_m).
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 
 def _pid(player: Any) -> str:
@@ -37,7 +39,7 @@ def _nudge_morale(player: Any, delta_01: float) -> None:
             setattr(psych, "morale", max(0.0, min(1.0, cur + float(delta_01))))
             return
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         cur = float(getattr(player, "morale", 50) or 50)
         if cur <= 1.5:
@@ -45,12 +47,12 @@ def _nudge_morale(player: Any, delta_01: float) -> None:
         else:
             setattr(player, "morale", max(0.0, min(100.0, cur + float(delta_01) * 100.0)))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         rel = float(getattr(player, "org_relationship", 0.55) or 0.55)
         setattr(player, "org_relationship", max(0.0, min(1.0, rel + float(delta_01) * 0.5)))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _condition_met(cond: Dict[str, Any], stats: Dict[str, Any], awards: Optional[Dict[str, Any]] = None) -> bool:
@@ -213,7 +215,7 @@ def evaluate_development_promise(
             setattr(player, "development_promise_honoured", True)
             setattr(player, "development_promise_result", reason)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     else:
         _nudge_morale(player, -0.055)
         try:
@@ -222,7 +224,7 @@ def evaluate_development_promise(
             friction = float(getattr(player, "negotiation_friction", 0) or 0)
             setattr(player, "negotiation_friction", min(1.0, friction + 0.12))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     return {
         "ok": True,
@@ -288,7 +290,7 @@ def evaluate_development_promise_midseason(
         )
         setattr(player, "development_promise_midseason_status", label)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     return {
         "ok": True,
@@ -341,7 +343,7 @@ def apply_earned_bonuses_to_team_cap(
         team.performance_bonus_reserve = new_reserve
         team.bonus_reserve_m = new_reserve
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     if overage > 0:
         next_label = f"{int(season_year) + 1}-{(int(season_year) + 2) % 100:02d}"
@@ -358,7 +360,7 @@ def apply_earned_bonuses_to_team_cap(
             team.bonus_overage = records
             team.bonus_overages = records
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     return {
         "earned_m": round(earned, 4),

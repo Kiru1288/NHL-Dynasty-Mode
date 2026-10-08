@@ -32,14 +32,16 @@ import re
 import threading
 import zlib
 from datetime import date, timedelta
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 _log = logging.getLogger(__name__)
 
 FEED_VERSION = 2
 ARCHIVE_DAYS = 60
-MAX_POSTS = 1300
-MAX_THREADS = 330
+MAX_POSTS = 2000
+MAX_THREADS = 400
 MAX_SEEN = 500
 STATE_ATTR = "social_feed_state"
 
@@ -256,6 +258,47 @@ def _fill(template: str, ctx: Dict[str, Any]) -> Optional[str]:
     return re.sub(r"\s+([.,!?;:])", r"\1", re.sub(r"[ \t]+", " ", out)).strip()
 
 
+_FP_RE = re.compile(r"[A-Z][\w'.-]*|\d+|[^\w\s]")
+
+
+def _fingerprint(text: str) -> str:
+    """Shape of a line with names and numbers stripped, so the same template filled
+    for two fanbases counts as a repeat."""
+    return " ".join(_FP_RE.sub("", str(text or "")).lower().split())[:40]
+
+
+def _recent_fps(st: Dict[str, Any]) -> List[str]:
+    return st.setdefault("recent_fp", [])
+
+
+def _remember_fp(st: Dict[str, Any], text: Optional[str]) -> None:
+    if not text:
+        return
+    rows = _recent_fps(st)
+    rows.append(_fingerprint(text))
+    if len(rows) > 260:
+        del rows[: len(rows) - 260]
+
+
+def _pick_fresh(st: Dict[str, Any], rng: random.Random, options: List[str]) -> str:
+    """Pick an option whose shape hasn't been used recently (falls back to any)."""
+    opts = [o for o in options if o]
+    if not opts:
+        return ""
+    recent = set(_recent_fps(st)[-160:])
+    fresh = [o for o in opts if _fingerprint(o) not in recent]
+    choice = rng.choice(fresh or opts)
+    _remember_fp(st, choice)
+    return choice
+
+
+def _compose_fresh(st: Dict[str, Any], rng: random.Random, templates: List[str], ctx: Dict[str, Any], limit: int = 280) -> Optional[str]:
+    filled = [t for t in (_fill(tp, ctx) for tp in templates) if t and len(t) <= limit]
+    if not filled:
+        return None
+    return _pick_fresh(st, rng, filled)
+
+
 def _compose(rng: random.Random, templates: List[str], ctx: Dict[str, Any], limit: int = 280) -> Optional[str]:
     pool = list(templates)
     rng.shuffle(pool)
@@ -291,13 +334,13 @@ def _state(session: Any) -> Dict[str, Any]:
         try:
             setattr(session, STATE_ATTR, st)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         # Legacy (pre-v2) posts were template/filler rows — drop them on migration.
         try:
             session.social_posts = [p for p in list(getattr(session, "social_posts", None) or []) if isinstance(p, dict) and int(p.get("v") or 0) == FEED_VERSION]
             session.reddit_threads = [t for t in list(getattr(session, "reddit_threads", None) or []) if isinstance(t, dict) and int(t.get("v") or 0) == FEED_VERSION]
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     return st
 
 
@@ -715,9 +758,15 @@ def _add_post(
     if not text:
         return None
     text = str(text).strip()
-    if len(text) < 8:
+    if len(text) < 8 and not str(kind).startswith(("player", "guarantee")):
+        return None
+    if not text:
         return None
     tids = [str(t) for t in team_ids if str(t or "") in F.teams]
+    if player_id and F.utid and F.utid not in tids:
+        p_team = str((F.pss.get(str(player_id)) or {}).get("team_id") or "") if isinstance(F.pss, dict) else ""
+        if p_team == F.utid:
+            tids.append(F.utid)
     market = max([F.team(t).get("market", 1.0) for t in tids] or [1.0])
     rng = F.rand("eng", kind, text[:40])
     eng = _engagement(F, acct, mag=mag, star=star, market=market, controversy=controversy, rng=rng)
@@ -902,9 +951,11 @@ def _headshot_bits(player: Any) -> Dict[str, Any]:
     try:
         from app.sim_engine.generation.player_headshots import merge_headshot_into_row
 
-        row: Dict[str, Any] = {}
-        merge_headshot_into_row(row, player)
-        return {k: v for k, v in row.items() if "headshot" in k or k in ("avatar_seed", "face_variant", "nationality", "nationality_code", "nhl_id", "nhl_player_id")}
+        # merge_headshot_into_row returns a new dict; it doesn't fill the one passed in.
+        row = merge_headshot_into_row({}, player) or {}
+        keep = ("avatar_seed", "face_variant", "skin_tone", "hair_style", "hair_color", "facial_hair", "expression", "age_bucket",
+                "nationality", "nationality_code", "nhl_id", "nhl_player_id", "real_nhl_import", "portrait_source")
+        return {k: v for k, v in row.items() if v not in (None, "") and ("headshot" in k or k in keep)}
     except Exception:
         return {}
 
@@ -981,8 +1032,12 @@ def _day_lines(F: _Pass) -> Dict[str, Dict[str, Any]]:
     # form memory (last 8 games of points / goalie results) for streak posts
     form = F.st.setdefault("form", {})
     for pid, d in lines.items():
-        val = d["pts"] if not d["pos"].startswith("G") else (1 if d["w"] else 0)
-        form[pid] = (list(form.get(pid) or []) + [int(val)] * max(1, min(3, d["gp"])))[-10:]
+        gp = max(1, int(d["gp"]))
+        total = int(d["pts"]) if not d["pos"].startswith("G") else int(d["w"])
+        per_game = [total // gp + (1 if i < total % gp else 0) for i in range(gp)]
+        if d["pos"].startswith("G"):
+            per_game = [min(1, v) for v in per_game]
+        form[pid] = (list(form.get(pid) or []) + per_game[-3:])[-10:]
     if len(form) > 1600:
         for k in list(form.keys())[: len(form) - 1400]:
             form.pop(k, None)
@@ -1090,7 +1145,11 @@ def _pgt_comment_pool(F: "_Pass", rng: random.Random, *, gd: Dict[str, Any], win
                              "Fun game to watch honestly"]), 0.1)
     rng.shuffle(out)
     out.sort(key=lambda t: -t[0] * rng.uniform(0.6, 1.4))
-    picked = out[:6]
+    recent = set(_recent_fps(F.st)[-160:])
+    fresh = [o for o in out if _fingerprint(o[1]) not in recent]
+    picked = (fresh + [o for o in out if o not in fresh])[:6]
+    for _o in picked:
+        _remember_fp(F.st, _o[1])
     comments: List[Optional[Dict[str, Any]]] = []
     for i, (w, txt, sent, rival) in enumerate(picked):
         team_for_user = them if rival else me
@@ -1101,6 +1160,35 @@ def _pgt_comment_pool(F: "_Pass", rng: random.Random, *, gd: Dict[str, Any], win
             c = _with_replies(F, c, [_comment(_reddit_user(rng, me), reply, rng.randint(3, 60), sent=sent * 0.5)])
         comments.append(c)
     return comments
+
+
+def _fan_flavor_templates(F: _Pass, tid: str, happy: bool) -> List[str]:
+    """Lines that only make sense for this club right now (record, coach, market)."""
+    tm, r = F.team(tid), F.rec(tid)
+    out: List[str] = []
+    city = tm.get("city") or ""
+    if happy:
+        if r.get("odds", 0.5) >= 0.8:
+            out += ["{rec}. start planning the parade route, " + city + " (I'm kidding) (I'm not kidding)"]
+        if r.get("odds", 0.5) <= 0.25:
+            out += ["a win is nice but the lottery odds just took a hit. I am a complicated person",
+                    "{score} W in a lost season. we take these and we don't ask questions"]
+        if tm.get("coach"):
+            out += [f"{_last(tm['coach'])} pushed the right buttons tonight. there, I said something nice"]
+        if tm.get("market", 1.0) >= 1.25:
+            out += ["the radio call-in shows are going to be unbearable tomorrow and I love it"]
+    else:
+        if tm.get("coach_hot") or tm.get("coach_security", 0.5) < 0.35:
+            out += [f"how many more of these before {_last(tm.get('coach') or 'the coach')} gets the call",
+                    "the coach is out of answers. you can see it on the bench"]
+        if r.get("odds", 0.5) >= 0.7:
+            out += ["one loss. everyone breathe. we're fine. (are we fine?)"]
+        if r.get("odds", 0.5) <= 0.25:
+            out += ["at this point I'm watching for the draft lottery percentages",
+                    "{rec}. I'm learning the names of draft prospects instead of our power play units"]
+        if tm.get("market", 1.0) >= 1.25:
+            out += ["the local paper is going to have a field day with this one. {score}."]
+    return out
 
 
 def _gen_games(F: _Pass, games: List[Dict[str, Any]], lines: Dict[str, Dict[str, Any]]) -> None:
@@ -1135,7 +1223,14 @@ def _gen_games(F: _Pass, games: List[Dict[str, Any]], lines: Dict[str, Dict[str,
         mag = 0.8 + 0.3 * (ws - ls >= 4) + 0.4 * user_game + 0.2 * ot
         when = F.stamp(F.iso, 22 * 60 + 5, 23 * 60 + 40, rng)
         tag = " (SO)" if so else " (OT)" if ot else ""
-        star_txt = f" {stars[0]['name']} led the way with {stars[0]['line']}." if stars else ""
+        win_top = next((p for p in skaters if p["team_id"] == win and p["pts"]), None)
+        win_gk = next((gk for gk in goalies if gk["team_id"] == win and gk.get("w") and gk.get("saves", 0) >= 30), None)
+        if win_gk and (not win_top or win_gk.get("ga", 9) == 0 or (win_top.get("pts", 0) <= 1 and win_gk.get("saves", 0) >= 42)):
+            star_txt = f" {win_gk['name']} made {win_gk.get('saves', 0)} saves."
+        elif win_top:
+            star_txt = f" {win_top['name']} led the way with {_game_line_text(win_top)}."
+        else:
+            star_txt = ""
         _add_post(F, _official(), f"FINAL{tag}: {W.get('abbr')} {ws}, {Lt.get('abbr')} {ls}.{star_txt} {W.get('abbr')} move to {F.rec(win).get('rec', '')}.",
                   kind="final", cat="game", when=when, team_ids=[win, lose], attach=att, mag=mag, knowledge="confirmed")
         # Beat writers for both clubs
@@ -1145,18 +1240,27 @@ def _gen_games(F: _Pass, games: List[Dict[str, Any]], lines: Dict[str, Dict[str,
             top = mine[0] if mine and mine[0]["pts"] else None
             tm = F.team(tid)
             opp = F.team(lose if won else win)
+            my_shots = _si(g.get("home_sog" if tid == hid else "away_sog"))
+            opp_shots = _si(g.get("away_sog" if tid == hid else "home_sog"))
+            shot_note = None
+            if my_shots and opp_shots:
+                if my_shots - opp_shots >= 8:
+                    shot_note = f"outshot the {opp.get('nick')} {my_shots}-{opp_shots}"
+                elif opp_shots - my_shots >= 8:
+                    shot_note = f"won it despite being outshot {opp_shots}-{my_shots}"
             ctx = {"abbr": tm.get("abbr"), "opp": opp.get("nick"), "score": f"{ws}-{ls}", "rec": F.rec(tid).get("rec"),
                    "top": top["name"] if top else None, "line": _game_line_text(top) if top else None,
-                   "shots": _si(g.get("home_sog" if tid == hid else "away_sog")), "coach": tm.get("coach") or None}
+                   "shots": my_shots or None, "shot_note": shot_note, "coach": tm.get("coach") or None}
             tmpl = (["{abbr} beat the {opp} {score}. {top}: {line}. Record now {rec}.",
-                     "Win #{rec} in the books. {top} ({line}) drove it, {abbr} outshot by nobody tonight with {shots} SOG.",
+                     "{abbr} improve to {rec} with a {score} win over the {opp}. {top} ({line}) drove it.",
+                     "{abbr} {shot_note} and take it {score}. {top}: {line}.",
                      "{abbr} take it {score} over the {opp}. {coach} on {top}: \"He was the difference tonight.\""]
                     if won else
                     ["{abbr} drop a {score} decision to the {opp}. {rec} on the year.",
                      "Tough night: {abbr} fall {score} to the {opp} despite {shots} shots. {top} had {line}.",
                      "{coach} after the {score} loss to the {opp}: \"Not good enough. We know it.\" {abbr} now {rec}."])
             if tm.get("is_user") or rng.random() < 0.55:
-                _add_post(F, _beat_writer(F, tid), _compose(rng, tmpl, ctx), kind="recap", cat="game",
+                _add_post(F, _beat_writer(F, tid), _compose_fresh(F.st, rng, tmpl, ctx), kind="recap", cat="game",
                           when=F.stamp(F.iso, 22 * 60 + 20, 23 * 60 + 55, rng), team_ids=[tid], player_id=top["id"] if top else "",
                           player_name=top["name"] if top else "", mag=0.7 + 0.5 * tm.get("is_user", False), knowledge="confirmed")
             # Fans
@@ -1183,18 +1287,32 @@ def _gen_games(F: _Pass, games: List[Dict[str, Any]], lines: Dict[str, Dict[str,
                          "{rec} and the GM is still 'evaluating'. evaluate THIS",
                          "every loss to the {opp} takes a year off my life. {score}",
                          "started the game with hope, ended it with a {score} L and a headache"])
+                tmpl = tmpl + _fan_flavor_templates(F, tid, happy)
                 if happy and bias < -0.2:
-                    tmpl = ["won {score} but the process is still bad and you all know it", "fine. {score}. wake me up when it matters"]
-                _add_post(F, fan, _compose(rng, tmpl, fctx), kind="fan_react", cat="game", when=F.stamp(F.iso, 22 * 60 + 30, 23 * 60 + 59, rng),
+                    tmpl = ["won {score} but the process is still bad and you all know it", "fine. {score}. wake me up when it matters",
+                            "a {score} win doesn't fix the roster. I will be back here complaining by Thursday",
+                            "{score} W. enjoy it. I'm still not buying it"]
+                _add_post(F, fan, _compose_fresh(F.st, rng, tmpl, fctx), kind="fan_react", cat="game", when=F.stamp(F.iso, 22 * 60 + 30, 23 * 60 + 59, rng),
                           team_ids=[tid], mag=0.6 + 0.4 * tm.get("is_user", False), sentiment=0.6 if happy else -0.6, controversy=0.2 if not happy else 0.05)
         # Milestones
         for p in skaters[:4]:
             if p["g"] >= 3:
                 info = F.pinfo(p["id"], p["name"], p["team_id"])
-                _add_post(F, _insider("knox"), f"HAT TRICK: {p['name']} ({F.team(p['team_id']).get('abbr')}) with three tonight. That's {info['g']} goals in {info['gp']} games this season.",
+                hrng = F.rand("hat", p["id"])
+                abbr_p = F.team(p["team_id"]).get("abbr")
+                ht_author = _beat_writer(F, p["team_id"]) if hrng.random() < 0.6 else _insider(_pick(hrng, ["knox", "lee", "ellison"]))
+                ht_text = _pick_fresh(F.st, hrng, [
+                    f"HAT TRICK: {p['name']} ({abbr_p}) with three tonight. That's {info['g']} goals in {info['gp']} games this season.",
+                    f"Three for {p['name']}. {_ordinal(max(1, info['g']))}-goal season pace aside, that's his {'first' if info['g'] <= 4 else 'latest'} hat trick of the year. {info['g']} G in {info['gp']} GP.",
+                    f"{p['name']} completes the hat trick for {abbr_p}. Hats are raining down. {info['g']} goals on the season.",
+                    f"{_last(p['name'])} with a natural feel for the net tonight: three goals, {p['sog']} shots. {abbr_p} fans are out of hats.",
+                ])
+                _add_post(F, ht_author, ht_text,
                           kind="hat_trick", cat="game", when=F.stamp(F.iso, 21 * 60 + 40, 23 * 60, rng), team_ids=[p["team_id"]], player_id=p["id"], player_name=p["name"],
                           attach=_statline_attach(F, info, _season_line(info), label="Season"), mag=2.0, star=F.star(info), knowledge="confirmed")
-                _add_post(F, _meme_account(rng), f"hats on the ice for {_last(p['name'])} 🎩🎩🎩 someone check on the {Lt.get('nick') if p['team_id'] == win else W.get('nick')} goalie",
+                _add_post(F, _meme_account(rng), _pick_fresh(F.st, rng, [f"hats on the ice for {_last(p['name'])} 🎩🎩🎩 someone check on the {Lt.get('nick') if p['team_id'] == win else W.get('nick')} goalie",
+                          f"{_last(p['name'])} said 'one hat? no. three.' 🎩🎩🎩",
+                          f"the {Lt.get('nick') if p['team_id'] == win else W.get('nick')} goalie is going to see {_last(p['name'])} in his sleep tonight"]),
                           kind="meme", cat="game", when=F.stamp(F.iso, 22 * 60, 23 * 60 + 50, rng), team_ids=[p["team_id"]], player_id=p["id"], player_name=p["name"], mag=1.4)
             elif p["pts"] >= 4:
                 info = F.pinfo(p["id"], p["name"], p["team_id"])
@@ -1217,7 +1335,7 @@ def _gen_games(F: _Pass, games: List[Dict[str, Any]], lines: Dict[str, Dict[str,
         if user_game or ws - ls >= 5 or any(p["g"] >= 3 for p in skaters):
             sub = F.team(F.utid).get("sub") if user_game else "r/hockey"
             user_won = win == F.utid
-            ctx_team = F.team(F.utid if user_game else win)
+            F.team(F.utid if user_game else win)
             top = skaters[0] if skaters else None
             comments = _pgt_comment_pool(F, rng, gd=gd, win=win, lose=lose, ws=ws, ls=ls,
                                          skaters=skaters, goalies=goalies, user_game=user_game)
@@ -1250,7 +1368,7 @@ def _gen_streaks(F: _Pass, lines: Dict[str, Dict[str, Any]]) -> None:
     form = F.st.get("form") or {}
     posted = 0
     for pid, d in sorted(lines.items(), key=lambda kv: -kv[1].get("pts", 0)):
-        if posted >= 4:
+        if posted >= 2:
             break
         if d["pos"].startswith("G"):
             continue
@@ -1304,6 +1422,41 @@ def _gen_injuries(F: _Pass) -> None:
                         mag=1.4, sentiment=-0.5, knowledge="confirmed")
 
 
+def _gen_roster_moves(F: _Pass) -> None:
+    """CPU call-ups / send-downs (services/cpu_roster_moves.py) on the beat writers' feeds."""
+    rows, seen = _seen(F.st, "crm")
+    posted = 0
+    for mv in list(getattr(F.session, "cpu_roster_moves_log", None) or [])[-40:]:
+        key = str(mv.get("id") or "")
+        if not key or key in seen:
+            continue
+        _mark_seen(F.st, "crm", key)
+        if posted >= 5 or int(mv.get("day") or 0) < F.day_idx - 3:
+            continue
+        tid = str(mv.get("team_id") or "")
+        if tid not in F.teams:
+            continue
+        up, down = mv.get("up") or {}, mv.get("down") or {}
+        rng = F.rand("crm", key)
+        abbr = F.team(tid).get("abbr")
+        method = str(mv.get("method") or "")
+        if method == "goalie_assigned":
+            text = f"{abbr} assign G {up.get('name')} to the AHL. Back to a two-goalie rotation."
+        elif method == "goalie_waived":
+            text = f"{abbr} have placed G {up.get('name')} on waivers."
+        elif method == "recalled" or not down:
+            text = f"{abbr} recall {up.get('name')} from the AHL."
+        elif method == "waived":
+            text = f"{abbr} have placed {down.get('name')} on waivers and recalled {up.get('name')} from the AHL."
+        else:
+            text = _pick(rng, [f"{abbr} recall {up.get('name')} from the AHL; {down.get('name')} assigned down.",
+                               f"Roster move: {up.get('name')} up, {down.get('name')} down for {abbr}.",
+                               f"{up.get('name')} gets the call to {abbr}. {down.get('name')} heads to the AHL."])
+        _add_post(F, _beat_writer(F, tid), text, kind="roster_move", cat="news", when=F.stamp(F.iso, 10 * 60, 17 * 60, rng),
+                  team_ids=[tid], player_id=str(up.get("player_id") or ""), player_name=str(up.get("name") or ""), mag=0.6, knowledge="confirmed")
+        posted += 1
+
+
 def _gen_trades(F: _Pass) -> None:
     league = getattr(getattr(F.session, "sim", None), "league", None)
     rows, seen = _seen(F.st, "trade")
@@ -1337,7 +1490,10 @@ def _gen_trades(F: _Pass) -> None:
         star = F.star(best) if best else 1.0
         mag = 1.4 + 0.8 * user_inv + 0.6 * (str(tr.get("importance") or "") in ("major", "blockbuster"))
         when = F.stamp(F.iso, 11 * 60, 20 * 60, rng)
-        _add_post(F, _insider(_pick(rng, ["ellison", "vargas"])), "TRADE: " + " | ".join(parts) + (f". {str(tr.get('reason_text') or '')[:140]}" if tr.get("reason_text") else ""),
+        reason = str(tr.get("reason_text") or "").strip()
+        if reason and not reason.endswith((".", "!", "?")):
+            reason = reason.rsplit(";", 1)[0].rsplit(",", 1)[0].strip() + "."
+        _add_post(F, _insider(_pick(rng, ["ellison", "vargas"])), "TRADE: " + " | ".join(parts) + (f". {reason[:150]}" if reason else ""),
                   kind="trade", cat="trade", when=when, team_ids=teams, player_id=best["id"] if best else "", player_name=best["name"] if best else "",
                   mag=mag, star=star, knowledge="confirmed", source_trade_id=key)
         if best and best["cap"]:
@@ -1348,8 +1504,19 @@ def _gen_trades(F: _Pass) -> None:
             tm = F.team(tid)
             angry = tid == loser
             fan = _fan_account(F, tid, "doomer" if angry else "homer", rng)
-            txt = (f"what did we just do. {tm.get('fan')} front office fleeced again" if angry else
-                   _pick(rng, [f"LOVE this move. {tm.get('fan')} got better today", f"ok I'm in on this. {best['last'] if best else 'new guy'} is going to fit perfectly", "fine trade. not a home run, not a disaster"]))
+            rel = "fractured" in reason.lower() or "demand" in reason.lower() or "wish" in reason.lower()
+            new_guy = best["last"] if best else "the new guy"
+            if angry:
+                pool = [f"what did we just do. {tm.get('fan')} front office fleeced again", "I need someone to explain this trade to me slowly",
+                        f"we gave up THAT for THIS? {tm.get('fan')} twitter is in shambles", "this trade will age like milk. screenshot it"]
+            elif rel:
+                pool = ["good riddance honestly. the room needed this", "addition by subtraction. moving on", "wish him well but this had to happen",
+                        f"the drama is someone else's problem now. welcome {new_guy}"]
+            else:
+                pool = [f"LOVE this move. {tm.get('fan')} got better today", f"ok I'm in on this. {new_guy} is going to fit perfectly",
+                        "fine trade. not a home run, not a disaster", f"{new_guy} jersey already in the cart", "need to see him play before I judge but I like the vibes",
+                        f"didn't see that coming. {new_guy}? sure, why not"]
+            txt = _pick_fresh(F.st, rng, pool)
             _add_post(F, fan, txt, kind="trade_react", cat="trade", when=F.stamp(F.iso, 12 * 60, 23 * 60, rng), team_ids=[tid], mag=0.7 + 0.6 * tm.get("is_user", False),
                       sentiment=-0.7 if angry else 0.5, controversy=0.5 if angry else 0.1, source_trade_id=key)
         _add_thread(F, sub="r/hockey", title=f"[{_insider('ellison')['name']}] " + "; ".join(parts), body=str(tr.get("reason_text") or tr.get("headline") or ""),
@@ -1385,8 +1552,7 @@ def _gen_storylines(F: _Pass) -> None:
                   mag=0.6 + heat / 50.0, knowledge=str(ev.get("knowledge_type") or "report"), storyline_id=str(ev.get("storyline_id") or ""), related=head)
 
 
-def _gen_demands_and_burners(F: _Pass) -> None:
-    rng = F.rand("burner")
+def _gen_demands(F: _Pass) -> None:
     demands = getattr(F.session, "trade_demands", None) or {}
     open_d = [d for d in demands.values() if isinstance(d, dict) and str(d.get("status") or "open") in ("open", "active", "formal", "requested")]
     for d in open_d:
@@ -1399,7 +1565,11 @@ def _gen_demands_and_burners(F: _Pass) -> None:
         _add_post(F, _insider("ellison"), f"Hearing {info['name']} has asked {F.team(info['team_id']).get('abbr')} for a trade. Main issue: {d.get('primary_complaint') or 'his role'}.",
                   kind="trade_request", cat="rumor", when=F.stamp(F.iso, 9 * 60, 20 * 60, r2), team_ids=[info["team_id"]], player_id=pid, player_name=info["name"],
                   mag=1.6, star=F.star(info), knowledge="report", controversy=0.6)
-    # burner rumor mill: players on bad contracts / slumping teams / coach seat
+
+
+def _gen_burner_rumors(F: _Pass) -> None:
+    """Burner rumor mill: sellers, buyers and hot seats (once per played day)."""
+    rng = F.rand("burner")
     cands = []
     for tid, r in F.stand.items():
         if r.get("gp", 0) >= 15 and r.get("odds", 0.5) < 0.25:
@@ -1493,6 +1663,28 @@ def _gen_carryover(F: _Pass) -> None:
 # Day runner / catch-up
 # ---------------------------------------------------------------------------
 
+def _gen_player_voices(F: _Pass, games: List[Dict[str, Any]], lines: Dict[str, Dict[str, Any]]) -> None:
+    from services.player_social_engine import gen_player_voices  # noqa: WPS433
+
+    gen_player_voices(F, games, lines)
+
+
+def _gen_player_event_voices(F: _Pass) -> None:
+    from services.player_social_engine import gen_player_event_voices  # noqa: WPS433
+
+    gen_player_event_voices(F)
+
+
+def _player_social_summary(session: Any) -> Dict[str, Any]:
+    try:
+        from services.player_social_engine import player_social_summary  # noqa: WPS433
+
+        return player_social_summary(session)
+    except Exception:
+        _log.exception("player social summary failed")
+        return {}
+
+
 def _iso_for_day(session: Any, day_idx: int) -> str:
     try:
         from services.franchise_sim import _calendar_iso_for_day
@@ -1514,62 +1706,163 @@ def _prune(session: Any, today_iso: str) -> None:
     session.reddit_threads = threads[-MAX_THREADS:]
 
 
-def run_social_feed_day(session: Any, day_idx: int, *, lines: Optional[Dict[str, Dict[str, Any]]] = None) -> int:
+def _games_on_day(session: Any, day_idx: int) -> List[Dict[str, Any]]:
+    """Every final on ``day_idx`` (scans back from the newest result, bug S9)."""
+    out: List[Dict[str, Any]] = []
+    season = _si(getattr(session, "season_calendar_year", 0))
+    for g in reversed(list(getattr(session, "game_results", None) or [])):
+        if not isinstance(g, dict):
+            continue
+        gs = _si(g.get("season_calendar_year"), season)
+        if gs and season and gs != season:
+            break
+        gd = _si(g.get("calendar_day"), -1)
+        if gd == int(day_idx):
+            out.append(g)
+        elif 0 <= gd < int(day_idx) - 1 and out:
+            break
+    out.reverse()
+    return out
+
+
+_DAY_GENERATORS = ("games", "daily", "streaks", "injuries", "trades", "moves", "stories", "demands", "rumors", "standings", "gov", "carry", "players")
+_EVENT_GENERATORS = ("injuries", "trades", "moves", "stories", "demands", "gov", "carry")
+
+
+def run_social_feed_day(session: Any, day_idx: int, *, lines: Optional[Dict[str, Dict[str, Any]]] = None, events_only: bool = False) -> int:
+    """Generate one calendar day of posts.
+
+    A full pass is for a day whose games are final; it advances ``last_day``. An
+    ``events_only`` pass covers the current, unplayed day (trades, signings, offseason
+    news) and never marks the day as done (bug S1)."""
     iso = _iso_for_day(session, day_idx)
     if not iso:
         return 0
-    F = _Pass(session, iso=iso, day_idx=day_idx)
-    games = [g for g in list(getattr(session, "game_results", None) or [])[-160:] if _si(g.get("calendar_day"), -1) == int(day_idx)]
+    F = _Pass(session, iso=iso, day_idx=day_idx, mode="events" if events_only else "day")
+    games: List[Dict[str, Any]] = [] if events_only else _games_on_day(session, day_idx)
     if lines is None:
-        lines = _day_lines(F)
-    for fn, args in ((_gen_games, (F, games, lines)), (_gen_daily_thread, (F, games, lines)), (_gen_streaks, (F, lines)), (_gen_injuries, (F,)), (_gen_trades, (F,)),
-                     (_gen_storylines, (F,)), (_gen_demands_and_burners, (F,)), (_gen_standings, (F,)), (_gen_governance, (F,)), (_gen_carryover, (F,))):
+        lines = {} if events_only else _day_lines(F)
+    gens = {
+        "games": (_gen_games, (F, games, lines)), "daily": (_gen_daily_thread, (F, games, lines)), "streaks": (_gen_streaks, (F, lines)),
+        "injuries": (_gen_injuries, (F,)), "trades": (_gen_trades, (F,)), "moves": (_gen_roster_moves, (F,)), "stories": (_gen_storylines, (F,)),
+        "demands": (_gen_demands, (F,)), "rumors": (_gen_burner_rumors, (F,)), "standings": (_gen_standings, (F,)),
+        "gov": (_gen_governance, (F,)), "carry": (_gen_carryover, (F,)), "players": (_gen_player_voices, (F, games, lines)),
+    }
+    for key in (_EVENT_GENERATORS if events_only else _DAY_GENERATORS):
+        fn, args = gens[key]
         try:
             fn(*args)
         except Exception:
             _log.exception("social feed generator %s failed", getattr(fn, "__name__", fn))
+    if events_only:
+        try:
+            _gen_player_event_voices(F)
+        except Exception:
+            _log.exception("social feed player event voices failed")
     F.posts.sort(key=lambda p: p["ts"])
     session.social_posts = list(getattr(session, "social_posts", None) or []) + F.posts
     session.reddit_threads = list(getattr(session, "reddit_threads", None) or []) + F.threads
-    F.st["last_day"] = int(day_idx)
+    if not events_only:
+        F.st["last_day"] = max(_si(F.st.get("last_day"), -1), int(day_idx))
     if F.posts:
-        F.st["last_ts"] = F.posts[-1]["ts"]
+        F.st["last_ts"] = max(str(F.st.get("last_ts") or ""), F.posts[-1]["ts"])
     _prune(session, iso)
     return len(F.posts) + len(F.threads)
 
 
-def ensure_social_feed_current(session: Any, max_days: int = 10) -> int:
+def _season_sync(session: Any, st: Dict[str, Any]) -> None:
+    season = _si(getattr(session, "season_calendar_year", 0))
+    if st.get("season") != season:
+        st["season"] = season
+        st["last_day"] = -1
+        cur = _snapshot(getattr(session, "player_season_stats", None) or {})
+        # A fresh ledger (opening night) diffs against nothing, so night one gets its lines.
+        fresh = all((v[0] if v else 0) <= 1 for v in cur.values())
+        st["snap"] = {} if fresh or not st.get("bootstrapped") else cur
+    if not st.get("bootstrapped"):
+        # First run on an existing save: seed the stat snapshot so day lines start clean,
+        # and treat everything already played as covered.
+        cur = _snapshot(getattr(session, "player_season_stats", None) or {})
+        fresh = all((v[0] if v else 0) <= 1 for v in cur.values())
+        st["snap"] = {} if fresh else cur
+        st["bootstrapped"] = True
+        st["fmt3"] = True
+        st["last_day"] = -1 if fresh else max(_si(st.get("last_day"), -1), _current_day(session) - 1)
+
+
+def _migrate_cursor(st: Dict[str, Any], first_unplayed: int) -> None:
+    """Saves from before the S1 fix marked the unplayed day as done; step back once."""
+    if not st.get("fmt3"):
+        st["fmt3"] = True
+        st["last_day"] = min(_si(st.get("last_day"), -1), int(first_unplayed) - 1)
+
+
+def _run_played_span(session: Any, st: Dict[str, Any], start: int, end: int) -> int:
+    """Full passes for played days ``start..end``. One day (the normal case, called right
+    after the sim finishes it) gets exact lines; a longer gap splits one ledger diff by
+    each team's game days so a player's totals never land on a single night (bug S3)."""
+    if end < start:
+        return 0
+    probe = _Pass(session, iso=_iso_for_day(session, end) or "", day_idx=end)
+    all_lines = _day_lines(probe)
+    if start == end:
+        return run_social_feed_day(session, end, lines=all_lines)
+    games_by_team: Dict[str, List[int]] = {}
+    for d in range(start, end + 1):
+        for g in _games_on_day(session, d):
+            for t in (str(g.get("home_id")), str(g.get("away_id"))):
+                games_by_team.setdefault(t, []).append(d)
+    per_day: Dict[int, Dict[str, Dict[str, Any]]] = {}
+    for pid, ln in all_lines.items():
+        days = games_by_team.get(str(ln.get("team_id"))) or []
+        if not days:
+            continue
+        if int(ln.get("gp") or 0) <= 1:
+            per_day.setdefault(days[-1], {})[pid] = ln
+            continue
+        # Several games in the gap: only the per-game average is known, so post it as
+        # an average on the last game day instead of inventing a monster night.
+        gp = int(ln["gp"])
+        avg = dict(ln)
+        for k in ("g", "a", "pts", "sog", "w", "so", "ga", "saves", "shots_against"):
+            avg[k] = int(round(float(ln.get(k) or 0) / gp))
+        avg["gp"] = 1
+        avg["_span_avg"] = True
+        per_day.setdefault(days[-1], {})[pid] = avg
+    made = 0
+    for d in range(start, end + 1):
+        made += run_social_feed_day(session, d, lines=per_day.get(d, {}))
+    return made
+
+
+def social_feed_after_day(session: Any, day_idx: int) -> int:
+    """Sim hook: call once a calendar day's games are final (bug S1/S2/S11 — the feed
+    keeps up with the sim instead of catching up when the tab is opened)."""
     with _LOCK:
         st = _state(session)
-        today = _current_day(session)
-        season = _si(getattr(session, "season_calendar_year", 0))
-        if st.get("season") != season:
-            st["season"] = season
-            st["snap"] = _snapshot(getattr(session, "player_season_stats", None) or {}) if st.get("bootstrapped") else {}
+        _season_sync(session, st)
+        _migrate_cursor(st, int(day_idx))
         last = _si(st.get("last_day"), -1)
-        if last > today:
-            last = today - 1
-        if last >= today:
+        if int(day_idx) <= last:
             return 0
-        start = max(last + 1, today - max_days + 1)
-        if not st.get("bootstrapped"):
-            # First run on an existing save: seed the stat snapshot so day lines start clean.
-            st["snap"] = _snapshot(getattr(session, "player_season_stats", None) or {})
-            st["bootstrapped"] = True
-        # One ledger diff for the whole span; each player's line goes to his team's
-        # most recent game day inside the span (exact when the feed runs daily).
-        probe = _Pass(session, iso=_iso_for_day(session, today) or "", day_idx=today)
-        all_lines = _day_lines(probe)
-        team_last: Dict[str, int] = {}
-        for g in list(getattr(session, "game_results", None) or [])[-200:]:
-            gd = _si(g.get("calendar_day"), -1)
-            if start <= gd <= today:
-                for t in (str(g.get("home_id")), str(g.get("away_id"))):
-                    team_last[t] = max(team_last.get(t, -1), gd)
+        start = max(last + 1, int(day_idx) - ARCHIVE_DAYS + 1)
+        return _run_played_span(session, st, start, int(day_idx))
+
+
+def ensure_social_feed_current(session: Any, max_days: int = ARCHIVE_DAYS) -> int:
+    """Cheap catch-up: covers any played day the sim hook missed, then an events-only
+    pass for the current (unplayed) day so trades and offseason news still show up."""
+    with _LOCK:
+        st = _state(session)
+        _season_sync(session, st)
+        today = _current_day(session)
+        _migrate_cursor(st, today)
+        last = _si(st.get("last_day"), -1)
         made = 0
-        for d in range(start, today + 1):
-            day_lines = {pid: ln for pid, ln in all_lines.items() if team_last.get(ln.get("team_id")) == d}
-            made += run_social_feed_day(session, d, lines=day_lines)
+        played_end = today - 1
+        if last < played_end:
+            made += _run_played_span(session, st, max(last + 1, played_end - max(1, int(max_days)) + 1), played_end)
+        made += run_social_feed_day(session, today, events_only=True)
         return made
 
 
@@ -1584,29 +1877,41 @@ def _match_tab(item: Dict[str, Any], tab: str, utid: str) -> bool:
         return item.get("cat") in ("game", "analytics", "standings")
     if tab == "trades":
         return item.get("cat") == "trade"
+    if tab == "players":
+        return item.get("cat") == "players" or item.get("author_type") == "player"
     return True
 
 
-def build_social_feed_response(session: Any, *, tab: str = "all", sub: str = "all", page: int = 0, page_size: int = 40) -> Dict[str, Any]:
+def build_social_feed_response(session: Any, *, tab: str = "all", sub: str = "all", page: int = 0, page_size: int = 40,
+                               thread_page: Optional[int] = None, author: str = "") -> Dict[str, Any]:
     try:
         ensure_social_feed_current(session)
     except Exception:
         _log.exception("social feed catch-up failed")
+    tpage = page if thread_page is None else max(0, int(thread_page))
     utid = str(getattr(session, "user_team_id", "") or "")
     posts = [p for p in list(getattr(session, "social_posts", None) or []) if isinstance(p, dict) and int(p.get("v") or 0) == FEED_VERSION]
     threads = [t for t in list(getattr(session, "reddit_threads", None) or []) if isinstance(t, dict) and int(t.get("v") or 0) == FEED_VERSION]
     posts = [p for p in posts if _match_tab(p, tab, utid)]
-    threads = [t for t in threads if _match_tab(t, tab, utid) and (sub in ("", "all") or str(t.get("subreddit") or "").lower() == sub.lower())]
+    if author:
+        posts = [p for p in posts if str(p.get("author_player_id") or "") == author or str(p.get("author_id") or "") == author]
+    all_threads = [t for t in threads if _match_tab(t, tab, utid)]
+    threads = [t for t in all_threads if sub in ("", "all") or str(t.get("subreddit") or "").lower() == sub.lower()]
     posts.sort(key=lambda p: (str(p.get("ts") or ""), _si(p.get("seq"))), reverse=True)
     threads.sort(key=lambda t: (str(t.get("ts") or ""), _si(t.get("upvotes"))), reverse=True)
     lo, hi = page * page_size, (page + 1) * page_size
-    subs = sorted({str(t.get("subreddit") or "") for t in threads if t.get("subreddit")})
+    tlo, thi = tpage * page_size, (tpage + 1) * page_size
+    subs = sorted({str(t.get("subreddit") or "") for t in all_threads if t.get("subreddit")})
     pub = lambda rows: [{k: v for k, v in r.items() if not str(k).startswith("_")} for r in rows]  # noqa: E731
+    user_sub = (_team_info(session).get(utid) or {}).get("sub") or ""
     return {
         "puckr": pub(posts[lo:hi]),
-        "icehole": pub(threads[lo:hi]),
+        "icehole": pub(threads[tlo:thi]),
         "has_more_posts": len(posts) > hi,
-        "has_more_threads": len(threads) > hi,
+        "has_more_threads": len(threads) > thi,
+        "thread_page": tpage,
+        "user_subreddit": user_sub,
+        "player_social": _player_social_summary(session),
         "total_posts": len(posts),
         "total_threads": len(threads),
         "subreddits": subs,
@@ -1639,4 +1944,5 @@ def publish_external_post(
     )
     if post:
         session.social_posts = list(getattr(session, "social_posts", None) or []) + F.posts
+        _prune(session, iso)  # bug S10
     return post

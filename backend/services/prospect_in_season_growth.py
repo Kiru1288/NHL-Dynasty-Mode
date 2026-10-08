@@ -11,7 +11,9 @@ together. The offseason pass only pays out whatever growth is still owed
 from __future__ import annotations
 
 import random
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, Optional
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 # Players up to this age are treated as growing prospects.
 PROSPECT_MAX_AGE_DEV_LEAGUE = 23
@@ -146,7 +148,7 @@ def _apply_environment(p: Any, team: Optional[Any]) -> None:
         setattr(p, "_league_quality_mod", 0.88 + 0.2 * lq)
         setattr(p, "_dev_env_growth_mult", org_mod * coach_mod)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 _POOL_TIER_GROWTH = {
@@ -256,7 +258,7 @@ def prospect_in_season_tick(session: Any) -> Dict[str, int]:
                 if apply_pool_range_pulse(p, teams.get(str(rights)) if rights is not None else None, rng, season_id):
                     moved += 1
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             continue
         if not _has_ratings(p):
             continue
@@ -285,7 +287,7 @@ def prospect_in_season_tick(session: Any) -> Dict[str, int]:
             session._draft_class_detail_cache = None
             session._prospect_profile_by_id_cache = None
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     return {"moved": moved, "potential": pot_moved}
 
 

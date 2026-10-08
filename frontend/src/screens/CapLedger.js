@@ -1,23 +1,8 @@
+import { gameConfirm } from "../components/common/gameConfirm";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useGameUI } from "../game/GameUIContext";
 import { SCREENS } from "../game/constants";
-import {
-  getContractOffice,
-  qualifyRfa,
-  releaseRfaRights,
-  buyoutContract,
-  waiveContract,
-  buryContract,
-  signFreeAgent,
-  getFreeAgentDetail,
-  submitOfferSheet,
-  matchOfferSheet,
-  declineOfferSheet,
-  fileArbitration,
-  settleArbitration,
-  getRosterMoves,
-  moveRosterPlayer,
-} from "../services/franchiseService";
+import { getContractOffice, qualifyRfa, releaseRfaRights, buyoutContract, waiveContract, buryContract, getFreeAgentDetail, submitOfferSheet, matchOfferSheet, declineOfferSheet, fileArbitration, settleArbitration, getRosterMoves, moveRosterPlayer } from "../services/franchiseService";
 import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
 import PlayerHeadshot from "../components/PlayerHeadshot";
 import { ensurePlayerHeadshotFields } from "../utils/playerHeadshots";
@@ -446,8 +431,9 @@ function ContractRosterMoves({ row, onMoved }) {
     try {
       let result = await moveRosterPlayer({ player_id: playerId, action });
       if (!result?.ok && result?.requires_waivers) {
-        const ok = window.confirm(
-          `${row.name || "Player"} requires waivers to leave the NHL roster. Place on waivers and send down?`
+        const ok = await gameConfirm(
+          `${row.name || "Player"} requires waivers to leave the NHL roster. Place on waivers and send down?`,
+          { title: "Waivers required", confirmLabel: "Place on waivers" }
         );
         if (!ok) {
           setError("Waivers required — move cancelled");
@@ -702,328 +688,16 @@ function ContractActionPanel({
   );
 }
 
-const STOCK_ICON = { breakout: "↑↑", rising: "↑", falling: "↓", stable: "→" };
-const STOCK_WORD = { breakout: "Breakout", rising: "Rising", falling: "Falling", stable: "Stable" };
 
-function formatSvPct(v) {
-  const n = safeNum(v, NaN);
-  if (!Number.isFinite(n)) return "—";
-  return n.toFixed(3).replace(/^0/, "");
-}
 
-function formatGaa(v) {
-  const n = safeNum(v, NaN);
-  return Number.isFinite(n) ? n.toFixed(2) : "—";
-}
 
-function isGoalieRow(row) {
-  const s = row?.season_stats || {};
-  return Boolean(s.is_goalie) || String(row?.position || "").toUpperCase() === "G";
-}
 
-function primaryStatValue(row) {
-  const s = row?.season_stats || {};
-  if (isGoalieRow(row)) return formatSvPct(s.save_pct);
-  return s.points != null ? String(s.points) : "—";
-}
 
-function StockTrend({ row, showLabel = false }) {
-  const dir = row?.stock_direction || "stable";
-  const icon = STOCK_ICON[dir] || "→";
-  const word = STOCK_WORD[dir] || "Stable";
-  return (
-    <span className={`cap-fa-trend cap-fa-trend--${dir}`} title={row?.stock_reason || word}>
-      <span aria-hidden="true">{icon}</span>
-      {showLabel ? <em>{word}</em> : null}
-    </span>
-  );
-}
 
-function FreeAgentHeader() {
-  return (
-    <div className="cap-board-head cap-fa-head">
-      <span>Player</span>
-      <span title="Position">Pos</span>
-      <span title="Age">Age</span>
-      <span title="Current league the player is featuring in">League</span>
-      <span title="Projected games played this season">GP</span>
-      <span title="Projected points (skaters) / save % (goalies) — from attributes, not game results">Pts/SV%</span>
-      <span title="Overall rating">OVR</span>
-      <span title="Market stock trend">Trend</span>
-      <span title="Asking average annual value">Ask</span>
-    </div>
-  );
-}
 
-function FreeAgentRow({ row, onSelect, isSelected = false }) {
-  const ovr = safeNum(row.overall ?? row.ovr);
-  const s = row.season_stats || {};
-  const goalie = isGoalieRow(row);
-  const player = buildHeadshotPlayer(row);
 
-  return (
-    <button
-      type="button"
-      className={`cap-contract-card cap-contract-row cap-fa-row${isSelected ? " is-selected" : ""}`}
-      onClick={() => onSelect(row)}
-    >
-      <span className="cap-contract-player">
-        <PlayerHeadshot player={player} size="sm" className="cap-card-headshot" />
-        <span className="cap-contract-meta cap-contract-row__identity">
-          <strong className="cap-contract-row__name">{safeText(row.name, "Unnamed Player")}</strong>
-          <em className="cap-contract-row__sub">{safeText(row.role || row.position)}</em>
-        </span>
-      </span>
 
-      <span className="cap-contract-row__cell cap-contract-row__pos">{safeText(row.position)}</span>
-      <span className="cap-contract-row__cell">{row.age || "—"}</span>
-      <span className="cap-contract-row__cell cap-fa-league" title={row.current_team || row.current_league || ""}>
-        {safeText(row.current_league, "—")}
-      </span>
-      <span className="cap-contract-row__cell">{s.gp != null ? s.gp : "—"}</span>
-      <span className="cap-contract-row__cell">
-        <strong>{primaryStatValue(row)}</strong>
-        <em>{goalie ? "SV%" : "PTS"}</em>
-      </span>
-      <span className="cap-contract-row__cell cap-contract-row__ovr">
-        <strong>{ovr || "—"}</strong>
-        <em>OVR</em>
-      </span>
-      <span className="cap-contract-row__cell"><StockTrend row={row} /></span>
-      <span className="cap-contract-row__cell">
-        <strong>{formatMoneyM(row.asking_aav ?? row.askingAav)}</strong>
-        <em>{row.asking_term ? `${row.asking_term}yr` : ""}</em>
-      </span>
-    </button>
-  );
-}
 
-const FA_POS = [["all", "All"], ["C", "C"], ["LW", "LW"], ["RW", "RW"], ["D", "D"], ["G", "G"]];
-const FA_AGE = [["all", "Any age"], ["u23", "23 & under"], ["24-29", "24–29"], ["30+", "30+"]];
-const FA_OVR = [["all", "Any OVR"], ["80", "80+"], ["70", "70–79"], ["u70", "Under 70"]];
-
-function FreeAgentsTab({ data, onSelect, selectedId }) {
-  const [search, setSearch] = useState("");
-  const [pos, setPos] = useState("all");
-  const [age, setAge] = useState("all");
-  const [ovrBand, setOvrBand] = useState("all");
-
-  const rows = useMemo(() => {
-    let list = [...safeArray(data.free_agents)];
-
-    if (search.trim()) {
-      const q = search.trim().toLowerCase();
-      list = list.filter((r) =>
-        [r.name, r.position, r.current_league, r.role]
-          .map((v) => safeText(v, "").toLowerCase())
-          .join(" ")
-          .includes(q),
-      );
-    }
-
-    if (pos !== "all") list = list.filter((r) => String(r.position || "").toUpperCase() === pos);
-
-    if (age !== "all") {
-      list = list.filter((r) => {
-        const a = safeNum(r.age);
-        if (age === "u23") return a <= 23;
-        if (age === "24-29") return a >= 24 && a <= 29;
-        return a >= 30;
-      });
-    }
-
-    if (ovrBand !== "all") {
-      list = list.filter((r) => {
-        const o = safeNum(r.overall ?? r.ovr);
-        if (ovrBand === "80") return o >= 80;
-        if (ovrBand === "70") return o >= 70 && o < 80;
-        return o < 70;
-      });
-    }
-
-    // Default view leads with skaters (sorted by OVR); goalies fall to the bottom so the
-    // list isn't goalie-flooded. Filtering position to "G" surfaces goalies directly.
-    return list.sort((a, b) => {
-      const ga = String(a.position || "").toUpperCase() === "G" ? 1 : 0;
-      const gb = String(b.position || "").toUpperCase() === "G" ? 1 : 0;
-      if (ga !== gb) return ga - gb;
-      return safeNum(b.overall ?? b.ovr) - safeNum(a.overall ?? a.ovr);
-    });
-  }, [data.free_agents, search, pos, age, ovrBand]);
-
-  return (
-    <section className="cap-office-panel cap-board-panel cap-fa-panel">
-      <div className="cap-ledger-toolbar cap-board-toolbar cap-fa-toolbar">
-        <input
-          className="cap-search"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search free agents"
-        />
-        <select className="cap-fa-select" value={pos} onChange={(e) => setPos(e.target.value)} title="Filter by position">
-          {FA_POS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-        </select>
-        <select className="cap-fa-select" value={age} onChange={(e) => setAge(e.target.value)} title="Filter by age">
-          {FA_AGE.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-        </select>
-        <select className="cap-fa-select" value={ovrBand} onChange={(e) => setOvrBand(e.target.value)} title="Filter by overall">
-          {FA_OVR.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-        </select>
-      </div>
-
-      <FreeAgentHeader />
-
-      <div className="cap-contract-list cap-board-list cap-fa-list">
-        {rows.length ? (
-          rows.map((row) => (
-            <FreeAgentRow
-              key={row.player_id || row.id || row.name}
-              row={row}
-              onSelect={onSelect}
-              isSelected={selectedId === (row.player_id || row.id)}
-            />
-          ))
-        ) : (
-          <div className="cap-empty-state">No free agents match.</div>
-        )}
-      </div>
-    </section>
-  );
-}
-
-function FreeAgentDetailPanel({ row, detail, loading, onClose, onSign, busy, slots, capSpace }) {
-  if (!row) {
-    return (
-      <section className="cap-action-panel cap-action-panel--empty">
-        <p>Select a free agent to view projected-season stats and sign him.</p>
-      </section>
-    );
-  }
-
-  // Header comes from the light list row immediately; heavy stats load on demand.
-  const fa = detail?.free_agent || null;
-  const ovr = safeNum(row.overall ?? row.ovr);
-  const ask = safeNum(row.asking_aav ?? row.askingAav);
-  const term = safeNum(row.asking_term ?? row.askingTerm);
-  const goalie = isGoalieRow(fa || row);
-  const s = fa?.season_stats || null;
-  const prev = fa?.previous_season_stats || null;
-  const player = buildHeadshotPlayer(row);
-  const openSlots = safeNum(detail?.open_contract_slots ?? slots?.open, NaN);
-  const effCap = Number.isFinite(safeNum(detail?.cap_space_m, NaN)) ? safeNum(detail.cap_space_m) : capSpace;
-  const spaceOk = Number.isFinite(effCap) ? ask <= effCap : true;
-  const slotOk = Number.isFinite(openSlots) ? openSlots > 0 : true;
-  const eligible = spaceOk && slotOk;
-  const blocker = !spaceOk ? "Not enough cap space" : (!slotOk ? "No open contract slot" : null);
-
-  const capAfter = Number.isFinite(effCap) ? effCap - ask : null;
-
-  return (
-    <section className="cap-action-panel cap-fa-detail">
-      <button type="button" className="cap-action-panel__close" onClick={onClose} aria-label="Clear selection">
-        ×
-      </button>
-
-      <div className="cap-fa-detail__id">
-        <div className="cap-fa-detail__idhead">
-          <PlayerHeadshot player={player} size="md" className="cap-action-panel__headshot" />
-          <div className="cap-fa-detail__idtext">
-            <h3>{safeText(row.name, "Unnamed Player")}</h3>
-            <p>
-              {safeText(row.position)} · {row.age || "—"} · OVR {ovr || "—"}
-              {row.potential ? ` · POT ${row.potential}` : ""}
-            </p>
-            <p className="cap-fa-detail__where">
-              {safeText(row.current_team || row.current_league, "Unsigned")}
-              {row.current_team && row.current_league ? ` · ${row.current_league}` : ""}
-            </p>
-          </div>
-        </div>
-
-        <div className="cap-fa-detail__trendline">
-          <StockTrend row={fa || row} showLabel />
-          {fa?.stock_reason ? <span className="cap-fa-detail__reason">{fa.stock_reason}</span> : null}
-          <span
-            className="cap-fa-proj-tag"
-            title="Projected from the player's attributes and role — not live game-ledger results."
-          >
-            Projected
-          </span>
-        </div>
-      </div>
-
-      <div className="cap-fa-detail__body">
-        <div className="cap-fa-detail__block">
-          <h4 className="cap-fa-detail__blocktitle">
-            {fa?.season ? `${fa.season} season` : "This season"} · projected
-          </h4>
-          {loading || !s ? (
-            <div className="cap-fa-detail__loading">{loading ? "Loading stats…" : "No projection yet"}</div>
-          ) : (
-            <>
-              <div className="cap-action-panel__stats cap-fa-detail__stats">
-                {goalie ? (
-                  <>
-                    <div><span>GP</span><strong>{s.gp ?? "—"}</strong></div>
-                    <div><span>W</span><strong>{s.wins ?? "—"}</strong></div>
-                    <div><span title="Save percentage">SV%</span><strong>{formatSvPct(s.save_pct)}</strong></div>
-                    <div><span title="Goals-against average">GAA</span><strong>{formatGaa(s.gaa)}</strong></div>
-                    <div><span title="Shutouts">SO</span><strong>{s.shutouts ?? "—"}</strong></div>
-                  </>
-                ) : (
-                  <>
-                    <div><span>GP</span><strong>{s.gp ?? "—"}</strong></div>
-                    <div><span>G</span><strong>{s.goals ?? "—"}</strong></div>
-                    <div><span>A</span><strong>{s.assists ?? "—"}</strong></div>
-                    <div><span>PTS</span><strong>{s.points ?? "—"}</strong></div>
-                    <div><span title="Points per game">P/GP</span><strong>{s.ppg ?? "—"}</strong></div>
-                  </>
-                )}
-              </div>
-              {prev ? (
-                <p className="cap-fa-detail__prev">
-                  Last season ({safeText(fa.previous_season_league, "—")}):{" "}
-                  {goalie
-                    ? `${prev.gp || 0} GP · ${formatSvPct(prev.save_pct)} SV%`
-                    : `${prev.gp || 0} GP · ${prev.points || 0} PTS`}
-                </p>
-              ) : null}
-            </>
-          )}
-        </div>
-
-        <div className="cap-fa-detail__block">
-          <h4 className="cap-fa-detail__blocktitle">Contract & fit</h4>
-          <div className="cap-action-panel__stats cap-fa-detail__terms">
-            <div><span>Role</span><strong>{safeText(fa?.role || row.role)}</strong></div>
-            <div><span title="Asking average annual value">Ask AAV</span><strong>{formatMoneyM(ask)}</strong></div>
-            <div><span>Term</span><strong>{term ? `${term} yr` : "—"}</strong></div>
-            <div><span title="Projected cap space after this signing">Cap After</span><strong>{capAfter != null ? formatMoneyM(capAfter) : "—"}</strong></div>
-            <div><span title="Open contract slots">Slots</span><strong>{Number.isFinite(openSlots) ? `${openSlots} open` : "—"}</strong></div>
-          </div>
-          {fa ? (
-            <p className="cap-fa-detail__risk">
-              <span>Risk</span> {safeText(fa.risk)} <span>·</span> <span>Fit</span> {safeText(fa.fit)}
-            </p>
-          ) : null}
-        </div>
-      </div>
-
-      <div className="cap-fa-detail__cta">
-        <button
-          type="button"
-          className="cap-action-btn cap-action-btn--sign"
-          disabled={busy || !eligible}
-          onClick={() => onSign(row)}
-          title={blocker || "Offer the player his asking terms"}
-        >
-          {eligible ? "Sign Player" : (blocker || "Unavailable")}
-        </button>
-        {blocker ? <span className="cap-fa-detail__blocker">{blocker}</span> : null}
-      </div>
-    </section>
-  );
-}
 
 function CapTile({ label, value, danger = false }) {
   return (
@@ -1330,8 +1004,8 @@ export default function CapLedger() {
     setCapLedgerTab,
     capLedgerTab,
     refreshFranchise,
-    openFranchiseEvent,
-    onReopenOffseasonStage,
+    
+    
     pendingPromiseNav,
     setPendingPromiseNav,
   } = useGameUI();
@@ -1342,8 +1016,8 @@ export default function CapLedger() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
-  const [faDetail, setFaDetail] = useState(null);
-  const [faDetailLoading, setFaDetailLoading] = useState(false);
+  const [, setFaDetail] = useState(null);
+  const [, setFaDetailLoading] = useState(false);
   const [sheetDraft, setSheetDraft] = useState({ aav_m: "2.000", years: "4" });
   const [negotiateRow, setNegotiateRow] = useState(null);
 
@@ -1551,41 +1225,6 @@ export default function CapLedger() {
     }
   };
 
-  const handleSign = async (row) => {
-    const pid = row.player_id || row.id;
-
-    if (!pid) {
-      setError("Missing player id");
-      return;
-    }
-
-    setBusy(true);
-    setError("");
-
-    try {
-      const result = await signFreeAgent({
-        player_id: pid,
-        aav_m: safeNum(row.asking_aav ?? row.askingAav),
-        years: Math.max(1, safeNum(row.asking_term ?? row.askingTerm, 1)),
-      });
-
-      if (result?.office) {
-        setData(result.office);
-      } else {
-        await loadData();
-      }
-
-      if (!result?.ok) {
-        setError(result?.reason || "The player rejected the offer.");
-      } else {
-        setSelected(null);
-      }
-    } catch (e) {
-      setError(String(e?.message || "Signing failed"));
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const selectTab = (id) => {
     setSelected(null);

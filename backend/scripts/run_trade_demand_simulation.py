@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Simulate trade stability, agents, and crisis timers across 8 player/team scenarios."""
 
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 import json
 import sys
 import time
@@ -23,15 +23,7 @@ from app.sim_engine.franchise.player_agent_engine import (  # noqa: E402
     agent_public_view,
     ensure_player_agent,
 )
-from app.sim_engine.franchise.trade_stability_engine import (  # noqa: E402
-    apply_daily_stability_update,
-    apply_trade_hub_exposure,
-    formal_demand_eligible,
-    gather_player_concerns,
-    primary_complaint_from_pressures,
-    stability_to_escalation_level,
-    update_player_stability,
-)
+from app.sim_engine.franchise.trade_stability_engine import apply_daily_stability_update, apply_trade_hub_exposure, formal_demand_eligible, gather_player_concerns, update_player_stability
 from services.trade_demand_engine import (  # noqa: E402
     build_trade_demand_crisis_payload,
     evaluate_trade_demand_ntc_waiver,
@@ -556,7 +548,7 @@ def run_simulation():
             sync_trade_demand_crises(session, elapsed_hint=0)
 
             stage = int(book.get("crisis_stage") or 1)
-            payload = build_trade_demand_crisis_payload(session)
+            build_trade_demand_crisis_payload(session)
             print(
                 f"    [{label}] remaining={remaining:>3}s  stage={stage} "
                 f"({CRISIS_STAGE_LABELS.get(stage, '?')})  "

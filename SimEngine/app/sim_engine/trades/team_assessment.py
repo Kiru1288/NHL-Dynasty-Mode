@@ -21,9 +21,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from statistics import median
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 from app.sim_engine.trades.trade_asset import player_holds_nhl_spc, team_id_of
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Lineup model
@@ -52,6 +54,15 @@ SLOT_LABELS = {
 LINEUP_COUNTS = {"C": 4, "W": 8, "D": 6, "G": 2}
 #: OVR below the league median at a slot that counts as a full (1.0) need.
 NEED_FULL_GAP = 6.0
+#: How much each slot moves team strength (see trades/lineup_impact.py): the starting
+#: goalie most, then top-four D, then the bottom six and third pair, which play real
+#: minutes and count twice (line weight + the depth term). Needs are scaled by this.
+SLOT_NEED_WEIGHT: Dict[str, float] = {
+    "G_START": 1.45, "LD_TOP4": 1.1, "RD_TOP4": 1.1, "D_BOTTOM": 1.1,
+    "F_BOTTOM6": 1.1, "C_TOP2": 0.95, "W_TOP6": 0.85,
+}
+#: Top-unit-to-depth OVR gap above which the bottom of the lineup becomes a priority.
+DEPTH_DROPOFF_OVR = 10.0
 
 STATUS_CONTENDER = "contender"
 STATUS_BUBBLE = "bubble"
@@ -636,10 +647,22 @@ def assess_team(
         slot_avgs[slot] = avg
         a.slot_floor[slot] = floor
         gap = medians.get(slot, 70.0) - avg
-        need = max(0.0, min(1.0, gap / NEED_FULL_GAP))
+        need = max(0.0, min(1.0, gap / NEED_FULL_GAP * SLOT_NEED_WEIGHT.get(slot, 1.0)))
         if a.status == STATUS_CONTENDER or a.panic_buyer:
             need = min(1.0, need * 1.2 + (0.1 if gap > -1.5 else 0.0))  # contenders chase marginal upgrades
         a.needs[slot] = round(need, 3)
+    # A big drop from the top unit to the bottom of the lineup is a hole even when the
+    # bottom matches the league median: depth decides the 82-game race.
+    f_top = (slot_avgs.get("C_TOP2", 70.0) + slot_avgs.get("W_TOP6", 70.0)) / 2.0
+    d_top = (slot_avgs.get("LD_TOP4", 70.0) + slot_avgs.get("RD_TOP4", 70.0)) / 2.0
+    f_drop = f_top - slot_avgs.get("F_BOTTOM6", 70.0)
+    d_drop = d_top - slot_avgs.get("D_BOTTOM", 70.0)
+    if f_drop > DEPTH_DROPOFF_OVR and a.status != STATUS_TANK:
+        a.needs["F_BOTTOM6"] = round(min(1.0, a.needs.get("F_BOTTOM6", 0.0) + (f_drop - DEPTH_DROPOFF_OVR) / 8.0), 3)
+        a.notes.append("Top-heavy forward group — needs bottom-six help")
+    if d_drop > DEPTH_DROPOFF_OVR and a.status != STATUS_TANK:
+        a.needs["D_BOTTOM"] = round(min(1.0, a.needs.get("D_BOTTOM", 0.0) + (d_drop - DEPTH_DROPOFF_OVR) / 8.0), 3)
+        a.notes.append("Thin third pair")
     # Injury holes hit hardest where the lineup has no cover.
     try:
         from app.sim_engine.economy.team_needs import _injury_need_boost
@@ -654,7 +677,7 @@ def assess_team(
             for s in ("C_TOP2", "W_TOP6"):
                 a.needs[s] = max(a.needs[s], float(boost["top_line_forward"]) * 0.8)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     a.surplus, a.spend_prospects = _find_surplus(
         team, lineup, status=a.status, slot_avgs=slot_avgs, medians=medians, cap_tight=a.cap_tight,
@@ -714,7 +737,7 @@ def assess_league(
     try:
         setattr(league, "_cpu_form", _FORM)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     medians = _league_slot_medians(teams)
     table = _standings_table(league, teams)
     out = {
@@ -731,7 +754,7 @@ def assess_league(
             {"day": int(calendar_cursor), "by_team": out, "medians": medians, "n_trades": len(getattr(league, "trade_history", None) or [])},
         )
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return out
 
 

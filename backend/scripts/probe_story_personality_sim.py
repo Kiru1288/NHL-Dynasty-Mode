@@ -191,9 +191,8 @@ def dump_life(session, roster) -> None:
 
 
 def dump_storylines(session) -> None:
-    uid = str(session.user_team_id)
+    str(session.user_team_id)
     events = list(getattr(session, "storyline_events", None) or [])
-    user = [s for s in events if str(s.get("team_id") or s.get("team") or "") in ("", uid) or True]
     personal = [
         s
         for s in events

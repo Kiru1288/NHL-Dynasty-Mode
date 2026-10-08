@@ -51,10 +51,11 @@ If your actual entities differ, either:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
-from typing import Any, Dict, List, Optional, Tuple, Callable
-import math
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Tuple
 import random
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -367,8 +368,8 @@ def build_team_draft_board(
 
     for p in prospects:
         pid = str(get_attr(p, "pid", get_attr(p, "id", "")))
-        name = str(get_attr(p, "name", pid))
-        pos = str(get_attr(p, "position", "N/A"))
+        str(get_attr(p, "name", pid))
+        str(get_attr(p, "position", "N/A"))
 
         # "truth-ish" signal, then perception noise
         base = _prospect_base_value(p)
@@ -557,7 +558,7 @@ def try_trade_up(
         return None
 
     # Choose a partner (someone ahead of you)
-    possible_slots = list(range(pick_idx, lookahead + 1))
+    list(range(pick_idx, lookahead + 1))
     # trading "up" means lower index
     partner_idx = pick_idx - rng.randint(1, min(4, pick_idx)) if pick_idx > 0 else None
     if partner_idx is None:
@@ -949,7 +950,7 @@ def draft_sim(
                     league_code=str(get_attr(chosen_obj, "league_code", get_attr(chosen_obj, "league", "")) or ""),
                 )
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         pick_idx += 1
 
     narratives = build_narratives(picks, consensus_rank, cfg)

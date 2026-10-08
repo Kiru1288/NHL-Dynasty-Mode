@@ -104,7 +104,7 @@
   border-bottom: 1px solid rgba(156, 218, 236, 0.07);
   font-variant-numeric: tabular-nums;
 }
-.dcb-test-table td span { display: block; font-size: 10px; color: #607789; }
+.dcb-test-table td span { display: block; font-size: 11px; color: #607789; }
 .dcb-test-table td.who { text-align: left; }
 .dcb-test-table td.who strong { display: block; }
 .dcb-test-table td.hi { color: #52df94; }

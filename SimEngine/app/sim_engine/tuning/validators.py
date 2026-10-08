@@ -9,6 +9,8 @@ import random
 from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 
 from app.sim_engine.tuning.era_modifiers import resolve_era_profile
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 
 def _ovr(p: Any) -> float:
@@ -79,7 +81,7 @@ def validate_league_state(
                 all_ovr.append(_ovr(p))
                 n_players += 1
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
 
     if n_players == 0:
         report["issues"].append("zero_active_players")
@@ -134,7 +136,7 @@ def validate_league_state(
                 try:
                     ranked.append((p, _ovr(p)))
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
         ranked.sort(key=lambda x: x[1], reverse=True)
         for p, ov in ranked[:6]:
             if ov < 0.93:
@@ -186,7 +188,7 @@ def validate_league_state(
             prev = float(getattr(league, "_pipeline_dev_boost_one_year", 1.0) or 1.0)
             setattr(league, "_pipeline_dev_boost_one_year", max(prev, 1.065))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     elif prospect_total < thin_threshold and world_ok:
         report["fixes"].append(
             f"pipeline_org_shallow_world_ok org={prospect_total} world_dev={world_inv} effective~{effective_pipe}"
@@ -232,7 +234,7 @@ def validate_team(team: Any, league_state: Optional[Mapping[str, Any]] = None) -
     cap_space = getattr(team, "cap_space", None)
     if cap_hit is not None and cap_space is not None:
         try:
-            ch, cs = float(cap_hit), float(cap_space)
+            cs = float(cap_space)
             if cs < -2_000_000:
                 report["issues"].append("severe_cap_over")
                 factor = 0.985
@@ -242,7 +244,7 @@ def validate_team(team: Any, league_state: Optional[Mapping[str, Any]] = None) -
                         try:
                             setattr(c, "aav", max(750_000.0, float(c.aav) * factor))
                         except Exception:
-                            pass
+                            _swallowed_log.debug("suppressed exception", exc_info=True)
                 report["fixes"].append("soft_contract_trim")
         except (TypeError, ValueError):
             pass

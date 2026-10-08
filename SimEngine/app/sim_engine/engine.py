@@ -31,6 +31,8 @@ import os
 import random
 import re
 import time
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 
 # Set True, or export NHL_DEBUG_STATS_PIPELINE=1, for verbose stat ledger tracing.
@@ -43,6 +45,13 @@ _ENV_DEBUG_STATS_PIPELINE: bool = os.environ.get("NHL_DEBUG_STATS_PIPELINE", "")
     "true",
     "yes",
 )
+
+
+def _stable_hash(value):
+    """Process-stable replacement for built-in hash() (salted per process via PYTHONHASHSEED)."""
+    import hashlib as _hl
+
+    return int.from_bytes(_hl.sha256(str(value).encode("utf-8")).digest()[:8], "big", signed=True)
 
 
 def _stats_pipeline_debug() -> bool:
@@ -92,8 +101,36 @@ _GM_STRENGTH_MATCHUP_GOAL_K = 1.85
 _GM_STRENGTH_GAME_GOAL_SIGMA = 1.26
 _GM_STRENGTH_MATCHUP_SIGMA_DAMP = 0.52
 _GM_STRENGTH_TIEBREAK_SKILL_K = 0.48
+# Starting tier of each franchise in Generated Players mode (edit freely). Offsets are
+# added to every generated player's target OVR (0-1 scale), so a contender is deeper
+# top to bottom, not just one star richer.
+GENERATED_FRANCHISE_TIERS: Dict[str, str] = {
+    "FLA": "contender", "EDM": "contender", "CAR": "contender", "DAL": "contender", "COL": "contender",
+    "VGK": "contender", "WPG": "contender", "TBL": "contender", "WSH": "contender", "TOR": "contender",
+    "LAK": "playoff", "NJD": "playoff", "MIN": "playoff", "OTT": "playoff", "MTL": "playoff",
+    "STL": "playoff", "UTA": "playoff", "NYR": "playoff", "VAN": "playoff",
+    "CGY": "bubble", "DET": "bubble", "NYI": "bubble", "CBJ": "bubble", "BOS": "bubble", "PIT": "bubble",
+    "SEA": "bubble", "ANA": "bubble", "BUF": "bubble", "NSH": "bubble", "PHI": "bubble",
+    "SJS": "rebuild", "CHI": "rebuild",
+}
+GENERATED_TIER_OVR_OFFSET: Dict[str, float] = {"contender": 0.040, "playoff": 0.018, "bubble": 0.0, "rebuild": -0.040}
+
+# Raw team-strength gap that maps to ~0.20 of game-model strength (see _build_strength_map).
+STRENGTH_MAP_RAW_SCALE = 0.085
 # Goal/+/- context: mostly line/pair, remainder talent/usage spread.
 _GM_SCORING_LINE_UNIT_BLEND = 0.80
+
+# Superstar goal-claim curve (per goal, before line selection). Smooth from 88 OVR:
+# 88 -> 0, 90 -> ~0.03, 93 -> ~0.08, 95 -> ~0.11, 97 -> ~0.15, 99 -> ~0.19.
+_GM_SUPERSTAR_TEAM_CLAIM_CAP = 0.26
+
+
+def _gm_superstar_goal_claim(ovr_0_100: float) -> float:
+    over = float(ovr_0_100) - 88.0
+    if over <= 0.0:
+        return 0.0
+    return float(min(0.20, 0.0125 * over ** 1.15))
+
 
 
 # -------------------------------
@@ -151,35 +188,7 @@ except Exception:  # pragma: no cover
 # -------------------------------
 # Entities
 # -------------------------------
-from app.sim_engine.entities.player import (
-    Player,
-    Position,
-    Shoots,
-    IdentityBio,
-    BackstoryUpbringing,
-    BackstoryType,
-    UpbringingType,
-    SupportLevel,
-    PressureLevel,
-    DevResources,
-    PersonalityTraits,
-    ATTRIBUTE_KEYS,
-    OFFENSE_KEYS,
-    PASSING_KEYS,
-    DEFENSE_KEYS,
-    IQ_KEYS,
-    PHYS_KEYS,
-    SKATING_KEYS,
-    GOALIE_KEYS,
-    clamp_rating,
-    compute_ovr,
-    assign_skater_archetype,
-    archetype_from_generation_profile,
-    ALIASES,
-    DEFAULT_NHL_RATING,
-    random_height_cm,
-    sanitize_height_cm,
-)
+from app.sim_engine.entities.player import Player, Position, Shoots, IdentityBio, BackstoryUpbringing, BackstoryType, UpbringingType, SupportLevel, PressureLevel, DevResources, PersonalityTraits, ATTRIBUTE_KEYS, OFFENSE_KEYS, PASSING_KEYS, DEFENSE_KEYS, IQ_KEYS, PHYS_KEYS, SKATING_KEYS, GOALIE_KEYS, clamp_rating, compute_ovr, assign_skater_archetype, archetype_from_generation_profile, ALIASES, DEFAULT_NHL_RATING, sanitize_height_cm
 from app.sim_engine.entities.team import Team, TeamArchetype
 from app.sim_engine.entities.league import League
 from app.sim_engine.entities.coach import Coach, CoachRole, generate_coach
@@ -254,15 +263,7 @@ from app.sim_engine.entities.contract import (
 # -------------------------------
 # Scouting System
 # -------------------------------
-from app.sim_engine.draft.scouting import (
-    create_scout,
-    create_scouting_department,
-    update_scouting,
-    build_team_draft_board,
-    LeagueContextSnapshot,
-    Region,
-    ScoutRole,
-)
+from app.sim_engine.draft.scouting import create_scout, create_scouting_department, update_scouting, LeagueContextSnapshot, Region, ScoutRole
 
 
 
@@ -683,7 +684,7 @@ def _infer_player_potential_01(player: Any, rng: random.Random) -> float:
                 pf /= 99.0
             return max(0.35, min(0.99, pf))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     try:
         ovr = float(player.ovr()) if callable(getattr(player, "ovr", None)) else 0.62
@@ -774,7 +775,7 @@ def finalize_created_player_for_game_ledger(
         try:
             ctx.current_team_id = str(team_id)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     setattr(player, "current_team_id", str(team_id))
     setattr(player, "team_id", str(team_id))
@@ -789,7 +790,7 @@ def finalize_created_player_for_game_ledger(
     try:
         assign_career_phase_from_age(player)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     ensure_player_playstyle(player)
     _ensure_player_stat_containers(player)
@@ -799,7 +800,7 @@ def finalize_created_player_for_game_ledger(
 
         ensure_player_headshot(player)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     setattr(player, "_game_ledger_ready", True)
     setattr(player, "_ledger_player_id", pid)
@@ -814,7 +815,7 @@ def _invoke_nhl_promotion_contract_hook(league: Any, player: Any, team: Any, sea
     try:
         hook(player, team, league, int(season_year))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _invoke_roster_make_room_hook(league: Any, team: Any, incoming_player: Any, season_year: int) -> bool:
@@ -881,9 +882,9 @@ def _make_room_before_promotion(
             worst.buried = True
             worst.in_minors = True
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def build_role_shaped_ratings(
@@ -1164,7 +1165,7 @@ def _apply_cap_hit_m_to_player(player: Any, millions: float) -> None:
         if hasattr(c, "salary_aav"):
             setattr(c, "salary_aav", m * 1_000_000.0)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def nudge_team_payroll_toward_cap_target(
@@ -1322,7 +1323,7 @@ def update_team_strategy(
     try:
         setattr(team, "_tuning_trade_aggression", float(trade_m))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return s
 
 
@@ -1642,7 +1643,7 @@ def apply_cap_pressure_effects(team: Any, *, salary_cap_m: Optional[float] = Non
             elif character <= 35 and mult < 1.0:
                 mult = 1.0 - ((1.0 - mult) * 1.20)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
         affected_players += 1
         avg_multiplier += (mult - 1.0)
@@ -1670,7 +1671,7 @@ def apply_cap_pressure_effects(team: Any, *, salary_cap_m: Optional[float] = Non
                 cur = float(getattr(st, "team_morale", 0.5) or 0.5)
                 setattr(st, "team_morale", max(0.12, cur - 0.035))
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
 
         for player in _team_roster_players(team):
             if getattr(player, "retired", False):
@@ -1684,7 +1685,7 @@ def apply_cap_pressure_effects(team: Any, *, salary_cap_m: Optional[float] = Non
                 m = float(getattr(psych, "morale", 0.5) or 0.5)
                 setattr(psych, "morale", max(0.15, m - 0.017))
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 # --- Career lifecycle (major progression: resolve_authoritative_major_progression_event) ---
@@ -1930,7 +1931,7 @@ def _career_apply_rating_delta_0_100(player: Any, delta_0_100: float) -> None:
         try:
             ratings[k] = clamp_rating(float(ratings[k]) + probe_amt)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     probed = _ovr99()
     for k, v in saved.items():
         if v is not None:
@@ -1967,12 +1968,12 @@ def _career_apply_rating_delta_0_100(player: Any, delta_0_100: float) -> None:
             else:
                 ratings[k] = new_val
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     try:
         setattr(player, "_rating_round_carry", carry)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _career_clamp_ovr_window(player: Any, lo: float = 40.0, hi: float = 99.0) -> None:
@@ -2058,7 +2059,7 @@ def _lifecycle_bump_breakout(league: Any) -> None:
     try:
         setattr(league, "_lifecycle_used_breakouts", int(getattr(league, "_lifecycle_used_breakouts", 0)) + 1)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 # Console-only trace for diagnosing duplicate/legacy breakout paths (keep False in production).
@@ -2140,7 +2141,7 @@ def reset_career_breakout_season_flags(teams: Any) -> None:
                 setattr(pl, "major_progression_event_this_season", None)
                 setattr(pl, "_lifecycle_ovr_before_special", None)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _late_bloom_trajectory_allows(player: Any, ovr100: float) -> bool:
@@ -2619,7 +2620,7 @@ def resolve_authoritative_major_progression_event(
                     setattr(player, "_special_progression_last_season_year", sy)
                     setattr(player, "_special_progression_last_positive_mag", float(applied_bo))
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             if league is not None:
                 try:
                     setattr(
@@ -2639,7 +2640,7 @@ def resolve_authoritative_major_progression_event(
                             int(getattr(league, "_prog_top_breakouts_used", 0) or 0) + 1,
                         )
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
             o_post = career_ovr_0_100(player)
             _emit_special_enforcement_line(
                 pname=pname,
@@ -2700,7 +2701,7 @@ def resolve_authoritative_major_progression_event(
                     setattr(player, "_special_progression_last_season_year", sy)
                     setattr(player, "_special_progression_last_positive_mag", float(applied_lb))
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             if league is not None:
                 try:
                     setattr(
@@ -2715,7 +2716,7 @@ def resolve_authoritative_major_progression_event(
                             int(getattr(league, "_prog_top_late_blooms_used", 0) or 0) + 1,
                         )
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
             o_post = career_ovr_0_100(player)
             _emit_special_enforcement_line(
                 pname=pname,
@@ -2745,7 +2746,7 @@ def resolve_authoritative_major_progression_event(
             setattr(player, "progression_event_this_season", "bust_trend")
             setattr(player, "major_progression_event_this_season", "bust_trend")
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         if league is not None:
             try:
                 setattr(
@@ -2754,7 +2755,7 @@ def resolve_authoritative_major_progression_event(
                     int(getattr(league, "_prog_global_busts_used", 0) or 0) + 1,
                 )
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         o_post = career_ovr_0_100(player)
         _emit_authoritative_progression_debug(
             f"DEBUG PROGRESSION:\n  player={pname} season={sy} event=bust_trend\n"
@@ -2775,7 +2776,7 @@ def resolve_authoritative_major_progression_event(
             setattr(player, "progression_event_this_season", "major_decline")
             setattr(player, "major_progression_event_this_season", "major_decline")
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         o_post = career_ovr_0_100(player)
         _emit_authoritative_progression_debug(
             f"DEBUG PROGRESSION:\n  player={pname} season={sy} event=major_decline\n"
@@ -2826,7 +2827,7 @@ def _lifecycle_bump_decline(league: Any) -> None:
     try:
         setattr(league, "_lifecycle_used_declines", int(getattr(league, "_lifecycle_used_declines", 0)) + 1)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def breakout_check(
@@ -2873,23 +2874,29 @@ def late_bloomer_check(
 
 
 def _aging_v3_base_decline_chance(age: int) -> float:
+    # Steady curve: most players 30+ lose a little every year (was 28%*0.55 = ~15%,
+    # so most veterans never aged and a few fell off a cliff).
     if age <= 24:
         return 0.0
     if age <= 29:
         return 0.12
+    if age <= 31:
+        return 0.55
     if age <= 33:
-        return 0.28
+        return 0.70
     if age <= 36:
-        return 0.42
-    return 0.58
+        return 0.80
+    return 0.88
 
 
 def prime_league_season_aging_v3(league: Any, total_players: int) -> None:
-    """Reset global aging budget for one season (max ~18% of roster can log a decline)."""
+    """Reset global aging budget for one season (safety cap only: ~45% of roster).
+
+    It was 18%, so whoever was processed first declined and everyone after was immune."""
     if league is None:
         return
     tp = max(0, int(total_players))
-    mx = int(tp * 0.18)
+    mx = int(tp * 0.45)
     if tp > 0 and mx < 1:
         mx = 1
     try:
@@ -2898,7 +2905,7 @@ def prime_league_season_aging_v3(league: Any, total_players: int) -> None:
         setattr(league, "_max_aging_events", mx)
         setattr(league, "_season_aging_v3_primed", True)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def prime_league_season_breakout_v3(
@@ -2935,7 +2942,7 @@ def prime_league_season_breakout_v3(
         if season_year is not None:
             setattr(league, "_progression_season_year", int(season_year))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     if _LOG_SPECIAL_PROGRESSION_ENFORCEMENT:
         print(
             f"PROGRESSION ENFORCE: seasonal_prime year={season_year} "
@@ -2987,7 +2994,7 @@ def apply_league_ovr_soft_regression_if_needed(
                 if oa > ob + 0.004:
                     continue
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         # Protect young breakout / momentum paths from broad inflation clawbacks.
         try:
             age = int(getattr(getattr(pl, "identity", None), "age", None) or getattr(pl, "age", 99) or 99)
@@ -2997,7 +3004,7 @@ def apply_league_ovr_soft_regression_if_needed(
             if age <= 23:
                 continue
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         lo_mag = 0.5
         hi_mag = min(1.5, 0.5 + scale * 1.0)
         if hi_mag < lo_mag:
@@ -3052,11 +3059,11 @@ def _career_aging_decline_try_v3(
         decline_chance = 0.0
     else:
         base = _aging_v3_base_decline_chance(age)
-        decline_chance = base * 0.55
+        decline_chance = base
         if age <= 29:
             decline_chance *= 0.4
         if ovr >= 90.0:
-            decline_chance *= 0.5
+            decline_chance *= 0.75
         decline_chance = max(0.0, min(0.92, decline_chance))
 
     if decline_chance <= 0.0:
@@ -3083,7 +3090,9 @@ def _career_aging_decline_try_v3(
             decline_amount = -float(rng.uniform(1.4, 1.9))
 
     if ovr >= 90.0:
-        decline_amount *= 0.7
+        decline_amount *= 0.8
+    if age >= 32:
+        decline_amount *= 1.3
 
     if age < 34:
         decline_amount = max(decline_amount, -1.8)
@@ -3257,7 +3266,7 @@ def run_career_lifecycle_for_player(
     try:
         setattr(player, "_lifecycle_ovr_before_special", float(career_ovr_0_100(player)))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     major = resolve_authoritative_major_progression_event(
         player, rng, macro=macro, league=league, season_year=sy
@@ -3328,7 +3337,7 @@ def _normalize_era_key(era: Any) -> str:
         try:
             return str(era.value).lower().replace("-", "_")
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     return str(era).lower().replace("-", "_").replace(" ", "_")
 
 
@@ -3398,7 +3407,7 @@ def assign_team_coach_profile(team: Any, rng: random.Random) -> Tuple[int, str]:
         try:
             coach.job_security = float(clamp((rating - 55) / 90.0, 0.35, 0.92))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         try:
             if ct == "elite":
                 coach.development.skill_growth_multiplier = min(
@@ -3412,7 +3421,7 @@ def assign_team_coach_profile(team: Any, rng: random.Random) -> Tuple[int, str]:
                     0.82, float(coach.development.skill_growth_multiplier) - 0.06
                 )
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     return rating, ct
 
 
@@ -3433,7 +3442,11 @@ def team_identity_strength_multiplier(team: Any, era: Any) -> float:
         "veteran_structured": 1.022,
     }.get(sys, 1.0)
     cm = coach_type_strength_multiplier(team)
-    return float(max(0.86, min(1.14, era_m * skew * cm)))
+    # System/era fit and coaching are a nudge, not the roster: the raw product swung team
+    # strength ±12% (5x the whole spread of roster talent), so whichever clubs drew a
+    # run-and-gun coach in a speed era became juggernauts — a different team every save.
+    raw = era_m * skew * cm - 1.0
+    return float(1.0 + max(-0.03, min(0.03, raw * 0.3)))
 
 
 def team_identity_win_pct_nudge(team: Any, era: Any) -> float:
@@ -3482,13 +3495,13 @@ def _scale_player_keys(player: Any, keys: Sequence[str], factor: float) -> None:
                 try:
                     ratings[k] = clamp_rating(float(ratings[k]) * factor)
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
         return
     for k in keys:
         try:
             set_fn(k, float(get_fn(k, 50)) * factor)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def apply_team_system_effects(team: Any, year_tag: Optional[int] = None) -> None:
@@ -3517,7 +3530,7 @@ def apply_team_system_effects(team: Any, year_tag: Optional[int] = None) -> None
                 try:
                     h.injury_risk_baseline = float(clamp(float(getattr(h, "injury_risk_baseline", 0.2)) * 1.04, 0.05, 0.95))
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
         elif sys == "young_fast":
             if career_player_age(player) < 25:
                 _scale_player_keys(player, SKATING_KEYS, 1.012)
@@ -3566,7 +3579,7 @@ def player_offense_defense_proxy(player: Any) -> Tuple[float, float]:
             df = float(ga.get("defense", 50)) + 0.25 * float(ga.get("physical", 50))
             return off, df
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         o = float(player.ovr()) * 100.0
     except Exception:
@@ -4339,7 +4352,7 @@ def _player_position_label(p: Any) -> str:
         if hasattr(pos, "value"):
             return str(pos.value).upper()
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     ident = getattr(p, "identity", None)
     if ident is not None:
         pv = getattr(ident, "position", None)
@@ -4363,7 +4376,7 @@ def _avg_keys_01(player: Any, keys: List[str]) -> float:
 def _player_playstyle_seed_u01(player: Any) -> float:
     ident = getattr(player, "identity", None)
     nm = str(getattr(ident, "name", None) or getattr(player, "name", None) or id(player))
-    h = abs(hash(nm)) % 10_007
+    h = abs(_stable_hash(nm)) % 10_007
     return (h % 1000) / 1000.0
 
 
@@ -4482,7 +4495,7 @@ def calculate_line_chemistry(line: List[Any], team: Any = None, pair_memo: Optio
             score100 = float(calculate_forward_line_chemistry(line, context=chem_ctx).get("chemistry", 50))
         return clamp(score100 / 100.0, 0.26, 0.91)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     for p in line:
         ensure_player_playstyle(p)
     styles = [str(getattr(p, "playstyle", "two_way") or "two_way").lower() for p in line]
@@ -4582,7 +4595,7 @@ def apply_line_chemistry_effects(line: List[Any], chemistry: float) -> None:
                     cur = float(getattr(psych, "morale", 0.5) or 0.5)
                     setattr(psych, "morale", max(0.12, cur - psych_hit))
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
     for player in line:
         r = getattr(player, "ratings", None)
         if not isinstance(r, dict):
@@ -4683,7 +4696,7 @@ def _optimize_forward_line_assignments(team: Any, league: Any, rng: random.Rando
             try:
                 ctx.line_assignment = None
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
     arch = _runner_arch_for_team(league, team)
     pool = list(fw)
     pool.sort(key=_player_ovr01, reverse=True)
@@ -4720,7 +4733,7 @@ def _optimize_forward_line_assignments(team: Any, league: Any, rng: random.Rando
                 try:
                     ctx.line_assignment = label
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
     extra = 5
     while len(pool) >= 2 and extra <= 8:
         label = f"L{extra}"
@@ -4732,7 +4745,7 @@ def _optimize_forward_line_assignments(team: Any, league: Any, rng: random.Rando
                 try:
                     ctx.line_assignment = label
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
         extra += 1
 
 
@@ -4892,7 +4905,7 @@ def run_line_chemistry_pass(league: Any) -> List[Dict[str, Any]]:
     try:
         setattr(league, "_player_archetype_assignment_logs", list(arch_logs))
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return report
 
 
@@ -5127,7 +5140,7 @@ def assign_player_roles_percentile(players: Sequence[Any]) -> int:
                 setattr(p, "role", role)
                 setattr(p, "role_narrative", narr)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
     return moved
 
 
@@ -6054,7 +6067,7 @@ def _assign_franchise_team_personality(team: Any, rng: random.Random) -> None:
         else:
             team.state.status = _TS.BUBBLE
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 # =====================================================================
@@ -6325,6 +6338,13 @@ class SimEngine:
 
         GEN_P, ELITE_P, STAR_P = 0.003, 0.018, 0.045
         used_names: Set[str] = set()
+        # Generated players still sit on real franchises: contenders start deeper than
+        # rebuilders (with a little per-save wobble), instead of a fresh lottery each save.
+        tier_off_by_team: Dict[int, float] = {}
+        for _ti, _tm in enumerate(self.league.teams):
+            _abbr = str(getattr(_tm, "abbreviation", None) or getattr(_tm, "abbr", "") or "").upper()
+            _tier = GENERATED_FRANCHISE_TIERS.get(_abbr, "bubble")
+            tier_off_by_team[_ti] = GENERATED_TIER_OVR_OFFSET.get(_tier, 0.0) + rng.uniform(-0.008, 0.008)
 
         for team_idx, team in enumerate(self.league.teams):
             if not hasattr(team, "roster") or team.roster is None:
@@ -6337,7 +6357,7 @@ class SimEngine:
             team.roster.clear()
             team.scratches.clear()
 
-            team_id = _safe_team_id_for_player_creation(team, team_idx)
+            _safe_team_id_for_player_creation(team, team_idx)
 
             tier_cycle = [ovr_tiers[(team_idx * 7 + i) % len(ovr_tiers)] for i in range(roster_size)]
             rng.shuffle(tier_cycle)
@@ -6365,6 +6385,8 @@ class SimEngine:
 
                     if roll >= GEN_P + ELITE_P:
                         target_ovr = min(target_ovr, 0.89)
+                    # Franchise tier after the caps, so it isn't clipped away.
+                    target_ovr = max(0.5, min(0.97, target_ovr + tier_off_by_team.get(team_idx, 0.0)))
 
                     age_lo, age_hi = age_order[slot_idx]
                     age = rng.randint(age_lo, age_hi)
@@ -6437,7 +6459,7 @@ class SimEngine:
                         try:
                             setattr(player, "_generated_profile", gen_profile)
                         except Exception:
-                            pass
+                            _swallowed_log.debug("suppressed exception", exc_info=True)
 
                     finalize_created_player_for_game_ledger(
                         player,
@@ -6471,7 +6493,7 @@ class SimEngine:
 
             enforce_league_ovr_distribution_from_league(self.league, rng=rng)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     # --------------------------------------------------
     # Injection
@@ -6523,7 +6545,7 @@ class SimEngine:
                 DevelopmentSystem.PREP,
             ]
         )
-        seed_val = abs(hash(f"GP|{year}|{age}|{bucket}|{rng.random()}")) % (2**31 - 1) or 1
+        seed_val = abs(_stable_hash(f"GP|{year}|{age}|{bucket}|{rng.random()}")) % (2**31 - 1) or 1
         # Height/weight must be correlated (a 6'5" prospect can't be 150 lb). Reuse the
         # shared position/age-aware body generator instead of two independent rolls.
         from app.sim_engine.generation.prospect_body import (
@@ -6651,11 +6673,11 @@ class SimEngine:
                     f"europe={hist0.get('EUROPE', 0)} unsigned={hist0.get('UNSIGNED', 0)}"
                 )
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             try:
                 self.ensure_prospect_pipeline_depth(year, rng)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             return hist0
 
         arch_map: Dict[str, str] = {}
@@ -6663,7 +6685,7 @@ class SimEngine:
             setattr(self.league, "_global_pool_spike_cap", max(22, min(78, 20 + len(gp) // 48)))
             setattr(self.league, "_global_pool_spike_count", 0)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
         nxt: List[Any] = []
         hist: Dict[str, int] = {"JUNIOR": 0, "MINOR_LEAGUE": 0, "EUROPE": 0, "UNSIGNED": 0}
@@ -6772,13 +6794,13 @@ class SimEngine:
                 f"yearly_intake_juniors={n_in}"
             )
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         try:
             setattr(self.league, "_last_global_junior_skill_delta", float(j_gain))
             setattr(self.league, "_last_global_europe_skill_delta", float(eu_gain))
             setattr(self.league, "_last_global_yearly_intake", int(n_in))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         return hist
 
     def _select_global_draft_class(self, rng: random.Random, year: int, target_n: int) -> List[Prospect]:
@@ -6895,7 +6917,7 @@ class SimEngine:
         try:
             setattr(self.league, "_last_signing_late_bloom_count", int(n_late))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         return signed
 
     def _count_global_draft_eligibles(self) -> int:
@@ -6935,7 +6957,7 @@ class SimEngine:
                     f"ECOSYSTEM REPAIR: emergency_draft_eligible_injection n={added} year={year}"
                 )
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         return added
 
     def reclassify_stale_prospect_pipelines(self, rng: random.Random) -> int:
@@ -6984,7 +7006,7 @@ class SimEngine:
                     f"PROSPECT LIFECYCLE: stale_pipeline_reclassified_or_returned n={moves}"
                 )
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         return moves
 
     def ecosystem_operational_repairs(self, teams: Sequence[Any], rng: random.Random, year: int) -> List[str]:
@@ -7042,7 +7064,7 @@ class SimEngine:
         try:
             setattr(self.league, "_last_ecosystem_snapshot", snap)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         logs.append(
             "PIPELINE_HEALTH active_nhl={active_nhl} global_pool={global_pool} eligibles={draft_eligibles_18_21} "
             "pipeline={pipeline_total} u23_on_rosters={roster_u23}".format(**snap)
@@ -7112,7 +7134,7 @@ class SimEngine:
                     f"SIGNING REPORT: global_pool_signings={signing_n} late_bloom_subpath~{lb}"
                 )
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
         if not global_class:
             self._pipeline_log_buffer.append(
@@ -7129,7 +7151,7 @@ class SimEngine:
                 setattr(self.league, "_last_draft_class_quality", "empty_pool")
                 setattr(self.league, "_last_draft_class_strength_mean10", 0.0)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             self._last_draft_class_size = 0
             self._last_draft_class_top_ovr = 0.0
             self._last_draft_class_tier_counts = {k: 0 for k in ("elite", "high", "mid", "depth", "longshot")}
@@ -7146,7 +7168,7 @@ class SimEngine:
             try:
                 p.lock_draft_year_outputs(estimated_class_size=max(len(global_class), int(self.DRAFT_CLASS_SIZE_MIN)))
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         self.draft_class = global_class
         for p in global_class:
             if p not in self.prospects:
@@ -7192,7 +7214,7 @@ class SimEngine:
             setattr(self.league, "_last_draft_class_strength_top", float(top_ovr))
             setattr(self.league, "_last_draft_class_strength_mean10", float(strength_mean_mid))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         if not hasattr(self.league, "draft_pool"):
             self.league.draft_pool = []
         self.league.draft_pool = list(global_class)
@@ -7315,7 +7337,7 @@ class SimEngine:
         try:
             mult *= float(getattr(self.league, "_pipeline_dev_boost_one_year", 1.0) or 1.0)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         t_arch = "balanced"
         pscore = 0.52
         if team is None:
@@ -7430,7 +7452,7 @@ class SimEngine:
                     else:
                         setattr(self.league, "_pipeline_spike_count", spike_used + 1)
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
             else:
                 growth *= rng.uniform(1.12, 1.62)
         elif dev_phase == "REGRESSION":
@@ -7471,7 +7493,7 @@ class SimEngine:
                 setattr(prospect, "_pool_inseason_spent", 0.0)
                 setattr(prospect, "_pool_season_plan", None)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         ceil = float(getattr(prospect, "_pipeline_ceiling", hi))
         fl = float(getattr(prospect, "_pipeline_floor", lo))
         lo = max(0.35, min(0.97, lo + growth * 0.55))
@@ -7697,7 +7719,7 @@ class SimEngine:
                         y = int(getattr(pr, "development_years_remaining", 2) or 2)
                         pr.development_years_remaining = max(0, y - 1)
                     except Exception:
-                        pass
+                        _swallowed_log.debug("suppressed exception", exc_info=True)
                     dr = getattr(pr, "draft_value_range", None)
                     if dr and len(dr) >= 2:
                         try:
@@ -7707,7 +7729,7 @@ class SimEngine:
                                 min(0.97, hi + rng.uniform(0.004, 0.018)),
                             )
                         except Exception:
-                            pass
+                            _swallowed_log.debug("suppressed exception", exc_info=True)
         health = "stable"
         tot = sum(len(getattr(t, "prospect_pool", None) or []) for t in teams)
         cap = max(1, len(teams) * 14)
@@ -7725,7 +7747,7 @@ class SimEngine:
                 try:
                     setattr(tm, "prospect_pipeline_score", 0.38)
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
                 continue
             mids: List[float] = []
             for pr in pool:
@@ -7738,7 +7760,7 @@ class SimEngine:
             try:
                 setattr(tm, "prospect_pipeline_score", sum(mids) / len(mids) if mids else 0.45)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
 
     def _trim_team_prospect_pipeline_for_cap(self, team: Any, gpp: List[Any], rng: random.Random) -> None:
         cap = int(self.NHL_PROSPECT_PIPELINE_CAP)
@@ -7773,7 +7795,7 @@ class SimEngine:
                     f"PIPELINE CAP: {nm} returned to global_player_pool (team_cap={cap})"
                 )
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
 
     def run_universe_draft(
         self,
@@ -7826,14 +7848,14 @@ class SimEngine:
         try:
             self.reclassify_stale_prospect_pipelines(self.rng)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         total_pool = sum(len(getattr(t, "prospect_pool", None) or []) for t in teams)
         cap_spikes = max(7, min(58, 7 + total_pool // 38))
         try:
             setattr(self.league, "_pipeline_spike_cap", int(cap_spikes))
             setattr(self.league, "_pipeline_spike_count", 0)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         arch_map: Dict[str, str] = {}
         raw_arch = getattr(self.league, "_promotion_team_archetypes", None) or {}
         if isinstance(raw_arch, dict):
@@ -7866,7 +7888,7 @@ class SimEngine:
         try:
             setattr(self.league, "_pipeline_dev_boost_one_year", 1.0)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     def _assign_drafted_rookies_to_rosters(self, rng: random.Random, year: int) -> int:
         """Convert last_draft_results player_payloads into Player entities and add to team rosters."""
@@ -7920,13 +7942,13 @@ class SimEngine:
                 age = year - birth_year
                 birth_country = str(identity_dict.get("birth_country", "Canada"))
                 birth_city = str(identity_dict.get("birth_city", "Unknown"))
-                height_cm = sanitize_height_cm(identity_dict.get("height_cm", 180), rng, position)
-                weight_kg = int(identity_dict.get("weight_kg", 85))
                 pos_val = identity_dict.get("position", "C")
                 if hasattr(pos_val, "value"):
                     pos_val = pos_val.value
                 pos_val = str(pos_val) if pos_val else "C"
                 position = Position(pos_val) if pos_val in ("C", "LW", "RW", "D", "G") else Position.C
+                height_cm = sanitize_height_cm(identity_dict.get("height_cm", 180), rng, position)
+                weight_kg = int(identity_dict.get("weight_kg", 85))
                 shoots_val = identity_dict.get("shoots", "R")
                 if hasattr(shoots_val, "value"):
                     shoots_val = shoots_val.value
@@ -7963,7 +7985,7 @@ class SimEngine:
 
                     ensure_player_headshot(player)
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
                 player.context.current_team_id = str(team_id)
                 _arches = [
                     "FAST_RISER",
@@ -8075,7 +8097,7 @@ class SimEngine:
                     if y > 0:
                         prospect.development_years_remaining = max(0, y - 1)
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
 
     def _compute_promotion_target(self, league: Any) -> Tuple[int, str]:
         teams = getattr(league, "teams", None) or []
@@ -8113,7 +8135,6 @@ class SimEngine:
         age: int,
         potential: float,
     ) -> bool:
-        MAX_ROSTER = 23
         try:
             roster = getattr(team, "roster", None)
             if roster is None:
@@ -8142,7 +8163,7 @@ class SimEngine:
             try:
                 self._pipeline_log_buffer.append(f"PROMOTION EVENT: Pool player promoted to NHL: {name}")
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             return True
         except Exception:
             return False
@@ -8159,7 +8180,6 @@ class SimEngine:
         age: int,
         potential: float,
     ) -> bool:
-        MAX_ROSTER = 23
         if not callable(getattr(prospect, "convert_to_player_payload", None)):
             return self._promote_existing_player_from_pool(
                 team,
@@ -8272,7 +8292,7 @@ class SimEngine:
                     try:
                         setattr(player, _attr, getattr(prospect, _attr))
                     except Exception:
-                        pass
+                        _swallowed_log.debug("suppressed exception", exc_info=True)
             setattr(player, "_bust_pressure", float(getattr(prospect, "_bust_pressure", 0.08) or 0.08))
             setattr(player, "_steal_momentum", float(getattr(prospect, "_steal_momentum", 0.06) or 0.06))
             a_age = int(year - birth_year)
@@ -8291,7 +8311,7 @@ class SimEngine:
                     f"early_promotion_risk={'high' if early else 'normal'}"
                 )
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             try:
                 ceil = float(getattr(prospect, "_pipeline_ceiling", 0.0) or 0.0)
                 if ceil >= 0.62:
@@ -8300,7 +8320,7 @@ class SimEngine:
                 else:
                     setattr(player, "potential", min(0.99, max(float(ovr) * 1.06, float(ovr) + 0.02)))
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             roster = getattr(team, "roster", None)
             if roster is None:
                 team.roster = []
@@ -8329,7 +8349,7 @@ class SimEngine:
                     f"PROMOTION EVENT: Prospect promoted to NHL: {name} (OVR {ovr:.2f})"
                 )
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             return True
         except Exception:
             return False
@@ -8628,7 +8648,7 @@ class SimEngine:
             setattr(league, "_last_rookie_entries_via_promotion", int(count))
             setattr(league, "_promotion_cycles_completed", promo_cycles + 1)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         return count, promoted_ages, promoted_potentials
 
     def apply_progression_rebalance(self, rng: random.Random) -> None:
@@ -8689,7 +8709,6 @@ class SimEngine:
         Released players are removed from roster (free agents if league tracks them).
         Returns total number of players removed across all teams.
         """
-        r = rng if rng is not None else self.rng
         teams = getattr(self.league, "teams", None) or []
         prune_ctx = getattr(self.league, "_age_balance_prune", None) or {}
         pu = float(prune_ctx.get("pct_u24", 25.0))
@@ -8892,7 +8911,7 @@ class SimEngine:
             econ_ctx["cap_floor"] = float(getattr(self.league, "cap_floor_m", cap_row.get("lowerLimit", 68.0)))
             econ_ctx["cap_growth_rate"] = float(getattr(self.league, "cap_growth_rate", 0.05))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
         # ------------------------------------
 # Build season-level stat engines from league context
@@ -9251,14 +9270,14 @@ class SimEngine:
                 try:
                     result.contract.term_years = ty
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
             inf = calculate_contract_inflation(self.league)
             self.contract_years_left = int(getattr(result.contract, "term_years", ty))
             self.contract_aav = float(result.contract.salary_aav) * float(inf)
             try:
                 result.contract.salary_aav = float(self.contract_aav)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             cap_for_afford_m = float(cap)
             if cap_for_afford_m > 200.0:
                 cap_for_afford_m = cap_for_afford_m / 1_000_000.0
@@ -9273,7 +9292,7 @@ class SimEngine:
                 try:
                     result.contract.salary_aav = float(self.contract_aav)
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
             self.contract_clause = str(result.contract.clauses.clause_type.value)
         else:
             # unsigned: player might be "in limbo"
@@ -9333,7 +9352,7 @@ class SimEngine:
             for g, v in self.player.group_averages().items():
                 print(f"{g:22s}: {v:.3f}")
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
         print("\n[PERSONALITY TRAITS]")
         for k, v in vars(self.player.traits).items():
@@ -9526,8 +9545,6 @@ class SimEngine:
         need_goalie = 0.5
         if goalies < 2:
             need_goalie += 0.5
-        avg_age = (age_sum / age_count) if age_count else 27.0
-        age_pressure = (avg_age - 27.0) / 10.0
         bucket = str(getattr(team, "bucket", getattr(team, "status", "bubble"))).lower()
         if "contend" in bucket or "contender" in bucket:
             window = 1.0
@@ -10006,7 +10023,7 @@ class SimEngine:
                 setattr(self.player, "progression_event_this_season", None)
                 setattr(self.player, "major_progression_event_this_season", None)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         try:
             self.season_aging_events = int(getattr(self.league, "_season_aging_events", 0) or 0)
             self.season_player_count = int(getattr(self.league, "_season_player_count", tp) or tp)
@@ -10014,15 +10031,16 @@ class SimEngine:
             self.season_breakouts = int(getattr(self.league, "_season_breakout_events", 0) or 0)
             self.max_breakouts = int(getattr(self.league, "_max_season_breakouts", 0) or 0)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         # Draft-year locking for eligible prospects
         for p in self.prospects:
             if p.phase == ProspectPhase.DRAFT_YEAR:
                 p.lock_draft_year_outputs()
 
-        print("\n==============================")
-        print(f"      SIM YEAR {self.year}")
-        print("==============================")
+        if os.environ.get("SIM_VERBOSE"):
+            print("\n==============================")
+            print(f"      SIM YEAR {self.year}")
+            print("==============================")
 
         # --------------------------------------------------
         # 0. League macro
@@ -10033,7 +10051,6 @@ class SimEngine:
                 # --------------------------------------------------
         # Initialize waiver priority for season
         # --------------------------------------------------
-        league_ctx = self.last_league_context or {}
         season_ctx = {
             "day": 1,
             "standings_current": getattr(self.league, "teams", []),
@@ -10275,13 +10292,13 @@ class SimEngine:
                 season_year=int(getattr(self, "year", 0) or 0),
             )
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         try:
             _teams = list(getattr(getattr(self, "league", None), "teams", None) or [])
             if _teams:
                 apply_league_ovr_soft_regression_if_needed(_teams, self.rng)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
                             # Example: random waiver test for depth player
         if self.player.ovr() < 0.42 and self.rng.random() < 0.15:
@@ -10449,8 +10466,9 @@ class SimEngine:
 
     def _line_composite_strength_multiplier(self, team: Any) -> float:
         lc = self._runner_line_composite_for_team(team)
-        m = 0.88 + 0.28 * lc
-        return max(0.90, min(1.10, m))
+        # Chemistry helps at the margins (±2%); it used to swing ±10% including a random jitter.
+        m = 1.0 + (lc - 0.62) * 0.10
+        return max(0.98, min(1.02, m))
 
     def _unit_mean_ovr01(self, players: Sequence[Any]) -> float:
         vals = [self._gm_ovr_0_100(p) / 99.0 for p in (players or []) if p is not None]
@@ -10471,15 +10489,16 @@ class SimEngine:
         while len(pairs) < 3:
             pairs.append([])
         style = self._gm_deployment_style(team)
+        # All four lines and three pairs play real minutes and give up real goals.
         if style == "rolling_four":
-            lw = (0.28, 0.26, 0.24, 0.22)
-            pw = (0.36, 0.33, 0.31)
+            lw = (0.27, 0.26, 0.25, 0.22)
+            pw = (0.35, 0.33, 0.32)
         elif style == "top_heavy":
-            lw = (0.38, 0.28, 0.20, 0.14)
-            pw = (0.44, 0.33, 0.23)
+            lw = (0.34, 0.28, 0.22, 0.16)
+            pw = (0.41, 0.33, 0.26)
         else:
-            lw = (0.32, 0.27, 0.23, 0.18)
-            pw = (0.39, 0.33, 0.28)
+            lw = (0.29, 0.26, 0.24, 0.21)
+            pw = (0.36, 0.33, 0.31)
         f_score = sum(lw[i] * self._unit_mean_ovr01(lines[i]) for i in range(4))
         d_score = sum(pw[i] * self._unit_mean_ovr01(pairs[i]) for i in range(3))
         goalies = self._gm_goalies(team)
@@ -10493,12 +10512,18 @@ class SimEngine:
         p3 = self._unit_mean_ovr01(pairs[2])
         depth = (l3 + l4 + p3) / 3.0
         # Rolling four with real bottom-six/3rd-pair talent beats star-and-dropoff clubs.
+        # A thin bottom six / third pair gets exposed over 82 games, whoever is on line one.
+        top = (self._unit_mean_ovr01(lines[0]) + self._unit_mean_ovr01(pairs[0])) / 2.0
+        dropoff = max(0.0, (top - depth) - 0.08)
         if style == "rolling_four":
-            depth_adj = (depth - 0.76) * 0.22
+            depth_adj = (depth - 0.76) * 0.30 - dropoff * 0.10
         elif style == "top_heavy":
-            depth_adj = (depth - 0.76) * 0.16 - max(0.0, 0.78 - depth) * 0.20
+            depth_adj = (depth - 0.76) * 0.24 - dropoff * 0.22 - max(0.0, 0.78 - depth) * 0.10
         else:
-            depth_adj = (depth - 0.76) * 0.18
+            depth_adj = (depth - 0.76) * 0.27 - dropoff * 0.15
+        # Leaning on the top lines costs legs over 82 games (and late in games); rolling
+        # four keeps everyone fresh. Shortening the bench only pays when the bottom is bad.
+        depth_adj += {"rolling_four": 0.004, "top_heavy": -0.007}.get(style, 0.0)
         return float(max(0.22, min(0.96, 0.46 * f_score + 0.36 * d_score + 0.18 * g_score + depth_adj)))
 
     def _preseason_line_synergy_refresh(self, teams: List[Any], rng: random.Random) -> None:
@@ -10554,7 +10579,7 @@ class SimEngine:
         try:
             setattr(team, "_gm_toi_drift_by_player", drift_map)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     def _team_strength(self, team: Any) -> float:
         """0..1 strength: stars matter, but 4 lines / 3 pairs are in the score."""
@@ -10567,8 +10592,8 @@ class SimEngine:
             comp_f = depth_s
         if comp_f > 1.5:
             comp_f = comp_f / 99.0
-        # Top-end identity still counts, but cannot erase a real bottom six / 3rd pair.
-        base = 0.38 * max(0.2, min(1.0, comp_f)) + 0.62 * depth_s
+        # Top-end talent (best-12 average) still counts, but the full lineup decides it.
+        base = 0.15 * max(0.2, min(1.0, comp_f)) + 0.85 * depth_s
         sm, _ = self._identity_runner_strength_noise_factors(team)
         cm = self._runner_cap_strength_multiplier(team)
         tid_m = team_identity_strength_multiplier(team, self._active_era_str())
@@ -10586,7 +10611,7 @@ class SimEngine:
                 if ae is not None and hasattr(ae, "value"):
                     return str(ae.value)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         return ""
 
     def _build_strength_map(self, teams: List[Any]) -> Dict[str, float]:
@@ -10600,15 +10625,15 @@ class SimEngine:
             if tid is None:
                 tid = f"T{idx:02d}"
             m[str(tid)] = self._team_strength(t)
-        # Roster averages sit in a narrow band, so raw strength made every club
-        # a coin flip. Stretch the league from the worst team to the best.
-        if len(m) >= 8:
+        # Map raw strength to the game model on a fixed scale around the league average.
+        # The old min-max stretch always made the best club (even by a hair) a 0.82 and
+        # the worst a 0.30 — a 90% matchup — so tiny or random gaps became dynasties.
+        if m:
             vals = list(m.values())
-            lo, hi = min(vals), max(vals)
-            span = max(0.025, hi - lo)
+            mean = sum(vals) / len(vals) if len(vals) >= 4 else 0.82
             for tid, v in list(m.items()):
-                t = (float(v) - lo) / span
-                m[tid] = 0.30 + t * 0.52
+                z = (float(v) - mean) / STRENGTH_MAP_RAW_SCALE
+                m[tid] = 0.56 + 0.26 * math.tanh(z)
         return m
 
     def _narrative_team_goal_sigma_multiplier(self, team: Any) -> float:
@@ -10759,12 +10784,11 @@ class SimEngine:
             tier_mult = 1.0 + (tier_mult - 1.0) * 0.42
         elif usage < 1.45:
             tier_mult = 1.0 + (tier_mult - 1.0) * 0.72
-        if ovr99 >= 93 and pos != "D":
-            tier_mult = max(tier_mult, 2.35)
-        elif ovr99 >= 90 and pos != "D":
-            tier_mult = max(tier_mult, 1.95)
-        # 90+ forwards have to be otherworldly, not just another first-liner.
-        cap = 3.05 if ovr99 >= 93 else (2.45 if ovr99 >= 90 else 1.78)
+        # Smooth superstar floor/cap (was a hard cliff at 90/93 that only the
+        # very top pair ever cleared in practice).
+        if ovr99 >= 88 and pos != "D":
+            tier_mult = max(tier_mult, min(2.35, 1.20 + 0.12 * (ovr99 - 86.0)))
+        cap = min(3.05, 1.78 + 0.13 * max(0.0, ovr99 - 88.0))
         return float(max(0.85, min(cap, tier_mult * self._gm_franchise_alloc_mult(
             p, "overall_equivalent", "effort", "shot_involvement", "assist_involvement"
         ))))
@@ -10841,11 +10865,59 @@ class SimEngine:
                         elite_ids.add(pid)
         setattr(self.league, "_scoring_elite_player_ids", elite_ids)
 
+    def _scoring_carryover_mult(self, p: Any, year: int) -> float:
+        """Season-to-season production memory.
+
+        Last season's points vs. what a player of his rating was expected to post
+        (stamped league-wide at rollover by the development pass) carries into this
+        season's scoring weight. A breakout year follows up with more of the same;
+        a dud year starts a little colder. Blended with the previous carryover so
+        multi-year trends persist, and idempotent per season year.
+        """
+        try:
+            if getattr(p, "_scoring_carryover_year", None) == int(year):
+                return float(getattr(p, "_scoring_carryover_mult", 1.0) or 1.0)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+        prev = float(getattr(p, "_scoring_carryover_mult", 1.0) or 1.0)
+        pts = getattr(p, "_dev_season_points", None)
+        exp = getattr(p, "_dev_expected_season_points", None)
+        try:
+            gp = int(getattr(p, "gp", 0) or getattr(p, "games_played", 0) or 0)
+        except Exception:
+            gp = 0
+        if pts is None or exp is None or float(exp or 0) <= 3.0 or gp < 20:
+            new = 1.0 + (prev - 1.0) * 0.5
+        else:
+            # +6 shrinks small-sample flukes toward 1.0.
+            ratio = (float(pts) + 6.0) / (float(exp) + 6.0)
+            weight = min(1.0, gp / 70.0)
+            signal = (ratio - 1.0) * 0.55 * weight
+            new = 1.0 + 0.70 * signal + 0.30 * (prev - 1.0)
+        new = float(max(0.86, min(1.20, new)))
+        try:
+            setattr(p, "_scoring_carryover_mult", round(new, 4))
+            setattr(p, "_scoring_carryover_year", int(year))
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+        return new
+
     def _roll_historic_scoring_seasons(self, teams: List[Any], rng: random.Random, year: int) -> None:
         """Rare GOAT/historic seasons — requires talent, usage, health, and team context."""
         for tm in teams:
             off_ctx = self._team_offense_skill(tm)
             for p in self._gm_skaters(tm):
+                prev_hist = getattr(p, "_historic_scoring_season", None)
+                prev_hist_year = getattr(p, "_historic_scoring_season_year", None)
+                prev_surge = getattr(p, "_surge_scoring_season", None)
+                prev_surge_year = getattr(p, "_surge_scoring_season_year", None)
+                same_year_reroll = (prev_hist_year == int(year)) or (prev_surge_year == int(year))
+                # Was last season special? (a same-year re-roll keeps the prior carry signal)
+                hot_last_year = bool(
+                    (prev_hist and (prev_hist_year == int(year) - 1 or same_year_reroll))
+                    or (prev_surge and (prev_surge_year == int(year) - 1 or same_year_reroll))
+                )
+                carry = self._scoring_carryover_mult(p, year)
                 setattr(p, "_historic_scoring_season", None)
                 setattr(p, "_surge_scoring_season", None)
                 if self._injury_sidelined(p):
@@ -10856,8 +10928,15 @@ class SimEngine:
                 except Exception:
                     ovr = 70.0
                 usage = self._gm_role_usage_mult(p)
-                if tier in ("normal", "elite") and 78.0 <= ovr < 86.0 and usage >= 1.52:
-                    if rng.random() < 0.028:
+                if tier in ("normal", "elite") and 78.0 <= ovr < 86.0 and usage >= 1.30:
+                    # Breakouts follow up: a hot prior season (or strong carryover)
+                    # makes another surge far likelier than a cold 2.8% roll.
+                    surge_p = 0.028 if usage >= 1.52 else 0.0
+                    if hot_last_year:
+                        surge_p = max(surge_p, 0.30)
+                    elif carry >= 1.08:
+                        surge_p = max(surge_p, 0.028 + (carry - 1.0) * 0.9)
+                    if rng.random() < surge_p:
                         setattr(p, "_surge_scoring_season", "breakout")
                         setattr(p, "_surge_scoring_season_year", int(year))
                 if tier == "normal":
@@ -10875,6 +10954,9 @@ class SimEngine:
                 base_p *= (0.72 + 0.36 * off_ctx) * (0.80 + 0.32 * conf)
                 if usage >= 1.95:
                     base_p *= 1.18
+                if hot_last_year:
+                    base_p *= 1.75
+                base_p *= max(0.6, carry) ** 2
                 if rng.random() >= base_p:
                     continue
                 if tier == "goat" and rng.random() < 0.07:
@@ -11697,6 +11779,8 @@ class SimEngine:
         pt = self._gm_player_type_str(p)
         nudge = 1.02 if "playmaker" in pt else (1.01 if "sniper" in pt or "finisher" in pt else 1.0)
         val = max(0.04, (base + star_curve * 0.42) * usage * nudge * depth_penalty)
+        # Prior-season production memory (stamped at season start).
+        val *= float(getattr(p, "_scoring_carryover_mult", 1.0) or 1.0)
         val *= self._gm_franchise_alloc_mult(
             p, "overall_equivalent", "effort", "composure", "offensive_awareness", "readiness_ovr_delta"
         )
@@ -12150,15 +12234,12 @@ class SimEngine:
             return bonus
 
         fw.sort(key=_line_sort_key, reverse=True)
-        lines: List[List[Any]] = [[], [], [], []]
-        n = len(fw)
-        if n > 0:
-            q = max(1, (n + 3) // 4)
-            idx = 0
-            for li in range(4):
-                chunk = fw[idx : idx + q]
-                idx += len(chunk)
-                lines[li] = chunk
+        # Dress twelve forwards in lines of three, best first. (It used to split however
+        # many forwards were on the roster into four equal chunks: 13 forwards became
+        # lines of 4/4/4/1, so the scratch played and the fourth line was one man.)
+        lines: List[List[Any]] = [fw[i * 3 : i * 3 + 3] for i in range(4)]
+        # Pairs best-first too; roster order put a healthy scratch on the top pair.
+        defs.sort(key=_line_sort_key, reverse=True)
         return lines, defs
 
     def _gm_saved_lines_payload(self, team: Any) -> Optional[Dict[str, Any]]:
@@ -12217,7 +12298,7 @@ class SimEngine:
                 if hit is not None:
                     return hit
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         return None
 
     def _gm_note_lineup_fallback(self, team: Any, reason: str) -> None:
@@ -12225,7 +12306,7 @@ class SimEngine:
         try:
             setattr(team, "_franchise_lineup_fallback", str(reason))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     def _gm_try_resolve_saved_lineup(self, team: Any) -> Optional[Dict[str, Any]]:
         """
@@ -13483,16 +13564,7 @@ class SimEngine:
         home_b2b: bool = False,
         away_b2b: bool = False,
     ) -> Dict[str, Any]:
-        from app.sim_engine.gameplay.game_analytics_ledger import (
-            CHANCE_TYPE_RAW_XG,
-            credit_assist_xa,
-            credit_shot_attempt_event,
-            pick_chance_type,
-            pick_chance_type_for_shooter,
-            raw_xg_for_chance,
-            resolve_goal_probability,
-            validate_game_integrity,
-        )
+        from app.sim_engine.gameplay.game_analytics_ledger import CHANCE_TYPE_RAW_XG, credit_assist_xa, credit_shot_attempt_event, pick_chance_type_for_shooter, raw_xg_for_chance, resolve_goal_probability, validate_game_integrity
 
         strength_map = strength_map or {}
         home_dressed, home_gl, home_scratches, _ = self._gm_build_dressed_lineup(home, rng)
@@ -13852,9 +13924,8 @@ class SimEngine:
                     atk_team, def_team = home, away
                     atk_sk, def_sk = home_dressed, away_dressed
                     atk_units, def_units = home_units, away_units
-                    atk_gl, def_gl = home_gl, away_gl
+                    def_gl = away_gl
                     tid, oid = hid, aid
-                    score_state = 0.12 if reg_home < reg_away else (-0.08 if reg_home > reg_away else 0.0)
                 else:
                     if not chronological:
                         sk_h, sk_a = _manpower_at(game_sec_elapsed)
@@ -13867,9 +13938,8 @@ class SimEngine:
                     atk_team, def_team = away, home
                     atk_sk, def_sk = away_dressed, home_dressed
                     atk_units, def_units = away_units, home_units
-                    atk_gl, def_gl = away_gl, home_gl
+                    def_gl = home_gl
                     tid, oid = aid, hid
-                    score_state = 0.12 if reg_away < reg_home else (-0.08 if reg_away > reg_home else 0.0)
 
                 atk_unit, _ = self._gm_on_ice_unit(atk_units, strength, rng)
                 def_unit, _ = self._gm_on_ice_unit(def_units, "PK" if strength == "PP" else ("PP" if strength == "SH" else "EV"), rng)
@@ -14574,7 +14644,7 @@ class SimEngine:
             try:
                 setattr(tm, "_gm_hub_mult_by_player", hub_map)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
 
         home_starter = (
             self._gm_select_starting_goalie(
@@ -14646,9 +14716,9 @@ class SimEngine:
                 except Exception:
                     shoot = ovr_n
                 try:
-                    passing = float(self._gm_rating_avg(p, PASSING_KEYS)) / 99.0
+                    pass
                 except Exception:
-                    passing = ovr_n
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
                 role = self._gm_role_usage_mult(p)
                 hub = self._gm_scoring_hub_bonus(p, team)
                 fin = self._gm_finishing_adjustment(p)
@@ -14733,19 +14803,28 @@ class SimEngine:
             line_share = (0.34, 0.29, 0.22, 0.15)
             pair_share = (0.46, 0.34, 0.20)
 
+            # Superstar factor: every elite forward (not just a hardcoded 98+ pair)
+            # gets a smooth, OVR-scaled direct claim on team goals. Shares are
+            # capped per team so two stars on one club split the pie instead of
+            # doubling it.
+            star_claims: List[Tuple[Any, float]] = []
+            for _sp in fw_pool:
+                _sh = _gm_superstar_goal_claim(self._gm_ovr_0_100(_sp))
+                if _sh > 0.0:
+                    star_claims.append((_sp, _sh))
+            star_total = sum(c for _, c in star_claims)
+            star_scale = (
+                min(1.0, _GM_SUPERSTAR_TEAM_CLAIM_CAP / star_total) if star_total > 0 else 0.0
+            )
+
             def _pick_scorer() -> Any:
-                # 98-overall forwards are a different tier from a 96 winger.
-                # McDavid and Draisaitl take a real slice of the goals instead of
-                # splitting a normal top line with everyone else.
-                titans = [p for p in fw_pool if self._gm_ovr_norm(p) >= 0.982]
                 use_d = bool(d_pool) and rng.random() < 0.17
-                if titans and not use_d and rng.random() < (0.20 if len(titans) == 1 else 0.42):
-                    # Two franchise forwards share this. Full shot-weight was
-                    # giving it all to one of them; a coin flip left the other behind.
-                    ordered = sorted(titans, key=self._gm_ovr_norm, reverse=True)
-                    if len(ordered) == 1 or rng.random() < 0.55:
-                        return ordered[0]
-                    return rng.choice(ordered[1:])
+                if star_claims and not use_d and rng.random() < star_total * star_scale:
+                    return rng.choices(
+                        [sp for sp, _ in star_claims],
+                        weights=[c for _, c in star_claims],
+                        k=1,
+                    )[0]
                 pool = d_pool if use_d else (fw_pool or skaters)
                 if not pool:
                     pool = skaters
@@ -14769,10 +14848,16 @@ class SimEngine:
                 bi = rng.choices([0, 1, 2, 3], weights=weights_f, k=1)[0]
                 return _pick_weighted_live(buckets_f[bi], off_w, 0.85, balance_role="score")
 
+            # PP share of goals follows the club's PP threat (was a flat 21% for everyone).
+            try:
+                _pp_d = float(self._team_pp_danger(team))
+            except Exception:
+                _pp_d = 0.55
+            pp_goal_p = max(0.14, min(0.30, 0.21 * (0.60 + 0.75 * _pp_d)))
             for _ in range(goals):
                 scorer = _pick_scorer()
                 gkw: Dict[str, Any] = {"g": 1}
-                if rng.random() < 0.21:
+                if rng.random() < pp_goal_p:
                     gkw["ppg"] = 1
                     ppg_tagged += 1
                 self._gm_ledger_add(ledger, scorer, tid, **gkw)
@@ -14793,18 +14878,18 @@ class SimEngine:
                         break
                     bucket = ast_prim_w if i_a == 0 else ast_sec_w
                     d_choices = [p for p in remaining if self._gm_is_defense(p)]
-                    scorer_is_titan = (
-                        not self._gm_is_defense(scorer) and self._gm_ovr_norm(scorer) >= 0.982
+                    # Star-on-star chemistry: when an elite forward scores and another
+                    # elite forward is on his unit, that partner is favoured for the
+                    # primary — but it is a lean, not an automatic point.
+                    scorer_is_star = (
+                        not self._gm_is_defense(scorer) and self._gm_ovr_0_100(scorer) >= 90.0
                     )
                     partner = [
-                        p for p in remaining
-                        if not self._gm_is_defense(p) and self._gm_ovr_norm(p) >= 0.982
+                        p for p in linemates
+                        if not self._gm_is_defense(p) and self._gm_ovr_0_100(p) >= 90.0
                     ]
-                    # When one of McDavid or Draisaitl scores, the other gets the
-                    # primary assist. They do not take the primary on everyone else's goals.
-                    if i_a == 0 and scorer_is_titan and partner:
-                        best = max(partner, key=self._gm_ovr_norm)
-                        assister = best
+                    if i_a == 0 and scorer_is_star and partner and rng.random() < 0.45:
+                        assister = max(partner, key=self._gm_ovr_norm)
                     elif i_a == d_assist_slot and d_choices:
                         assister = _pick_weighted_live(d_choices, bucket, 1.05, balance_role="assist")
                     elif i_a == 0 and linemates and rng.random() < _GM_SCORING_LINE_UNIT_BLEND:
@@ -14968,15 +15053,11 @@ class SimEngine:
                         base_w *= 1.35
                     elif ovr_n >= 0.86:
                         base_w *= 1.15
-                elif ovr_n >= 0.95:
-                    # Floor so a second superstar on the same line is not squeezed to ordinary shots.
-                    base_w = max(base_w, 0.48) * 1.85
-                elif ovr_n >= 0.92:
-                    base_w = max(base_w, 0.36) * 1.5
-                elif ovr_n >= 0.88:
-                    base_w *= 1.55
-                elif ovr_n >= 0.84:
-                    base_w *= 1.22
+                elif ovr_n >= 0.82:
+                    # Smooth star shot curve; floor keeps a second star on the
+                    # same line from being squeezed to ordinary volume.
+                    star_floor = max(0.0, ovr_n - 0.88) * 4.4
+                    base_w = max(base_w, star_floor) * (1.0 + (ovr_n - 0.82) * 5.5)
                 sog_w.append(max(0.06, base_w))
             shares = self._gm_distribute_integer_shares(rng, sog_w, sog_n)
             for p, n in zip(skaters, shares):
@@ -15165,9 +15246,13 @@ class SimEngine:
             team_ca: int,
             team_xgf: float,
             team_xga: float,
+            team_sf: int = 0,
+            team_sa: int = 0,
         ) -> None:
             if not skaters:
                 return
+            _xden = float(team_xgf) + float(team_xga)
+            game_xgf_pct = (float(team_xgf) / _xden) if _xden > 0 else 0.5
             cf_weights: List[float] = []
             ca_weights: List[float] = []
             for p in skaters:
@@ -15195,24 +15280,51 @@ class SimEngine:
                     fa=round(team_ca * ca_share * 0.78, 3),
                     xgf=round(team_xgf * cf_share, 4),
                     xga=round(team_xga * ca_share, 4),
+                    on_ice_shots_for=round(float(team_sf) * cf_share, 3),
+                    on_ice_shots_against=round(float(team_sa) * ca_share, 3),
+                    xgf_pct_sum=round(game_xgf_pct, 4),
+                    xgf_pct_gp=1,
+                    analytics_gp=1,
                 )
 
-        _alloc_possession(home_sk, home_toi, hid, home_cf_n, home_ca_n, home_xgf_n, home_xga_n)
-        _alloc_possession(away_sk, away_toi, aid, away_cf_n, away_ca_n, away_xgf_n, away_xga_n)
+        _alloc_possession(home_sk, home_toi, hid, home_cf_n, home_ca_n, home_xgf_n, home_xga_n, home_sog_n, away_sog_n)
+        _alloc_possession(away_sk, away_toi, aid, away_cf_n, away_ca_n, away_xgf_n, away_xga_n, away_sog_n, home_sog_n)
 
         # Special-teams counting for light boxes (CPU–CPU). Without this, Stats Central
         # PP%/PK% only reflect the handful of full-event games vs the user club.
         def _light_ppo(ppg: int) -> int:
-            # ~21% conversion ⇒ PPO ≈ PPG / 0.21, with NHL-like 2–4 chances.
-            if ppg <= 0:
-                return max(1, int(round(rng.gauss(2.7, 0.8))))
-            base = max(ppg + 1, int(round(ppg / 0.21)))
-            return max(ppg, min(7, base + rng.randint(0, 1)))
+            # Chances come from the opponent's discipline, not from how many PP
+            # goals were scored — so PP% reflects actual PP quality instead of
+            # every club converging on 21%.
+            draw = int(round(rng.gauss(3.0, 1.0)))
+            return max(ppg, max(1, min(7, draw)))
 
         home_ppo = _light_ppo(home_ppg)
         away_ppo = _light_ppo(away_ppg)
 
+        # Penalty minutes: each opponent PP chance is one infraction by this club,
+        # plus the odd coincidental minor / fighting major that grants no PP.
+        def _light_pim(offenders: List[Any], tid: str, n_pp: int) -> int:
+            if not offenders:
+                return 0
+            total = 0
+            n_extra = 1 if rng.random() < 0.22 else 0
+            for i in range(int(n_pp) + n_extra):
+                if i < int(n_pp):
+                    mins = int(rng.choices([2, 4], weights=[0.86, 0.14], k=1)[0])
+                else:
+                    mins = int(rng.choices([2, 5], weights=[0.7, 0.3], k=1)[0])
+                who = self._gm_pick_weighted(rng, offenders, self._gm_penalty_risk_weight)
+                self._gm_ledger_add(ledger, who, tid, pim=mins)
+                total += mins
+            return total
+
+        home_pim = _light_pim(list(home_sk), hid, away_ppo)
+        away_pim = _light_pim(list(away_sk), aid, home_ppo)
+
         return {
+            "home_pim": int(home_pim),
+            "away_pim": int(away_pim),
             "home_goals": hg,
             "away_goals": ag,
             "overtime": bool(ot),
@@ -15342,6 +15454,8 @@ class SimEngine:
                     "away_ppga": int(result.get("away_ppga", 0) or 0),
                     "home_opp_ppo": int(result.get("home_opp_ppo", 0) or 0),
                     "away_opp_ppo": int(result.get("away_opp_ppo", 0) or 0),
+                    "home_pim": int(result.get("home_pim", 0) or 0),
+                    "away_pim": int(result.get("away_pim", 0) or 0),
                     "light_box": True,
                     "stat_source": "light_strength",
                 }
@@ -15509,13 +15623,10 @@ class SimEngine:
             "player_away_goals": int(result.get("player_away_goals", 0)),
             "hockey_home_goals": int(result.get("player_home_goals", 0)),
             "hockey_away_goals": int(result.get("player_away_goals", 0)),
-            "scoring_events": list(result.get("scoring_events") or []),
             "home_pp_seconds": float(result.get("home_pp_seconds", 0) or 0),
             "away_pp_seconds": float(result.get("away_pp_seconds", 0) or 0),
+            "pp_event_ownership": dict(result.get("pp_event_ownership") or {}),
         }
-        if result.get("pp_event_ownership"):
-            out["pp_event_ownership"] = dict(result["pp_event_ownership"])
-        return out
 
     def _season_stat_line_from_ledger_row(self, row: Dict[str, Any], season_year: int) -> Dict[str, Any]:
         """Build one player season stat dict from a game ledger row (source of truth)."""
@@ -15754,7 +15865,7 @@ class SimEngine:
                 _warn(
                     "P0",
                     "TEAM_ZERO_GP",
-                    f"team played 0 games after regular season (falsy-id or schedule mapping bug).",
+                    "team played 0 games after regular season (falsy-id or schedule mapping bug).",
                     team_id=str(tid),
                     abbr=str(getattr(rec, "abbr", "") or ""),
                 )
@@ -15918,7 +16029,7 @@ class SimEngine:
             home_mu += float(team_scoring_pace_bias(home))
             away_mu += float(team_scoring_pace_bias(away))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
         home_mu -= max(0.0, (0.52 - self._team_strength(home)) * 1.35)
         away_mu -= max(0.0, (0.52 - self._team_strength(away)) * 1.35)
@@ -16001,7 +16112,7 @@ class SimEngine:
                 ))
                 setattr(self, "_light_scored_games", lk)
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             return out
 
         hid = str(getattr(home, "team_id", getattr(home, "id", "H")))
@@ -16052,7 +16163,7 @@ class SimEngine:
                 setattr(t, "point_pct", float(rec.point_pct()))
                 setattr(t, "goal_diff", int(rec.goal_diff()))
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
 
     def _season_daily_socio_economics(
         self,
@@ -16154,7 +16265,7 @@ class SimEngine:
         if 0 <= days_left <= DEADLINE_WEEK_DAYS:
             # Most deadline business lands in the final 48 hours.
             trade_prob = max(trade_prob, 0.80)
-            max_exec = 4 if days_left <= 2 else 2
+            max_exec = 5 if days_left <= 2 else 3  # C5: was 4 / 2
         if days_left == 0:
             # Deadline day frenzy — every GM is on the phone.
             trade_prob = 1.0
@@ -16170,7 +16281,7 @@ class SimEngine:
             if freqs:
                 trade_prob += (sum(freqs) / len(freqs) - 0.5) * 0.04
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         bulk_comp = int(getattr(self.league, "_franchise_bulk_trade_day_multiplier", 1) or 1)
         if bulk_comp > 1 and days_left > DEADLINE_WEEK_DAYS:
             # Bulk sims tick the market every few days — compensate the skipped looks.
@@ -16210,7 +16321,7 @@ class SimEngine:
             setattr(self.league, "_cpu_standings_snapshot", snap)
             setattr(self.league, "_cpu_regular_season_games", int(getattr(self.league, "games_per_team", 82) or 82))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         if (not post_deadline) and (rng.random() < trade_prob or forced_market_check):
             tr = evaluate_trade_market(
                 self.league,
@@ -16273,7 +16384,7 @@ class SimEngine:
                             }
                         )
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
 
         rm = RosterManager()
         tbl = standings.league_table()
@@ -16335,7 +16446,7 @@ class SimEngine:
 
             touch_league_narrative_profiles(self.league, r)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
         try:
             _econ = (self.league.get_league_context().get("economics") or {})
@@ -16354,7 +16465,7 @@ class SimEngine:
                         print(f"Cap Pressure: {round(_p, 3)} Strategy: {_s}")
                         break
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
         schedule = generate_regular_season_schedule(r, teams, games_per_team=82)
         standings = StandingsTable(teams)
@@ -16639,7 +16750,7 @@ class SimEngine:
                     try:
                         world_fatigue.set_fatigue(pl, f)
                     except Exception:
-                        pass
+                        _swallowed_log.debug("suppressed exception", exc_info=True)
 
         if use_world and world_durability is not None:
             for tm in teams:
@@ -16718,7 +16829,7 @@ class SimEngine:
                     rng=r,
                 )
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
         _pri_rank = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
 
@@ -16850,7 +16961,7 @@ class SimEngine:
                     pitched.add(pid)
                     batch.append((player, team, "progression", age, ovr))
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
 
         for team in league.teams:
             roster = getattr(team, "roster", None) or []
@@ -16881,7 +16992,7 @@ class SimEngine:
                     pitched.add(pid)
                     batch.append((player, team, reason, age, ovr))
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
                 finally:
                     self.player = None
 
@@ -16897,7 +17008,7 @@ class SimEngine:
             try:
                 player.retirement_reason = reason
             except Exception:
-                pass
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             league.retired_players.append(player)
             retired_count += 1
             roster = getattr(team, "roster", None) or []
@@ -16920,7 +17031,7 @@ class SimEngine:
                     if p not in league.retired_players:
                         league.retired_players.append(p)
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
                 try:
                     roster.remove(p)
                 except ValueError:
@@ -17026,7 +17137,7 @@ class SimEngine:
                 try:
                     stem_season[str(k)] = stem_season.get(str(k), 0) + int(v)
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
 
         def _tier_scale_fx(tier: str) -> float:
             if tier == "major":
@@ -17406,7 +17517,7 @@ class SimEngine:
             setattr(league, "_narrative_storyline_stem_carry", dec_stem)
             setattr(league, "_narrative_storyline_family_counts", dict(family_season))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
         league_delta["chaos_index"] = min(0.09, max(0.0, float(league_delta.get("chaos_index", 0.0))))
         league_delta["parity_index"] = min(0.06, max(0.0, float(league_delta.get("parity_index", 0.0))))
@@ -17472,7 +17583,7 @@ class SimEngine:
                     ovr = float(ovr_fn()) if callable(ovr_fn) else 0.5
                     all_ovrs.append((p, ovr))
                 except Exception:
-                    pass
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
         if not all_ovrs:
             return [], 0.0, 0.0, 0.0, 0.0, 0.0
         ovrs_only = [o for _, o in all_ovrs]
@@ -17499,7 +17610,6 @@ class SimEngine:
         League equilibrium: targets top 0.94-0.98, top_50 0.86-0.92, mean 0.68-0.72, median 0.67-0.71.
         If median < 0.66: stronger floor boost. If median > 0.74: no boost (natural decay). Soft only.
         """
-        r = rng if rng is not None else self.rng
         all_ovrs, top_ovr, top_10_avg, top_50_avg, mean_ovr, median_ovr = self._league_ovr_stats(league)
         if not all_ovrs:
             return {"top_ovr": 0.0, "top_10_avg": 0.0, "top_50_avg": 0.0, "mean_ovr": 0.0, "median_ovr": 0.0}

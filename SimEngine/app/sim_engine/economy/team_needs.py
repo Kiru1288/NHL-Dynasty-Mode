@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 
 def _clamp(x: float, lo: float = 0.0, hi: float = 1.0) -> float:
@@ -72,6 +74,7 @@ def _bucket_priority(target: float, actual: float) -> float:
 
 def _injury_games_out(player: Any) -> int:
     for key in (
+        "_world_injury_games_remaining",  # what the world injury system actually writes
         "injury_games_remaining",
         "games_out",
         "games_remaining",
@@ -99,15 +102,26 @@ def _injury_games_out(player: Any) -> int:
     return 0
 
 
+def _status_text(raw: Any) -> str:
+    """Normalise a status that may be an Enum (InjuryStatus.DAY_TO_DAY) or a string."""
+    if raw is None:
+        return ""
+    val = getattr(raw, "value", raw)
+    txt = str(val or "").strip().upper()
+    if "." in txt:  # str(Enum) -> "INJURYSTATUS.DAY_TO_DAY"
+        txt = txt.rsplit(".", 1)[-1]
+    return txt
+
+
 def _injury_status(player: Any) -> str:
     for key in ("injury_status", "health_status", "status"):
-        val = str(getattr(player, key, "") or "").strip().upper()
+        val = _status_text(getattr(player, key, None))
         if val:
             return val
     health = getattr(player, "health", None)
     if health is not None:
         for key in ("injury_status", "status"):
-            val = str(getattr(health, key, "") or "").strip().upper()
+            val = _status_text(getattr(health, key, None))
             if val:
                 return val
     return ""
@@ -219,7 +233,7 @@ class TeamNeeds:
         try:
             team.needs = needs
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         return needs
 
 

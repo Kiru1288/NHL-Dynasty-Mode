@@ -257,26 +257,6 @@ function AdvancingOverlay({ label = "Simulating league day…" }) {
   );
 }
 
-function HubBootstrapScreen({ label = "Restoring franchise…" }) {
-  return (
-    <div
-      style={{
-        minHeight: "100%",
-        display: "grid",
-        placeItems: "center",
-        background: "#0c0e14",
-        color: "rgba(201,168,106,0.85)",
-        fontFamily: 'var(--font-office-display, "Archivo Black", sans-serif)',
-        letterSpacing: "0.12em",
-        textTransform: "uppercase",
-        fontSize: 12,
-        fontWeight: 800,
-      }}
-    >
-      {label}
-    </div>
-  );
-}
 
 function leanStateIdentity(prev, next) {
   if (!prev || !next) return false;
@@ -470,7 +450,7 @@ function BreakingNewsLayer({ franchiseState, screen, setScreen }) {
         boxShadow: "0 12px 32px rgba(0,0,0,.4)",
       }}
     >
-      <p style={{ margin: "0 0 4px", fontSize: 10, fontWeight: 900, letterSpacing: ".12em", textTransform: "uppercase", color: "#ff606d" }}>
+      <p style={{ margin: "0 0 4px", fontSize: 11, fontWeight: 900, letterSpacing: ".12em", textTransform: "uppercase", color: "#ff606d" }}>
         Breaking · {String(active.level || "major").replace(/_/g, " ")}
         {pending.length > 1 ? ` · ${pending.length} alerts` : ""}
       </p>
@@ -621,14 +601,6 @@ export function GameUIProvider({ children }) {
     }
   }, []);
 
-  const forceEndAdvancing = useCallback(() => {
-    advancingDepthRef.current = 0;
-    if (advancingSafetyTimerRef.current) {
-      clearTimeout(advancingSafetyTimerRef.current);
-      advancingSafetyTimerRef.current = null;
-    }
-    setAdvancing(false);
-  }, []);
 
   useEffect(() => {
     const resetIfIdle = () => {

@@ -12,6 +12,8 @@ import threading
 import time
 from contextlib import contextmanager
 from typing import Any, Dict, Iterator, List, Optional
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 _LOCK = threading.Lock()
 _ENABLED = os.environ.get("NHL_PERF", "1").strip().lower() not in ("0", "false", "off", "no")
@@ -90,7 +92,7 @@ def record(name: str, duration_ms: float, *, meta: Optional[Dict[str, Any]] = No
                 f" {meta}" if meta else "",
             )
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 @contextmanager

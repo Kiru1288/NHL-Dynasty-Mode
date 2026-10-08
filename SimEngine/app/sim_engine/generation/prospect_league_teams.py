@@ -13,6 +13,13 @@ from typing import Any, Dict, List, Optional, Tuple
 TeamSpec = Tuple[str, str]  # (city_key, full_name)
 
 
+def _stable_hash(value):
+    """Process-stable replacement for built-in hash() (salted per process via PYTHONHASHSEED)."""
+    import hashlib as _hl
+
+    return int.from_bytes(_hl.sha256(str(value).encode("utf-8")).digest()[:8], "big", signed=True)
+
+
 def _norm_key(value: str) -> str:
     text = unicodedata.normalize("NFKD", str(value or ""))
     text = "".join(ch for ch in text if not unicodedata.combining(ch))
@@ -715,7 +722,7 @@ def apply_prospect_league_team_fix(row: Dict[str, Any]) -> Dict[str, Any]:
     tier = league_fit_tier(nat, code)
     if tier == "invalid" and nat:
         seed_key = str(out.get("key") or out.get("name") or team_raw or "0")
-        rng = random.Random(abs(hash(seed_key)) & 0xFFFFFFFF)
+        rng = random.Random(abs(_stable_hash(seed_key)) & 0xFFFFFFFF)
         new_code = None
         for attempt in range(14):
             candidate = pick_league_for_nationality(
@@ -730,7 +737,7 @@ def apply_prospect_league_team_fix(row: Dict[str, Any]) -> Dict[str, Any]:
             new_code = _fallback_league_for_nationality(nat)
         teams = teams_for_league(new_code) if new_code else []
         if teams and new_code:
-            team = teams[abs(hash(f"{seed_key}:{new_code}")) % len(teams)]
+            team = teams[abs(_stable_hash(f"{seed_key}:{new_code}")) % len(teams)]
             out["league_code"] = new_code
             out["league_display"] = league_display_name(new_code)
             out["league"] = out["league_display"]

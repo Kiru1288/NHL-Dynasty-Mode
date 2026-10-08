@@ -4,238 +4,7 @@
  * Three registers: Office Sanctum · Broadcast Ops · Franchise Shell
  */
 
-:root {
-  /* ─── Office Sanctum ─── */
-  --office-bg: #101218;
-  --office-bg-deep: #0c0e14;
-  --office-desk: rgba(14, 16, 22, 0.9);
-  --office-desk-strong: rgba(10, 12, 18, 0.94);
-  --office-brass: #c9a86a;
-  --office-brass-soft: rgba(201, 168, 106, 0.14);
-  --office-illumination: rgba(201, 168, 106, 0.1);
-  --office-line: rgba(255, 255, 255, 0.08);
-  --office-line-strong: rgba(201, 168, 106, 0.32);
-  --office-text: #ece8e0;
-  --office-text-secondary: rgba(220, 216, 208, 0.58);
-  --office-text-faint: rgba(220, 216, 208, 0.32);
-  --office-focus: #c9a86a;
-  --office-selection: rgba(201, 168, 106, 0.18);
-  --office-blue: #6a9ab8;
-  --office-red: #a84a44;
-  --office-green: #6a9a82;
 
-  /* ─── Broadcast Operations ─── */
-  --ops-navy: #04101a;
-  --ops-navy-deep: #020a11;
-  --ops-black: #061522;
-  --ops-panel: rgba(9, 25, 38, 0.94);
-  --ops-panel-2: rgba(12, 35, 52, 0.94);
-  --ops-panel-3: rgba(15, 46, 66, 0.78);
-  --ops-cyan: #13d8e7;
-  --ops-cyan-soft: rgba(19, 216, 231, 0.13);
-  --ops-gold: #e9a83c;
-  --ops-gold-soft: rgba(233, 168, 60, 0.14);
-  --ops-ice: #38bdf8;
-  --ops-signal-red: #c8102e;
-  --ops-text: #e9f7fb;
-  --ops-text-secondary: #8096a8;
-  --ops-text-disabled: #607789;
-  --ops-grid: rgba(156, 218, 236, 0.14);
-  --ops-grid-2: rgba(115, 229, 241, 0.25);
-  --ops-grid-strong: rgba(73, 231, 240, 0.5);
-  --ops-scan: rgba(19, 216, 231, 0.04);
-  --ops-table-sel: rgba(19, 216, 231, 0.13);
-  --ops-injury: #ff606d;
-  --ops-injury-soft: rgba(255, 96, 109, 0.13);
-  --ops-warning: #e9a83c;
-  --ops-success: #52df94;
-  --ops-success-soft: rgba(82, 223, 148, 0.13);
-  --ops-info: #8ab4ff;
-  --ops-info-soft: rgba(138, 180, 255, 0.13);
-
-  /* ─── Franchise Shell ─── */
-  --shell-bg: #03050c;
-  --shell-bg-1: #070d1c;
-  --shell-bg-2: #0f1830;
-  --shell-structure: rgba(26, 36, 61, 0.55);
-  --shell-structure-hi: #2a3555;
-  --shell-violet: #7b3eb0;
-  --shell-violet-hi: #9d5fd4;
-  --shell-orange: #e07020;
-  --shell-orange-dim: #a85518;
-  --shell-text: #eef0f5;
-  --shell-text-muted: #8b93a8;
-  --shell-silver: #c8cdd8;
-  --shell-neon: #38bdf8;
-  --shell-nav-focus: #38bdf8;
-  --shell-scrim: rgba(3, 5, 12, 0.72);
-
-  /* ─── Typography roles ─── */
-  --font-office-display: "Archivo Black", "Rajdhani", "Barlow Condensed", "Arial Narrow", sans-serif;
-  --font-broadcast-display: "Archivo Black", "Rajdhani", "Barlow Condensed", "Arial Narrow", sans-serif;
-  --font-ops-ui: Inter, ui-sans-serif, system-ui, "Segoe UI", sans-serif;
-  /* Ops screen headings — same stack as the Entry Draft floor (--ed-head). */
-  --font-ops-head: "Barlow Condensed", "Archivo Black", "Rajdhani", "Arial Narrow", sans-serif;
-  /* The shell (settings, legacy hub) now reads in the Entry Draft pair too. */
-  --font-shell-headline: var(--font-ops-head);
-  --font-shell-body: var(--font-ops-ui);
-  --font-editorial: Inter, "IBM Plex Sans", Georgia, serif;
-  --font-mono-data: "IBM Plex Mono", Consolas, "Courier New", monospace;
-
-  --type-office-display-size: 1.35rem;
-  --type-broadcast-display-size: 1.2rem;
-  --type-ops-heading-size: 0.95rem;
-  --type-dept-label-size: 0.72rem;
-  --type-phase-label-size: 0.6875rem;
-  --type-body-size: 0.875rem;
-  --type-compact-size: 0.8125rem;
-  --type-table-value-size: 0.8125rem;
-  --type-table-meta-size: 0.72rem;
-  --type-score-size: 1.25rem;
-  --type-financial-size: 0.875rem;
-  --type-control-label-size: 0.72rem;
-  --type-editorial-size: 1.05rem;
-  --type-wire-ts-size: 0.72rem;
-
-  /* ─── Radius ladder ─── */
-  --radius-ops: 2px;
-  --radius-hud: 4px;
-  --radius-control: 6px;
-  --radius-card: 8px;
-  --radius-panel: 10px;
-  --radius-panel-lg: 12px;
-  --radius-pill: 999px;
-
-  /* ─── Spacing ─── */
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-5: 24px;
-  --space-6: 32px;
-
-  /* ─── Depth / shadow ─── */
-  --depth-flat: none;
-  --depth-registered: 0 1px 0 rgba(255, 255, 255, 0.04);
-  --depth-lifted: 0 12px 32px rgba(0, 0, 0, 0.36), inset 0 1px 0 rgba(255, 255, 255, 0.04);
-  --depth-overlay: 0 24px 70px rgba(0, 0, 0, 0.42);
-  --depth-cinematic: 0 32px 90px rgba(0, 0, 0, 0.55);
-  --depth-hud: 0 18px 42px rgba(0, 0, 0, 0.48), inset 0 1px 0 rgba(255, 255, 255, 0.04);
-  --depth-shell-glass: 0 12px 40px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.06);
-  --glow-cyan-active: 0 0 22px rgba(19, 216, 231, 0.8);
-  --glow-brass: 0 0 18px rgba(201, 168, 106, 0.35);
-
-  /* ─── Motion ─── */
-  --motion-micro: 110ms ease;
-  --motion-workspace: 200ms cubic-bezier(0.22, 1, 0.36, 1);
-  --motion-department: 380ms cubic-bezier(0.22, 1, 0.36, 1);
-  --motion-cinematic: 620ms cubic-bezier(0.16, 1, 0.3, 1);
-  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
-
-  /* ─── Z-index layers (absolute values match live overlay stack) ─── */
-  --z-shell: 10;
-  --z-rail: 20;
-  --z-sticky: 30;
-  --z-ticker: 40;
-  --z-inspector: 50;
-  --z-tooltip: 400;
-  --z-modal: 1200;
-  --z-popup: 12000;
-  --z-cinematic: 13000;
-  --z-toast: 14000;
-
-  /* ═══════════════════════════════════════════
-     Compatibility aliases (legacy selectors)
-     ═══════════════════════════════════════════ */
-
-  /* theme.css legacy */
-  --bg-deep: var(--shell-bg);
-  --bg-panel: var(--ops-panel);
-  --bg-panel-alt: var(--ops-panel-2);
-  --border: var(--ops-grid);
-  --border-bright: var(--ops-grid-2);
-  --text: var(--ops-text);
-  --text-muted: var(--ops-text-secondary);
-  --accent: var(--ops-signal-red);
-  --accent-dim: #8b0b20;
-  --silver: var(--shell-silver);
-  --highlight: rgba(200, 16, 46, 0.18);
-  --font-head: var(--font-shell-headline);
-  --font-body: var(--font-ops-ui);
-  --font-motion-control: var(--font-office-display);
-
-  /* DESIGN.md color names */
-  --rink-cyan: var(--ops-cyan);
-  --rink-cyan-soft: var(--ops-cyan-soft);
-  --deadline-gold: var(--ops-gold);
-  --deadline-gold-soft: var(--ops-gold-soft);
-  --arena-orange: var(--shell-orange);
-  --franchise-violet: var(--shell-violet);
-  --ice-neon: var(--ops-ice);
-  --nhl-signal-red: var(--ops-signal-red);
-  --void-teal: var(--ops-navy);
-  --void-teal-deep: var(--ops-navy-deep);
-  --void-navy: var(--shell-bg);
-  --office-charcoal: var(--office-bg);
-  --panel-ops: var(--ops-panel);
-  --panel-ops-2: var(--ops-panel-2);
-  --panel-shell: var(--shell-structure);
-  --line-ops: var(--ops-grid);
-  --line-ops-strong: var(--ops-grid-strong);
-  --text-ice: var(--ops-text);
-  --text-shell: var(--shell-text);
-  --text-office: var(--office-text);
-  --muted-ops: var(--ops-text-secondary);
-  --muted-shell: var(--shell-text-muted);
-  --muted-office: var(--office-text-secondary);
-  --status-green: var(--ops-success);
-  --status-red: var(--ops-injury);
-  --status-blue: var(--ops-info);
-
-  /* game-ui shell aliases */
-  --g-navy0: var(--shell-bg);
-  --g-navy1: var(--shell-bg-1);
-  --g-navy2: var(--shell-bg-2);
-  --g-panel: var(--shell-structure);
-  --g-panel-hi: var(--shell-structure-hi);
-  --g-silver: var(--shell-silver);
-  --g-silver-dim: var(--shell-text-muted);
-  --g-purple: var(--shell-violet);
-  --g-purple-hi: var(--shell-violet-hi);
-  --g-orange: var(--shell-orange);
-  --g-orange-dim: var(--shell-orange-dim);
-  --g-neon: var(--shell-neon);
-  --g-text: var(--shell-text);
-  --g-font-head: var(--font-shell-headline);
-  --g-font-body: var(--font-shell-body);
-  --g-space-1: var(--space-3);
-  --g-space-2: var(--space-4);
-  --g-space-3: var(--space-5);
-
-  /* nhlcalShell aliases */
-  --bg: var(--ops-navy);
-  --bg-2: var(--ops-black);
-  --panel: var(--ops-panel);
-  --panel-2: var(--ops-panel-2);
-  --panel-3: var(--ops-panel-3);
-  --line: var(--ops-grid);
-  --line-2: var(--ops-grid-2);
-  --line-strong: var(--ops-grid-strong);
-  --muted: var(--ops-text-secondary);
-  --muted-2: var(--ops-text-disabled);
-  --cyan: var(--ops-cyan);
-  --cyan-soft: var(--ops-cyan-soft);
-  --gold: var(--ops-gold);
-  --gold-soft: var(--ops-gold-soft);
-  --green: var(--ops-success);
-  --green-soft: var(--ops-success-soft);
-  --red: var(--ops-injury);
-  --red-soft: var(--ops-injury-soft);
-  --blue: var(--ops-info);
-  --blue-soft: var(--ops-info-soft);
-  --purple: var(--ops-info, #8ab4ff);
-  --shadow: var(--depth-overlay);
-}
 
 /* Font guard — nothing may fall back to a serif or Arial default */
 html {
@@ -731,6 +500,204 @@ textarea {
    ═══════════════════════════════════════════════════════════ */
 
 :root {
+  --office-bg: #101218;
+  --office-bg-deep: #0c0e14;
+  --office-desk: rgba(14, 16, 22, 0.9);
+  --office-desk-strong: rgba(10, 12, 18, 0.94);
+  --office-brass: #c9a86a;
+  --office-brass-soft: rgba(201, 168, 106, 0.14);
+  --office-illumination: rgba(201, 168, 106, 0.1);
+  --office-line: rgba(255, 255, 255, 0.08);
+  --office-line-strong: rgba(201, 168, 106, 0.32);
+  --office-text: #ece8e0;
+  --office-text-secondary: rgba(220, 216, 208, 0.58);
+  --office-text-faint: rgba(220, 216, 208, 0.32);
+  --office-focus: #c9a86a;
+  --office-selection: rgba(201, 168, 106, 0.18);
+  --office-blue: #6a9ab8;
+  --office-red: #a84a44;
+  --office-green: #6a9a82;
+  --ops-navy: #04101a;
+  --ops-navy-deep: #020a11;
+  --ops-black: #061522;
+  --ops-panel: rgba(9, 25, 38, 0.94);
+  --ops-panel-2: rgba(12, 35, 52, 0.94);
+  --ops-panel-3: rgba(15, 46, 66, 0.78);
+  --ops-cyan: #13d8e7;
+  --ops-cyan-soft: rgba(19, 216, 231, 0.13);
+  --ops-gold: #e9a83c;
+  --ops-gold-soft: rgba(233, 168, 60, 0.14);
+  --ops-ice: #38bdf8;
+  --ops-signal-red: #c8102e;
+  --ops-text: #e9f7fb;
+  --ops-text-secondary: #8096a8;
+  --ops-text-disabled: #607789;
+  --ops-grid: rgba(156, 218, 236, 0.14);
+  --ops-grid-2: rgba(115, 229, 241, 0.25);
+  --ops-grid-strong: rgba(73, 231, 240, 0.5);
+  --ops-scan: rgba(19, 216, 231, 0.04);
+  --ops-table-sel: rgba(19, 216, 231, 0.13);
+  --ops-injury: #ff606d;
+  --ops-injury-soft: rgba(255, 96, 109, 0.13);
+  --ops-warning: #e9a83c;
+  --ops-success: #52df94;
+  --ops-success-soft: rgba(82, 223, 148, 0.13);
+  --ops-info: #8ab4ff;
+  --ops-info-soft: rgba(138, 180, 255, 0.13);
+  --shell-bg: #03050c;
+  --shell-bg-1: #070d1c;
+  --shell-bg-2: #0f1830;
+  --shell-structure: rgba(26, 36, 61, 0.55);
+  --shell-structure-hi: #2a3555;
+  --shell-violet: #7b3eb0;
+  --shell-violet-hi: #9d5fd4;
+  --shell-orange: #e07020;
+  --shell-orange-dim: #a85518;
+  --shell-text: #eef0f5;
+  --shell-text-muted: #8b93a8;
+  --shell-silver: #c8cdd8;
+  --shell-neon: #38bdf8;
+  --shell-nav-focus: #38bdf8;
+  --shell-scrim: rgba(3, 5, 12, 0.72);
+  --font-office-display: "Archivo Black", "Rajdhani", "Barlow Condensed", "Arial Narrow", sans-serif;
+  --font-broadcast-display: "Archivo Black", "Rajdhani", "Barlow Condensed", "Arial Narrow", sans-serif;
+  --font-ops-ui: Inter, ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+  --font-ops-head: "Barlow Condensed", "Archivo Black", "Rajdhani", "Arial Narrow", sans-serif;
+  --font-shell-headline: var(--font-ops-head);
+  --font-shell-body: var(--font-ops-ui);
+  --font-editorial: Inter, "IBM Plex Sans", Georgia, serif;
+  --font-mono-data: "IBM Plex Mono", Consolas, "Courier New", monospace;
+  --type-office-display-size: 1.35rem;
+  --type-broadcast-display-size: 1.2rem;
+  --type-ops-heading-size: 0.95rem;
+  --type-dept-label-size: 0.72rem;
+  --type-phase-label-size: 0.6875rem;
+  --type-body-size: 0.875rem;
+  --type-compact-size: 0.8125rem;
+  --type-table-value-size: 0.8125rem;
+  --type-table-meta-size: 0.72rem;
+  --type-score-size: 1.25rem;
+  --type-financial-size: 0.875rem;
+  --type-control-label-size: 0.72rem;
+  --type-editorial-size: 1.05rem;
+  --type-wire-ts-size: 0.72rem;
+  --radius-ops: 2px;
+  --radius-hud: 4px;
+  --radius-control: 6px;
+  --radius-card: 8px;
+  --radius-panel: 10px;
+  --radius-panel-lg: 12px;
+  --radius-pill: 999px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --depth-flat: none;
+  --depth-registered: 0 1px 0 rgba(255, 255, 255, 0.04);
+  --depth-lifted: 0 12px 32px rgba(0, 0, 0, 0.36), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --depth-overlay: 0 24px 70px rgba(0, 0, 0, 0.42);
+  --depth-cinematic: 0 32px 90px rgba(0, 0, 0, 0.55);
+  --depth-hud: 0 18px 42px rgba(0, 0, 0, 0.48), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --depth-shell-glass: 0 12px 40px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  --glow-cyan-active: 0 0 22px rgba(19, 216, 231, 0.8);
+  --glow-brass: 0 0 18px rgba(201, 168, 106, 0.35);
+  --motion-micro: 110ms ease;
+  --motion-workspace: 200ms cubic-bezier(0.22, 1, 0.36, 1);
+  --motion-department: 380ms cubic-bezier(0.22, 1, 0.36, 1);
+  --motion-cinematic: 620ms cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --z-shell: 10;
+  --z-rail: 20;
+  --z-sticky: 30;
+  --z-ticker: 40;
+  --z-inspector: 50;
+  --z-tooltip: 400;
+  --z-modal: 1200;
+  --z-popup: 12000;
+  --z-cinematic: 13000;
+  --z-toast: 14000;
+  --bg-deep: var(--shell-bg);
+  --bg-panel: var(--ops-panel);
+  --bg-panel-alt: var(--ops-panel-2);
+  --border: var(--ops-grid);
+  --border-bright: var(--ops-grid-2);
+  --text: var(--ops-text);
+  --text-muted: var(--ops-text-secondary);
+  --accent: var(--ops-signal-red);
+  --accent-dim: #8b0b20;
+  --silver: var(--shell-silver);
+  --highlight: rgba(200, 16, 46, 0.18);
+  --font-head: var(--font-shell-headline);
+  --font-body: var(--font-ops-ui);
+  --font-motion-control: var(--font-office-display);
+  --rink-cyan: var(--ops-cyan);
+  --rink-cyan-soft: var(--ops-cyan-soft);
+  --deadline-gold: var(--ops-gold);
+  --deadline-gold-soft: var(--ops-gold-soft);
+  --arena-orange: var(--shell-orange);
+  --franchise-violet: var(--shell-violet);
+  --ice-neon: var(--ops-ice);
+  --nhl-signal-red: var(--ops-signal-red);
+  --void-teal: var(--ops-navy);
+  --void-teal-deep: var(--ops-navy-deep);
+  --void-navy: var(--shell-bg);
+  --office-charcoal: var(--office-bg);
+  --panel-ops: var(--ops-panel);
+  --panel-ops-2: var(--ops-panel-2);
+  --panel-shell: var(--shell-structure);
+  --line-ops: var(--ops-grid);
+  --line-ops-strong: var(--ops-grid-strong);
+  --text-ice: var(--ops-text);
+  --text-shell: var(--shell-text);
+  --text-office: var(--office-text);
+  --muted-ops: var(--ops-text-secondary);
+  --muted-shell: var(--shell-text-muted);
+  --muted-office: var(--office-text-secondary);
+  --status-green: var(--ops-success);
+  --status-red: var(--ops-injury);
+  --status-blue: var(--ops-info);
+  --g-navy0: var(--shell-bg);
+  --g-navy1: var(--shell-bg-1);
+  --g-navy2: var(--shell-bg-2);
+  --g-panel: var(--shell-structure);
+  --g-panel-hi: var(--shell-structure-hi);
+  --g-silver: var(--shell-silver);
+  --g-silver-dim: var(--shell-text-muted);
+  --g-purple: var(--shell-violet);
+  --g-purple-hi: var(--shell-violet-hi);
+  --g-orange: var(--shell-orange);
+  --g-orange-dim: var(--shell-orange-dim);
+  --g-neon: var(--shell-neon);
+  --g-text: var(--shell-text);
+  --g-font-head: var(--font-shell-headline);
+  --g-font-body: var(--font-shell-body);
+  --g-space-1: var(--space-3);
+  --g-space-2: var(--space-4);
+  --g-space-3: var(--space-5);
+  --bg: var(--ops-navy);
+  --bg-2: var(--ops-black);
+  --panel: var(--ops-panel);
+  --panel-2: var(--ops-panel-2);
+  --panel-3: var(--ops-panel-3);
+  --line: var(--ops-grid);
+  --line-2: var(--ops-grid-2);
+  --line-strong: var(--ops-grid-strong);
+  --muted: var(--ops-text-secondary);
+  --muted-2: var(--ops-text-disabled);
+  --cyan: var(--ops-cyan);
+  --cyan-soft: var(--ops-cyan-soft);
+  --gold: var(--ops-gold);
+  --gold-soft: var(--ops-gold-soft);
+  --green: var(--ops-success);
+  --green-soft: var(--ops-success-soft);
+  --red: var(--ops-injury);
+  --red-soft: var(--ops-injury-soft);
+  --blue: var(--ops-info);
+  --blue-soft: var(--ops-info-soft);
+  --purple: var(--ops-info, #8ab4ff);
+  --shadow: var(--depth-overlay);
   --fcn-cut: 10px;
   --fcn-cut-sm: 6px;
   --fcn-rail-w: 3px;

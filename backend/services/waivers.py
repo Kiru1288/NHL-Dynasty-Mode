@@ -13,7 +13,9 @@ Flow (mirrors the real NHL):
 from __future__ import annotations
 
 import random
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 WAIVER_WINDOW_DAYS = 1
 POPUP_MIN_OVR = 73  # league-wide waiver notices for players worth a look
@@ -49,7 +51,7 @@ def _popup(session: Any, key: str, payload: Dict[str, Any]) -> None:
 
         _append_showcase_popup(session, key, payload)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _standings_points(session: Any, team: Any) -> float:
@@ -107,7 +109,7 @@ def _portrait_fields(player: Any, entry: Dict[str, Any]) -> Dict[str, Any]:
 
             fields = merge_headshot_into_row(fields, player)
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         abbr = str(getattr(player, "team_abbrev", None) or getattr(player, "team_abbreviation", None) or "")
         if abbr:
             fields["team_abbrev"] = abbr
@@ -179,7 +181,7 @@ def place_on_waivers(session: Any, team: Any, player: Any, *, reason: str = "man
         player.on_waiver_wire = True
         player.active_roster = False
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     sync_team_cap_fields(team, league)
 
     user_tid = str(getattr(session, "user_team_id", "") or "")
@@ -251,7 +253,7 @@ def _claim_room(team: Any, league: Any, entry: Dict[str, Any]) -> bool:
         if not validate_contract_slots(team, league, additional=1).get("ok"):
             return False
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return True
 
 
@@ -305,7 +307,7 @@ def _resolve_entry(session: Any, entry: Dict[str, Any]) -> None:
 
             auto_send_down_overflow(winner, protect_ids=[str(entry.get("player_id"))])
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         sync_team_cap_fields(winner, league)
         if _tid(winner) == user_tid:
             _popup(session, f"waiver_won:{entry['player_id']}", {
@@ -349,7 +351,7 @@ def _resolve_entry(session: Any, entry: Dict[str, Any]) -> None:
 
             _set_assignment(player, org_nhl_team_id=_tid(orig), level="ahl", club=_team_label(orig))
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         sync_team_cap_fields(orig, league)
     if str(entry.get("original_team_id")) == user_tid:
         _popup(session, f"waiver_clear:{entry['player_id']}", {
@@ -405,7 +407,9 @@ def _cpu_waiver_moves(session: Any, rng: random.Random) -> int:
             continue
         up = max(callups, key=_player_ovr)
         gap = _player_ovr(victim) - _player_ovr(up)
-        if gap > 3:
+        # Waiving a better player for a worse call-up needs a real reason (it used to
+        # happen for anything within 3 OVR).
+        if gap > 0:
             # A high-ceiling kid can still bump a fading depth vet.
             try:
                 from app.sim_engine.progression.potential import read_player_potential99
@@ -433,7 +437,7 @@ def _cpu_waiver_moves(session: Any, rng: random.Random) -> int:
             up.buried = False
             up.roster_location = "nhl"
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         moves += 1
     return moves
 

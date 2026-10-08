@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 KEY = "_world_momentum"
 STREAK_W = "_world_streak"  # signed int: wins positive, losses negative

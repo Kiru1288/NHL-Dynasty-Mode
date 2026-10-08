@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from app.sim_engine.trades.cpu_trade_proposer import propose_and_execute_cpu_trades
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 
 @dataclass
@@ -39,7 +41,7 @@ class TradeAI:
                 or 0.5
             )
         except Exception:
-            pass
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         target = self.base_trades + int(round(chaos * 4.0))
         target = max(self.base_trades, min(self.max_trades, target))
         if max_executions is not None:

@@ -25,6 +25,8 @@ import hashlib
 import math
 import random
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+import logging as _logging_swallow
+_swallowed_log = _logging_swallow.getLogger(__name__)
 
 COMBINE_SCHEMA_VERSION = 2
 
@@ -449,7 +451,7 @@ def _height_cm(player: Any, entry: Mapping[str, Any]) -> Optional[float]:
         if hcm:
             return float(hcm)
     except Exception:
-        pass
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     if entry.get("height_cm"):
         try:
             return float(entry["height_cm"])
