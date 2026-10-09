@@ -202,30 +202,30 @@ const CSS = `
 .nmp { border: 1px solid rgba(115,229,241,.22); border-radius: 10px; margin: 10px 0; background: rgba(19,216,231,.03); }
 .nmp__toggle { width: 100%; display: flex; align-items: center; gap: 10px; padding: 9px 12px; background: transparent;
   border: 0; color: inherit; cursor: pointer; text-align: left; }
-.nmp__toggle span { font-size: 11px; font-weight: 900; letter-spacing: .1em; text-transform: uppercase; }
-.nmp__toggle em { font-style: normal; font-size: 11px; color: #8fb4c4; margin-left: auto; }
+.nmp__toggle span { font-size: 15px; font-weight: 900; letter-spacing: .06em; text-transform: uppercase; }
+.nmp__toggle em { font-style: normal; font-size: 14px; color: #8fb4c4; margin-left: auto; }
 .nmp__toggle i { font-style: normal; color: #8fb4c4; }
 .nmp__body { padding: 0 12px 12px; display: grid; gap: 10px; }
 .nmp__read { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.nmp__read strong { display: block; font-size: 12.5px; }
-.nmp__read small { font-weight: 600; color: #8fb4c4; }
-.nmp__label { display: block; font-size: 9.5px; font-weight: 900; letter-spacing: .12em; text-transform: uppercase; color: #8fb4c4; margin-bottom: 4px; }
+.nmp__read strong { display: block; font-size: 16px; line-height: 1.35; }
+.nmp__read small { font-weight: 600; color: #8fb4c4; font-size: 14px; }
+.nmp__label { display: block; font-size: 13px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; color: #8fb4c4; margin-bottom: 6px; }
 .nmp__trust { position: relative; height: 6px; border-radius: 3px; background: rgba(255,255,255,.08); margin-top: 6px; }
 .nmp__trust i { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: #13d8e7; }
-.nmp__trust b { position: absolute; right: 0; top: -15px; font-size: 10px; color: #8fb4c4; }
-.nmp__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; }
-.nmp__opt { text-align: left; padding: 8px 10px; border-radius: 8px; cursor: pointer; color: inherit;
-  border: 1px solid rgba(115,229,241,.22); background: rgba(255,255,255,.02); display: grid; gap: 3px; }
+.nmp__trust b { position: absolute; right: 0; top: -16px; font-size: 13px; color: #8fb4c4; }
+.nmp__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px; }
+.nmp__opt { text-align: left; padding: 12px 14px; border-radius: 8px; cursor: pointer; color: inherit;
+  border: 1px solid rgba(115,229,241,.22); background: rgba(255,255,255,.02); display: grid; gap: 4px; }
 .nmp__opt:hover:not(:disabled) { border-color: #13d8e7; background: rgba(19,216,231,.08); }
 .nmp__opt:disabled { opacity: .5; cursor: default; }
-.nmp__opt strong { font-size: 12px; }
-.nmp__opt span { font-size: 10.5px; color: #8fb4c4; line-height: 1.35; }
+.nmp__opt strong { font-size: 16px; }
+.nmp__opt span { font-size: 14px; color: #c5dbe6; line-height: 1.4; }
 .nmp__opt--wide { width: 100%; }
-.nmp__result { margin: 0; font-size: 12px; line-height: 1.45; }
+.nmp__result { margin: 0; font-size: 15px; line-height: 1.45; }
 .nmp__result b.is-pos, .nmp__result.is-pos { color: #3ccf8e; }
 .nmp__result b.is-neg { color: #ff7a7a; }
-.nmp__muted { margin: 0; font-size: 11.5px; color: #8fb4c4; }
-.nmp__flash { margin: 0; font-size: 12px; padding: 7px 10px; border-radius: 6px; background: rgba(255,255,255,.04); }
+.nmp__muted { margin: 0; font-size: 14px; color: #8fb4c4; }
+.nmp__flash { margin: 0; font-size: 15px; padding: 8px 12px; border-radius: 6px; background: rgba(255,255,255,.04); }
 .nmp__flash.is-good { border-left: 3px solid #3ccf8e; }
 .nmp__flash.is-warn { border-left: 3px solid #e9a83c; }
 .nmp__flash.is-neutral { border-left: 3px solid #8fb4c4; }

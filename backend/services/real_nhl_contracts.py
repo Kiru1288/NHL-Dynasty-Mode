@@ -117,107 +117,172 @@ def _parse_money_sort(raw: str) -> Optional[float]:
     return None
 
 
-def _parse_yearly_team_html(html: str) -> Dict[str, Dict[str, Any]]:
-    """Return name_key → contract dict from a Spotrac multi-year team page."""
-    out: Dict[str, Dict[str, Any]] = {}
-    # Prefer the first large player table body after a "Player (" header.
-    marker = html.find("Player (")
-    if marker < 0:
-        marker = 0
-    tbody_s = html.find("<tbody", marker)
-    if tbody_s < 0:
-        return out
-    tbody_e = html.find("</tbody>", tbody_s)
-    if tbody_e < 0:
-        return out
-    tbody = html[tbody_s:tbody_e]
-    rows = re.findall(r"<tr[^>]*>(.*?)</tr>", tbody, re.S)
-    for row in rows:
-        pl = re.search(
-            r'nhl/player/_/id/(\d+)/([^"]+)"[^>]*>\s*([^<]+)',
-            row,
-        )
-        if not pl:
-            continue
-        display = pl.group(3).strip()
-        key = normalize_player_name(display)
-        if not key:
-            continue
-        sorts = re.findall(r'data-sort="([^"]*)"', row)
-        year_hits: List[float] = []
-        for s in sorts:
-            m = _parse_money_sort(s)
-            if m is not None:
-                year_hits.append(m)
-        if not year_hits:
-            continue
-        # The yearly board's money cells are one per season starting with the current
-        # season (no separate AAV column). The old code dropped the first cell whenever
-        # the first two matched, which removed a real season from every flat contract
-        # (Chabot, Sanderson, Stützle... all expired a year early).
-        season_hits = [float(h or 0) for h in year_hits]
-        seasons: List[float] = []
-        for hit in season_hits:
-            if hit <= 0.05:
-                break
-            seasons.append(hit)
-        if not seasons:
-            continue
-        aav_m = round(seasons[0], 3)
-        # A later run of seasons at a clearly different cap hit is an already-signed
-        # extension (e.g. Batherson: $4.975M in 2026-27, then 8 x $10.75M).
-        cur_len = 1
-        while cur_len < len(seasons) and abs(seasons[cur_len] - seasons[0]) <= 0.25:
-            cur_len += 1
-        pending_ext = None
-        if cur_len < len(seasons):
-            ext = seasons[cur_len:]
-            ext_aav = round(sum(ext) / len(ext), 3)
-            if abs(ext_aav - aav_m) > 0.25:
-                pending_ext = {"aav_m": ext_aav, "cap_hit_m": ext_aav, "years": min(len(ext), 8)}
-            else:
-                cur_len = len(seasons)
-        years_remaining = min(max(cur_len if pending_ext else len(seasons), 1), 8)
-        rights = "UFA"
-        row_text = re.sub(r"<[^>]+>", " ", row)
-        if re.search(r"\bRFA\b", row_text):
-            rights = "RFA"
-        elif re.search(r"\bUFA\b", row_text):
-            rights = "UFA"
-        nmc = bool(re.search(r"\bNMC\b|no[-\s]?move", row_text, re.I))
-        mntc = bool(re.search(r"\bM-NTC\b|\bMNTC\b|modified\s+no[-\s]?trade", row_text, re.I))
-        ntc = bool(re.search(r"\bNTC\b|no[-\s]?trade", row_text, re.I)) and not nmc and not mntc
-        # ELC heuristic: low AAV + short remaining term on young deals.
-        ctype = "ELC" if aav_m <= 1.0 and years_remaining <= 3 else "STANDARD"
-        entry = {
-            "name": display,
-            "spotrac_id": int(pl.group(1)),
-            "aav_m": aav_m,
-            "cap_hit_m": aav_m,
-            "years_remaining": years_remaining,
-            "years": years_remaining,
-            "rights_status": rights,
-            "contract_type": ctype,
-            "no_move_clause": nmc,
-            "no_trade_clause": ntc,
-            "ntc_mode": "MODIFIED" if mntc and not nmc else ("FULL" if ntc else "NONE"),
-            "modified_no_trade_teams": 10 if mntc and not nmc else 0,
-            "clause_type": "NMC" if nmc else ("M-NTC" if mntc else "NTC" if ntc else "None"),
-            "season_cap_hits": [round(h, 3) for h in seasons],
-            "source": "real_nhl_spotrac",
-        }
-        if pending_ext:
-            entry["pending_extension"] = pending_ext
-        # Same display name can appear twice on one club (e.g. Elias Pettersson C/D).
-        existing = out.get(key)
-        if existing is None:
-            out[key] = entry
-        elif isinstance(existing, list):
-            if not any(int(x.get("spotrac_id") or 0) == entry["spotrac_id"] for x in existing):
-                existing.append(entry)
+def _cell_clause_token(cell_html: str) -> str:
+    """Clause mark inside one season cell. NMC wins over M-NTC over NTC."""
+    text = re.sub(r"<[^>]+>", " ", str(cell_html or "")).upper()
+    if re.search(r"\bNMC\b|NO[-\s]?MOVE", text):
+        return "NMC"
+    if re.search(r"\bM-?NTC\b|MODIFIED\s+NO", text):
+        return "M-NTC"
+    if re.search(r"\bNTC\b|NO[-\s]?TRADE", text):
+        return "NTC"
+    return ""
+
+
+def _year_from_spotrac_url(url: str) -> Optional[int]:
+    m = re.search(r"/year/(\d{4})", str(url or ""))
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_yearly_row(row: str, season_year: Optional[int] = None) -> Optional[Dict[str, Any]]:
+    """One Spotrac yearly <tr> → contract dict, or None if it is not a player row."""
+    pl = re.search(
+        r'nhl/player/_/id/(\d+)/([^"]+)"[^>]*>\s*([^<]+)',
+        row,
+    )
+    if not pl:
+        return None
+    display = pl.group(3).strip()
+    key = normalize_player_name(display)
+    if not key:
+        return None
+    cells = re.findall(r"<td([^>]*)>(.*?)</td>", row, re.S)
+    seasons: List[float] = []
+    clauses: List[str] = []
+    loose = ""
+    if cells:
+        for attrs, inner in cells:
+            money = None
+            for s in re.findall(r'data-sort="([^"]*)"', f"{attrs} {inner}"):
+                parsed = _parse_money_sort(s)
+                if parsed is not None and parsed > 0.05:
+                    money = parsed
+                    break
+            clause = _cell_clause_token(inner)
+            if money is not None:
+                seasons.append(float(money))
+                clauses.append(clause)
+            elif clause and not loose:
+                loose = clause
+    else:
+        # Older fixtures put data-sort on the row without a clean td split.
+        for s in re.findall(r'data-sort="([^"]*)"', row):
+            parsed = _parse_money_sort(s)
+            if parsed is not None and parsed > 0.05:
+                seasons.append(float(parsed))
+                clauses.append("")
+        loose = _cell_clause_token(row)
+    if not seasons:
+        return None
+    # A clause printed only on the name (not inside a year cell) applies now.
+    # A mark inside a later year cell does not — that year is when it kicks in.
+    if not any(clauses) and loose:
+        clauses = [loose] * len(seasons)
+    aav_m = round(seasons[0], 3)
+    cur_len = 1
+    while cur_len < len(seasons) and abs(seasons[cur_len] - seasons[0]) <= 0.25:
+        cur_len += 1
+    pending_ext = None
+    if cur_len < len(seasons):
+        ext = seasons[cur_len:]
+        ext_aav = round(sum(ext) / len(ext), 3)
+        if abs(ext_aav - aav_m) > 0.25:
+            pending_ext = {"aav_m": ext_aav, "cap_hit_m": ext_aav, "years": min(len(ext), 8)}
+            ext_clauses = clauses[cur_len:]
+            if any(ext_clauses):
+                pending_ext["clause_by_year"] = ext_clauses
         else:
-            if int(existing.get("spotrac_id") or 0) != entry["spotrac_id"]:
+            cur_len = len(seasons)
+    years_remaining = min(max(cur_len if pending_ext else len(seasons), 1), 8)
+    rights = "UFA"
+    row_text = re.sub(r"<[^>]+>", " ", row)
+    if re.search(r"\bRFA\b", row_text):
+        rights = "RFA"
+    elif re.search(r"\bUFA\b", row_text):
+        rights = "UFA"
+    active = clauses[0] if clauses else ""
+    nmc = active == "NMC"
+    mntc = active == "M-NTC"
+    ntc = active == "NTC"
+    ctype = "ELC" if aav_m <= 1.0 and years_remaining <= 3 else "STANDARD"
+    entry = {
+        "name": display,
+        "name_key": key,
+        "spotrac_id": int(pl.group(1)),
+        "aav_m": aav_m,
+        "cap_hit_m": aav_m,
+        "years_remaining": years_remaining,
+        "years": years_remaining,
+        "rights_status": rights,
+        "contract_type": ctype,
+        "no_move_clause": nmc,
+        "no_trade_clause": ntc,
+        "ntc_mode": "MODIFIED" if mntc and not nmc else ("FULL" if ntc else "NONE"),
+        "modified_no_trade_teams": 10 if mntc and not nmc else 0,
+        "clause_type": "NMC" if nmc else ("M-NTC" if mntc else "NTC" if ntc else "None"),
+        "clause_by_year": clauses[: min(len(clauses), 8)],
+        "season_cap_hits": [round(h, 3) for h in seasons],
+        "source": "real_nhl_spotrac",
+    }
+    try:
+        sy = int(season_year) if season_year is not None else 0
+    except (TypeError, ValueError):
+        sy = 0
+    future_i = next((i for i, tok in enumerate(clauses) if tok), None)
+    if active:
+        entry["clause_active"] = True
+        entry["clause_kicks_in_year"] = sy if sy else 0
+        entry["clause_future_type"] = ""
+    elif future_i is not None:
+        entry["clause_active"] = False
+        entry["clause_future_type"] = clauses[future_i]
+        entry["clause_kicks_in_year"] = (sy + future_i) if sy else 0
+    if pending_ext:
+        entry["pending_extension"] = pending_ext
+    return entry
+
+
+def _parse_yearly_team_html(html: str, season_year: Optional[int] = None) -> Dict[str, Dict[str, Any]]:
+    """Return name_key → contract dict from a Spotrac multi-year team page.
+
+    Every player table is read. Injured, reserve, and suspended skaters often
+    sit in a later tbody; the first table alone was stamping them as 1-year deals.
+    """
+    out: Dict[str, Dict[str, Any]] = {}
+    bodies = re.findall(r"<tbody[^>]*>(.*?)</tbody>", html or "", re.S)
+    if not bodies:
+        bodies = [html or ""]
+
+    def _keep(existing: Dict[str, Any], fresh: Dict[str, Any]) -> Dict[str, Any]:
+        old_hits = existing.get("season_cap_hits") or []
+        new_hits = fresh.get("season_cap_hits") or []
+        if len(new_hits) > len(old_hits):
+            return fresh
+        return existing
+
+    for tbody in bodies:
+        if "player/_/id/" not in tbody and "nhl/player/" not in tbody:
+            continue
+        for row in re.findall(r"<tr[^>]*>(.*?)</tr>", tbody, re.S):
+            entry = _parse_yearly_row(row, season_year)
+            if entry is None:
+                continue
+            key = entry.pop("name_key")
+            existing = out.get(key)
+            if existing is None:
+                out[key] = entry
+            elif isinstance(existing, list):
+                if not any(int(x.get("spotrac_id") or 0) == entry["spotrac_id"] for x in existing):
+                    existing.append(entry)
+            elif int(existing.get("spotrac_id") or 0) != entry["spotrac_id"]:
                 out[key] = [existing, entry]
+            else:
+                out[key] = _keep(existing, entry)
     return out
 
 
@@ -506,7 +571,8 @@ def fetch_team_contracts(
     for url in urls:
         try:
             html = _http_get_text(url)
-            parsed = _parse_yearly_team_html(html)
+            page_year = _year_from_spotrac_url(url) or year
+            parsed = _parse_yearly_team_html(html, page_year)
             if parsed:
                 yearly = parsed
                 break

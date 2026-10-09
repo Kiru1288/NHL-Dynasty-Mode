@@ -183,10 +183,10 @@ function rightsHolderTeamId(player) {
   ).toUpperCase();
 }
 
-function collectProspectsForOrg(org) {
+function prospectRowFromPlayer(org, p, leagueFallback) {
   const tid = str(org.team_id || org.id).toUpperCase();
   const name = str(org.name || tid);
-  return asArray(org.prospects).map((p) => ({
+  return {
     player_id: str(p.player_id || p.id),
     name: str(p.name || "Prospect"),
     team_id: tid,
@@ -195,10 +195,23 @@ function collectProspectsForOrg(org) {
     potential: prospectPotentialScore(p),
     ovr: Number(p.ovr ?? p.overall) || null,
     position: str(p.position || p.pos || ""),
-    league: str(p.league || p.current_league || p.minor_season?.league || ""),
+    league: str(p.league || p.current_league || p.minor_season?.league || leagueFallback || ""),
     age: Number(p.age) || null,
-    raw: p,
-  }));
+    raw: leagueFallback ? { ...p, league: p.league || leagueFallback } : p,
+  };
+}
+
+function collectProspectsForOrg(org) {
+  return asArray(org.prospects).map((p) => prospectRowFromPlayer(org, p));
+}
+
+/** AHL skaters still in their prospect years belong in the org pipeline. */
+function collectAhlProspectsUnder22(org) {
+  return asArray(org.ahl).flatMap((p) => {
+    const age = Number(p?.age);
+    if (!Number.isFinite(age) || age <= 0 || age >= 22) return [];
+    return [prospectRowFromPlayer(org, p, "AHL")];
+  });
 }
 
 function collectDevelopmentLeagueProspects(developmentLeagues, orgIndex) {
@@ -237,6 +250,7 @@ function collectLeagueProspectsDeduped(organizations, developmentLeagues) {
   const leagueProspects = [];
   orgs.forEach((org) => {
     leagueProspects.push(...collectProspectsForOrg(org));
+    leagueProspects.push(...collectAhlProspectsUnder22(org));
   });
   leagueProspects.push(...collectDevelopmentLeagueProspects(developmentLeagues, orgIndex));
 

@@ -85,7 +85,7 @@ def _nhl_view(session: Any, team: Any) -> Dict[str, Any]:
     extras = [r for r in (_row(p) for p in list(getattr(team, "roster", None) or [])) if r and r["id"] not in dressed]
     return {
         "ok": True,
-        "forwards": [_unit(ln) for ln in (units.get("lines") or [])[:4]],
+        "forwards": [_unit(list(ln or [])[:3]) for ln in (units.get("lines") or [])[:4]],
         "defense": [_unit(pr) for pr in (units.get("pairs") or [])[:3]],
         "goalies": {"starter": _row(goalies[0]) if goalies else None, "backup": _row(goalies[1]) if len(goalies) > 1 else None},
         "power_play": [_unit(units.get("pp1") or []), _unit(units.get("pp2") or [])],

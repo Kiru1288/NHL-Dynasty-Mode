@@ -181,7 +181,7 @@ class ResignPhaseOutcomeTests(unittest.TestCase):
         self.assertEqual(by_id["signed1"].get("phase_status"), "accepted")
         self.assertIn("walked1", by_id)
         self.assertEqual(by_id["walked1"].get("phase_status"), "released")
-        self.assertEqual(board.get("version"), 6)
+        self.assertEqual(board.get("version"), fo.STAGE_PAYLOAD_VERSION["re_sign"])
         self.assertIn("phase_outcomes", board)
 
     def test_rejected_is_retryable_until_accepted(self):
@@ -214,6 +214,67 @@ class ResignPhaseOutcomeTests(unittest.TestCase):
             terms={"aav_m": 5.0, "years": 4},
         )
         self.assertTrue(session.resign_phase_outcomes["p2"]["terminal"])
+
+    def test_accepted_resign_leaves_the_pending_rail(self):
+        from services.franchise_offseason import (
+            _prepare_resign_payload,
+            upsert_resign_phase_outcome,
+        )
+
+        import services.contract_economy as ce
+
+        session = _session()
+        session.team_by_id = {}
+        session.sim = types.SimpleNamespace(league=types.SimpleNamespace(teams=[], free_agents=[]))
+        session.season_calendar_year = 2026
+        session.own_fa_window_active = True
+        session.phase = "re_sign"
+        upsert_resign_phase_outcome(
+            session,
+            player_id="zub",
+            phase_status="accepted",
+            snapshot_row={"player_id": "zub", "name": "Zub", "expiry_status": "UFA"},
+            terms={"aav_m": 4.0, "years": 4},
+            name="Zub",
+        )
+
+        def _fake_office(_session):
+            return {
+                "contracts": [],
+                "expiring": [
+                    {
+                        "player_id": "zub",
+                        "name": "Zub",
+                        "position": "D",
+                        "years_remaining": 1,
+                        "expiry_year": 2027,
+                        "expiry_status": "UFA",
+                        "aav_m": 4.5,
+                        "can_negotiate": True,
+                        "negotiation_status": "pending",
+                        "pending_offer": {"aav_m": 4.0, "years": 4},
+                    }
+                ],
+                "rfa_rights": [],
+                "summary": {"ufaCount": 1, "rfaCount": 0},
+                "cap_snapshot": {},
+                "contract_slots": {},
+                "buyout_candidates": [],
+                "team": {},
+            }
+
+        original = ce.build_contract_office
+        ce.build_contract_office = _fake_office
+        try:
+            payload = _prepare_resign_payload(session, force=True)
+        finally:
+            ce.build_contract_office = original
+
+        board = payload.get("re_sign") or payload.get("contracts") or {}
+        pending_ids = [str(r.get("player_id")) for r in (board.get("pending_decisions") or [])]
+        self.assertNotIn("zub", pending_ids)
+        self.assertEqual(board["summary"]["pendingDecisions"], 0)
+        self.assertIsNone(session.resign_phase_outcomes["zub"]["snapshot_row"].get("pending_offer"))
 
     def test_leaving_resign_stage_clears_ledger(self):
         from services.franchise_offseason import (

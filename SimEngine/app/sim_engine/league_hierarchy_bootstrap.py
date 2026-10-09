@@ -964,10 +964,10 @@ _PIPELINE_OVR_REPAIR = {
 
 # Depth quality is independent of star power — a class can be top-heavy or deep.
 _DEPTH_QUALITY_TIERS = [
-    ("weak", 0.18, {"round1_tail": 28, "nhl_floor": 8, "round2": 16, "round3_4": 24, "round5_7": 30, "upside_pct": 0.06}),
-    ("average", 0.42, {"round1_tail": 38, "nhl_floor": 16, "round2": 28, "round3_4": 40, "round5_7": 48, "upside_pct": 0.10}),
-    ("strong", 0.28, {"round1_tail": 48, "nhl_floor": 24, "round2": 36, "round3_4": 52, "round5_7": 62, "upside_pct": 0.14}),
-    ("elite", 0.12, {"round1_tail": 55, "nhl_floor": 32, "round2": 44, "round3_4": 64, "round5_7": 72, "upside_pct": 0.18}),
+    ("weak", 0.18, {"round1_tail": 28, "nhl_floor": 12, "round2": 24, "round3_4": 36, "round5_7": 48, "upside_pct": 0.16}),
+    ("average", 0.42, {"round1_tail": 38, "nhl_floor": 20, "round2": 36, "round3_4": 56, "round5_7": 72, "upside_pct": 0.24}),
+    ("strong", 0.28, {"round1_tail": 48, "nhl_floor": 28, "round2": 44, "round3_4": 68, "round5_7": 88, "upside_pct": 0.30}),
+    ("elite", 0.12, {"round1_tail": 55, "nhl_floor": 36, "round2": 52, "round3_4": 80, "round5_7": 100, "upside_pct": 0.36}),
 ]
 
 _TRANSCENDENT_BACKSTORY_KEYS = (
@@ -1135,22 +1135,22 @@ def _assign_residual_dev_potential(
         pot = rng.randint(73, 82)
         setattr(player, "pipeline_tier", "pool_upside")
     elif roll < 0.20:
-        pot = rng.randint(70, 79)
+        pot = rng.randint(76, 86)
         setattr(player, "pipeline_tier", "pool")
-    elif roll < 0.38:
-        pot = rng.randint(66, 75)
+    elif roll < 0.42:
+        pot = rng.randint(72, 82)
         setattr(player, "pipeline_tier", "pool")
-    elif roll < 0.58:
-        pot = rng.randint(62, 71)
+    elif roll < 0.64:
+        pot = rng.randint(68, 78)
         setattr(player, "pipeline_tier", "pool")
-    elif roll < 0.76:
-        pot = rng.randint(58, 67)
+    elif roll < 0.82:
+        pot = rng.randint(64, 74)
         setattr(player, "pipeline_tier", "pool")
-    elif roll < 0.90:
-        pot = rng.randint(54, 63)
+    elif roll < 0.93:
+        pot = rng.randint(62, 72)
         setattr(player, "pipeline_tier", "pool")
     else:
-        pot = rng.randint(50, 59)
+        pot = rng.randint(60, 70)
         setattr(player, "pipeline_tier", "pool")
 
     pot = int(max(ovr99 + 2, min(99, pot + depth_shift)))
@@ -1304,11 +1304,11 @@ def _shape_draft_class_pipeline(league: Any, rng: random.Random) -> None:
         setattr(generational_goalie, "generational_goalie", True)
 
     _goalie_shape = {
-        "weak": (0, 1),
-        "normal": (0, 3),
-        "strong": (1, 3),
-        "elite": (1, 4),
-        "generational": (1, 2),
+        "weak": (1, 4),
+        "normal": (2, 6),
+        "strong": (3, 8),
+        "elite": (4, 8),
+        "generational": (3, 6),
     }
     n_elite_g, n_top_g = _goalie_shape.get(g_label, (0, 2))
     if n_elite_g > 0:
@@ -1354,14 +1354,14 @@ def _shape_draft_class_pipeline(league: Any, rng: random.Random) -> None:
         sp = _next_skater(0.70)
         if sp is None:
             break
-        chosen.append((sp, "round2", 0.54, 0.62, 74, 84))
+        chosen.append((sp, "round2", 0.64, 0.74, 80, 90))
 
     n_round3_4 = int(depth_slots.get("round3_4", 40))
     for _ in range(n_round3_4):
         sp = _next_skater(0.58)
         if sp is None:
             break
-        chosen.append((sp, "round3_4", 0.50, 0.58, 70, 82))
+        chosen.append((sp, "round3_4", 0.60, 0.70, 76, 88))
 
     n_round5_7 = int(depth_slots.get("round5_7", 48))
     upside_pct = float(depth_slots.get("upside_pct", 0.08))
@@ -1369,12 +1369,25 @@ def _shape_draft_class_pipeline(league: Any, rng: random.Random) -> None:
         sp = _next_skater(0.48)
         if sp is None:
             break
-        if rng.random() < upside_pct * 0.55:
-            chosen.append((sp, "hidden_upside", 0.46, 0.56, 80, 92))
-        elif rng.random() < 0.22:
-            chosen.append((sp, "round5_7", 0.48, 0.56, 72, 84))
+        if rng.random() < upside_pct * 0.70:
+            chosen.append((sp, "hidden_upside", 0.58, 0.68, 82, 94))
+        elif rng.random() < 0.45:
+            chosen.append((sp, "round5_7", 0.56, 0.66, 76, 88))
         else:
-            chosen.append((sp, "round5_7", 0.42, 0.52, 65, 78))
+            chosen.append((sp, "round5_7", 0.54, 0.64, 72, 84))
+
+    # Spread real goalie prospects through the class. Non-franchise goalies stay
+    # out of round 1 via the board scatter; these bands are rounds 2-7.
+    for i in range(26):
+        gp = _next_goalie(0.72)
+        if gp is None:
+            break
+        if i < 8:
+            chosen.append((gp, "round2", 0.62, 0.72, 78, 90))
+        elif i < 16:
+            chosen.append((gp, "round3_4", 0.58, 0.68, 74, 86))
+        else:
+            chosen.append((gp, "round5_7", 0.54, 0.64, 70, 82))
 
     shaped_ids = set()
     for p, tier, lo, hi, pot_lo, pot_hi in chosen:
@@ -1396,6 +1409,70 @@ def _shape_draft_class_pipeline(league: Any, rng: random.Random) -> None:
         if id(p) in shaped_ids:
             continue
         _assign_residual_dev_potential(p, rng, depth_label=depth_label, upside_pct=upside_pct)
+
+
+_LATER_ROUND_LIFT_SKIP = frozenset({
+    "transcendent", "franchise", "elite", "top", "round1_tail",
+})
+
+
+def lift_shallow_draft_depth(league: Any, rng: Optional[random.Random] = None) -> int:
+    """Raise later-round and residual draft-age players who were left at ~40-55 overall.
+
+    Stars and the top of round 1 are left alone. Runs once per league.
+    """
+    if league is None or bool(getattr(league, "_later_round_quality_v2", False)):
+        return 0
+    rng_inst = rng if rng is not None else random.Random(42)
+    lifted = 0
+    for block in getattr(league, "development_leagues", None) or []:
+        code = str(block.get("league_code") or "JUNIOR")
+        max_age = 24 if code.upper() == "NCAA" else 20
+        for tm in block.get("teams") or []:
+            for p in tm.get("players") or []:
+                if getattr(p, "retired", False) or getattr(p, "drafted", False):
+                    continue
+                ident = getattr(p, "identity", None)
+                age = int(getattr(ident, "age", 99) or 99) if ident else 99
+                if age < 17 or age > max_age:
+                    continue
+                tier = str(getattr(p, "pipeline_tier", "") or "")
+                if tier in _LATER_ROUND_LIFT_SKIP:
+                    continue
+                ovr = _player_ovr_frac(p)
+                ratings = getattr(p, "ratings", None)
+                pot = 0
+                if isinstance(ratings, dict):
+                    try:
+                        pot = int(float(ratings.get("dev_potential") or 0))
+                    except (TypeError, ValueError):
+                        pot = 0
+                if ovr >= 0.60 and pot >= 70:
+                    continue
+                roll = rng_inst.random()
+                if roll < 0.18:
+                    lo, hi, plo, phi, shaped = 0.62, 0.72, 80, 92, "hidden_upside"
+                elif roll < 0.50:
+                    lo, hi, plo, phi, shaped = 0.58, 0.68, 76, 88, "round3_4"
+                else:
+                    lo, hi, plo, phi, shaped = 0.54, 0.66, 72, 84, "round5_7"
+                _apply_shaped_player(
+                    p,
+                    tier=shaped,
+                    lo=lo,
+                    hi=hi,
+                    pot_lo=plo,
+                    pot_hi=phi,
+                    rng=rng_inst,
+                    code_by_id={id(p): code},
+                    rng_inst=rng_inst,
+                )
+                lifted += 1
+    try:
+        setattr(league, "_later_round_quality_v2", True)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    return lifted
 
 
 def repair_undervalued_draft_pipeline_stars(league: Any, rng: Optional[random.Random] = None) -> int:

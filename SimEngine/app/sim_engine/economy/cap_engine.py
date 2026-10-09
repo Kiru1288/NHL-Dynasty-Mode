@@ -179,17 +179,45 @@ def player_cap_hit_millions(player: Any) -> float:
 
 
 def player_full_cap_hit_millions(player: Any) -> float:
-    for key in ("cap_hit_m", "contract_aav_m", "aav_m", "salary_m"):
+    """This year's cap charge. AAV already includes a signing bonus, so a stored
+    cap hit that sits well above AAV is the bonus counted a second time.
+    """
+    cap = 0.0
+    aav = 0.0
+    for key in ("cap_hit_m", "contract_aav_m"):
+        v = normalize_money_to_millions(_get(player, key, 0))
+        if v > 0:
+            cap = v
+            break
+    for key in ("aav_m", "contract_aav_m"):
+        v = normalize_money_to_millions(_get(player, key, 0))
+        if v > 0:
+            aav = v
+            break
+    c = _get(player, "contract", None)
+    if c is not None:
+        if cap <= 0:
+            for key in ("cap_hit_m", "cap_hit"):
+                v = normalize_money_to_millions(_get(c, key, 0))
+                if v > 0:
+                    cap = v
+                    break
+        if aav <= 0:
+            for key in ("aav_m", "aav", "salary_aav"):
+                v = normalize_money_to_millions(_get(c, key, 0))
+                if v > 0:
+                    aav = v
+                    break
+    if aav > 0 and cap > aav + 1.0 and cap > aav * 1.25:
+        return aav
+    if cap > 0:
+        return cap
+    if aav > 0:
+        return aav
+    for key in ("salary_m",):
         v = normalize_money_to_millions(_get(player, key, 0))
         if v > 0:
             return v
-
-    c = _get(player, "contract", None)
-    if c is not None:
-        for key in ("cap_hit_m", "cap_hit", "aav_m", "aav", "salary_aav"):
-            v = normalize_money_to_millions(_get(c, key, 0))
-            if v > 0:
-                return v
     return 0.0
 
 
@@ -277,10 +305,119 @@ def _is_active_roster_player(player: Any) -> bool:
         )
 
 
-def team_active_roster_cap_hit_millions(team: Any, *, include_expiring: bool = False) -> float:
+def _contract_years_left(player: Any) -> int:
+    c = _get(player, "contract", None)
+    raw = None
+    if isinstance(c, dict):
+        raw = c.get("years_remaining")
+    elif c is not None:
+        raw = getattr(c, "years_remaining", None)
+    if raw is None:
+        raw = _get(player, "years_remaining", 0)
+    try:
+        return max(0, int(raw or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def team_expiring_active_cap_hit_millions(team: Any, *, include_expiring: bool = False) -> float:
+    """Active-roster cap hit that is on this year's books and comes off next year.
+
+    Pending July-1 deals are omitted when they are already excluded from the
+    current total, so next year's projection does not subtract them twice.
+    """
     total = 0.0
     for p in _iter_team_roster(team):
         if not _is_active_roster_player(p):
+            continue
+        if (not include_expiring) and _is_pending_july1_expiry(p):
+            continue
+        if _contract_years_left(p) <= 1:
+            total += player_cap_hit_millions(p)
+    return max(0.0, total)
+
+
+def pending_extension_cap_hit_millions(player: Any) -> float:
+    """AAV of an extension that is signed but has not started."""
+    c = _get(player, "contract", None)
+    ext = None
+    if isinstance(c, dict):
+        ext = c.get("pending_extension")
+    elif c is not None:
+        ext = getattr(c, "pending_extension", None)
+    if not isinstance(ext, dict):
+        return 0.0
+    try:
+        return max(0.0, float(ext.get("cap_hit_m") or ext.get("aav_m") or 0.0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def team_following_season_active_cap_hit_millions(team: Any, *, include_expiring: bool = False) -> float:
+    """Active-roster cap hit for the season after this one.
+
+    Final-year deals drop off. A signed extension replaces that hit with the
+    new AAV. Deals with term left keep their current hit.
+    """
+    del include_expiring
+    _dedupe_roster_attr(team, "roster")
+    total = 0.0
+    seen: set = set()
+    for p in _iter_team_roster(team):
+        if not _is_active_roster_player(p):
+            continue
+        pid = str(_get(p, "id", "") or _get(p, "player_id", "") or "")
+        key = pid or f"obj:{id(p)}"
+        if key in seen:
+            continue
+        seen.add(key)
+        yrs = _contract_years_left(p)
+        ext_hit = pending_extension_cap_hit_millions(p)
+        if yrs <= 1 and ext_hit > 0:
+            total += ext_hit
+            continue
+        if yrs <= 1:
+            continue
+        total += player_cap_hit_millions(p)
+    return max(0.0, total)
+
+
+def _dedupe_roster_attr(team: Any, attr: str) -> None:
+    """Drop a second copy of the same player. A doubled NHL list charges every AAV twice."""
+    roster = list(_get(team, attr, None) or [])
+    if len(roster) < 2:
+        return
+    seen: set = set()
+    kept: List[Any] = []
+    for p in roster:
+        pid = str(_get(p, "id", "") or _get(p, "player_id", "") or "")
+        key = pid or f"obj:{id(p)}"
+        if key in seen:
+            continue
+        seen.add(key)
+        kept.append(p)
+    if len(kept) != len(roster):
+        try:
+            setattr(team, attr, kept)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+
+
+def team_active_roster_cap_hit_millions(team: Any, *, include_expiring: bool = False) -> float:
+    _dedupe_roster_attr(team, "roster")
+    total = 0.0
+    seen: set = set()
+    for p in _iter_team_roster(team):
+        if not _is_active_roster_player(p):
+            continue
+        pid = str(_get(p, "id", "") or _get(p, "player_id", "") or "")
+        key = pid or f"obj:{id(p)}"
+        if key in seen:
+            continue
+        seen.add(key)
+        # A deal that already burned to 0 years is off the books even if the
+        # body is still sitting on the list.
+        if _contract_years_left(p) <= 0 and not _is_pending_july1_expiry(p):
             continue
         # Deferred July-1 UFAs stay on the roster for extension talks, but their
         # AAV must not squat usable opening-day space (re-sign / FA desk).
@@ -291,15 +428,36 @@ def team_active_roster_cap_hit_millions(team: Any, *, include_expiring: bool = F
     return max(0.0, total)
 
 
-def team_buried_cap_hit_millions(team: Any, *, season_start_year: Optional[int] = None) -> float:
+def team_buried_cap_hit_millions(
+    team: Any,
+    *,
+    season_start_year: Optional[int] = None,
+    opening_day: bool = False,
+) -> float:
     """Sum bury residuals for minors/AHL/ECHL SPC holders (NHL CBA)."""
     total = 0.0
+    seen: set = set()
+    relief = nhl_bury_threshold_millions(season_start_year) if season_start_year is not None else 1.15
     for p in _iter_org_contracted_players(team):
         if bool(_get(p, "retired", False)):
             continue
         # Active NHL roster players are never buried residual.
         if _is_active_roster_player(p):
             continue
+        pid = str(_get(p, "id", "") or _get(p, "player_id", "") or "")
+        key = pid or f"obj:{id(p)}"
+        if key in seen:
+            continue
+        seen.add(key)
+        if opening_day:
+            yrs = _contract_years_left(p)
+            ext_hit = pending_extension_cap_hit_millions(p)
+            # A contract that dies this July does not bury against next year's cap.
+            if yrs <= 1 and ext_hit <= 0:
+                continue
+            if yrs <= 1 and ext_hit > 0:
+                total += max(0.0, ext_hit - relief)
+                continue
         total += buried_cap_hit_millions(p, season_start_year=season_start_year)
     return max(0.0, total)
 
@@ -364,10 +522,19 @@ def _sum_money_records_millions(records: Any, season_label: Optional[str] = None
                     total += _sum_money_records_millions(records.get(k), None)
             if hit:
                 return total
-        total = 0.0
-        for v in records.values():
-            total += _sum_money_records_millions(v, None)
-        return total
+        # A map of season → hit must not be added up across every remaining
+        # year. One snapshot is one season. Player-id maps still sum.
+        season_hits: Dict[str, float] = {}
+        other = 0.0
+        for key, value in records.items():
+            label = str(key)
+            if len(label) >= 4 and label[:4].isdigit() and (len(label) == 4 or label[4] == "-"):
+                season_hits[label] = season_hits.get(label, 0.0) + _sum_money_records_millions(value, None)
+            else:
+                other += _sum_money_records_millions(value, None)
+        if season_hits:
+            return other + max(season_hits.values())
+        return other
 
     if isinstance(records, (list, tuple, set)):
         if keys:
@@ -485,9 +652,26 @@ def _league_cap_bounds_millions(
     default_upper = nhl_upper_limit_millions(season_y, league)
     default_lower = nhl_lower_limit_millions(season_y, league)
 
-    # Explicit session/label season → table is source of truth (and re-stamp).
+    # Explicit session/label season → table is source of truth.
+    # Do not roll the live cap backward. The salary-cap stage already announced
+    # next year; a re-sign snapshot that still asks for the season that just
+    # ended used to stamp $104M back over that announcement.
     if season_start_year is not None and season_y is not None:
-        if league is not None:
+        sched = _league_cap_schedule(league)
+        live_sy = 0
+        try:
+            live_sy = int(_get(league, "season_year", 0) or 0)
+        except (TypeError, ValueError):
+            live_sy = 0
+        announced_later = False
+        for key in sched:
+            try:
+                if int(key) > int(season_y):
+                    announced_later = True
+                    break
+            except (TypeError, ValueError):
+                continue
+        if league is not None and not announced_later and live_sy <= int(season_y):
             try:
                 apply_nhl_salary_cap_for_season(league, int(season_y))
             except Exception:
@@ -628,6 +812,7 @@ def calculate_team_cap_snapshot(
     calendar_cursor: int = 0,
     regular_season_last_index: int = 192,
     include_expiring: bool = False,
+    opening_day: bool = False,
 ) -> Dict[str, Any]:
     season_y = _season_start_year_from_label(season_label, league)
     # Pass the resolved season so a stale league.salary_cap_m=$88 (or a lagging
@@ -636,15 +821,35 @@ def calculate_team_cap_snapshot(
     upper_limit_m = max(0.0, bounds["upper"])
     lower_limit_m = max(0.0, bounds["lower"])
 
-    active_m = team_active_roster_cap_hit_millions(team, include_expiring=bool(include_expiring))
+    if opening_day:
+        # Next season's NHL payroll: final-year deals drop off, a signed
+        # extension takes their place. This is the number re-sign and free
+        # agency have to agree with the offseason hub on.
+        active_m = team_following_season_active_cap_hit_millions(team)
+    else:
+        active_m = team_active_roster_cap_hit_millions(team, include_expiring=bool(include_expiring))
     # Do NOT fall back to team.total_cap_hit when active is 0 — that mirror is the
     # FULL snapshot total and reinstates pending July-1 UFAs (and double-counts
     # buried/bonus), leaving every club at ~$0 usable space for FA.
-    buried_m = team_buried_cap_hit_millions(team, season_start_year=season_y)
+    buried_m = team_buried_cap_hit_millions(
+        team, season_start_year=season_y, opening_day=bool(opening_day)
+    )
     retained_m = team_retained_salary_millions(team, season_label=season_label)
     buyout_m = team_buyout_cap_hit_millions(team, season_label=season_label)
     bonus_overage_m = team_bonus_overage_millions(team, season_label=season_label)
     bonus_reserve_m = team_performance_bonus_reserve_millions(team)
+    if opening_day and bonus_reserve_m > 0:
+        # Last season's unearned ELC hold is released at year end. A reserve
+        # with no season stamp, or a stamp for a year that already ended,
+        # must not keep taxing July cap space.
+        stamp = _get(team, "performance_bonus_reserve_season", None)
+        stamp_y = 0
+        try:
+            stamp_y = int(stamp) if stamp is not None else 0
+        except (TypeError, ValueError):
+            stamp_y = 0
+        if season_y is None or stamp_y != int(season_y):
+            bonus_reserve_m = 0.0
     ltir_pool_m = team_ltir_pool_millions(team)
     # Season-scoped pools (e.g. the opening-day allowance) expire when the season rolls.
     pool_season = _get(team, "ltir_pool_season", None)
@@ -656,6 +861,15 @@ def calculate_team_cap_snapshot(
             pass
 
     other_dead_m = max(0.0, normalize_money_to_millions(_get(team, "other_dead_cap_m", _get(team, "other_dead_cap", 0.0))))
+    # A bonus ledger that picked up raw dollars, or a reserve funded once per
+    # player and never released, was charging a second full payroll. Real clubs
+    # do not carry a nine-figure bonus cushion.
+    if bonus_reserve_m > 20.0:
+        bonus_reserve_m = 20.0
+    if bonus_overage_m > 25.0:
+        bonus_overage_m = 25.0
+    if other_dead_m > 40.0:
+        other_dead_m = 40.0
     effective_limit_m = upper_limit_m + ltir_pool_m
     total_m = (
         active_m
@@ -674,8 +888,13 @@ def calculate_team_cap_snapshot(
     total_regular_days = max(1, int(regular_season_last_index))
     day_idx = max(0, int(calendar_cursor))
     days_remaining = max(0, total_regular_days - day_idx)
-    remaining_pct = max(0.05, float(days_remaining) / float(total_regular_days))
-    projected_deadline_space_m = max(0.0, usable_cap_space_m / remaining_pct)
+    if opening_day or days_remaining <= 0:
+        # A finished season used to divide by a 5% floor, so $1M of real room
+        # showed up as $20M of "projected" space on the way into the offseason.
+        projected_deadline_space_m = usable_cap_space_m
+    else:
+        remaining_pct = float(days_remaining) / float(total_regular_days)
+        projected_deadline_space_m = usable_cap_space_m / remaining_pct
 
     roster = _iter_team_roster(team)
     active_roster_players = [p for p in roster if _is_active_roster_player(p)]

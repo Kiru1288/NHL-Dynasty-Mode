@@ -11,6 +11,7 @@ import {
   computeOfferCapHitM,
   estimateOfferInterestM,
   interestMeterTone,
+  maxNegotiationOfferAavM,
   projectNegotiationCap,
   resignInterestLabel,
 } from "../../utils/contractNegotiation";
@@ -247,13 +248,15 @@ export default function CapContractNegotiation({
         ? `${agentName}: terms changed — Talk to agent or submit again for an updated read.`
         : `${agentName} represents ${safeText(row?.name, "the player")}. Set AAV and years, then submit or talk to agent.`;
 
-  const seasonRoom = inSeasonCap
-    ? safeNum(capSnapshot?.usable_cap_space_m, NaN) + Math.max(0, safeNum(row?.aav_m ?? row?.cap_hit_m, 0))
-    : NaN;
-  const sliderMax = Math.min(
-    Number(signingBonusElig?.max_salary_m || 99),
-    Math.max(12, ask.aav * 1.45, offerAavNum, safeNum(row?.aav_m, 1) * 1.8),
-    Number.isFinite(seasonRoom) && seasonRoom > 0.8 ? seasonRoom : 99,
+  const sliderMax = useMemo(
+    () =>
+      maxNegotiationOfferAavM({
+        capSnapshot,
+        nextYearProjection,
+        playerRow: row,
+        cbaMaxSalaryM: signingBonusElig?.max_salary_m,
+      }),
+    [capSnapshot, nextYearProjection, row, signingBonusElig?.max_salary_m],
   );
   const sliderMin = 0.775;
 
@@ -497,8 +500,18 @@ export default function CapContractNegotiation({
               {formatMoneyM(capSnapshot.usable_cap_space_m)}
             </strong>
           </div>
+          {capProj.dealStartsNextYear && capProj.nextYearRoomBeforeM != null ? (
+            <div className="cap-dossier-tile cap-dossier-tile--highlight">
+              <span className="cap-dossier-tile__label">Cap room next year</span>
+              <strong className="cap-num-pop tone-green">
+                {formatMoneyM(capProj.nextYearRoomBeforeM)}
+              </strong>
+            </div>
+          ) : null}
           <div className="cap-dossier-tile">
-            <span className="cap-dossier-tile__label">After offer</span>
+            <span className="cap-dossier-tile__label">
+              {capProj.dealStartsNextYear ? "This year (unchanged)" : "After offer"}
+            </span>
             <strong
               className={`cap-num-pop ${projectedAfter != null && projectedAfter < 0 ? "tone-danger" : "tone-cyan"}`}
             >
@@ -506,13 +519,29 @@ export default function CapContractNegotiation({
             </strong>
           </div>
           <div className="cap-dossier-tile">
-            <span className="cap-dossier-tile__label">{inSeasonCap ? "Next year (info)" : "Next season"}</span>
+            <span className="cap-dossier-tile__label">
+              {capProj.dealStartsNextYear ? "Next year after offer" : inSeasonCap ? "Next year (info)" : "Next season"}
+            </span>
             <strong
-              className={`cap-num-pop ${!inSeasonCap && projectedNext != null && projectedNext < 0 ? "tone-danger" : "tone-gold"}`}
+              className={`cap-num-pop ${projectedNext != null && projectedNext < 0 ? "tone-danger" : "tone-gold"}`}
             >
               {projectedNext != null ? formatMoneyM(projectedNext) : "—"}
             </strong>
           </div>
+          {capProj.capBarPct != null ? (
+            <div
+              className="cap-bar"
+              style={{ flex: "1 1 100%" }}
+              title="Cap used after this offer, against this year's upper limit"
+            >
+              <div
+                className={`cap-bar-fill ${
+                  capProj.capBarPct >= 100 ? "is-danger" : capProj.capBarPct >= 95 ? "is-tight" : "is-comfortable"
+                }`}
+                style={{ width: `${capProj.capBarPct}%` }}
+              />
+            </div>
+          ) : null}
         </div>
       </header>
 
@@ -608,13 +637,7 @@ export default function CapContractNegotiation({
         </aside>
 
         <section className="cap-nego-desk__controls">
-          <NegotiationMeetingPanel
-            playerId={row?.player_id || row?.id}
-            compact
-            onChanged={() => {
-              runPreview();
-            }}
-          />
+          <div className="cap-nego-desk__controls-grid">
           <div className="cap-nego-meter" aria-label="Deal interest">
             <div className="cap-nego-meter-head">
               <span>Deal interest</span>
@@ -657,6 +680,23 @@ export default function CapContractNegotiation({
               disabled={busy}
               onChange={(e) => setOfferAav(e.target.value)}
             />
+          </div>
+
+          <div className="cap-nego__term cap-nego__term--inline">
+            <span>Years</span>
+            <div className="cap-nego__term-btns">
+              {termOptions.map((y) => (
+                <button
+                  key={y}
+                  type="button"
+                  className={`cap-edraft-action-btn${offerYearsNum === y ? " is-active" : ""}`}
+                  disabled={busy}
+                  onClick={() => setOfferYears(String(y))}
+                >
+                  {y}
+                </button>
+              ))}
+            </div>
           </div>
 
           <div className="cap-nego__clauses" role="group" aria-label="Contract clauses">
@@ -738,28 +778,30 @@ export default function CapContractNegotiation({
             )}
           </div>
 
-          <div className="cap-nego__term">
-            <span>Years</span>
-            <div className="cap-nego__term-btns">
-              {termOptions.map((y) => (
-                <button
-                  key={y}
-                  type="button"
-                  className={`cap-edraft-action-btn${offerYearsNum === y ? " is-active" : ""}`}
-                  disabled={busy}
-                  onClick={() => setOfferYears(String(y))}
-                >
-                  {y}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <p className="cap-nego-desk__cap-note">
+          <p className="cap-nego-desk__cap-note cap-nego-desk__cap-note--span">
             Cap hit {formatMoneyM(offerCapHitNum)}
             {offerBonusNum > 0 ? ` (incl. ${formatMoneyM(offerBonusNum)} bonus)` : ""}
-            {capProj.capDeltaNowM != null ? ` · Δ this season ${formatMoneyM(capProj.capDeltaNowM)}` : ""}
+            {capProj.dealStartsNextYear
+              ? " · counts next season, not this year's cap"
+              : capProj.capDeltaNowM != null
+                ? ` · Δ this season ${formatMoneyM(capProj.capDeltaNowM)}`
+                : ""}
+            {capProj.capUsedAfterM != null && Number.isFinite(Number(capSnapshot.upper_limit_m))
+              ? ` · ${formatMoneyM(capProj.capUsedAfterM)} / ${formatMoneyM(capSnapshot.upper_limit_m)}`
+              : ""}
+            {capProj.dealStartsNextYear && projectedNext != null
+              ? ` · ${formatMoneyM(projectedNext)} left after this offer (next year)`
+              : ""}
           </p>
+          </div>
+
+          <NegotiationMeetingPanel
+            playerId={row?.player_id || row?.id}
+            compact
+            onChanged={() => {
+              runPreview();
+            }}
+          />
 
           {localError ? <p className="cap-nego__error">{localError}</p> : null}
 

@@ -361,16 +361,17 @@ def _do_agent(session: Any, player: Any, where: str, approach: str) -> Dict[str,
     style = str(agent.get("style") or "")
     trust_before = float(arel.get("agent_gm_trust", 0.55))
     rng = _rng("agent", _player_id(player), _window(session), approach)
-    # (trust change, interest change, demand shift %) by approach x agent style
+    # (trust change, interest change, price intensity). Intensity is not a percent —
+    # _price_swing_pct turns a full-strength 18 into a move worth real dollars.
     table = {
-        "rapport": {"discreet": (0.08, 3, 0.0), "media_savvy": (0.06, 2, 0.0), "leverage": (0.03, 1, 0.0),
-                    "leaker": (0.04, 1, 0.0), "disruptor": (0.01, 0, 0.0)},
-        "transparent": {"discreet": (0.05, 2, -3.0), "media_savvy": (0.04, 1, -2.0), "leverage": (0.0, 0, -1.0),
-                        "leaker": (-0.03, -1, -2.0), "disruptor": (-0.02, -1, 0.0)},
-        "firm_number": {"discreet": (-0.02, -1, -1.5), "media_savvy": (0.0, 0, -1.0), "leverage": (0.05, 2, -2.5),
-                        "leaker": (0.0, -1, -1.0), "disruptor": (-0.06, -3, 1.5)},
+        "rapport": {"discreet": (0.08, 4, -6.0), "media_savvy": (0.06, 3, -3.0), "leverage": (0.03, 1, 0.0),
+                    "leaker": (0.02, 0, 4.0), "disruptor": (0.0, -2, 8.0)},
+        "transparent": {"discreet": (0.06, 4, -16.0), "media_savvy": (0.04, 2, -10.0), "leverage": (0.02, 1, -6.0),
+                        "leaker": (-0.05, -3, 8.0), "disruptor": (-0.06, -4, 14.0)},
+        "firm_number": {"discreet": (-0.02, 0, -12.0), "media_savvy": (0.0, 1, -8.0), "leverage": (0.06, 3, -18.0),
+                        "leaker": (-0.03, -2, 10.0), "disruptor": (-0.08, -6, 18.0)},
     }
-    dt, di, dshift = table[approach].get(style, (0.02, 1, 0.0))
+    dt, di, intensity = table[approach].get(style, (0.02, 1, 0.0))
     di = round(di + rng.uniform(-0.8, 0.8), 1)
     # R4: trust is the agent's, not the player's — it moves once per agent per window,
     # however many of his clients you meet through.
@@ -391,8 +392,8 @@ def _do_agent(session: Any, player: Any, where: str, approach: str) -> Dict[str,
     if approach == "transparent" and style == "leaker" and rng.random() < 0.6:
         leaked = True
         # O3: the leak is real — he uses your numbers as leverage, and the trust you built
-        # with him takes a hit.
-        dshift = float(dshift) + 2.0
+        # with him takes a hit. A leaked sheet is a full-strength price hike.
+        intensity = float(intensity) + 14.0
         after = max(0.0, after - 0.03)
         arel["agent_gm_trust"] = after
         try:
@@ -410,14 +411,22 @@ def _do_agent(session: Any, player: Any, where: str, approach: str) -> Dict[str,
             })
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
+    ask_before = _current_ask(session, player, where)
+    dshift = _price_swing_pct(intensity, ask_before)
     if dshift:
         try:
             setattr(player, "_agent_demand_shift", {"team_id": _uid(session), "pct": float(dshift), "window": _window(session), "expiry": _contract_expiry(player)})
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
+    ask_after = _current_ask(session, player, where) if dshift else ask_before
+    moved_m = round(ask_after - ask_before, 2) if ask_before and ask_after else 0.0
     name = str(agent.get("name") or "The agent")
     if repeat_agent:
-        line = f"{name} already met you this window. Nothing new on the relationship."
+        line = f"{name} already met you this window. The relationship doesn't move again."
+    elif moved_m <= -0.05 and dt >= 0:
+        line = f"{name} took the number seriously."
+    elif moved_m <= -0.05:
+        line = f"{name} pushed back, then came off the number."
     elif dt >= 0.05:
         line = f"{name} appreciated the approach — the relationship is warmer."
     elif dt > 0:
@@ -428,16 +437,21 @@ def _do_agent(session: Any, player: Any, where: str, approach: str) -> Dict[str,
         line = f"{name} didn't like it. Talks just got harder."
     if leaked:
         line += " Your cap numbers have already leaked to the press."
-    if dshift < 0:
-        line += f" His camp is now framing the ask about {abs(dshift):.1f}% lower."
+    if moved_m <= -0.05:
+        line += f" His camp cut the ask ${abs(moved_m):.2f}M."
+    elif moved_m >= 0.05:
+        line += f" He's dug in — the ask went up ${moved_m:.2f}M."
+    elif dshift < 0:
+        line += f" His camp is now framing the ask about {abs(dshift):.0f}% lower."
     elif dshift > 0:
-        line += f" He's dug in — the ask went up about {dshift:.1f}%."
+        line += f" He's dug in — the ask went up about {dshift:.0f}%."
     led["agent"] = {
         "id": approach,
         "interest_delta": di,
         "trust_before": round(trust_before * 100),
         "trust_after": round(after * 100),
         "demand_shift_pct": dshift,
+        "demand_shift_m": moved_m,
         "leaked": leaked,
         "line": line,
     }
@@ -495,10 +509,6 @@ def ask_hometown_discount(session: Any, player_id: str) -> Dict[str, Any]:
     if gm_trust <= 45:
         reasons.append("doesn't trust management")
     if roll < chance:
-        # Dollar spectrum, $1M-$5M: how loyal he is, how much he likes the city and
-        # you, and how big his number is decide where on the range he lands. The
-        # discount can never take more than ~45% off his ask (a $1.5M depth deal
-        # can't give back $1M), so cheap contracts land below the $1M end.
         from services.contract_economy import compute_player_demand, league_minimum_aav
 
         team = _user_team(session)
@@ -507,22 +517,17 @@ def ask_hometown_discount(session: Any, player_id: str) -> Dict[str, Any]:
             base_ask = float(compute_player_demand(player, team, league, context="re_sign").get("want_aav_m") or 0.0)
         except Exception:
             base_ask = 0.0
-        size_factor = max(0.0, min(1.0, (base_ask - 3.0) / 9.0))
         spread_roll = _rng("hometown_size", player_id, _window(session)).random()
-        spread = (
-            0.02
-            + traits["loyalty"] * 0.40
-            + max(0.0, goodwill - 55) * 0.010
-            + max(0.0, community - 50) * 0.004
-            + (0.06 if age >= 31 else 0.0)
-            + size_factor * 0.45
-            + (spread_roll - 0.5) * 0.35
-            - traits["money"] * 0.15
+        amount = _hometown_cut_m(
+            base_ask,
+            loyalty=float(traits["loyalty"]),
+            money=float(traits["money"]),
+            goodwill=goodwill,
+            community=community,
+            age=float(age),
+            spread=spread_roll,
+            league_min=float(league_minimum_aav(league) or 0.0),
         )
-        spread = max(0.0, min(1.0, spread))
-        amount = 1.0 + 4.0 * spread
-        cap = max(0.0, (base_ask - league_minimum_aav(league)) * 0.45) if base_ask > 0 else amount
-        amount = round(max(0.05, min(amount, cap)), 2)
         pct = round(100.0 * amount / base_ask, 1) if base_ask > 0 else 0.0
         try:
             setattr(player, "_hometown_discount", {
@@ -531,13 +536,37 @@ def ask_hometown_discount(session: Any, player_id: str) -> Dict[str, Any]:
             })
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
-        msg = f"{name} agreed — he'll take about ${amount:.2f}M a year under his number to stay."
+        msg = f"{name} agreed — he'll take ${amount:.2f}M a year under his number to stay."
         led["hometown"] = {"accepted": True, "pct": pct, "amount_m": amount, "chance": round(chance * 100), "line": msg}
     else:
-        _bump_entity(session, player_id, {"state.morale": -2.0})
-        _bump_gm_ledger(session, player_id, "negotiation_goodwill", -3.0)
-        msg = f"{name} turned it down. He wants full market value."
-        led["hometown"] = {"accepted": False, "chance": round(chance * 100), "line": msg}
+        _bump_entity(session, player_id, {"state.morale": -6.0})
+        _bump_gm_ledger(session, player_id, "negotiation_goodwill", -8.0)
+        ask_before = _current_ask(session, player, "own")
+        insult = 10.0
+        if traits["money"] >= 0.55:
+            insult += 8.0
+        if ovr >= 88:
+            insult += 6.0
+        if traits["loyalty"] >= 0.70:
+            insult -= 4.0
+        insult = max(8.0, insult)
+        pct_up = _price_swing_pct(insult, ask_before)
+        try:
+            setattr(player, "_hometown_refusal_shift", {
+                "team_id": _uid(session), "pct": float(pct_up), "expiry": _contract_expiry(player),
+            })
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+        ask_after = _current_ask(session, player, "own")
+        bumped = round(ask_after - ask_before, 2) if ask_before and ask_after else 0.0
+        if bumped >= 0.05:
+            msg = f"{name} took that personally. His ask went up ${bumped:.2f}M."
+        else:
+            msg = f"{name} turned it down. He wants full market value."
+        led["hometown"] = {
+            "accepted": False, "chance": round(chance * 100), "line": msg,
+            "demand_shift_pct": pct_up, "demand_shift_m": bumped,
+        }
     led["hometown"]["factors"] = reasons
     _log(led, f"Hometown discount ask: {'yes' if led['hometown']['accepted'] else 'no'} ({led['hometown']['chance']}% odds)")
     return {"ok": True, "kind": "hometown", "accepted": led["hometown"]["accepted"], "message": msg,
@@ -574,6 +603,75 @@ def _bump_gm_ledger(session: Any, player_id: str, key: str, delta: float) -> Non
 
 
 # --------------------------------------------------------------------------- engine hooks
+
+
+def _price_swing_pct(intensity: float, ask_m: float) -> float:
+    """Turn a meeting's intensity into a percent that moves real dollars.
+
+    Full strength (18) is the larger of about 22% or $0.50M plus 10% of the ask,
+    capped at 32% so one meeting is a swing and a later insult can still add.
+    A $2M depth deal and a $12M star both move by a number you can see.
+    """
+    raw = float(intensity or 0.0)
+    if abs(raw) < 0.05:
+        return 0.0
+    strength = min(1.0, abs(raw) / 18.0)
+    pct_leg = 22.0 * strength
+    dollar_leg = 0.0
+    ask = float(ask_m or 0.0)
+    if ask > 0.5:
+        dollars = (0.50 + 0.10 * ask) * strength
+        dollar_leg = 100.0 * dollars / ask
+    signed = min(32.0, max(pct_leg, dollar_leg))
+    return round(signed if raw > 0 else -signed, 1)
+
+
+def _hometown_cut_m(
+    base_ask: float,
+    *,
+    loyalty: float,
+    money: float,
+    goodwill: float,
+    community: float,
+    age: float,
+    spread: float,
+    league_min: float,
+) -> float:
+    """Dollars off this club's ask when he agrees to stay for less.
+
+    A loyal yes is up to about 42% off. A reluctant yes is still ~18%.
+    The cut stops at 45% of the ask so the new number stays a real contract.
+    """
+    ask = float(base_ask or 0.0)
+    floor = float(league_min or 0.0)
+    if ask <= floor + 0.05:
+        return 0.0
+    strength = (
+        0.15
+        + max(0.0, min(1.0, loyalty)) * 0.45
+        + max(0.0, (goodwill - 55.0) / 45.0) * 0.15
+        + max(0.0, (community - 40.0) / 60.0) * 0.12
+        + (0.10 if age >= 31 else 0.0)
+        + (float(spread) - 0.5) * 0.20
+        - max(0.0, min(1.0, money)) * 0.35
+    )
+    strength = max(0.0, min(1.0, strength))
+    frac = 0.18 + 0.24 * strength
+    amount = max(0.35, ask * frac)
+    room = max(0.0, ask - max(floor, ask * 0.55))
+    return round(min(amount, room, 7.0), 2)
+
+
+def _current_ask(session: Any, player: Any, where: str) -> float:
+    from services.contract_economy import compute_player_demand
+
+    ctx = "re_sign" if where == "own" else "ufa"
+    try:
+        row = compute_player_demand(player, _user_team(session), _league(session), context=ctx)
+        return float(row.get("want_aav_m") or 0.0)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+        return 0.0
 
 
 def interest_adjustment(session: Any, player: Any, team: Any, context: str) -> float:
@@ -617,14 +715,14 @@ def demand_multiplier(player: Any, team: Any, context: str) -> float:
     ):
         # Legacy percentage discounts (saves from before the dollar spectrum).
         mult *= 1.0 - float(disc.get("pct") or 0.0) / 100.0
-    shift = getattr(player, "_agent_demand_shift", None)
-    if isinstance(shift, dict) and str(shift.get("team_id")) == tid and shift.get("expiry") == exp_now:
-        mult *= 1.0 + float(shift.get("pct") or 0.0) / 100.0
-    # Lowball offers sour talks: each insult adds to his number with your club.
-    low = getattr(player, "_lowball_ask_shift", None)
-    if isinstance(low, dict) and str(low.get("team_id")) == tid and low.get("expiry") == exp_now:
-        mult *= 1.0 + float(low.get("pct") or 0.0) / 100.0
-    return max(0.8, min(1.10, mult))
+    # Agent framing, a refused hometown ask, and lowballs all stack.
+    # One hostile meeting plus a cheap offer can push the ask up about half.
+    # A friendly meeting can take it down to about 55% before the dollar discount.
+    for attr in ("_agent_demand_shift", "_hometown_refusal_shift", "_lowball_ask_shift"):
+        shift = getattr(player, attr, None)
+        if isinstance(shift, dict) and str(shift.get("team_id")) == tid and shift.get("expiry") == exp_now:
+            mult *= 1.0 + float(shift.get("pct") or 0.0) / 100.0
+    return max(0.55, min(1.50, mult))
 
 
 def demand_discount_m(player: Any, team: Any, context: str) -> float:

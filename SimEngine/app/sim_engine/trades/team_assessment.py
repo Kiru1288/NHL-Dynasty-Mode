@@ -720,13 +720,21 @@ def assess_league(
     cached_form = getattr(league, "_cpu_form", None)
     if isinstance(cached_form, dict):
         _FORM = cached_form
-    refresh_every = 1 if 0 <= days_to_deadline <= 14 else 7
+    bulk_market = int(getattr(league, "_franchise_bulk_trade_day_multiplier", 1) or 1) > 1
+    if bulk_market and not (0 <= days_to_deadline <= 7):
+        refresh_every = 21
+    else:
+        refresh_every = 1 if 0 <= days_to_deadline <= 14 else 7
+    trades_match = True if bulk_market else (
+        int(cache.get("n_trades", -1) or -1) == len(getattr(league, "trade_history", None) or [])
+        if isinstance(cache, dict) else False
+    )
     if (
         not force
         and isinstance(cache, dict)
         and isinstance(cache.get("by_team"), dict)
         and 0 <= int(calendar_cursor) - int(cache.get("day", -999)) < refresh_every
-        and int(cache.get("n_trades", -1)) == len(getattr(league, "trade_history", None) or [])
+        and trades_match
     ):
         return cache["by_team"]
     teams = list(getattr(league, "teams", None) or [])

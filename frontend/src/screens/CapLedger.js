@@ -153,15 +153,18 @@ function chipClass(label) {
 }
 
 function getStatusLabel(row) {
-  const expiry = safeText(row?.expiry_status, "");
   const clause = safeText(row?.clause_label, "");
-
-  if (clause && clause !== "None" && clause !== "—") return clause;
-  if (expiry && expiry !== "—") return expiry;
-
   const years = safeNum(row?.years_remaining ?? row?.yearsRemaining, 0);
-  if (years <= 1) return "Exp";
-  return "Signed";
+
+  if (row?.extension_signed) return "EXT";
+  if (years > 1) {
+    if (clause && clause !== "None" && clause !== "—") return clause;
+    return "Signed";
+  }
+  const expiry = safeText(row?.expiry_status, "");
+  if (expiry && expiry !== "—") return expiry;
+  if (clause && clause !== "None" && clause !== "—") return clause;
+  return "Exp";
 }
 
 function getValueLabel(row) {
@@ -205,7 +208,12 @@ function ContractBoardRow({ row, onSelect, isSelected = false }) {
   const player = buildHeadshotPlayer(row);
   const expiry = String(row?.expiry_status || "").toUpperCase();
   const daysLeft = Number(row?.days_to_expiry ?? row?.daysToExpiry ?? row?.ufa_days);
-  const isExpiring = yrs <= 1 || /UFA|RFA|EXP/i.test(status);
+  const isExpiring =
+    !row?.extension_signed &&
+    (yrs <= 1 ||
+      row?.contract_status === "expiring" ||
+      row?.pending_july1_expiry ||
+      /^exp$/i.test(status));
   const sealTone = /UFA/.test(expiry) || /UFA/.test(status)
     ? "ufa"
     : /RFA/.test(expiry) || /RFA/.test(status)
@@ -256,6 +264,12 @@ function ContractBoardRow({ row, onSelect, isSelected = false }) {
           <span className="cap-num-pop tone-cyan">{yrs > 0 ? yrs : "—"}</span>
           {yrs > 0 ? <em className="cap-stat-well__unit">YR</em> : null}
         </span>
+        {row.extension_signed && row.extension_aav_m ? (
+          <span className="cap-contract-row__ext">
+            Next {formatMoneyM(row.extension_aav_m)}
+            {row.extension_years ? ` × ${row.extension_years}y` : ""}
+          </span>
+        ) : null}
       </span>
 
       <span className="cap-contract-row__tags">
@@ -309,7 +323,9 @@ function LedgerTab({ data, onSelect, selectedId }) {
     }
 
     if (filter === "expiring") {
-      list = list.filter((r) => safeNum(r.years_remaining ?? r.yearsRemaining, 99) <= 1);
+      list = list.filter(
+        (r) => !r.extension_signed && safeNum(r.years_remaining ?? r.yearsRemaining, 99) <= 1,
+      );
     }
 
     if (filter === "rfa") {

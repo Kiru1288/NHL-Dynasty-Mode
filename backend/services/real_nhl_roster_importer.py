@@ -1092,6 +1092,11 @@ def _apply_real_contract(
     yrs = int(payload.get("years_remaining") or payload.get("years") or 0)
     if yrs <= 0 or float(payload.get("aav_m") or payload.get("cap_hit_m") or 0) <= 0:
         return
+    from services.contract_economy import _sync_term_from_season_cap_hits
+
+    payload["effective_season"] = int(season_year)
+    _sync_term_from_season_cap_hits(payload, int(season_year))
+    yrs = int(payload.get("years_remaining") or payload.get("years") or yrs)
     if not payload.get("expiry_year"):
         payload["expiry_year"] = int(season_year) + yrs
     ext = payload.get("pending_extension")
@@ -2655,6 +2660,17 @@ def build_real_nhl_league_players(
             brady_meta = apply_brady_chaos_to_league(teams)
         except Exception as e:
             brady_meta = {"ok": False, "error": str(e)}
+
+    try:
+        setattr(league, "real_nhl_spotrac_contracts", contracts_by_team)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    try:
+        from services.contract_economy import repair_league_contract_terms
+
+        repair_league_contract_terms(league, sy, contracts_by_team)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     try:
         setattr(league, "real_nhl_import_meta", {

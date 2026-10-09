@@ -911,6 +911,17 @@ function normalizeContract(player) {
     ),
     ""
   );
+  const clausePending = safeStr(
+    pickFirstDefined(contract.clause_pending, contract.clausePending),
+    ""
+  );
+  const clauseKicksInYear = safeNumOrNull(
+    pickFirstDefined(contract.clause_kicks_in_year, contract.clauseKicksInYear)
+  );
+  const clauseDisplay = safeStr(
+    pickFirstDefined(contract.clause_display, contract.clauseDisplay),
+    ""
+  );
 
   const twoWay = Boolean(pickFirstDefined(contract.two_way, contract.twoWay, player?.two_way));
   const isEntryLevel = Boolean(
@@ -937,6 +948,9 @@ function normalizeContract(player) {
     expiryYear,
     type,
     clause,
+    clausePending,
+    clauseKicksInYear,
+    clauseDisplay,
     isSigned,
     twoWay,
     isEntryLevel,
@@ -4434,7 +4448,13 @@ function ContractPanel({ player }) {
           <div className="pdx-chip-row">
             {contract.isEntryLevel ? <DossierChip tone="good">Entry-level</DossierChip> : null}
             {contract.twoWay ? <DossierChip>Two-way</DossierChip> : null}
-            {contract.clause ? <DossierChip tone="premium">{humanizeDossierValue(contract.clause)}</DossierChip> : null}
+            {contract.clauseDisplay && contract.clauseDisplay !== "None" ? (
+              <DossierChip tone={contract.clausePending ? "neutral" : "premium"}>
+                {contract.clauseDisplay}
+              </DossierChip>
+            ) : contract.clause ? (
+              <DossierChip tone="premium">{humanizeDossierValue(contract.clause)}</DossierChip>
+            ) : null}
           </div>
         </div>
         <DossierTiles dense>
@@ -4444,7 +4464,14 @@ function ContractPanel({ player }) {
           <DossierTile label="Years left" value={contract.yearsRemaining ? `${contract.yearsRemaining}` : "—"} />
           <DossierTile label="Expiry" value={formatContractExpiry(contract)} />
           <DossierTile label="Type" value={humanizeDossierValue(contract.type)} />
-          <DossierTile label="Clause" value={humanizeDossierValue(contract.clause, "None")} />
+          <DossierTile
+            label={contract.clausePending ? "Clause kicks in" : "Clause"}
+            value={
+              contract.clauseDisplay && contract.clauseDisplay !== "None"
+                ? contract.clauseDisplay
+                : humanizeDossierValue(contract.clause, "None")
+            }
+          />
           {contract.startYear ? <DossierTile label="Start" value={contract.startYear} /> : null}
           {contract.signingBonusM ? <DossierTile label="Signing bonus" value={formatMoneyMillions(contract.signingBonusM)} /> : null}
           {contract.performanceBonusM ? (

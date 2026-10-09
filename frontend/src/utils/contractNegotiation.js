@@ -5,11 +5,21 @@ export function computeOfferCapHitM(aav, years, signingBonus = 0) {
   return Math.round(((Number(aav) || 0) * y + (Number(signingBonus) || 0)) / y * 1000) / 1000;
 }
 
+function countedCurrentHit(capSnapshot, playerRow, replaceCurrentHit) {
+  if (!replaceCurrentHit) return 0;
+  const currentHit = Number(playerRow.aav_m ?? playerRow.cap_hit_m ?? playerRow.aav ?? 0) || 0;
+  const inSeason = Boolean(capSnapshot.in_season_cap);
+  const pending = Boolean(playerRow.pending_july1_expiry || playerRow.pendingJuly1Expiry);
+  if (pending && !inSeason) return 0;
+  return Math.max(0, currentHit);
+}
+
 export function projectNegotiationCap({
   capSnapshot = {},
   nextYearProjection = {},
   playerRow = {},
   offerCapHitM,
+  replaceCurrentHit = true,
 }) {
   const usable = Number(capSnapshot.usable_cap_space_m);
   const totalHit = Number(capSnapshot.total_cap_hit_m);
@@ -20,40 +30,124 @@ export function projectNegotiationCap({
     Number(nextYearProjection.upper_limit_m) ||
     (Number.isFinite(upper) ? upper * 1.03 : NaN);
 
-  const currentHit = Number(playerRow.aav_m ?? playerRow.cap_hit_m ?? 0);
   const yrsLeft = Math.max(0, Number(playerRow.years_remaining ?? playerRow.yearsRemaining ?? 0));
   const offerHit = Number(offerCapHitM) || 0;
   const inSeason = Boolean(capSnapshot.in_season_cap);
+  const pendingJuly = Boolean(playerRow.pending_july1_expiry || playerRow.pendingJuly1Expiry);
+  const countedHit = countedCurrentHit(capSnapshot, playerRow, replaceCurrentHit);
+  // Final-year extensions keep this year's AAV. The new cap hit starts next season.
+  const dealStartsNextYear = replaceCurrentHit && yrsLeft >= 1 && !(pendingJuly && !inSeason);
 
-  if (!Number.isFinite(usable)) {
-    return {
-      capDeltaNowM: null,
-      projectedAfterM: null,
-      projectedNextSeasonM: null,
-      inSeasonCap: inSeason,
-    };
-  }
+  const empty = {
+    capDeltaNowM: null,
+    projectedAfterM: null,
+    projectedNextSeasonM: null,
+    nextYearRoomBeforeM: null,
+    capUsedAfterM: null,
+    capBarPct: null,
+    inSeasonCap: inSeason,
+    dealStartsNextYear,
+  };
 
-  // In season the raise has to fit in this year's usable space, even on a deal
-  // that still has term left. Next year's number is not the ceiling.
-  const capDeltaNow = inSeason || yrsLeft <= 1 ? Math.max(0, offerHit - currentHit) : 0;
+  if (!Number.isFinite(usable)) return empty;
+
+  const capDeltaNow = dealStartsNextYear ? 0 : (inSeason || yrsLeft <= 1 || !replaceCurrentHit)
+    ? Math.max(0, offerHit - countedHit)
+    : 0;
   const projectedAfter = usable - capDeltaNow;
+  const capUsedAfterM = Number.isFinite(totalHit)
+    ? (dealStartsNextYear ? totalHit : totalHit - countedHit + offerHit)
+    : null;
 
   let projectedNextSeason = null;
-  if (Number.isFinite(upperNext) && Number.isFinite(totalHit)) {
-    if (yrsLeft <= 1) {
-      projectedNextSeason = upperNext - (totalHit - currentHit + offerHit);
-    } else {
-      projectedNextSeason = upperNext - totalHit;
-    }
+  const following = Number(capSnapshot.following_season_active_cap_hit_m);
+  if (Number.isFinite(upperNext) && Number.isFinite(following)) {
+    const deadNext =
+      (Number(capSnapshot.buried_cap_hit_m) || 0) +
+      (Number(capSnapshot.retained_salary_m) || 0) +
+      (Number(capSnapshot.buyout_cap_hit_m) || 0) +
+      (Number(capSnapshot.other_dead_cap_m) || 0);
+    const booked = dealStartsNextYear ? Number(playerRow.extension_aav_m || 0) || 0 : 0;
+    const nextOffer = dealStartsNextYear || !replaceCurrentHit ? offerHit : 0;
+    projectedNextSeason = upperNext - (Math.max(0, following - booked) + nextOffer + deadNext);
+  } else if (Number.isFinite(upperNext) && Number.isFinite(totalHit)) {
+    const expiringRaw = Number(
+      capSnapshot.expiring_roster_cap_hit_m ?? capSnapshot.expiringRosterCapHit,
+    );
+    const expiringHit = Number.isFinite(expiringRaw)
+      ? Math.max(0, expiringRaw)
+      : (yrsLeft <= 1 ? countedHit : 0);
+    const nextOffer = yrsLeft <= 1 || !replaceCurrentHit ? offerHit : 0;
+    projectedNextSeason = upperNext - (totalHit - expiringHit + nextOffer);
   }
+
+  const nextOfferForRoom = dealStartsNextYear || !replaceCurrentHit ? offerHit : 0;
+  const nextYearRoomBefore =
+    projectedNextSeason != null && Number.isFinite(nextOfferForRoom)
+      ? projectedNextSeason + nextOfferForRoom
+      : null;
+
+  const barLimit = dealStartsNextYear && Number.isFinite(upperNext) ? upperNext : upper;
+  const barUsed = dealStartsNextYear && projectedNextSeason != null && Number.isFinite(barLimit)
+    ? barLimit - projectedNextSeason
+    : capUsedAfterM;
+  const capBarPct =
+    barUsed != null && Number.isFinite(barLimit) && barLimit > 0
+      ? Math.max(0, Math.min(100, (barUsed / barLimit) * 100))
+      : null;
 
   return {
     capDeltaNowM: capDeltaNow,
     projectedAfterM: projectedAfter,
     projectedNextSeasonM: projectedNextSeason,
+    nextYearRoomBeforeM: nextYearRoomBefore,
+    capUsedAfterM,
+    capBarPct,
     inSeasonCap: inSeason,
+    dealStartsNextYear,
   };
+}
+
+/** Upper bound for the AAV range slider (CBA max salary vs cap room for when the deal counts). */
+export function maxNegotiationOfferAavM({
+  capSnapshot = {},
+  nextYearProjection = {},
+  playerRow = {},
+  cbaMaxSalaryM = 99,
+  replaceCurrentHit = true,
+}) {
+  const cbaMax =
+    Number.isFinite(Number(cbaMaxSalaryM)) && Number(cbaMaxSalaryM) > 0 ? Number(cbaMaxSalaryM) : 99;
+  const capAtZero = projectNegotiationCap({
+    capSnapshot,
+    nextYearProjection,
+    playerRow,
+    offerCapHitM: 0,
+    replaceCurrentHit,
+  });
+  const inSeason = Boolean(capSnapshot.in_season_cap);
+  const yrsLeft = Math.max(0, Number(playerRow.years_remaining ?? playerRow.yearsRemaining ?? 0));
+  const currentHit = Math.max(0, Number(playerRow.aav_m ?? playerRow.cap_hit_m ?? playerRow.aav ?? 0) || 0);
+  const usable = Number(capSnapshot.usable_cap_space_m);
+
+  let capRoomM = 99;
+  if (capAtZero.dealStartsNextYear) {
+    const before = capAtZero.nextYearRoomBeforeM;
+    if (before != null && Number.isFinite(before)) {
+      capRoomM = before;
+    } else if (capAtZero.projectedNextSeasonM != null && Number.isFinite(capAtZero.projectedNextSeasonM)) {
+      capRoomM = capAtZero.projectedNextSeasonM;
+    } else {
+      const snapNext = Number(capSnapshot.projected_cap_space_next_season_m);
+      if (Number.isFinite(snapNext) && snapNext > 0) capRoomM = snapNext;
+    }
+  } else if (inSeason && Number.isFinite(usable)) {
+    capRoomM = usable + (yrsLeft >= 1 ? currentHit : 0);
+  } else if (Number.isFinite(usable)) {
+    capRoomM = usable + currentHit;
+  }
+
+  return Math.min(cbaMax, Math.max(0.775, capRoomM));
 }
 
 export function interestMeterTone(interest) {

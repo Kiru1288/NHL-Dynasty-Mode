@@ -3039,7 +3039,7 @@ def _ensure_player_contract(
 
     if getattr(player, "retired", False):
         return False
-    hydrate_player_contract(player)
+    hydrate_player_contract(player, season_year)
     if _player_cap_hit_millions(player) > 0 and getattr(player, "contract", None) is not None:
         return False
     if rng is None:
@@ -4318,11 +4318,17 @@ def _get_cached_user_cap_snapshot(
         return {}, default_info
     rev = int(getattr(session, "_stats_revision", 0) or 0)
     cur = int(getattr(session, "calendar_cursor", 0) or 0)
+    phase = str(getattr(session, "phase", "") or "")
+    from services.contract_economy import cap_books_for_session, get_team_cap_snapshot_full, sync_team_cap_fields
+
+    books = cap_books_for_session(session)
     cached = getattr(session, "_cached_user_cap_snapshot", None)
     if (
         isinstance(cached, dict)
         and int(cached.get("revision", -1)) == rev
         and int(cached.get("cursor", -1)) == cur
+        and str(cached.get("phase") or "") == phase
+        and int(cached.get("cap_year") or -1) == int(books["season_year"])
     ):
         full = dict(cached.get("full") or {})
         info = dict(cached.get("info") or default_info)
@@ -4330,24 +4336,26 @@ def _get_cached_user_cap_snapshot(
     league_for_cap = getattr(sim, "league", None)
     cap_snapshot_full: Dict[str, Any] = {}
     try:
-        from services.contract_economy import get_team_cap_snapshot_full, sync_team_cap_fields
-
         cap_snapshot_full = sync_team_cap_fields(
             user_team,
             league_for_cap,
             sim,
-            season_year=sy_cap,
-            calendar_cursor=cur,
-            regular_season_last_index=int(getattr(session, "nhl_regular_season_last_index", 192) or 192),
+            season_year=books["season_year"],
+            calendar_cursor=books["calendar_cursor"],
+            regular_season_last_index=books["regular_season_last_index"],
+            count_expiring=books["count_expiring"],
+            opening_day=books["opening_day"],
         )
         if not cap_snapshot_full:
             cap_snapshot_full = get_team_cap_snapshot_full(
                 user_team,
                 league_for_cap,
                 sim,
-                season_year=sy_cap,
-                calendar_cursor=cur,
-                regular_season_last_index=int(getattr(session, "nhl_regular_season_last_index", 192) or 192),
+                season_year=books["season_year"],
+                calendar_cursor=books["calendar_cursor"],
+                regular_season_last_index=books["regular_season_last_index"],
+                count_expiring=books["count_expiring"],
+                opening_day=books["opening_day"],
             )
     except Exception:
         cap_snapshot_full = {}
@@ -4362,6 +4370,8 @@ def _get_cached_user_cap_snapshot(
     session._cached_user_cap_snapshot = {
         "revision": rev,
         "cursor": cur,
+        "phase": phase,
+        "cap_year": int(books["season_year"]),
         "full": cap_snapshot_full,
         "info": cap_info,
     }
@@ -7646,6 +7656,7 @@ def _serialize_player_row(
     # Full contract summary for dossier Contract tab.
     try:
         from services.contract_economy import (
+            clause_timing_fields,
             get_contract_display_summary,
             is_waiver_exempt,
             normalize_contract_payload,
@@ -7675,6 +7686,9 @@ def _serialize_player_row(
         except Exception:
             expiry_year = None
         years_remaining = int(csum.get("years_remaining") or 0)
+        timing = clause_timing_fields(p)
+        if timing.get("clause") and timing.get("clause") != "None":
+            clause_label = str(timing["clause"])
         row["contract"] = {
             "salary": round(float(csum.get("nhl_salary_m") or csum.get("aav_m") or row["contract"]["salary"] or 0), 3),
             "cap_hit": round(float(csum.get("cap_hit_m") or csum.get("aav_m") or row["contract"]["cap_hit"] or 0), 3),
@@ -7686,6 +7700,10 @@ def _serialize_player_row(
             "type": str(csum.get("type") or "") or None,
             "contract_type": str(csum.get("type") or "") or None,
             "clause": clause_label,
+            "clause_display": timing.get("clause_display") or clause_label,
+            "clause_pending": timing.get("clause_pending"),
+            "clause_kicks_in_year": timing.get("clause_kicks_in_year"),
+            "clause_active": bool(timing.get("clause_active")),
             "two_way": bool(csum.get("two_way")),
             "is_entry_level": bool(csum.get("is_entry_level")),
             "signing_bonus_m": float(csum.get("signing_bonus_m") or 0),
@@ -8981,24 +8999,38 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
     )
 
     from services.draft_ranking_logic import (
+        DRAFT_ELIGIBLE_TARGET,
         MIN_BOARD_GOALIES,
         backfill_draft_eligible_goalies,
+        backfill_draft_eligible_skaters,
         build_draft_rank_reason_codes,
         clean_team_name,
         collect_goalie_pipeline_stats,
+        count_draft_eligible_players,
         enrich_prospect_row_from_player,
         fix_prospect_league_team_row,
         normalize_league_code,
     )
 
+    draft_rng = rng if rng is not None else random.Random(42)
+    try:
+        from app.sim_engine.league_hierarchy_bootstrap import lift_shallow_draft_depth
+
+        lift_shallow_draft_depth(league, draft_rng)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+
     pipeline_stats = collect_goalie_pipeline_stats(league, age_max=20, pos_fn=_pos_str)
     if pipeline_stats["draft_eligible_dev_goalies"] < MIN_BOARD_GOALIES:
         backfill_draft_eligible_goalies(
             league,
-            rng if rng is not None else random.Random(42),
+            draft_rng,
             MIN_BOARD_GOALIES - pipeline_stats["draft_eligible_dev_goalies"],
         )
         pipeline_stats = collect_goalie_pipeline_stats(league, age_max=20, pos_fn=_pos_str)
+    eligible_now = count_draft_eligible_players(league)
+    if eligible_now < DRAFT_ELIGIBLE_TARGET:
+        backfill_draft_eligible_skaters(league, draft_rng, DRAFT_ELIGIBLE_TARGET - eligible_now)
 
     prospects: List[Dict[str, Any]] = []
 
@@ -9196,6 +9228,7 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
         apply_hard_ranking_floor_pass,
         apply_potential_band_enforcement,
         enforce_goalie_scatter_final,
+        enforce_first_round_draft_age,
         build_potential_intel,
         cap_public_peak_range_for_rank,
         calculate_prospect_eta,
@@ -9280,6 +9313,8 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
     # Final positional guarantee: non-franchise goalies out of Round 1 and scattered. Must be
     # the last ordering step so the potential-band pass above can't re-promote a strong goalie.
     enforce_goalie_scatter_final(board_prospects, goalie_class_strength=goalie_class_strength)
+    # After goalie scatter, so shifting a goalie down cannot pull a 19 or 20 back into round 1.
+    enforce_first_round_draft_age(board_prospects)
     # Top board slots must carry realistic current ability (not raw ~50 junior OVR
     # promoted only by early-season PPG). Reshape live players in place.
     try:
@@ -11868,7 +11903,9 @@ def _franchise_daily_league_tick(session: FranchiseSession, calendar_idx: int) -
     # pressure, but compensate trade cadence on the days we do run (see engine).
     bulk = bool(getattr(session, "_bulk_calendar_advance", False))
     light_bulk = bulk and bool(getattr(session, "_light_game_stat_accumulation", False))
-    socio_gap = 4 if light_bulk else 8
+    # Light season sim used to reopen the trade market every few days and rebuild
+    # prospect/AHL data on the same cadence. A full year of that is the stall.
+    socio_gap = 14 if light_bulk else 8
     # C8: jitter the bulk cadence (3–5 / 7–9 days) so the market isn't a fixed every-4th-day beat.
     socio_gap = max(2, socio_gap - 1 + (zlib.crc32(f"socio|{int(calendar_idx)}".encode()) % 3))
     # Never throttle the deadline week — the trade market must run every one of those days.
@@ -13282,11 +13319,9 @@ def _run_bulk_incremental_catchup(session: FranchiseSession, *, steps_n: int) ->
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
 
-    try:
-        if steps_n >= BULK_INCREMENTAL_CATCHUP_EVERY_STEPS:
-            _sync_prospect_stats_to_calendar(session, force=False)
-    except Exception:
-        _swallowed_log.debug("suppressed exception", exc_info=True)
+    # Prospect leagues, the AHL, and the social feed are synced once when the
+    # bulk sim finishes. Doing it every few NHL days re-walked the whole
+    # development pool for the length of a season.
 
     try:
         from services.franchise_scouting import apply_passive_scouting_progress
@@ -18034,16 +18069,22 @@ def advance_franchise_day(session: FranchiseSession) -> Dict[str, Any]:
     - Clear only the current day after successful simulation.
     - Move cursor exactly once after successful simulation.
     """
-    try:
-        from services.team_identity_service import refresh_team_identities as _rti
+    # Identity + roster repair walk every NHL/AHL list. During a week or month
+    # sim that is most of the non-game cost, so it runs once a week and again
+    # when the bulk sim finishes.
+    bulk_now = bool(getattr(session, "_bulk_calendar_advance", False))
+    guard_day = int(getattr(session, "calendar_cursor", 0) or 0)
+    if (not bulk_now) or (guard_day % 7 == 0):
+        try:
+            from services.team_identity_service import refresh_team_identities as _rti
 
-        _rti(session)
-    except Exception:
-        _swallowed_log.debug("suppressed exception", exc_info=True)
-    try:
-        _league_roster_integrity_pass(session)
-    except Exception:
-        _startup_log.exception("roster integrity pass failed")
+            _rti(session)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+        try:
+            _league_roster_integrity_pass(session)
+        except Exception:
+            _startup_log.exception("roster integrity pass failed")
     _ensure_session_event_lists(session)
     _sync_session_phase_from_calendar(session)
     bulk_light = bool(getattr(session, "_bulk_calendar_advance", False)) and bool(
@@ -18468,6 +18509,16 @@ def advance_franchise_bulk(
             except Exception:
                 _swallowed_log.debug("suppressed exception", exc_info=True)
     finally:
+        try:
+            from services.team_identity_service import refresh_team_identities as _rti
+
+            _rti(session)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+        try:
+            _league_roster_integrity_pass(session)
+        except Exception:
+            _startup_log.exception("roster integrity pass failed")
         steps_n = int(len(steps))
         full_finalize = False
         if steps and str(steps[-1].get("status") or "") == "ok":
@@ -24272,6 +24323,9 @@ def _serialize_player_trade_block(
     tradeable = True
     trade_block_reason = ""
     clause_label = "None"
+    clause_display = "None"
+    clause_kicks = None
+    clause_pending = None
     approved: List[str] = []
     loc = "nhl"
     acq_id = str(
@@ -24295,6 +24349,19 @@ def _serialize_player_trade_block(
         loc = player_trade_roster_location(source_team, pid)
         clause = _clause_summary(player)
         clause_label = str(clause.get("label") or "None")
+        try:
+            from services.contract_economy import clause_timing_fields
+
+            timing = clause_timing_fields(player)
+            if timing.get("clause") and timing.get("clause") != "None":
+                clause_label = str(timing["clause"])
+            clause_display = str(timing.get("clause_display") or clause_label)
+            clause_kicks = timing.get("clause_kicks_in_year")
+            clause_pending = timing.get("clause_pending")
+        except Exception:
+            clause_display = clause_label
+            clause_kicks = None
+            clause_pending = None
         approved = list(clause.get("approved_destinations") or [])
         if clause_label == "M-NTC" and not approved and league is not None:
             try:
@@ -24404,6 +24471,9 @@ def _serialize_player_trade_block(
         "contract_years_remaining": _contract_years_remaining(player),
         "source_team_id": str(getattr(source_team, "team_id", "") or ""),
         "clause_label": clause_label,
+        "clause_display": clause_display,
+        "clause_pending": clause_pending,
+        "clause_kicks_in_year": clause_kicks,
         "tradeable": tradeable,
         "trade_block_reason": trade_block_reason,
         "requires_ntc_waive": requires_ntc_waive or (clause_label in ("NTC", "NMC") and not ntc_waived and not tradeable),
@@ -25209,6 +25279,12 @@ def _build_free_agent_row(p: Any, season_year: int, session: Any = None, *, deta
     age = _player_age_int(p)
     ovr = round(_player_ovr99(p))
     pos = _pos_str(p)
+    try:
+        from services.contract_economy import resolved_rights_status
+
+        fa_rights = resolved_rights_status(p)
+    except Exception:
+        fa_rights = "RFA" if age < 27 else "UFA"
     ident = getattr(p, "identity", None)
     meta = getattr(p, "_franchise_assignment", None) or {}
     pot = getattr(p, "ratings", None) or {}
@@ -25224,9 +25300,9 @@ def _build_free_agent_row(p: Any, season_year: int, session: Any = None, *, deta
         "ovr": ovr,
         "potential": potential,
         "nationality": str(getattr(ident, "birth_country", "") or ""),
-        "status": "UFA",
-        "ufaOrRfa": "UFA",
-        "expiry_status": "UFA",
+        "status": fa_rights,
+        "ufaOrRfa": fa_rights,
+        "expiry_status": fa_rights,
         "role": _fa_role_projection(pos, ovr),
         "availability_to_sign": True,
         "nhl_transfer_eligible": True,

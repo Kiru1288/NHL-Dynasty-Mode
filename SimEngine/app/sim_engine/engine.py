@@ -95,7 +95,7 @@ _SKATER_LEDGER_ANALYTICS_KEYS = (
 )
 
 # League-wide goals/points lift (game scores + finish rate). Does not touch TOI allocation.
-_GM_LEAGUE_SCORING_PACE_MULT = 1.36
+_GM_LEAGUE_SCORING_PACE_MULT = 1.08
 # Bulk/light game scores: talent gap should move standings, not single-game dice.
 _GM_STRENGTH_MATCHUP_GOAL_K = 1.85
 _GM_STRENGTH_GAME_GOAL_SIGMA = 1.26
@@ -11175,6 +11175,11 @@ class SimEngine:
 
     def _gm_ovr_0_100(self, p: Any) -> float:
         """Canonical 0-100 overall for usage / scoring allocation (matches UI OVR)."""
+        scope = getattr(self, "_gm_game_scope", None)
+        if isinstance(scope, dict):
+            hit = scope.setdefault("ovr", {}).get(id(p))
+            if hit is not None and hit[0] is p:
+                return float(hit[1])
         cache = getattr(p, "_gm_runtime_cache", None)
         if isinstance(cache, dict) and "ovr_0_100" in cache:
             return float(cache["ovr_0_100"])
@@ -11201,6 +11206,8 @@ class SimEngine:
         o = max(30.0, min(99.0, float(o)))
         if isinstance(cache, dict):
             cache["ovr_0_100"] = o
+        if isinstance(scope, dict):
+            scope.setdefault("ovr", {})[id(p)] = (p, o)
         return o
 
     def _gm_ovr_norm(self, p: Any) -> float:
@@ -14090,7 +14097,12 @@ class SimEngine:
                     if outcome == "BLOCKED" and blocker is not None:
                         self._gm_ledger_add(ledger, blocker, oid, blk=1)
                     if outcome == "GOAL":
-                        gkw: Dict[str, Any] = {"g": 1, "gf_on": 1.0, "plus_minus": 1}
+                        # NHL plus-minus ignores power-play goals. Shorthanded
+                        # goals still count for the SH unit and against the PP unit.
+                        counts_pm = strength != "PP"
+                        gkw: Dict[str, Any] = {"g": 1, "gf_on": 1.0}
+                        if counts_pm:
+                            gkw["plus_minus"] = 1
                         if strength == "PP":
                             gkw["ppg"] = 1
                         elif strength == "SH":
@@ -14098,9 +14110,15 @@ class SimEngine:
                         self._gm_ledger_add(ledger, shooter, tid, **gkw)
                         for p in atk_unit:
                             if p is not shooter:
-                                self._gm_ledger_add(ledger, p, tid, gf_on=1.0, plus_minus=1)
+                                ak: Dict[str, Any] = {"gf_on": 1.0}
+                                if counts_pm:
+                                    ak["plus_minus"] = 1
+                                self._gm_ledger_add(ledger, p, tid, **ak)
                         for p in def_unit:
-                            self._gm_ledger_add(ledger, p, oid, ga_on=1.0, plus_minus=-1)
+                            dk: Dict[str, Any] = {"ga_on": 1.0}
+                            if counts_pm:
+                                dk["plus_minus"] = -1
+                            self._gm_ledger_add(ledger, p, oid, **dk)
 
                 _record_team_attempt(side, outcome, raw_xg)
 
@@ -14949,26 +14967,31 @@ class SimEngine:
             pp_goals_against: int,
         ) -> None:
             """
-            EV +/-: ~80% line/pair context, five skaters per goal sampled by TOI
-            (linemates no longer share identical season +/-).
+            Even-strength plus-minus is the forward line and defense pair on
+            the ice for that goal. Power-play goals are already removed from
+            the counts. Sampling five skaters by ice time put stars on for
+            most goals against, so a 120-point season could finish near -30.
             """
+            del toi_map  # ice time must not decide who was on the ice
             line_share = (0.34, 0.29, 0.22, 0.15)
             pair_share = (0.46, 0.34, 0.20)
-            blend = float(_GM_SCORING_LINE_UNIT_BLEND)
+            # Goals against lean a little lower in the lineup than goals for.
+            ga_line_share = (0.30, 0.28, 0.24, 0.18)
+            ga_pair_share = (0.40, 0.36, 0.24)
             ev_gf = max(0, int(goals_for) - int(pp_goals_for))
             ev_ga = max(0, int(goals_against) - int(pp_goals_against))
             fw_pool = [p for p in skaters if not self._gm_is_defense(p)]
             d_pool = [p for p in skaters if self._gm_is_defense(p)]
 
-            def _pick_pm_context() -> Tuple[int, int]:
+            def _pick_units(forward_share: Tuple[float, ...], defense_share: Tuple[float, ...]) -> Tuple[int, int]:
                 buckets_f: Dict[int, List[Any]] = {0: [], 1: [], 2: [], 3: []}
                 for p in fw_pool:
                     buckets_f[_pm_unit_key(p)[1]].append(p)
                 buckets_d: Dict[int, List[Any]] = {0: [], 1: [], 2: []}
                 for p in d_pool:
                     buckets_d[_pm_unit_key(p)[1]].append(p)
-                wf = [line_share[i] if buckets_f[i] else 0.0 for i in range(4)]
-                wp = [pair_share[i] if buckets_d[i] else 0.0 for i in range(3)]
+                wf = [forward_share[i] if buckets_f[i] else 0.0 for i in range(4)]
+                wp = [defense_share[i] if buckets_d[i] else 0.0 for i in range(3)]
                 if sum(wf) <= 0 and fw_pool:
                     wf = [1.0, 1.0, 1.0, 1.0]
                 if sum(wp) <= 0 and d_pool:
@@ -14977,39 +15000,18 @@ class SimEngine:
                 pi = rng.choices([0, 1, 2], weights=wp or [1.0, 1.0, 1.0], k=1)[0]
                 return li, pi
 
-            def _pm_pick_five(ctx_line: int, ctx_pair: int) -> List[Any]:
-                weights: List[float] = []
-                for p in skaters:
-                    pid = _id_str(p, "id")
-                    toi = max(30, int(toi_map.get(pid, 0) or 0))
-                    ovr_n = max(0.35, self._gm_ovr_norm(p))
-                    uk = _pm_unit_key(p)
-                    on_ctx = (uk[0] == "F" and uk[1] == ctx_line) or (
-                        uk[0] == "D" and uk[1] == ctx_pair
-                    )
-                    ctx_mult = (1.0 + blend * 2.15) if on_ctx else (0.32 + (1.0 - blend) * 0.42)
-                    weights.append(max(0.02, float(toi) * (0.42 + 0.58 * ovr_n) * ctx_mult))
-                pool = list(skaters)
-                wpool = list(weights)
-                chosen: List[Any] = []
-                n_pick = min(5, len(pool))
-                for _ in range(n_pick):
-                    if not pool:
-                        break
-                    pick = rng.choices(pool, weights=wpool, k=1)[0]
-                    idx = pool.index(pick)
-                    chosen.append(pick)
-                    pool.pop(idx)
-                    wpool.pop(idx)
-                return chosen
+            def _on_ice(line_i: int, pair_i: int) -> List[Any]:
+                fw = [p for p in fw_pool if _pm_unit_key(p)[1] == line_i][:3]
+                dmen = [p for p in d_pool if _pm_unit_key(p)[1] == pair_i][:2]
+                return fw + dmen
 
             for _ in range(ev_gf):
-                li, pi = _pick_pm_context()
-                for p in _pm_pick_five(li, pi):
+                li, pi = _pick_units(line_share, pair_share)
+                for p in _on_ice(li, pi):
                     self._gm_ledger_add(ledger, p, tid, gf_on=1.0, plus_minus=1)
             for _ in range(ev_ga):
-                li, pi = _pick_pm_context()
-                for p in _pm_pick_five(li, pi):
+                li, pi = _pick_units(ga_line_share, ga_pair_share)
+                for p in _on_ice(li, pi):
                     self._gm_ledger_add(ledger, p, tid, ga_on=1.0, plus_minus=-1)
 
         _credit_ev_plus_minus(home_sk, home_toi, hid, hg, ag, home_ppg, away_ppg)
@@ -15018,9 +15020,9 @@ class SimEngine:
         def _team_sog_target(goals: int, team_cf: int) -> int:
             # SOG tracks talent-driven attempts. A higher on-net share lifts team
             # and player shot totals without turning every shot into a goal.
-            base = float(team_cf) * 0.66 + (float(goals) - 3.05) * 0.70
-            n = int(round(rng.gauss(base, 2.6)))
-            return max(int(goals) + 16, min(52, n))
+            base = float(team_cf) * 0.56 + (float(goals) - 3.05) * 0.55
+            n = int(round(rng.gauss(base, 2.2)))
+            return max(int(goals) + 14, min(44, n))
 
         def _allocate_team_sog(
             skaters: List[Any],
@@ -16033,8 +16035,8 @@ class SimEngine:
 
         home_mu -= max(0.0, (0.52 - self._team_strength(home)) * 1.35)
         away_mu -= max(0.0, (0.52 - self._team_strength(away)) * 1.35)
-        home_mu = max(1.2, min(5.0, home_mu))
-        away_mu = max(1.0, min(4.8, away_mu))
+        home_mu = max(1.15, min(4.4, home_mu))
+        away_mu = max(1.05, min(4.2, away_mu))
 
         sg = max(0.72, min(1.62, float(noise_scale)))
         nh = self._narrative_team_goal_sigma_multiplier(home)

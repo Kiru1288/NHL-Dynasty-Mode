@@ -121,7 +121,39 @@ def test_spotrac_yearly_html_parse_mcdavid_like_row():
     assert row["years_remaining"] == 2
     assert row["rights_status"] == "UFA"
     assert row["no_move_clause"] is True
+    assert row["clause_by_year"] == ["NMC", "NMC"]
     assert row["source"].startswith("real_nhl")
+
+
+def test_spotrac_clause_kicks_in_on_later_year_and_ir_table():
+    html = """
+    <table><tbody>
+      <tr>
+        <td><a href="https://www.spotrac.com/nhl/player/_/id/1/active-guy">Active Guy</a></td>
+        <td data-sort="8000000">$8,000,000</td>
+        <td data-sort="8000000">$8,000,000 <span>NTC</span></td>
+        <td data-sort="8000000">$8,000,000 NMC</td>
+      </tr>
+    </tbody></table>
+    <table id="table_reserve-suspended"><tbody>
+      <tr>
+        <td><a href="https://www.spotrac.com/nhl/player/_/id/2/ridly-greig">Ridly Greig</a></td>
+        <td data-sort="3250000">$3,250,000</td>
+        <td data-sort="3250000">$3,250,000</td>
+        <td data-sort="3250000">$3,250,000</td>
+      </tr>
+    </tbody></table>
+    """
+    parsed = _parse_yearly_team_html(html, 2026)
+    guy = parsed[normalize_player_name("Active Guy")]
+    assert guy["no_trade_clause"] is False
+    assert guy["no_move_clause"] is False
+    assert guy["clause_by_year"] == ["", "NTC", "NMC"]
+    assert guy["clause_future_type"] == "NTC"
+    assert guy["clause_kicks_in_year"] == 2027
+    greig = parsed[normalize_player_name("Ridly Greig")]
+    assert greig["years_remaining"] == 3
+    assert greig["season_cap_hits"] == [3.25, 3.25, 3.25]
 
 
 def test_match_contract_by_name():

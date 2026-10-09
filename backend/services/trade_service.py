@@ -29,7 +29,7 @@ _swallowed_log = _logging_swallow.getLogger(__name__)
 
 # Kept in backend (uvicorn-watched) so formula bumps reload the API process.
 # Keep in sync with SimEngine TRADE_VALUE_FORMULA_VERSION.
-TRADE_ASSETS_CACHE_VERSION = int(TRADE_VALUE_FORMULA_VERSION) + 4  # bump: uncapped TV + capacity
+TRADE_ASSETS_CACHE_VERSION = int(TRADE_VALUE_FORMULA_VERSION) + 5  # bump: clause kick-in year
 
 
 def _summarize_team_needs(needs: Dict[str, float], direction: str) -> Dict[str, Any]:
@@ -876,12 +876,26 @@ def build_trade_assets_payload(session: Any) -> Dict[str, Any]:
 
             user_tid = str(ctx.get("user_team_id") or "")
             acq_team = ctx["team_by_id"].get(user_tid) if user_tid else team
+            fa_open = bool(getattr(session, "free_agency_open", False))
+            sy_trade = int(getattr(session, "season_calendar_year", 2025) or 2025)
+            outcomes = getattr(session, "resign_phase_outcomes", None) or {}
             for p in getattr(team, "roster", None) or []:
                 if getattr(p, "retired", False):
                     continue
                 pid = str(getattr(p, "id", "") or "")
                 if not pid:
                     continue
+                phase_row = outcomes.get(pid) if isinstance(outcomes, dict) else None
+                if isinstance(phase_row, dict) and str(phase_row.get("phase_status") or "") == "released":
+                    continue
+                if fa_open:
+                    try:
+                        from services.contract_economy import _walks_without_new_deal
+
+                        if _walks_without_new_deal(p, sy_trade):
+                            continue
+                    except Exception:
+                        pass
                 player_values[pid] = _serialize_player_trade_block(
                     p,
                     source_team=team,

@@ -249,6 +249,24 @@ def _buyer_retention_pct(
     return str(target.get("id") or ""), pct
 
 
+def _clause_timing(player: Any) -> Dict[str, Any]:
+    """Active clause plus the year Spotrac says it kicks in. Empty when unprotected."""
+    try:
+        from services.contract_economy import clause_timing_fields
+
+        timing = clause_timing_fields(player)
+    except Exception:
+        return {}
+    display = str(timing.get("clause_display") or "")
+    if not display or display == "None":
+        return {}
+    return {
+        "clause": timing.get("clause") or "None",
+        "clause_display": display,
+        "clause_kicks_in_year": timing.get("clause_kicks_in_year"),
+    }
+
+
 def _clause_blocked(player: Any) -> bool:
     """Full NMC/NTC only. A modified list can still move to the teams on it."""
     c = getattr(player, "contract", None)
@@ -398,6 +416,7 @@ def _pool(
         if v <= 1.0:
             continue
         label = _player_label(p)
+        clause = _clause_timing(p)
         items.append({
             "type": "player",
             "id": pid,
@@ -407,6 +426,7 @@ def _pool(
             "cap_m": round(_trade_cap_hit(p, ctx), 3),
             "cap_full_m": round(_cap_hit(p), 3),
             **label,
+            **clause,
         })
     for row in _team_picks(league, team_id, ctx):
         pick_id = str(row.get("pick_id") or "")
@@ -479,7 +499,7 @@ def _payload_asset(a: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _public_asset(a: Dict[str, Any]) -> Dict[str, Any]:
-    keep = ("type", "id", "team", "value", "name", "pos", "age", "ovr", "pot", "level", "year", "round", "original_team_id", "cap_m", "cap_full_m", "retained")
+    keep = ("type", "id", "team", "value", "name", "pos", "age", "ovr", "pot", "level", "year", "round", "original_team_id", "cap_m", "cap_full_m", "retained", "clause", "clause_display", "clause_kicks_in_year")
     out = {k: a[k] for k in keep if k in a}
     if isinstance(a.get("headshot"), dict):
         out.update(a["headshot"])

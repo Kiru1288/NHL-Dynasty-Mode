@@ -2860,18 +2860,18 @@ export function LinesScope({ level = "nhl", children }) {
     );
   }
   return (
-    <>
+    <div className="lines-scope">
       {children}
       <label className="tlv-peek" title="See how another club dresses its lineup (read only)">
-        <span>👁 View lines:</span>
-        <select value="" onChange={(e) => setViewTeamId(e.target.value)}>
+        <span>View lines</span>
+        <select value="" onChange={(e) => setViewTeamId(e.target.value)} aria-label="View another team's lines">
           <option value="">Pick a team…</option>
           {teams.filter((t) => !t.is_user).map((t) => (
             <option key={t.team_id} value={t.team_id}>{t.name}</option>
           ))}
         </select>
       </label>
-    </>
+    </div>
   );
 }
 

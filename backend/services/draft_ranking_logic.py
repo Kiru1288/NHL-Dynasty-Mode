@@ -1886,9 +1886,10 @@ def scouting_confidence_for_entry(
     return float(base_conf)
 
 
-MIN_BOARD_GOALIES = 12
-TARGET_BOARD_GOALIES = 16
-MAX_BOARD_ENTRIES = 320
+MIN_BOARD_GOALIES = 30
+TARGET_BOARD_GOALIES = 36
+MAX_BOARD_ENTRIES = 1000
+DRAFT_ELIGIBLE_TARGET = 1000
 VISIBILITY_INJECT_FROM_RANK = 96
 
 # Soft caps — talent can still earn early slots; surplus only demotes weaker goalies.
@@ -2292,6 +2293,80 @@ def apply_goalie_class_rank_caps(
         prospects.sort(key=lambda r: -_effective_draft_score(r))
 
 
+def enforce_first_round_draft_age(board: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Round 1 is 18-year-olds. One 19-year-old may sit outside the top 10.
+
+    A 19- or 20-year-old does not stay in the first round because he is better.
+    Overagers lead the later rounds instead.
+    """
+    if not board:
+        return board
+    n = len(board)
+    round1 = list(board[:32])
+    rest = list(board[32:])
+
+    def _age(row: Dict[str, Any]) -> int:
+        try:
+            return int(row.get("age") or 18)
+        except (TypeError, ValueError):
+            return 18
+
+    eighteens: List[Dict[str, Any]] = []
+    nineteens: List[Dict[str, Any]] = []
+    over: List[Dict[str, Any]] = []
+    for row in round1:
+        age = _age(row)
+        if age >= 20 or (_is_goalie_row(row) and not _goalie_is_special(row)):
+            row["ranking_reason"] = "overager_later_rounds" if age >= 19 else row.get("ranking_reason")
+            over.append(row)
+        elif age == 19:
+            nineteens.append(row)
+        else:
+            eighteens.append(row)
+
+    kept_19 = nineteens[:1]
+    for row in nineteens[1:]:
+        row["ranking_reason"] = "overager_later_rounds"
+        over.append(row)
+    if kept_19:
+        kept_19[0]["ranking_reason"] = "first_round_nineteen"
+
+    def _pull_eighteens(need: int) -> List[Dict[str, Any]]:
+        nonlocal rest
+        if need <= 0:
+            return []
+        pulled: List[Dict[str, Any]] = []
+        still: List[Dict[str, Any]] = []
+        for row in rest:
+            if len(pulled) < need and _age(row) <= 18 and not (
+                _is_goalie_row(row) and not _goalie_is_special(row)
+            ):
+                pulled.append(row)
+            else:
+                still.append(row)
+        rest = still
+        return pulled
+
+    top10 = eighteens[:10]
+    top10.extend(_pull_eighteens(10 - len(top10)))
+    mid = eighteens[10:]
+    # 22 spots after the top 10. The single 19, if any, is the last of them.
+    room = 22 - (1 if kept_19 else 0)
+    if len(mid) > room:
+        spill = mid[room:]
+        mid = mid[:room]
+        rest = spill + rest
+    elif len(mid) < room:
+        mid.extend(_pull_eighteens(room - len(mid)))
+    if kept_19:
+        mid = mid + kept_19
+
+    for row in over:
+        row["ranking_flag"] = "overager_later_rounds"
+    board[:] = (top10 + mid + over + rest)[:n]
+    return board
+
+
 def compose_live_draft_board(
     prospects: List[Dict[str, Any]],
     *,
@@ -2436,13 +2511,13 @@ def backfill_draft_eligible_goalies(league: Any, rng: Any, needed: int) -> int:
     def _tier_and_pot() -> Tuple[str, int]:
         # Normal class-strength distribution — most are depth/mid, few are top.
         roll = int(rng.randint(1, 100))
-        if roll <= 6:
-            return "top", int(rng.randint(80, 88))
-        if roll <= 25:
-            return "high", int(rng.randint(72, 80))
-        if roll <= 60:
-            return "mid", int(rng.randint(64, 73))
-        return "depth", int(rng.randint(55, 66))
+        if roll <= 8:
+            return "top", int(rng.randint(82, 90))
+        if roll <= 30:
+            return "high", int(rng.randint(76, 84))
+        if roll <= 65:
+            return "mid", int(rng.randint(70, 78))
+        return "depth", int(rng.randint(64, 74))
 
     created = 0
     for _ in range(needed):
@@ -2456,8 +2531,8 @@ def backfill_draft_eligible_goalies(league: Any, rng: Any, needed: int) -> int:
         p = _spawn_player(
             rng,
             pos=Position.G,
-            ovr_lo=0.34,
-            ovr_hi=0.52,
+            ovr_lo=0.54,
+            ovr_hi=0.66,
             age_lo=17,
             age_hi=19,
             used_names=used_names,
@@ -2480,6 +2555,88 @@ def backfill_draft_eligible_goalies(league: Any, rng: Any, needed: int) -> int:
         target_team["players"] = roster
         created += 1
 
+    league.development_leagues = dev
+    league.players = league_players
+    return created
+
+
+def count_draft_eligible_players(league: Any) -> int:
+    """Players who belong on this year's draft board (17-20, NCAA through 24)."""
+    n = 0
+    for block in getattr(league, "development_leagues", None) or []:
+        code = str(block.get("league_code") or "")
+        max_age = 24 if code.upper() == "NCAA" else 20
+        for tm in block.get("teams") or []:
+            for p in tm.get("players") or []:
+                if getattr(p, "retired", False) or getattr(p, "drafted", False):
+                    continue
+                if str(
+                    getattr(p, "nhl_rights_team_id", None)
+                    or getattr(p, "rights_team_id", None)
+                    or getattr(p, "drafted_by", None)
+                    or ""
+                ).strip():
+                    continue
+                ident = getattr(p, "identity", None)
+                age = int(getattr(ident, "age", 99) or 99) if ident else 99
+                if 17 <= age <= max_age and getattr(p, "id", None):
+                    n += 1
+    return n
+
+
+def backfill_draft_eligible_skaters(league: Any, rng: Any, needed: int) -> int:
+    """Spawn draft-age skaters until the eligible pool reaches the board target."""
+    if needed <= 0 or league is None:
+        return 0
+    from app.sim_engine.entities.player import Position
+    from app.sim_engine.league_hierarchy_bootstrap import _set_assignment, _spawn_player, set_spawn_as_of_year
+
+    set_spawn_as_of_year(getattr(league, "season_start_year", None) or getattr(league, "season_year", None))
+    dev = list(getattr(league, "development_leagues", None) or [])
+    if not dev:
+        return 0
+    league_players = list(getattr(league, "players", None) or [])
+    used_names: set = set()
+    for p in league_players:
+        ident = getattr(p, "identity", None)
+        nm = str(getattr(ident, "name", "") or "")
+        if nm:
+            used_names.add(nm)
+    targets: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
+    for block in dev:
+        for team in (block.get("teams") or []):
+            targets.append((block, team))
+    if not targets:
+        return 0
+    positions = (Position.C, Position.LW, Position.RW, Position.D, Position.C, Position.LW)
+    created = 0
+    for i in range(int(needed)):
+        block, target_team = targets[i % len(targets)]
+        code = str(block.get("league_code") or "CHL_OHL")
+        club = str(target_team.get("name") or "Backfill")
+        tid = str(target_team.get("team_id") or "")
+        roster = list(target_team.get("players") or [])
+        p = _spawn_player(
+            rng,
+            pos=positions[i % len(positions)],
+            ovr_lo=0.56,
+            ovr_hi=0.68,
+            age_lo=17,
+            age_hi=19,
+            used_names=used_names,
+            league_players=league_players,
+            pool_context="junior",
+            league_code=code,
+        )
+        if not isinstance(getattr(p, "ratings", None), dict):
+            p.ratings = {}
+        p.ratings["dev_potential"] = int(rng.randint(72, 86))
+        setattr(p, "pipeline_tier", "round5_7" if i % 3 else "round3_4")
+        p.context.current_team_id = tid
+        _set_assignment(p, level="junior", league_code=code, club=club)
+        roster.append(p)
+        target_team["players"] = roster
+        created += 1
     league.development_leagues = dev
     league.players = league_players
     return created

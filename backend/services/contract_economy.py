@@ -33,7 +33,11 @@ def compute_prorated_cap_hit_m(
 ) -> float:
     """Cap hit = (AAV × years + signing_bonus) / years — signing bonus prorates into cap."""
     yrs = max(1, int(years or 1))
-    total = float(aav_m or 0.0) * yrs + float(signing_bonus_m or 0.0)
+    bonus = float(signing_bonus_m or 0.0)
+    if bonus > 250.0:
+        bonus = bonus / 1_000_000.0
+    bonus = min(bonus, 15.0)
+    total = float(aav_m or 0.0) * yrs + bonus
     return round(total / yrs, 3)
 
 
@@ -468,6 +472,8 @@ def normalize_contract_dict(raw: Any) -> Dict[str, Any]:
 
     out["rights"] = str(src.get("rights_status") or src.get("rights") or "UFA").upper()
     out["rights_status"] = out["rights"]
+    if src.get("rights_source"):
+        out["rights_source"] = str(src.get("rights_source"))
     out["expiry_status"] = str(src.get("expiry_status") or out["rights"]).upper()
     out["expiry_year"] = int(src.get("expiry_year") or 0)
     out["ntc"] = bool(src.get("no_trade_clause") or src.get("ntc"))
@@ -517,6 +523,17 @@ def normalize_contract_dict(raw: Any) -> Dict[str, Any]:
         "slide_years_used",
         "slide_triggered",
         "slide_games_threshold",
+        "season_cap_hits",
+        "clause_by_year",
+        "clause_kicks_in_year",
+        "clause_future_type",
+        "clause_active",
+        "clause_display",
+        "extension_aav_m",
+        "extension_years_remaining",
+        "extension_years",
+        "user_signed",
+        "pending_july1_expiry",
     ):
         if key in src and src[key] is not None:
             out[key] = src[key]
@@ -525,7 +542,653 @@ def normalize_contract_dict(raw: Any) -> Dict[str, Any]:
     _apply_contract_type_truth(out)
     if isinstance(src.get("pending_extension"), dict) and float(src["pending_extension"].get("aav_m") or 0) > 0:
         out["pending_extension"] = dict(src["pending_extension"])
+    _repair_pending_extension_fields(out)
+    _sync_term_from_season_cap_hits(out, out.get("effective_season"))
     return out
+
+
+def _sync_term_from_season_cap_hits(c: Dict[str, Any], season_year: Optional[int] = None) -> None:
+    """Align years_remaining / expiry with Spotrac season_cap_hits when present."""
+    if not isinstance(c, dict):
+        return
+    # A deal already flagged for this July is in its last year on purpose.
+    # The original cap grid still lists every season of the contract, and
+    # rewriting years from that grid put the AAV back on next year's books.
+    if c.get("pending_july1_expiry"):
+        # Keep a real multi-year term if the flag is stale. Only a last-year
+        # deal is protected from the old cap grid stretching it back out.
+        try:
+            stored = int(c.get("years_remaining") or 1)
+        except (TypeError, ValueError):
+            stored = 1
+        if stored <= 1:
+            c["years_remaining"] = 1 if stored == 0 else stored
+        return
+    hits = [float(h) for h in (c.get("season_cap_hits") or []) if float(h or 0) > 0.05]
+    if not hits:
+        return
+    cap = float(c.get("cap_hit_m") or c.get("aav_m") or hits[0] or 0)
+    start = 0
+    if cap > 0:
+        matched = None
+        for i, hit in enumerate(hits):
+            if abs(hit - cap) <= 0.35:
+                matched = i
+                break
+        if matched is not None:
+            start = matched
+    end = start + 1
+    while end < len(hits) and abs(hits[end] - hits[start]) <= 0.35:
+        end += 1
+    yrs = min(max(end - start, 1), 8)
+    c["years_remaining"] = yrs
+    c["years"] = max(int(c.get("years") or 0), yrs)
+    deal_hits = hits[start:end]
+    if deal_hits and not c.get("nhl_salary_by_year_m"):
+        c["nhl_salary_by_year_m"] = [round(h, 3) for h in deal_hits]
+    try:
+        sy = int(season_year) if season_year is not None else 0
+    except (TypeError, ValueError):
+        sy = 0
+    try:
+        es = int(c.get("effective_season") or 0)
+    except (TypeError, ValueError):
+        es = 0
+    # A deal that already starts next season (re-sign, or a term repair after the
+    # year was played) must not be pulled back onto the season that just ended.
+    if es > sy:
+        sy = es
+    if sy > 0:
+        c["effective_season"] = sy
+        c["expiry_year"] = sy + yrs
+    _apply_clause_year_schedule(c, sy)
+
+
+# CapWages "years remaining" is counted from the 2026-27 season.
+CAPWAGES_SNAPSHOT_SEASON = 2026
+
+
+def forward_years_from_reported(
+    reported_years: int,
+    season_year: int,
+    *,
+    season_already_played: bool,
+) -> int:
+    """Years still owed after this game's season, from a 2026-27 years-remaining report.
+
+    A report of 2 in 2026-27 means this season and the next. Once that season has
+    been played, one of those years is gone.
+    """
+    try:
+        reported = int(reported_years)
+        season = int(season_year)
+    except (TypeError, ValueError):
+        return 0
+    if reported <= 0:
+        return 0
+    forward = reported - (season - CAPWAGES_SNAPSHOT_SEASON)
+    if season_already_played:
+        forward -= 1
+    return int(forward)
+
+
+def is_current_ufa_class(
+    *,
+    years_remaining: int,
+    expiry_year: int,
+    season_year: int,
+    pending_july1: bool,
+    extension_signed: bool,
+) -> bool:
+    """True only for deals that end this July — not anyone with a year still on the books."""
+    if extension_signed:
+        return False
+    try:
+        years = int(years_remaining or 0)
+        expiry = int(expiry_year or 0)
+        season = int(season_year or 0)
+    except (TypeError, ValueError):
+        return False
+    fa_year = season + 1
+    if years > 1 and not pending_july1:
+        return False
+    # expiry_year is the first offseason they are unsigned. 2028 means they play 2027-28.
+    if expiry > fa_year and not pending_july1:
+        return False
+    if pending_july1 and years <= 1:
+        return True
+    return years <= 1 and (expiry <= 0 or expiry <= fa_year)
+
+
+def stamp_forward_contract_term(
+    contract: Dict[str, Any],
+    player: Any,
+    forward_years: int,
+    season_year: int,
+    *,
+    season_already_played: bool,
+) -> bool:
+    """Write the years still left so a cap-sheet 1-year stub is not this July's UFA."""
+    if not isinstance(contract, dict):
+        return False
+    if contract.get("user_signed"):
+        return False
+    src = str(contract.get("source") or "").lower()
+    if src in ("signed", "re_sign", "ufa", "free_agent", "fa", "arbitration"):
+        return False
+    try:
+        forward = int(forward_years)
+    except (TypeError, ValueError):
+        return False
+    if forward <= 0:
+        return False
+    hits = [float(h) for h in (contract.get("season_cap_hits") or []) if float(h or 0) > 0.05]
+    stored = int(contract.get("years_remaining") or 0)
+    # A real multi-year grid already on the deal wins over an outside report.
+    if len(hits) > 1 and stored > 1:
+        return False
+    start = int(season_year) + (1 if season_already_played else 0)
+    contract["years_remaining"] = forward
+    contract["years"] = max(int(contract.get("years") or 0), forward)
+    contract["effective_season"] = start
+    contract["expiry_year"] = start + forward
+    contract.pop("pending_july1_expiry", None)
+    aav = float(contract.get("aav_m") or contract.get("cap_hit_m") or 0)
+    if aav > 0:
+        contract["season_cap_hits"] = [round(aav, 3)] * min(forward, 8)
+    if player is not None:
+        try:
+            setattr(player, "pending_july1_expiry", False)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    return True
+
+
+def _clause_token(raw: Any) -> str:
+    text = str(raw or "").upper().replace(" ", "")
+    if text in ("NMC", "NOMOVE", "NO-MOVE"):
+        return "NMC"
+    if text in ("M-NTC", "MNTC", "MODIFIED"):
+        return "M-NTC"
+    if text in ("NTC", "NOTRADE", "NO-TRADE"):
+        return "NTC"
+    return ""
+
+
+def _clear_live_clause(c: Dict[str, Any]) -> None:
+    c["no_move_clause"] = False
+    c["no_trade_clause"] = False
+    c["nmc"] = False
+    c["ntc"] = False
+    c["ntc_mode"] = "NONE"
+    c["clause_type"] = "None"
+    c["modified_no_trade_teams"] = 0
+    c["clause_active"] = False
+
+
+def _set_live_clause(c: Dict[str, Any], token: str) -> None:
+    c["clause_active"] = True
+    c["clause_future_type"] = ""
+    if token == "NMC":
+        c["no_move_clause"] = True
+        c["nmc"] = True
+        c["no_trade_clause"] = False
+        c["ntc"] = False
+        c["ntc_mode"] = "NONE"
+        c["clause_type"] = "NMC"
+        c["modified_no_trade_teams"] = 0
+    elif token == "M-NTC":
+        c["no_move_clause"] = False
+        c["nmc"] = False
+        c["no_trade_clause"] = False
+        c["ntc"] = False
+        c["ntc_mode"] = "MODIFIED"
+        c["clause_type"] = "M-NTC"
+        if int(c.get("modified_no_trade_teams") or 0) <= 0:
+            c["modified_no_trade_teams"] = 10
+    elif token == "NTC":
+        c["no_move_clause"] = False
+        c["nmc"] = False
+        c["no_trade_clause"] = True
+        c["ntc"] = True
+        c["ntc_mode"] = "FULL"
+        c["clause_type"] = "NTC"
+        c["modified_no_trade_teams"] = 0
+
+
+def clause_schedule_label(schedule: List[str], season_year: int) -> str:
+    """Human label: active now, or 'NTC starts 2027-28', including a later upgrade."""
+    events: List[tuple] = []
+    prev = ""
+    for i, raw in enumerate(schedule or []):
+        tok = _clause_token(raw)
+        if tok and tok != prev:
+            events.append((tok, i))
+        prev = tok
+    if not events:
+        return ""
+    try:
+        sy = int(season_year or 0)
+    except (TypeError, ValueError):
+        sy = 0
+    parts: List[str] = []
+    for n, (tok, i) in enumerate(events):
+        year = (sy + i) if sy else 0
+        if i == 0:
+            parts.append(tok)
+        elif n == 0 and year:
+            parts.append(f"{tok} starts {year}-{str(year + 1)[-2:]}")
+        elif year:
+            parts.append(f"{tok} {year}-{str(year + 1)[-2:]}")
+        else:
+            parts.append(f"{tok} year {i + 1}")
+    return " · ".join(parts)
+
+
+def _apply_clause_year_schedule(c: Dict[str, Any], season_year: Optional[int] = None) -> None:
+    """Turn Spotrac's per-season clause marks into live vs not-yet-kicked-in flags.
+
+    A mark on a later cap-hit cell does not block trades this season.
+    """
+    if not isinstance(c, dict):
+        return
+    raw = c.get("clause_by_year")
+    if not isinstance(raw, list) or not any(_clause_token(x) for x in raw):
+        return
+    hits = [float(h) for h in (c.get("season_cap_hits") or []) if float(h or 0) > 0.05]
+    sched = [_clause_token(x) for x in raw]
+    if hits and len(sched) < len(hits):
+        sched = sched + [""] * (len(hits) - len(sched))
+    cap = float(c.get("cap_hit_m") or c.get("aav_m") or (hits[0] if hits else 0) or 0)
+    start = 0
+    if hits and cap > 0:
+        for i, hit in enumerate(hits):
+            if abs(hit - cap) <= 0.35:
+                start = i
+                break
+    end = start + 1
+    if hits:
+        while end < len(hits) and abs(hits[end] - hits[start]) <= 0.35:
+            end += 1
+    pe = c.get("pending_extension")
+    if isinstance(pe, dict) and end < len(sched) and any(sched[end:]):
+        pe = dict(pe)
+        pe["clause_by_year"] = sched[end:]
+        if hits and end < len(hits):
+            pe["season_cap_hits"] = [round(h, 3) for h in hits[end:]]
+        c["pending_extension"] = pe
+    window = sched[start:] if start < len(sched) else []
+    c["clause_by_year"] = sched
+    try:
+        sy = int(season_year if season_year else c.get("effective_season") or 0)
+    except (TypeError, ValueError):
+        sy = 0
+    current = window[0] if window else ""
+    future_i = next((i for i, tok in enumerate(window) if tok), None)
+    if current:
+        _set_live_clause(c, current)
+        c["clause_kicks_in_year"] = sy if sy else int(c.get("clause_kicks_in_year") or 0)
+        c["clause_future_type"] = ""
+    elif future_i is not None:
+        _clear_live_clause(c)
+        c["clause_future_type"] = window[future_i]
+        c["clause_kicks_in_year"] = (sy + future_i) if sy else int(c.get("clause_kicks_in_year") or 0)
+    else:
+        return
+    label = clause_schedule_label(window, sy)
+    if label:
+        c["clause_display"] = label
+
+
+def clause_timing_fields(player_or_contract: Any) -> Dict[str, Any]:
+    """Active clause (blocks trades) plus the Spotrac kick-in label for UI."""
+    c = normalize_contract_payload(player_or_contract)
+    active = "None"
+    if c.get("nmc") or c.get("no_move_clause"):
+        active = "NMC"
+    elif str(c.get("ntc_mode") or "").upper() in ("MODIFIED", "M-NTC", "MNTC") or str(c.get("clause_type") or "").upper() in ("M-NTC", "MNTC"):
+        active = "M-NTC"
+    elif c.get("ntc") or c.get("no_trade_clause") or str(c.get("ntc_mode") or "").upper() == "FULL":
+        active = "NTC"
+    display = str(c.get("clause_display") or "").strip()
+    if not display or display == "None":
+        display = active
+    pending = str(c.get("clause_future_type") or "").strip()
+    try:
+        kick = int(c.get("clause_kicks_in_year") or 0)
+    except (TypeError, ValueError):
+        kick = 0
+    if active != "None":
+        pending = ""
+    return {
+        "clause": active,
+        "clause_display": display if display else "None",
+        "clause_pending": pending or None,
+        "clause_kicks_in_year": kick or None,
+        "clause_active": active != "None",
+    }
+
+
+def advance_dict_contract_one_season(c: Dict[str, Any], season_year: int) -> None:
+    """Burn one contract year on dict-backed deals; keep season_cap_hits in step."""
+    if not isinstance(c, dict):
+        return
+    hits = [float(h) for h in (c.get("season_cap_hits") or []) if float(h or 0) > 0.05]
+    sched = c.get("clause_by_year")
+    if isinstance(sched, list) and sched:
+        c["clause_by_year"] = list(sched[1:])
+    if hits:
+        c["season_cap_hits"] = [round(h, 3) for h in hits[1:]]
+        if c["season_cap_hits"]:
+            nh = float(c["season_cap_hits"][0])
+            if nh > 0 and abs(nh - float(c.get("cap_hit_m") or c.get("aav_m") or 0)) > 0.35:
+                c["cap_hit_m"] = round(nh, 3)
+                c["aav_m"] = round(nh, 3)
+        arr = c.get("nhl_salary_by_year_m")
+        if isinstance(arr, list) and len(arr) > 1:
+            c["nhl_salary_by_year_m"] = [round(float(x), 3) for x in arr[1:]]
+    try:
+        es = int(c.get("effective_season") or season_year or 0)
+    except (TypeError, ValueError):
+        es = int(season_year or 0)
+    if es > 0:
+        c["effective_season"] = es + 1
+    c["years_remaining"] = max(0, int(c.get("years_remaining", 0)) - 1)
+    if c.get("season_cap_hits") or c.get("clause_by_year"):
+        _sync_term_from_season_cap_hits(c, c.get("effective_season"))
+        _apply_clause_year_schedule(c, c.get("effective_season"))
+    elif int(c.get("expiry_year") or 0) > 0:
+        try:
+            c["expiry_year"] = int(c["expiry_year"])
+        except (TypeError, ValueError):
+            pass
+
+
+def _team_abbrev(team: Any) -> str:
+    return str(
+        _get(team, "abbrev", None)
+        or _get(team, "abbr", None)
+        or _get(team, "abbreviation", None)
+        or ""
+    ).upper()
+
+
+def _contract_eligible_for_spotrac_restamp(player: Any, c: Dict[str, Any]) -> bool:
+    if c.get("user_signed"):
+        return False
+    src = str(c.get("source") or "").lower()
+    if src in ("re_sign", "ufa", "free_agent", "fa", "arbitration", "generated", "estimated", "bootstrap", "signed"):
+        return False
+    if getattr(player, "real_nhl_contract", False) or getattr(player, "real_nhl_import", False):
+        return True
+    return "spotrac" in src or "real_nhl" in src
+
+
+def _cache_missing_clause_schedule(cache: Any) -> bool:
+    """True when a stored Spotrac pull predates per-year NTC/NMC marks."""
+    if not isinstance(cache, dict) or not cache:
+        return True
+    for team_rows in list(cache.values())[:8]:
+        if not isinstance(team_rows, dict):
+            continue
+        for row in list(team_rows.values())[:16]:
+            rows = row if isinstance(row, list) else [row]
+            for item in rows:
+                if isinstance(item, dict) and "clause_by_year" in item:
+                    return False
+    return True
+
+
+def _restamp_spotrac_contract_from_cache(
+    player: Any,
+    team: Any,
+    league: Any,
+    season_year: int,
+    contracts_by_team: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> bool:
+    """Re-apply Spotrac yearly grid when term or clause years were dropped."""
+    c = normalize_contract_dict(_get(player, "contract", None) or {})
+    needs_hits = not c.get("season_cap_hits")
+    needs_clause = "clause_by_year" not in c
+    if not needs_hits and not needs_clause:
+        return False
+    if not _contract_eligible_for_spotrac_restamp(player, c):
+        return False
+    cache = contracts_by_team
+    if cache is None and league is not None:
+        cache = getattr(league, "real_nhl_spotrac_contracts", None)
+    if not isinstance(cache, dict) or not cache:
+        return False
+    abbr = _team_abbrev(team)
+    if not abbr:
+        return False
+    try:
+        from services.real_nhl_contracts import match_contract_for_player
+
+        fresh = match_contract_for_player(
+            _player_name(player),
+            abbr,
+            cache,
+            position_code=_player_pos(player),
+        )
+    except Exception:
+        return False
+    if not isinstance(fresh, dict):
+        return False
+    if needs_hits and not fresh.get("season_cap_hits"):
+        return False
+    if needs_clause and "clause_by_year" not in fresh and not needs_hits:
+        return False
+    merged = dict(c)
+    keys = ["source"]
+    if needs_hits:
+        keys.extend([
+            "season_cap_hits",
+            "aav_m",
+            "cap_hit_m",
+            "years",
+            "years_remaining",
+            "rights_status",
+            "pending_extension",
+            "extension_aav_m",
+            "extension_years_remaining",
+            "extension_years",
+        ])
+    if needs_clause or needs_hits:
+        keys.extend([
+            "clause_by_year",
+            "clause_future_type",
+            "clause_kicks_in_year",
+            "clause_active",
+            "no_trade_clause",
+            "no_move_clause",
+            "ntc_mode",
+            "clause_type",
+            "modified_no_trade_teams",
+        ])
+    keep_signed_ext = (
+        isinstance(c.get("pending_extension"), dict)
+        and (
+            c["pending_extension"].get("user_signed")
+            or str(c["pending_extension"].get("source") or "").lower() == "signed"
+        )
+    )
+    for key in keys:
+        if key == "pending_extension" and keep_signed_ext:
+            continue
+        if fresh.get(key) is not None:
+            merged[key] = fresh[key]
+    merged["effective_season"] = int(season_year)
+    apply_contract_to_player(player, merged, int(season_year))
+    return True
+
+
+def repair_player_contract_terms(
+    player: Any,
+    season_year: int,
+    *,
+    team: Any = None,
+    league: Any = None,
+    contracts_by_team: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> bool:
+    """Normalize + align term fields from Spotrac season_cap_hits when available."""
+    if player is None or bool(_get(player, "retired", False)):
+        return False
+    changed = False
+    if team is not None:
+        changed = _restamp_spotrac_contract_from_cache(
+            player, team, league, season_year, contracts_by_team
+        )
+    hydrate_player_contract(player, season_year)
+    c = normalize_contract_dict(_get(player, "contract", None) or {})
+    if isinstance(_get(player, "contract", None), dict):
+        live = _get(player, "contract", None)
+        if isinstance(live, dict):
+            live.update({k: v for k, v in c.items() if k in live or v is not None})
+    return changed or bool(c.get("season_cap_hits"))
+
+
+def iter_league_all_players(league: Any):
+    """Yield (player, team_or_none) for every contracted body in the league."""
+    seen: set = set()
+    for team in list(_get(league, "teams", None) or []):
+        for p in iter_org_contract_players(team):
+            key = _org_player_dedupe_key(p)
+            if key in seen:
+                continue
+            seen.add(key)
+            yield p, team
+    for pool in ("free_agents", "overseas_free_agents"):
+        for p in list(_get(league, pool, None) or []):
+            if bool(_get(p, "retired", False)):
+                continue
+            key = _org_player_dedupe_key(p)
+            if key in seen:
+                continue
+            seen.add(key)
+            yield p, None
+
+
+def _maybe_load_spotrac_contract_cache(league: Any, season_year: int) -> Optional[Dict[str, Dict[str, Any]]]:
+    """One Spotrac pull per session for Real NHL saves missing the embedded contract grid."""
+    existing = getattr(league, "real_nhl_spotrac_contracts", None)
+    stale_clauses = _cache_missing_clause_schedule(existing)
+    if isinstance(existing, dict) and existing and not stale_clauses:
+        return existing
+    if stale_clauses and bool(getattr(league, "_spotrac_clause_schedule_refreshed", False)):
+        return existing if isinstance(existing, dict) else None
+    if not getattr(league, "real_nhl_import_meta", None):
+        return existing if isinstance(existing, dict) else None
+    if bool(getattr(league, "_spotrac_contract_cache_loaded", False)):
+        return existing if isinstance(existing, dict) else None
+    try:
+        setattr(league, "_spotrac_contract_cache_loaded", True)
+        if stale_clauses:
+            setattr(league, "_spotrac_clause_schedule_refreshed", True)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    abbrs = sorted(
+        {
+            _team_abbrev(t)
+            for t in list(_get(league, "teams", None) or [])
+            if _team_abbrev(t)
+        }
+    )
+    if not abbrs:
+        return None
+    try:
+        from services.real_nhl_contracts import fetch_league_contracts_by_team
+
+        by_team, _, _ = fetch_league_contracts_by_team(abbrs, int(season_year), max_workers=10)
+        if isinstance(by_team, dict) and by_team:
+            try:
+                setattr(league, "real_nhl_spotrac_contracts", by_team)
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+            return by_team
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    return None
+
+
+def repair_league_contract_terms(
+    league: Any,
+    season_year: int,
+    contracts_by_team: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> int:
+    """League-wide Spotrac term repair (all 32 clubs + FA pools). Returns players touched."""
+    if league is None:
+        return 0
+    # Opening the cap desk, the FA wire, and a cap sync all call this. Walking
+    # every contract (and possibly refetching Spotrac) on each of those was a
+    # multi-second hit, and a season sim that refreshed cap did it again.
+    if contracts_by_team is None:
+        try:
+            if int(getattr(league, "_contract_terms_repaired_for", 0) or 0) == int(season_year):
+                return 0
+        except (TypeError, ValueError):
+            pass
+    cache = contracts_by_team
+    if cache is None:
+        cache = _maybe_load_spotrac_contract_cache(league, season_year)
+    n = 0
+    for player, team in iter_league_all_players(league):
+        try:
+            if repair_player_contract_terms(
+                player,
+                int(season_year),
+                team=team,
+                league=league,
+                contracts_by_team=cache,
+            ):
+                n += 1
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    try:
+        setattr(league, "_contract_terms_repaired_for", int(season_year))
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    return n
+
+
+def _repair_pending_extension_fields(c: Dict[str, Any]) -> None:
+    """Spotrac rows sometimes stamp extension_aav_m without nested pending_extension."""
+    if not isinstance(c, dict):
+        return
+    pe = c.get("pending_extension")
+    if isinstance(pe, dict) and float(pe.get("aav_m") or pe.get("cap_hit_m") or 0) > 0:
+        return
+    aav = float(c.get("extension_aav_m") or 0)
+    yrs = int(c.get("extension_years_remaining") or c.get("extension_years") or 0)
+    if aav > 0 and yrs > 0:
+        c["pending_extension"] = {
+            "aav_m": round(aav, 3),
+            "cap_hit_m": round(aav, 3),
+            "years": yrs,
+            "years_remaining": yrs,
+        }
+        return
+    hits = [float(h) for h in (c.get("season_cap_hits") or []) if float(h or 0) > 0.05]
+    cur = float(c.get("cap_hit_m") or c.get("aav_m") or 0)
+    if cur <= 0 or len(hits) < 2:
+        return
+    end = 0
+    while end < len(hits) and abs(hits[end] - cur) <= 0.35:
+        end += 1
+    if end >= len(hits):
+        return
+    future = hits[end:]
+    if not future or abs(future[0] - cur) <= 0.35:
+        return
+    ext_aav = round(sum(future) / len(future), 3)
+    c["pending_extension"] = {
+        "aav_m": ext_aav,
+        "cap_hit_m": ext_aav,
+        "years": min(len(future), 8),
+        "years_remaining": min(len(future), 8),
+    }
+    c.setdefault("extension_aav_m", ext_aav)
+    c.setdefault("extension_years_remaining", min(len(future), 8))
 
 
 def _apply_contract_type_truth(c: Dict[str, Any]) -> None:
@@ -574,13 +1237,21 @@ def get_contract_cap_hit(contract: Any, season: Optional[int] = None) -> float:
     ctype = str(c.get("contract_type") or c.get("type") or "").upper()
     if ctype in ("AHL", "ECHL", "AHL_ECHL", "PTO", "ATO", "TRYOUT"):
         return float(c.get("cap_hit_m") or 0.0)
+    # AAV is already the cap hit. Adding the signing bonus again charged the
+    # bonus twice and, once years_remaining ticked to 1, dumped the whole bonus
+    # onto this season.
+    stored = c.get("cap_hit_m")
+    try:
+        stored_f = float(stored) if stored is not None else 0.0
+    except (TypeError, ValueError):
+        stored_f = 0.0
     aav = float(c.get("aav_m") or 0.0)
-    bonus = float(c.get("signing_bonus_m") or 0.0)
-    yrs = max(1, int(c.get("years_remaining") or c.get("years") or 1))
-    if bonus > 0 and aav > 0:
-        return compute_prorated_cap_hit_m(aav, yrs, bonus)
-    if "cap_hit_m" in c and c.get("cap_hit_m") is not None:
-        return float(c.get("cap_hit_m") or 0.0)
+    if stored_f > 0 and aav > 0 and stored_f > aav + 1.0 and stored_f > aav * 1.25:
+        return aav
+    if stored_f > 0:
+        return stored_f
+    if aav > 0:
+        return aav
     return aav
 
 
@@ -840,10 +1511,12 @@ def _strip_malformed_contract(player: Any) -> None:
         _clear_expired_contract(player)
 
 
-def hydrate_player_contract(player: Any) -> None:
+def hydrate_player_contract(player: Any, season_year: Optional[int] = None) -> None:
     """Normalize legacy contract money on load. Idempotent."""
     _strip_malformed_contract(player)
     c = _get(player, "contract", None)
+    if isinstance(c, dict) and bool(getattr(player, "pending_july1_expiry", False)):
+        c["pending_july1_expiry"] = True
     if c is None:
         hit = player_cap_hit_millions(player)
         if hit <= 0:
@@ -853,7 +1526,12 @@ def hydrate_player_contract(player: Any) -> None:
             "years_remaining": max(0, int(_get(player, "years_remaining", 0) or 0)),
         })
     else:
+        if isinstance(c, dict) and season_year is not None and not c.get("effective_season"):
+            c = dict(c)
+            c["effective_season"] = int(season_year)
         normalized = normalize_contract_dict(c)
+        if season_year is not None:
+            _sync_term_from_season_cap_hits(normalized, int(season_year))
 
     try:
         if isinstance(c, dict):
@@ -876,13 +1554,26 @@ def hydrate_player_contract(player: Any) -> None:
         player.aav_m = normalized["aav_m"]
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
+    if normalized.get("pending_july1_expiry"):
+        try:
+            setattr(player, "pending_july1_expiry", True)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def apply_contract_to_player(player: Any, contract: Dict[str, Any], season_year: int) -> None:
-    normalized = normalize_contract_dict(contract)
+    payload = dict(contract or {})
+    try:
+        sy = int(season_year)
+    except (TypeError, ValueError):
+        sy = 0
+    if sy > 0:
+        payload.setdefault("effective_season", sy)
+        _sync_term_from_season_cap_hits(payload, sy)
+    normalized = normalize_contract_dict(payload)
     yrs = int(normalized.get("years_remaining") or normalized.get("years") or 1)
-    if not normalized.get("expiry_year"):
-        normalized["expiry_year"] = int(season_year) + yrs
+    if not normalized.get("expiry_year") and sy > 0:
+        normalized["expiry_year"] = sy + yrs
 
     existing = _get(player, "contract", None)
     if isinstance(existing, dict):
@@ -922,6 +1613,39 @@ def apply_contract_to_player(player: Any, contract: Dict[str, Any], season_year:
     existing_after = _get(player, "contract", None)
     if isinstance(existing_after, dict):
         existing_after.pop("pending_july1_expiry", None)
+
+def cap_books_for_session(session: Any) -> Dict[str, Any]:
+    """One cap view for the hub, the salary-cap card, re-sign, and free agency.
+
+    During the season the expiring class is still being paid, so it counts.
+    Once the season is over, usable space is opening-day space: unsigned
+    final-year deals come off, a signed extension replaces them, and the
+    announced next cap is the ceiling.
+    """
+    in_season = _phase_is_in_season(session)
+    try:
+        sy = int(getattr(session, "season_calendar_year", 2025) or 2025)
+    except (TypeError, ValueError):
+        sy = 2025
+    cap_year = sy
+    if not in_season:
+        league = getattr(getattr(session, "sim", None), "league", None)
+        sched = getattr(league, "cap_schedule_m", None) if league is not None else None
+        if isinstance(sched, dict):
+            try:
+                if int(sy + 1) in {int(k) for k in sched}:
+                    cap_year = sy + 1
+            except (TypeError, ValueError):
+                pass
+    return {
+        "in_season": in_season,
+        "season_year": cap_year,
+        "count_expiring": in_season,
+        "opening_day": not in_season,
+        "calendar_cursor": int(getattr(session, "calendar_cursor", 0) or 0),
+        "regular_season_last_index": int(getattr(session, "nhl_regular_season_last_index", 192) or 192),
+    }
+
 
 def _phase_is_in_season(session: Any) -> bool:
     """Regular season and playoffs spend this year's cap, not next July's books."""
@@ -1028,6 +1752,7 @@ def get_team_cap_snapshot_full(
     calendar_cursor: int = 0,
     regular_season_last_index: int = 192,
     count_expiring: bool = False,
+    opening_day: bool = False,
 ) -> Dict[str, Any]:
     season_label = None
     if season_year is not None:
@@ -1041,7 +1766,25 @@ def get_team_cap_snapshot_full(
         calendar_cursor=calendar_cursor,
         regular_season_last_index=regular_season_last_index,
         include_expiring=bool(count_expiring),
+        opening_day=bool(opening_day),
     )
+    try:
+        from app.sim_engine.economy.cap_engine import (
+            team_expiring_active_cap_hit_millions,
+            team_following_season_active_cap_hit_millions,
+        )
+
+        raw["expiringRosterCapHit"] = round(
+            float(team_expiring_active_cap_hit_millions(team, include_expiring=bool(count_expiring))),
+            3,
+        )
+        raw["followingSeasonActiveCapHit"] = round(
+            float(team_following_season_active_cap_hit_millions(team, include_expiring=bool(count_expiring))),
+            3,
+        )
+    except Exception:
+        raw["expiringRosterCapHit"] = 0.0
+        raw["followingSeasonActiveCapHit"] = 0.0
 
     _all_rostered(team)
     slots_used = _count_team_contract_slots(team)
@@ -1058,6 +1801,8 @@ def get_team_cap_snapshot_full(
         "lower_limit_m": float(raw.get("lowerLimit") or 0),
         "total_cap_hit_m": float(raw.get("totalCapHit") or 0),
         "active_roster_cap_hit_m": float(raw.get("activeRosterCapHit") or 0),
+        "expiring_roster_cap_hit_m": float(raw.get("expiringRosterCapHit") or 0),
+        "following_season_active_cap_hit_m": float(raw.get("followingSeasonActiveCapHit") or 0),
         "buried_cap_hit_m": float(raw.get("buriedCapHit") or 0),
         "retained_salary_m": float(raw.get("retainedSalary") or 0),
         "buyout_cap_hit_m": float(raw.get("buyoutCapHit") or 0),
@@ -1101,6 +1846,12 @@ def sync_team_cap_fields(team: Any, league: Any, sim: Any = None, **kwargs) -> D
 
 def sync_all_team_cap_fields(league: Any, sim: Any = None, **kwargs) -> int:
     """Refresh usable cap space on every club — required so CPU FA bidding works."""
+    sy = kwargs.get("season_year")
+    if sy is not None and league is not None:
+        try:
+            repair_league_contract_terms(league, int(sy), kwargs.get("contracts_by_team"))
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     n = 0
     for team in list(_get(league, "teams", None) or []):
         try:
@@ -1586,6 +2337,28 @@ def _apply_bad_contract_premium(aav: float, fair: float, bad_type: str, rng: ran
     return max(aav, fair * mult)
 
 
+def resolved_rights_status(player: Any, contract: Any = None) -> str:
+    """RFA vs UFA for desks and expiry.
+
+    The cap sheet stamps every row UFA. A player under 27 is an RFA unless a
+    term source (CapWages / Spotrac / a user signing) explicitly said UFA.
+    """
+    c = contract if isinstance(contract, dict) else (_get(player, "contract", None) or {})
+    if not isinstance(c, dict):
+        c = {}
+    stored = str(
+        c.get("rights_status") or c.get("rights") or _get(player, "rights_status", "") or "UFA"
+    ).upper()
+    if "RFA" in stored:
+        return "RFA"
+    source = str(c.get("rights_source") or getattr(player, "rights_source", "") or "").lower()
+    if stored == "UFA" and source in ("spotrac", "capwages", "user"):
+        return "UFA"
+    if _player_age(player) < 27:
+        return "RFA"
+    return "UFA"
+
+
 def contract_type_and_rights(age: int, ovr: float, *, true_elc: bool = False) -> Tuple[str, str]:
     if true_elc:
         return ("ELC", "RFA")
@@ -1933,6 +2706,7 @@ def assign_elc_contract(
             team.performance_bonus_reserve_m = new_reserve
             team.performance_bonus_reserve = new_reserve
             team.bonus_reserve_m = new_reserve
+            team.performance_bonus_reserve_season = int(season_year)
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
 
@@ -3608,6 +4382,15 @@ def compute_player_demand(
         if _disc > 0:
             want = max(LEAGUE_MINIMUM_AAV_M, round(want - _disc, 3))
             min_acceptable = max(LEAGUE_MINIMUM_AAV_M, round(min(min_acceptable, want * 0.94), 3))
+        if abs(_mm - 1.0) > 1e-6 or _disc > 0:
+            try:
+                cap_ul = float(_league_salary_cap_upper_limit(league) or MARKET_VALUE_CAP_ANCHOR_M)
+            except Exception:
+                cap_ul = MARKET_VALUE_CAP_ANCHOR_M
+            salary_ceiling = round(max_salary_share_of_cap(league) * max(MARKET_VALUE_CAP_ANCHOR_M, cap_ul), 3)
+            discount_floor = max(LEAGUE_MINIMUM_AAV_M, round(float(market) * 0.55, 3))
+            want = min(salary_ceiling, max(discount_floor, want))
+            min_acceptable = min(want, max(LEAGUE_MINIMUM_AAV_M, min_acceptable))
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
 
@@ -3972,26 +4755,36 @@ def evaluate_contract_offer(
         old_hit = max(0.0, float(player_cap_hit_millions(player)))
         if ctx_l in ("re_sign", "extension", "rfa") and old_hit > 0:
             yrs_left = max(0, int(_contract_years_remaining(player)))
-            # In season the raise has to fit in THIS year's usable space.
-            # Next year's projection is informational and is not the ceiling.
-            if in_season_cap:
-                cap_delta_m = max(0.0, cap_hit_m - old_hit)
+            # A July-1 flag means this year's snapshot already dropped his hit.
+            # Subtracting it again makes next year look richer than it is, and
+            # leaving every other expiring deal in the total makes it look broke.
+            try:
+                from app.sim_engine.economy.cap_engine import _is_pending_july1_expiry
+
+                hit_counted = bool(in_season_cap) or not _is_pending_july1_expiry(player)
+            except Exception:
+                hit_counted = True
+            counted_hit = old_hit if hit_counted else 0.0
+            starts_later = _extension_starts_next_season(player, in_season=bool(in_season_cap))
+            if starts_later:
+                cap_delta_m = 0.0
+            elif in_season_cap:
+                cap_delta_m = max(0.0, cap_hit_m - counted_hit)
             else:
-                cap_delta_m = 0.0 if yrs_left > 1 else max(0.0, cap_hit_m - old_hit)
+                cap_delta_m = 0.0 if yrs_left > 1 else max(0.0, cap_hit_m - counted_hit)
             projected = round(usable - cap_delta_m, 3)
-            total_hit = float(snap.get("total_cap_hit_m") or 0)
-            upper_next = float(
-                snap.get("projected_next_year_upper_limit_m")
-                or snap.get("upper_limit_m")
-                or 0
-            )
-            if upper_next <= 0:
-                upper_next = float(snap.get("upper_limit_m") or 88.0) * 1.03
-            if yrs_left <= 1:
-                next_total = total_hit - old_hit + cap_hit_m
-            else:
-                next_total = total_hit
-            projected_next_season = round(upper_next - next_total, 3)
+            if starts_later or yrs_left <= 1:
+                try:
+                    from app.sim_engine.economy.cap_engine import pending_extension_cap_hit_millions
+
+                    booked = pending_extension_cap_hit_millions(player) if yrs_left <= 1 else 0.0
+                except Exception:
+                    booked = 0.0
+                projected_next_season = _next_season_space_after_offer(
+                    snap,
+                    offer_hit_m=cap_hit_m if yrs_left <= 1 else 0.0,
+                    booked_hit_m=booked,
+                )
         else:
             cap_delta_m = cap_hit_m
             projected = round(usable - cap_hit_m, 3)
@@ -4533,6 +5326,49 @@ def _validate_sign_cap_ahl(team: Any, cap_hit_m: float, league: Any, season_year
     return {"ok": True, "reason": "ok_ahl", "snapshot": snap, "assign_ahl": True}
 
 
+def _extension_starts_next_season(player: Any, *, in_season: bool) -> bool:
+    """A final-year extension keeps this year's cap hit. The new AAV starts next season."""
+    if player is None:
+        return False
+    if _contract_years_remaining(player) < 1:
+        return False
+    try:
+        from app.sim_engine.economy.cap_engine import _is_pending_july1_expiry
+
+        if (not in_season) and _is_pending_july1_expiry(player):
+            return False
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    return True
+
+
+def _next_season_space_after_offer(
+    snap: Dict[str, Any],
+    *,
+    offer_hit_m: float,
+    booked_hit_m: float = 0.0,
+) -> Optional[float]:
+    """Room next season after replacing one already-booked extension hit with this offer."""
+    upper_next = float(
+        snap.get("projected_next_year_upper_limit_m")
+        or snap.get("upper_limit_m")
+        or 0
+    )
+    if upper_next <= 0:
+        upper_next = float(snap.get("upper_limit_m") or 88.0) * 1.03
+    following = snap.get("following_season_active_cap_hit_m")
+    if following is None:
+        return None
+    dead_next = (
+        float(snap.get("buried_cap_hit_m") or 0)
+        + float(snap.get("retained_salary_m") or 0)
+        + float(snap.get("buyout_cap_hit_m") or 0)
+        + float(snap.get("other_dead_cap_m") or 0)
+    )
+    next_active = max(0.0, float(following) - max(0.0, float(booked_hit_m)) + max(0.0, float(offer_hit_m)))
+    return round(upper_next - (next_active + dead_next), 3)
+
+
 def _validate_sign_cap(
     team: Any,
     aav_m: float,
@@ -4544,15 +5380,46 @@ def _validate_sign_cap(
 ) -> Dict[str, Any]:
     needed = max(0.0, float(aav_m))
     ctx = str(context or "").lower()
+    on_team = False
     if player is not None and ctx in ("re_sign", "extension", "rfa"):
         pid = _player_id(player)
-        on_team = pid and pid in {_player_id(p) for p in _all_rostered(team)}
+        on_team = bool(pid and pid in {_player_id(p) for p in _all_rostered(team)})
+        if on_team and _extension_starts_next_season(player, in_season=bool(in_season)):
+            # This year's payroll does not move. The extension has to fit next year,
+            # after every other signed extension is already on the books.
+            now = can_sign_player(
+                team, 0.0, league=league, player=player, include_expiring=bool(in_season),
+            )
+            if not now.get("ok") and "roster" in str(now.get("reason") or "").lower():
+                return now
+            try:
+                from app.sim_engine.economy.cap_engine import pending_extension_cap_hit_millions
+
+                snap = get_team_cap_snapshot_full(team, league, count_expiring=bool(in_season))
+                booked = pending_extension_cap_hit_millions(player) if _contract_years_remaining(player) <= 1 else 0.0
+                space = _next_season_space_after_offer(snap, offer_hit_m=needed, booked_hit_m=booked)
+            except Exception:
+                space = None
+            if space is not None and space < -0.05:
+                return {
+                    "ok": False,
+                    "reason": (
+                        f"That extension starts next season and would leave the club "
+                        f"${abs(space):.2f}M over the cap"
+                    ),
+                    "snapshot": snap,
+                }
+            return {"ok": True, "reason": "ok", "snapshot": now.get("snapshot"), "next_season_space_m": space}
         if on_team:
             old_hit = max(0.0, float(player_cap_hit_millions(player)))
-            if old_hit > 0:
+            try:
+                from app.sim_engine.economy.cap_engine import _is_pending_july1_expiry
+
+                hit_counted = bool(in_season) or not _is_pending_july1_expiry(player)
+            except Exception:
+                hit_counted = True
+            if old_hit > 0 and hit_counted:
                 needed = max(0.0, needed - old_hit)
-    # In season the ceiling is this year's usable space, including deals that
-    # expire in July. Next year's projection is not the spend limit.
     return can_sign_player(
         team,
         needed,
@@ -4880,6 +5747,46 @@ def _negotiation_gate(
     # CBA: an extension can only be signed in the final year of the current deal.
     if own and str(ctx or "").lower() in ("re_sign", "offer", "extension", ""):
         on_roster = pid in {_player_id(p) for p in _all_rostered(team)}
+        if on_roster:
+            c_live = normalize_contract_dict(_get(player, "contract", None) or {})
+            if isinstance(c_live, dict):
+                _repair_pending_extension_fields(c_live)
+                live = _get(player, "contract", None)
+                if isinstance(live, dict):
+                    live.update({k: v for k, v in c_live.items() if k == "pending_extension" or k.startswith("extension_")})
+            try:
+                from app.sim_engine.economy.cap_engine import pending_extension_cap_hit_millions
+
+                ext_hit = pending_extension_cap_hit_millions(player)
+            except Exception:
+                ext_hit = 0.0
+            if ext_hit > 0:
+                ext = c_live.get("pending_extension") if isinstance(c_live, dict) else None
+                ext_years = int((ext or {}).get("years") or (ext or {}).get("years_remaining") or 0) if isinstance(ext, dict) else 0
+                return {
+                    "ok": False,
+                    "status": "invalid",
+                    "reason": (
+                        f"{name} already signed an extension at ${ext_hit:.2f}M"
+                        + (f" for {ext_years} years" if ext_years else "")
+                        + ". It starts after this deal."
+                    ),
+                }
+            try:
+                stamp_aav = float(c_live.get("extension_aav_m") or 0)
+                stamp_yrs = int(c_live.get("extension_years_remaining") or c_live.get("extension_years") or 0)
+            except (TypeError, ValueError):
+                stamp_aav, stamp_yrs = 0.0, 0
+            if stamp_aav > 0 and stamp_yrs > 0:
+                return {
+                    "ok": False,
+                    "status": "invalid",
+                    "reason": (
+                        f"{name} already signed an extension at ${stamp_aav:.2f}M"
+                        + (f" for {stamp_yrs} years" if stamp_yrs else "")
+                        + ". It starts after this deal."
+                    ),
+                }
         yrs = int(_contract_years_remaining(player) or 0)
         if on_roster and yrs > 1:
             return {
@@ -4934,10 +5841,13 @@ def _record_talks_round(
             from services.negotiation_meetings import _bump_gm_ledger, _contract_expiry
 
             _bump_gm_ledger(session, pid, "negotiation_goodwill", -3.0)
+            from services.negotiation_meetings import _price_swing_pct
+
+            insult = min(18.0, 9.0 * int(talks["lowballs"]))
             setattr(player, "_lowball_ask_shift", {
                 "team_id": str(_get(team, "team_id", "") or _get(team, "id", "")),
                 "expiry": _contract_expiry(player),
-                "pct": min(6.0, 1.5 * int(talks["lowballs"])),
+                "pct": _price_swing_pct(insult, want_aav_m),
             })
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
@@ -5505,6 +6415,33 @@ def sign_player_to_team(
             entry["status"] = "accepted"
             entry["pending_offer"] = None
 
+    # A re-sign of a deal that dies this July starts next season. Counting the
+    # new term from the season that just ended left the signing looking expiring.
+    _cur_live = _get(player, "contract", None)
+    _ctx_ext = str(offer.get("context") or "").lower() in ("extension", "re_sign", "rfa")
+    _yrs_live = 0
+    _exp_live = 0
+    if isinstance(_cur_live, dict):
+        try:
+            _yrs_live = int(_cur_live.get("years_remaining") or 0)
+        except (TypeError, ValueError):
+            _yrs_live = 0
+        try:
+            _exp_live = int(_cur_live.get("expiry_year") or 0)
+        except (TypeError, ValueError):
+            _exp_live = 0
+    # Final-year July talks replace the deal even if the July flag was wiped
+    # off the contract. Nesting an extension left the old AAV and the player
+    # on the pending rail.
+    final_year_now = _ctx_ext and (
+        _yrs_live <= 1 or (0 < _exp_live <= int(season_year) + 1)
+    )
+    july_now = bool(
+        final_year_now
+        or (isinstance(_cur_live, dict) and _cur_live.get("pending_july1_expiry"))
+        or getattr(player, "pending_july1_expiry", False)
+    )
+    deal_start = int(season_year) + (1 if july_now and _ctx_ext else 0)
     contract = normalize_contract_dict({
         "type": offer.get("type") or "STANDARD",
         "years": years,
@@ -5514,10 +6451,21 @@ def sign_player_to_team(
         "base_salary_m": aav_m,
         "salary_m": aav_m,
         "signing_bonus_m": bonus_m,
-        "rights_status": offer.get("rights") or "UFA",
-        "expiry_year": int(season_year) + years,
+        "rights_status": (
+            str(offer.get("rights")).upper()
+            if str(offer.get("rights") or "").upper() in ("UFA", "RFA")
+            else (
+                "UFA"
+                if str(offer.get("context") or "").lower() in ("ufa", "free_agency", "fa")
+                else resolved_rights_status(player)
+            )
+        ),
+        "rights_source": "user" if str(offer.get("rights") or "").upper() in ("UFA", "RFA") else "",
+        "expiry_year": deal_start + years,
+        "effective_season": deal_start,
         "two_way": bool(offer.get("two_way")),
         "source": "signed",
+        "user_signed": True,
         **_contract_ntc_fields_from_offer(offer),
     })
     if str(contract.get("ntc_mode") or "") == "MODIFIED" and not (contract.get("ntc_teams") or contract.get("approved_trade_teams")):
@@ -5545,22 +6493,58 @@ def sign_player_to_team(
     if (
         ctx_ext
         and isinstance(cur, dict)
-        and int(cur.get("years_remaining") or 0) >= 1
+        and int(cur.get("years_remaining") or 0) > 1
+        and not final_year_now
         and not cur.get("pending_july1_expiry")
+        and not getattr(player, "pending_july1_expiry", False)
         and float(cur.get("aav_m") or cur.get("cap_hit_m") or 0) > 0
     ):
         ext = dict(contract)
+        ext["source"] = "signed"
+        ext["user_signed"] = True
         ext["expiry_year"] = int(cur.get("expiry_year") or (int(season_year) + int(cur.get("years_remaining") or 1))) + int(years)
         cur["pending_extension"] = ext
+        cur["extension_aav_m"] = round(aav_m, 3)
+        cur["extension_years_remaining"] = int(years)
         try:
             player.playoff_eligible = playoff_eligible
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
         _remove_from_unsigned_pools(league, player)
+        if session is not None and pid:
+            try:
+                from services.franchise_offseason import upsert_resign_phase_outcome
+
+                upsert_resign_phase_outcome(
+                    session,
+                    player_id=pid,
+                    phase_status="accepted",
+                    name=_player_name(player),
+                    terms={
+                        "aav_m": aav_m,
+                        "years": years,
+                        "expiry_year": ext.get("expiry_year"),
+                    },
+                    last_offer={"aav_m": aav_m, "years": years},
+                )
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         _notify_contract_result(
             session,
             f"{_player_name(player)} signed the extension: {years} years at ${aav_m:.2f}M AAV. It starts after the current deal.",
         )
+        if session is not None:
+            _books = cap_books_for_session(session)
+            sync_team_cap_fields(
+                team,
+                league,
+                getattr(session, "sim", None),
+                season_year=_books["season_year"],
+                calendar_cursor=_books["calendar_cursor"],
+                regular_season_last_index=_books["regular_season_last_index"],
+                count_expiring=_books["count_expiring"],
+                opening_day=_books["opening_day"],
+            )
         return {
             "ok": True,
             "status": "accepted",
@@ -5654,7 +6638,20 @@ def sign_player_to_team(
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
 
-    sync_team_cap_fields(team, league)
+    if session is not None:
+        _books = cap_books_for_session(session)
+        sync_team_cap_fields(
+            team,
+            league,
+            getattr(session, "sim", None),
+            season_year=_books["season_year"],
+            calendar_cursor=_books["calendar_cursor"],
+            regular_season_last_index=_books["regular_season_last_index"],
+            count_expiring=_books["count_expiring"],
+            opening_day=_books["opening_day"],
+        )
+    else:
+        sync_team_cap_fields(team, league)
     signed_line = (
         f"{_player_name(player)} signed and was assigned to the AHL."
         if offer.get("assign_ahl")
@@ -5770,13 +6767,34 @@ def release_rfa_rights(team: Any, player_id: str, league: Any, session: Any = No
         "qualifying_offer_aav_m": entry.get("qualifying_offer_aav_m") if isinstance(entry, dict) else None,
     }
     remove_rfa_rights(team, player_id)
+    pid = str(player_id or "")
+    for attr in ("roster", "ahl_roster", "echl_roster"):
+        roster = [
+            p for p in list(_get(team, attr, None) or [])
+            if _player_id(p) != pid
+        ]
+        try:
+            setattr(team, attr, roster)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     if player is not None:
         fa_pool = list(_get(league, "free_agents", None) or [])
-        if player not in fa_pool:
+        if player not in fa_pool and not any(_player_id(p) == pid for p in fa_pool):
             fa_pool.append(player)
             league.free_agents = fa_pool
+        _clear_expired_contract(player)
         try:
             player.rights_status = "UFA"
+            player.pending_july1_expiry = False
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    try:
+        sync_team_cap_fields(team, league)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    if session is not None:
+        try:
+            session._cached_trade_assets_payload = None
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
     if session is not None:
@@ -6128,11 +7146,9 @@ def handle_player_contract_expiry(
     else:
         yrs_before = _contract_years_remaining(player)
         norm_peek = normalize_contract_payload(player)
-        rights_peek = str(
-            norm_peek.get("rights_status") or _get(player, "rights_status", "UFA") or "UFA"
-        ).upper()
+        rights_peek = resolved_rights_status(player, norm_peek)
         ctype_peek = str(norm_peek.get("type") or norm_peek.get("contract_type") or "").upper()
-        is_rfa = "RFA" in rights_peek or ctype_peek == "RFA_BRIDGE"
+        is_rfa = rights_peek == "RFA" or ctype_peek == "RFA_BRIDGE"
 
         # An already-signed extension takes over when the current deal's last season ends
         # (July 1 like the NHL): new AAV/term, no trip to the re-sign desk or free agency.
@@ -6160,18 +7176,21 @@ def handle_player_contract_expiry(
                 _swallowed_log.debug("suppressed exception", exc_info=True)
         elif isinstance(c, dict):
             try:
-                c["years_remaining"] = max(0, int(c.get("years_remaining", 0)) - 1)
-            except (TypeError, ValueError):
-                c["years_remaining"] = 0
+                advance_dict_contract_one_season(c, int(season_year))
+            except Exception:
+                try:
+                    c["years_remaining"] = max(0, int(c.get("years_remaining", 0)) - 1)
+                except (TypeError, ValueError):
+                    c["years_remaining"] = 0
 
     yrs = _contract_years_remaining(player)
     if yrs > 0:
         return "kept"
 
     norm = normalize_contract_payload(player)
-    rights = str(norm.get("rights_status") or _get(player, "rights_status", "UFA") or "UFA").upper()
+    rights = resolved_rights_status(player, norm)
     ctype = str(norm.get("type") or norm.get("contract_type") or "").upper()
-    if "RFA" in rights or ctype == "RFA_BRIDGE":
+    if rights == "RFA" or ctype == "RFA_BRIDGE":
         add_rfa_rights(team, player, season_year, league)
         _clear_expired_contract(player)
         try:
@@ -6241,6 +7260,10 @@ def expire_pending_july1_contracts(session: Any) -> Dict[str, Any]:
                 if getattr(p, "retired", False):
                     continue
                 if not _is_pending(p):
+                    kept.append(p)
+                    continue
+                if _contract_years_remaining(p) > 1:
+                    _clear_stale_july1_flag(p)
                     kept.append(p)
                     continue
                 outcome = handle_player_contract_expiry(
@@ -6328,6 +7351,249 @@ def expire_pending_july1_contracts(session: Any) -> Dict[str, Any]:
         "expired_ufa_count": len(expired_ufas),
         "expired_rfa_count": len(expired_rfas),
     }
+
+
+def _has_pending_extension(player: Any) -> bool:
+    c = _get(player, "contract", None)
+    if not isinstance(c, dict) or not isinstance(c.get("pending_extension"), dict):
+        return False
+    ext = c.get("pending_extension") or {}
+    return float(ext.get("aav_m") or ext.get("cap_hit_m") or 0) > 0
+
+
+def _contract_expiry_year(player: Any) -> int:
+    c = _get(player, "contract", None)
+    if not isinstance(c, dict):
+        return 0
+    try:
+        return int(c.get("expiry_year") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _walks_without_new_deal(player: Any, season_year: int) -> bool:
+    """True when this player was not re-signed and their deal dies this July.
+
+    A stored extension does not by itself keep the old year on the books. The
+    roster pass swaps that extension in before anyone is released.
+    """
+    c = _get(player, "contract", None)
+    pending = bool(getattr(player, "pending_july1_expiry", False))
+    if isinstance(c, dict):
+        pending = pending or bool(c.get("pending_july1_expiry"))
+    return is_current_ufa_class(
+        years_remaining=_contract_years_remaining(player),
+        expiry_year=_contract_expiry_year(player),
+        season_year=int(season_year),
+        pending_july1=pending,
+        extension_signed=False,
+    )
+
+
+def _unsigned_entering_season(player: Any, season_year: int) -> bool:
+    """True when the contract on file does not cover the season already underway."""
+    if _has_pending_extension(player):
+        return False
+    c = _get(player, "contract", None)
+    if c is None and not has_active_contract(player):
+        return False
+    years = _contract_years_remaining(player)
+    expiry = _contract_expiry_year(player)
+    start = 0
+    src = ""
+    if isinstance(c, dict):
+        try:
+            start = int(c.get("effective_season") or c.get("start_year") or c.get("deal_start") or 0)
+        except (TypeError, ValueError):
+            start = 0
+        src = str(c.get("source") or "").lower()
+    signed_for_this_year = src in ("signed", "re_sign", "user") or bool(getattr(player, "user_signed", False))
+    if signed_for_this_year and years >= 1 and (start >= int(season_year) or expiry > int(season_year)):
+        return False
+    pending = bool(getattr(player, "pending_july1_expiry", False))
+    if isinstance(c, dict):
+        pending = pending or bool(c.get("pending_july1_expiry"))
+    if years > 1 and not pending:
+        return False
+    if expiry > int(season_year):
+        return False
+    if expiry <= 0:
+        return years <= 0
+    return True
+
+
+def _park_unsigned_player(player: Any, team: Any, league: Any) -> None:
+    """Roster slot is gone. Keep them in the free-agent pool if they are not already filed."""
+    pid = _player_id(player)
+    for row in list(_get(team, "rfa_rights", None) or []):
+        if isinstance(row, dict) and str(row.get("player_id") or "") == pid:
+            _clear_expired_contract(player)
+            return
+    fa_pool = list(_get(league, "free_agents", None) or [])
+    if not any(_player_id(p) == pid for p in fa_pool):
+        fa_pool.append(player)
+        try:
+            league.free_agents = fa_pool
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    _clear_expired_contract(player)
+    try:
+        player.rights_status = "UFA"
+        player.pending_july1_expiry = False
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+
+
+def _resign_phase_status(session: Any, player_id: str) -> str:
+    outcomes = getattr(session, "resign_phase_outcomes", None) or {}
+    if not isinstance(outcomes, dict):
+        return ""
+    row = outcomes.get(str(player_id or ""))
+    if not isinstance(row, dict):
+        return ""
+    return str(row.get("phase_status") or "").lower()
+
+
+def _drop_unsigned_from_org_lists(session: Any, should_drop: Any) -> Dict[str, Any]:
+    sim = getattr(session, "sim", None)
+    league = getattr(sim, "league", None) if sim is not None else None
+    if league is None:
+        return {"released": 0, "user_released": [], "cap_freed_m": 0.0}
+    season_year = int(getattr(session, "season_calendar_year", 2025) or 2025)
+    user_tid = str(getattr(session, "user_team_id", "") or "")
+    released = 0
+    user_released: List[Dict[str, Any]] = []
+    still_rostered: set = set()
+    for team in list(_get(league, "teams", None) or []):
+        tid = str(_get(team, "team_id", "") or _get(team, "id", "") or "")
+        for attr in ("roster", "ahl_roster", "echl_roster"):
+            roster = list(_get(team, attr, None) or [])
+            if not roster:
+                continue
+            kept: List[Any] = []
+            changed = False
+            for p in roster:
+                if getattr(p, "retired", False):
+                    changed = True
+                    continue
+                pid = _player_id(p)
+                if not should_drop(p):
+                    kept.append(p)
+                    if pid:
+                        still_rostered.add(pid)
+                    continue
+                if _has_pending_extension(p) and activate_pending_extension(p, season_year):
+                    kept.append(p)
+                    if pid:
+                        still_rostered.add(pid)
+                    changed = True
+                    continue
+                hit = float(player_cap_hit_millions(p) or 0)
+                outcome = handle_player_contract_expiry(
+                    p, team, league, season_year, force_expire=True
+                )
+                changed = True
+                if outcome == "kept" and not should_drop(p):
+                    kept.append(p)
+                    if pid:
+                        still_rostered.add(pid)
+                    continue
+                if outcome == "kept":
+                    _park_unsigned_player(p, team, league)
+                released += 1
+                if tid and tid == user_tid:
+                    user_released.append({
+                        "player_id": pid,
+                        "name": _player_name(p),
+                        "cap_hit_m": round(hit, 2),
+                        "list": attr,
+                    })
+            if changed:
+                setattr(team, attr, kept)
+        try:
+            sync_team_cap_fields(team, league, sim, season_year=season_year)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    if still_rostered:
+        fas = [
+            p for p in list(_get(league, "free_agents", None) or [])
+            if _player_id(p) not in still_rostered
+        ]
+        try:
+            league.free_agents = fas
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+        for team in list(_get(league, "teams", None) or []):
+            rights = [
+                row for row in list(_get(team, "rfa_rights", None) or [])
+                if not (isinstance(row, dict) and str(row.get("player_id") or "") in still_rostered)
+            ]
+            try:
+                team.rfa_rights = rights
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+    cap_freed = round(sum(float(row.get("cap_hit_m") or 0) for row in user_released), 2)
+    try:
+        session._cached_trade_assets_payload = None
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    return {"released": released, "user_released": user_released, "cap_freed_m": cap_freed}
+
+
+def release_unresigned_free_agents(session: Any) -> Dict[str, Any]:
+    """Take unsigned July free agents off every roster before the next season.
+
+    Re-sign and July 1 are supposed to do this. Players whose deal was still
+    the old contract stayed on the list into October and kept last year's hit.
+    A desk status of released means the club already let them walk, even if the
+    contract row still shows a year left.
+    """
+    season_year = int(getattr(session, "season_calendar_year", 2025) or 2025)
+    try:
+        if not bool(getattr(session, "july1_contracts_expired", False)):
+            expire_pending_july1_contracts(session)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+
+    def _should(player: Any) -> bool:
+        pid = _player_id(player)
+        status = _resign_phase_status(session, pid)
+        if status == "accepted":
+            return False
+        if status == "released":
+            return True
+        return _walks_without_new_deal(player, season_year)
+
+    dropped = _drop_unsigned_from_org_lists(session, _should)
+    if dropped.get("user_released"):
+        names = ", ".join(
+            f"{row.get('name') or 'Player'} (${float(row.get('cap_hit_m') or 0):.2f}M)"
+            for row in dropped["user_released"][:8]
+        )
+        extra = len(dropped["user_released"]) - 8
+        if extra > 0:
+            names = f"{names}, and {extra} more"
+        try:
+            session.fa_cap_release_note = {
+                "players": list(dropped["user_released"]),
+                "cap_freed_m": dropped.get("cap_freed_m") or 0,
+                "text": (
+                    f"{len(dropped['user_released'])} unsigned player"
+                    f"{'' if len(dropped['user_released']) == 1 else 's'} left the roster. "
+                    f"${float(dropped.get('cap_freed_m') or 0):.2f}M came off the books: {names}."
+                ),
+            }
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    return dropped
+
+
+def release_leftover_unsigned_agents(session: Any) -> Dict[str, Any]:
+    """Drop unsigned players who are already on next year's roster with the old hit."""
+    season_year = int(getattr(session, "season_calendar_year", 2025) or 2025)
+    return _drop_unsigned_from_org_lists(
+        session, lambda p: _unsigned_entering_season(p, season_year)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -8738,6 +10004,18 @@ def run_cpu_cap_casualty_trade_pass(session: Any, *, max_trades: int = 12) -> Di
 
 def build_own_ufa_resign_row(player: Any, team: Any, season_year: int, league: Any = None) -> Dict[str, Any]:
     """Serialize a just-expired UFA for the re-sign desk (off-roster, exclusive to former club)."""
+    c_pre = normalize_contract_dict(_get(player, "contract", None) or {})
+    if isinstance(c_pre, dict):
+        _repair_pending_extension_fields(c_pre)
+        try:
+            yrs_live = int(_contract_years_remaining(player) or c_pre.get("years_remaining") or 0)
+        except (TypeError, ValueError):
+            yrs_live = 0
+        pe = c_pre.get("pending_extension") if isinstance(c_pre.get("pending_extension"), dict) else {}
+        ext_aav = float(pe.get("aav_m") or pe.get("cap_hit_m") or c_pre.get("extension_aav_m") or 0)
+        ext_yrs = int(pe.get("years") or pe.get("years_remaining") or c_pre.get("extension_years_remaining") or 0)
+        if (ext_aav > 0 and ext_yrs > 0) or yrs_live > 0:
+            return build_contract_row(player, team, season_year, league)
     age = _player_age(player)
     ovr = round(_player_ovr(player))
     pot = round(_player_potential(player))
@@ -8818,9 +10096,32 @@ def _clause_label(c: Dict[str, Any]) -> str:
     return "None"
 
 
+def _clear_stale_july1_flag(player: Any) -> None:
+    """Drop a July-1 expiry flag when the contract still has years left."""
+    live = _get(player, "contract", None)
+    if isinstance(live, dict):
+        live.pop("pending_july1_expiry", None)
+    elif live is not None:
+        try:
+            setattr(live, "pending_july1_expiry", False)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    try:
+        setattr(player, "pending_july1_expiry", False)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+
+
 def build_contract_row(player: Any, team: Any, season_year: int, league: Any = None) -> Dict[str, Any]:
-    hydrate_player_contract(player)
+    hydrate_player_contract(player, season_year)
     c = normalize_contract_dict(_get(player, "contract", None) or {})
+    if isinstance(c, dict):
+        _repair_pending_extension_fields(c)
+        live_c = _get(player, "contract", None)
+        if isinstance(live_c, dict):
+            for key in ("pending_extension", "extension_aav_m", "extension_years_remaining"):
+                if key in c:
+                    live_c[key] = c[key]
     aav = c.get("aav_m") or player_cap_hit_millions(player)
     yrs = _contract_years_remaining(player)
     age = _player_age(player)
@@ -8855,10 +10156,55 @@ def build_contract_row(player: Any, team: Any, season_year: int, league: Any = N
         expiry_year = 0
     if expiry_year <= 0:
         expiry_year = int(season_year) + max(int(yrs), 0)
-    # Re-sign / Extensions desk is the current free-agency class only
-    # (this summer's expirings), not players still owed another season.
+    # Re-sign desk is this July's free agents only. A year that covers the
+    # upcoming season (expiry after this July) is a signed deal.
     fa_class_year = int(season_year) + 1
-    in_re_sign_class = bool(pending_july1) or (yrs <= 1 and expiry_year <= fa_class_year)
+    if int(yrs) > 1 and expiry_year <= fa_class_year:
+        expiry_year = int(season_year) + int(yrs)
+    if pending_july1 and (int(yrs) > 1 or expiry_year > fa_class_year):
+        pending_july1 = False
+        _clear_stale_july1_flag(player)
+        if isinstance(c, dict):
+            c.pop("pending_july1_expiry", None)
+    in_re_sign_class = is_current_ufa_class(
+        years_remaining=int(yrs),
+        expiry_year=int(expiry_year),
+        season_year=int(season_year),
+        pending_july1=bool(pending_july1),
+        extension_signed=False,
+    )
+    signed_ext = c.get("pending_extension") if isinstance(c, dict) else None
+    signed_ext_aav = 0.0
+    signed_ext_years = 0
+    if isinstance(signed_ext, dict):
+        try:
+            signed_ext_aav = float(signed_ext.get("cap_hit_m") or signed_ext.get("aav_m") or 0)
+        except (TypeError, ValueError):
+            signed_ext_aav = 0.0
+        try:
+            signed_ext_years = int(signed_ext.get("years") or signed_ext.get("years_remaining") or 0)
+        except (TypeError, ValueError):
+            signed_ext_years = 0
+    extension_signed = signed_ext_aav > 0
+    if not extension_signed:
+        try:
+            stamp_aav = float(c.get("extension_aav_m") or 0)
+            stamp_yrs = int(c.get("extension_years_remaining") or c.get("extension_years") or 0)
+        except (TypeError, ValueError):
+            stamp_aav, stamp_yrs = 0.0, 0
+        if stamp_aav > 0 and stamp_yrs > 0:
+            signed_ext_aav = stamp_aav
+            signed_ext_years = stamp_yrs
+            extension_signed = True
+            if not isinstance(c.get("pending_extension"), dict):
+                c["pending_extension"] = {
+                    "aav_m": round(stamp_aav, 3),
+                    "cap_hit_m": round(stamp_aav, 3),
+                    "years": stamp_yrs,
+                    "years_remaining": stamp_yrs,
+                }
+    if extension_signed:
+        in_re_sign_class = False
 
     pid = _player_id(player)
     row = {
@@ -8881,10 +10227,10 @@ def build_contract_row(player: Any, team: Any, season_year: int, league: Any = N
         "yearsRemaining": yrs,
         "expiry_year": expiry_year,
         "expiryYear": expiry_year,
-        "expiry_status": c.get("rights_status", "UFA"),
-        "expiryStatus": c.get("rights_status", "UFA"),
-        "expiry_type": c.get("rights_status", "UFA"),
-        "rights_status": c.get("rights_status", "UFA"),
+        "expiry_status": resolved_rights_status(player, c),
+        "expiryStatus": resolved_rights_status(player, c),
+        "expiry_type": resolved_rights_status(player, c),
+        "rights_status": resolved_rights_status(player, c),
         "contractType": c.get("contract_type", "STANDARD"),
         "clause_label": _clause_label(c),
         "clauseLabel": _clause_label(c),
@@ -8911,8 +10257,17 @@ def build_contract_row(player: Any, team: Any, season_year: int, league: Any = N
         "no_trade_clause": bool(c.get("ntc")),
         "no_move_clause": bool(c.get("nmc")),
         "extension_eligible": in_re_sign_class,
+        "extension_signed": extension_signed,
+        "extension_aav_m": round(signed_ext_aav, 3) if extension_signed else None,
+        "extension_years": signed_ext_years if extension_signed else None,
+        "ineligible_reason": (
+            f"Extension signed: ${signed_ext_aav:.2f}M × {signed_ext_years}y starts next season"
+            if extension_signed else ""
+        ),
         "pending_july1_expiry": pending_july1,
-        "contract_status": "expiring" if in_re_sign_class else ("signed" if yrs > 0 else "expiring"),
+        "contract_status": (
+            "extended" if extension_signed else ("expiring" if in_re_sign_class else ("signed" if yrs > 0 else "expiring"))
+        ),
         "can_negotiate": in_re_sign_class,
         "can_buyout": buyout_ok and yrs > 0,
         "can_waive": waive_ok,
@@ -8961,7 +10316,7 @@ def contract_row_available_actions(row: Dict[str, Any]) -> List[Dict[str, Any]]:
         reason = row.get("ineligible_reason") or (
             "Under contract" if int(row.get("years_remaining") or 0) > 1 else "No contract actions available"
         )
-        row.setdefault("ineligible_reason", reason)
+        row["ineligible_reason"] = reason
     return actions
 
 
@@ -9060,6 +10415,86 @@ def _resolve_session_user_team(session: Any) -> Any:
     return team
 
 
+def _repair_user_stub_terms(session: Any, user_team: Any, league: Any, season_year: int) -> int:
+    """One CapWages pass per session for the user's 1-year cap-sheet stubs."""
+    if user_team is None or league is None:
+        return 0
+    if bool(getattr(league, "_capwages_term_pass_done", False)):
+        return 0
+    try:
+        setattr(league, "_capwages_term_pass_done", True)
+    except Exception:
+        return 0
+    phase = str(getattr(session, "phase", "") or "").lower()
+    played = phase in ("offseason", "post_cup") and bool(getattr(session, "contracts_ticked", False))
+    players = []
+    for attr in ("roster", "ahl_roster", "echl_roster", "prospect_pool"):
+        players.extend(list(getattr(user_team, attr, None) or []))
+    cache = getattr(league, "_capwages_years", None)
+    if not isinstance(cache, dict):
+        cache = {}
+        try:
+            setattr(league, "_capwages_years", cache)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    try:
+        from services.capwages_contracts import repair_stub_terms_from_capwages
+
+        return repair_stub_terms_from_capwages(
+            players,
+            int(season_year),
+            season_already_played=played,
+            cache=cache,
+        )
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+        return 0
+
+
+def reclaim_mislabeled_rfas(league: Any, season_year: int) -> int:
+    """Young free agents stamped UFA by the cap sheet go back to their club's RFA list."""
+    if league is None:
+        return 0
+    teams: Dict[str, Any] = {}
+    for t in list(_get(league, "teams", None) or []):
+        tid = str(_get(t, "team_id", "") or _get(t, "id", "") or "")
+        if tid:
+            teams[tid] = t
+    kept: List[Any] = []
+    moved = 0
+    for p in list(_get(league, "free_agents", None) or []):
+        if _get(p, "retired", False):
+            continue
+        if resolved_rights_status(p) != "RFA":
+            kept.append(p)
+            continue
+        try:
+            p.rights_status = "RFA"
+            c = _get(p, "contract", None)
+            if isinstance(c, dict):
+                c["rights_status"] = "RFA"
+                c["rights"] = "RFA"
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+        tid = str(
+            getattr(p, "ufa_from_team_id", None)
+            or getattr(p, "previous_nhl_team_id", None)
+            or getattr(p, "team_id", None)
+            or ""
+        )
+        team = teams.get(tid)
+        if team is None:
+            kept.append(p)
+            continue
+        add_rfa_rights(team, p, int(season_year), league)
+        moved += 1
+    try:
+        league.free_agents = kept
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    return moved
+
+
 def build_contract_office(session: Any) -> Dict[str, Any]:
     """Read-only contract ledger + live cap snapshot for Cap Ledger / FA / Re-Sign.
 
@@ -9074,6 +10509,20 @@ def build_contract_office(session: Any) -> Dict[str, Any]:
     season_year = int(getattr(session, "season_calendar_year", 2025) or 2025)
     cal_cursor = int(getattr(session, "calendar_cursor", 0) or 0)
     last_idx = int(getattr(session, "nhl_regular_season_last_index", 192) or 192)
+
+    if league is not None:
+        try:
+            repair_league_contract_terms(league, season_year)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+        try:
+            reclaim_mislabeled_rfas(league, season_year)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+        try:
+            _repair_user_stub_terms(session, user_team, league, season_year)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     # Keep team.cap_space / cap_hit mirrors in sync with the live roster, but do
     # not mutate any player contracts here (except one-time affiliate SPC backfill
@@ -9099,23 +10548,28 @@ def build_contract_office(session: Any) -> Dict[str, Any]:
                     _ensure_team_affiliate_nhl_spcs(tm, season_year, __import__("random").Random(tseed))
                 session._league_affiliate_spcs_ensured = True
             # League-wide usable space — FA Wire / CPU bids must not use stale mirrors.
+            books = cap_books_for_session(session)
             sync_all_team_cap_fields(
                 league,
                 sim,
-                season_year=season_year,
-                calendar_cursor=cal_cursor,
-                regular_season_last_index=last_idx,
+                season_year=books["season_year"],
+                calendar_cursor=books["calendar_cursor"],
+                regular_season_last_index=books["regular_season_last_index"],
+                count_expiring=books["count_expiring"],
+                opening_day=books["opening_day"],
             )
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
 
     in_season_cap = _phase_is_in_season(session)
+    books = cap_books_for_session(session)
     cap_snapshot = get_team_cap_snapshot_full(
         user_team, league, sim,
-        season_year=season_year,
-        calendar_cursor=cal_cursor,
-        regular_season_last_index=last_idx,
-        count_expiring=in_season_cap,
+        season_year=books["season_year"],
+        calendar_cursor=books["calendar_cursor"],
+        regular_season_last_index=books["regular_season_last_index"],
+        count_expiring=books["count_expiring"],
+        opening_day=books["opening_day"],
     ) if user_team else {}
     if isinstance(cap_snapshot, dict):
         cap_snapshot["in_season_cap"] = bool(in_season_cap)
@@ -9141,7 +10595,10 @@ def build_contract_office(session: Any) -> Dict[str, Any]:
         -(r.get("aav_m") or 0),
     ))
 
-    expiring = [r for r in contracts if int(r.get("years_remaining") or 0) <= 1]
+    expiring = [
+        r for r in contracts
+        if r.get("can_negotiate") or r.get("contract_status") in ("expiring", "own_ufa")
+    ]
     # Just-expired UFAs from this club live in the FA pool but belong on the re-sign desk
     # until open free agency (home-team exclusive window).
     own_expired_ufas: List[Dict[str, Any]] = []

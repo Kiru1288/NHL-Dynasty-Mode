@@ -57,7 +57,7 @@ STAGE_NEXT_EVENT: Dict[str, str] = {
 STAGE_PAYLOAD_VERSION: Dict[str, int] = {
     "draft_review": 4,
     "prospect_rights": 5,
-    "re_sign": 6,
+    "re_sign": 7,
     "free_agency": 4,
 }
 
@@ -174,7 +174,19 @@ def _evaluate_user_team_compliance(session: FranchiseSession) -> Dict[str, Any]:
     cap_error: Optional[str] = None
     if user_team is not None:
         try:
-            cap_snap = get_team_cap_snapshot_full(user_team, league, session.sim, season_year=season_year) or {}
+            from services.contract_economy import cap_books_for_session as _cap_books
+
+            _books = _cap_books(session)
+            cap_snap = get_team_cap_snapshot_full(
+                user_team,
+                league,
+                session.sim,
+                season_year=_books["season_year"],
+                calendar_cursor=_books["calendar_cursor"],
+                regular_season_last_index=_books["regular_season_last_index"],
+                count_expiring=_books["count_expiring"],
+                opening_day=_books["opening_day"],
+            ) or {}
         except Exception as exc:
             cap_error = str(exc) or "unknown error"
     return evaluate_roster_compliance(
@@ -217,6 +229,30 @@ def push_hub_warning(
 
 def sync_hub_compliance_warnings(session: FranchiseSession) -> None:
     """Refresh compliance warnings from live roster/cap state."""
+    phase = str(getattr(session, "phase", "") or "")
+    if phase in ("preseason", "regular", "playoffs"):
+        sy = int(getattr(session, "season_calendar_year", 0) or 0)
+        if sy and getattr(session, "_prior_july_roster_swept_for", None) != sy:
+            try:
+                from services.contract_economy import release_leftover_unsigned_agents
+
+                release_leftover_unsigned_agents(session)
+                session._prior_july_roster_swept_for = sy
+                _scrub_lines_of_departed_players(session)
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+        if sy and getattr(session, "_stories_cleared_for", None) != sy:
+            try:
+                games = len(getattr(session, "game_results", None) or [])
+                days = int(getattr(session, "calendar_days_finished", 0) or 0)
+                rolled = bool(getattr(session, "season_history", None))
+                if rolled and games == 0 and days == 0:
+                    _clear_prior_season_stories(session, ended_season=sy - 1)
+                elif rolled:
+                    _drop_stories_before_season(session, sy)
+                session._stories_cleared_for = sy
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
     evaluation = _evaluate_user_team_compliance(session)
     existing = [w for w in list(getattr(session, "hub_warnings", None) or []) if w.get("type") != "compliance"]
     session.hub_warnings = existing
@@ -443,6 +479,7 @@ def upsert_resign_phase_outcome(
     if status == "accepted":
         row_snap["can_negotiate"] = False
         row_snap["available_actions"] = []
+        row_snap["pending_offer"] = None
         if terms:
             if terms.get("aav_m") is not None:
                 row_snap["aav_m"] = terms.get("aav_m")
@@ -2042,12 +2079,23 @@ def _advance_salary_cap(session: FranchiseSession) -> Dict[str, Any]:
             "movement_reason": "League held the cap steady.",
         }
 
+    from services.contract_economy import cap_books_for_session as _cap_books
+
+    _books = _cap_books(session)
+    _cap_label = f"{int(_books['season_year'])}-{(int(_books['season_year']) + 1) % 100:02d}"
+    _cap_kw = dict(
+        season_label=_cap_label,
+        calendar_cursor=_books["calendar_cursor"],
+        regular_season_last_index=_books["regular_season_last_index"],
+        include_expiring=_books["count_expiring"],
+        opening_day=_books["opening_day"],
+    )
     user_team = session.team_by_id.get(session.user_team_id)
-    user_snap = calculate_team_cap_snapshot(user_team, league) if user_team and league else {}
+    user_snap = calculate_team_cap_snapshot(user_team, league, **_cap_kw) if user_team and league else {}
     user_cap = _team_cap_snapshot(user_team, sim) if user_team else {}
     over_cap_teams: List[Dict[str, Any]] = []
     for tid, tm in (session.team_by_id or {}).items():
-        snap = calculate_team_cap_snapshot(tm, league) if tm and league else {}
+        snap = calculate_team_cap_snapshot(tm, league, **_cap_kw) if tm and league else {}
         space = float(snap.get("cap_space", snap.get("capSpace", 0)) or 0)
         if space < 0:
             over_cap_teams.append({"team_id": tid, "cap_space": space, "cap_hit": snap.get("cap_hit", snap.get("totalCapHit", 0))})
@@ -5764,6 +5812,9 @@ def _prepare_resign_payload(session: FranchiseSession, *, force: bool = False) -
                 live["can_negotiate"] = False
                 if status in ("accepted", "released"):
                     live["available_actions"] = []
+                    live["pending_offer"] = None
+                    live["negotiation_status"] = status
+                    live["negotiation_state"] = status
             # Refresh snapshot from live row while they remain on the board.
             upsert_resign_phase_outcome(
                 session,
@@ -5804,11 +5855,41 @@ def _prepare_resign_payload(session: FranchiseSession, *, force: bool = False) -
             table_rows.append(row)
             contract_ids.add(pid)
 
+    def _still_needs_a_decision(row: Dict[str, Any]) -> bool:
+        pid = str(row.get("player_id") or "")
+        outcome = outcomes.get(pid) if isinstance(outcomes.get(pid), dict) else {}
+        status = str(
+            outcome.get("phase_status")
+            or row.get("phase_status")
+            or row.get("negotiation_status")
+            or ""
+        ).lower()
+        if status:
+            row["phase_status"] = status
+        if status in ("accepted", "released", "lapsed"):
+            row["pending_offer"] = None
+            row["negotiation_status"] = status
+            row["negotiation_state"] = status
+            return False
+        if row.get("extension_signed") or str(row.get("contract_status") or "") == "extended":
+            return False
+        if isinstance(row.get("pending_extension"), dict):
+            return False
+        return True
+
     grouped = {
-        "pending_ufa": [r for r in expiring if str(r.get("expiry_status") or r.get("rights") or "").upper() == "UFA"],
+        "pending_ufa": [
+            r for r in expiring
+            if str(r.get("expiry_status") or r.get("rights") or "").upper() == "UFA"
+            and _still_needs_a_decision(r)
+        ],
         "pending_rfa": (
-            [r for r in expiring if str(r.get("expiry_status") or r.get("rights") or "").upper() == "RFA"]
-            + rfa_rows
+            [
+                r for r in expiring
+                if str(r.get("expiry_status") or r.get("rights") or "").upper() == "RFA"
+                and _still_needs_a_decision(r)
+            ]
+            + [r for r in rfa_rows if _still_needs_a_decision(r)]
         ),
         "buyout_candidates": list(office.get("buyout_candidates") or [])[:12],
         "signed_next_season": [r for r in contracts if int(r.get("years_remaining") or 0) > 1],
@@ -5951,6 +6032,7 @@ def _open_free_agency(session: FranchiseSession, *, force: bool = False) -> Dict
     from services.contract_economy import (
         build_contract_office,
         expire_pending_july1_contracts,
+        release_unresigned_free_agents,
         run_cpu_own_ufa_resign,
         run_cpu_rfa_decisions,
         sync_all_team_cap_fields,
@@ -5971,6 +6053,18 @@ def _open_free_agency(session: FranchiseSession, *, force: bool = False) -> Dict
     existing_market = getattr(session, "free_agency_market_payload", None)
     already_open = bool(session.free_agency_open)
     wave = int(getattr(session, "cpu_fa_wave", 0) or 0)
+
+    # Anyone not re-signed leaves the roster even if July 1 already ran and only
+    # burned the pending flag. Their old cap hit was still on the books, and they
+    # never reached the UFA wire. Runs on an already-open market too.
+    sy_now = int(getattr(session, "season_calendar_year", 2025) or 2025)
+    if getattr(session, "_fa_unsigned_released_for", None) != sy_now:
+        session.july1_roster_release = release_unresigned_free_agents(session)
+        session._fa_unsigned_released_for = sy_now
+        try:
+            _scrub_lines_of_departed_players(session)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     # Idempotent: July 1 burn → RFAs + own UFAs, then opens the living market.
     if not already_open or force:
@@ -6126,6 +6220,7 @@ def _open_free_agency(session: FranchiseSession, *, force: bool = False) -> Dict
         "recent_league_signings": recent,
         "cpu_signings_count": len(list(cpu.get("signings") or [])),
         "decision_snapshot": decisions,
+        "cap_release": dict(getattr(session, "fa_cap_release_note", None) or {}),
         "stage_status": "ready",
         "can_continue": True,
         "blocking_reasons": [],
@@ -6537,7 +6632,19 @@ def _revalidate_roster_cleanup(session: FranchiseSession, payload: Dict[str, Any
     cap_error: Optional[str] = None
     if user_team is not None:
         try:
-            cap_snap = get_team_cap_snapshot_full(user_team, league, session.sim, season_year=season_year) or {}
+            from services.contract_economy import cap_books_for_session as _cap_books
+
+            _books = _cap_books(session)
+            cap_snap = get_team_cap_snapshot_full(
+                user_team,
+                league,
+                session.sim,
+                season_year=_books["season_year"],
+                calendar_cursor=_books["calendar_cursor"],
+                regular_season_last_index=_books["regular_season_last_index"],
+                count_expiring=_books["count_expiring"],
+                opening_day=_books["opening_day"],
+            ) or {}
         except Exception as exc:
             cap_error = str(exc) or "unknown error"
 
@@ -6630,7 +6737,19 @@ def _run_roster_cleanup(session: FranchiseSession, *, force: bool = False) -> Di
     cap_error: Optional[str] = None
     if user_team is not None:
         try:
-            cap_snap = get_team_cap_snapshot_full(user_team, league, sim, season_year=season_year) or {}
+            from services.contract_economy import cap_books_for_session as _cap_books
+
+            _books = _cap_books(session)
+            cap_snap = get_team_cap_snapshot_full(
+                user_team,
+                league,
+                sim,
+                season_year=_books["season_year"],
+                calendar_cursor=_books["calendar_cursor"],
+                regular_season_last_index=_books["regular_season_last_index"],
+                count_expiring=_books["count_expiring"],
+                opening_day=_books["opening_day"],
+            ) or {}
         except Exception as exc:
             cap_error = str(exc) or "unknown error"
 
@@ -7117,12 +7236,98 @@ def _retune_inflated_underage_prospects(session: FranchiseSession) -> Dict[str, 
     return {"ok": True, "fixed": fixed}
 
 
+def _clear_prior_season_stories(session: FranchiseSession, ended_season: Optional[int] = None) -> None:
+    """Last year's wire, arcs, and social posts do not carry into the new season."""
+    ended = int(
+        ended_season
+        if ended_season is not None
+        else (getattr(session, "season_calendar_year", 0) or 0)
+    )
+    try:
+        from app.sim_engine.franchise.storyline_engine import (
+            _archive_storyline_beat,
+            seal_narrative_season,
+        )
+
+        for ev in list(getattr(session, "storyline_events", None) or [])[-80:]:
+            if isinstance(ev, dict):
+                _archive_storyline_beat(session, ev)
+        if ended:
+            seal_narrative_season(session, ended)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+
+    session.storyline_events = []
+    session.active_cause_storylines = []
+    session.story_arcs = []
+    session.social_posts = []
+    session.reddit_threads = []
+    session.press_conference_queue = []
+    session.reddit_engagement_pulse = []
+    sim = getattr(session, "sim", None)
+    hist = list(getattr(sim, "league_history", None) or [])
+    if hist:
+        last = hist[-1]
+        session._merged_engine_news_sig = (int(getattr(last, "year", 0) or 0), id(last))
+    try:
+        session.social_feed_state = None
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    session._storyline_dedupe = []
+    session._storyline_dedupe_set = set()
+    session._cached_narrative_universe_payload = None
+    # Open decisions from last year's stories would reappear on day one.
+    pending = [
+        d
+        for d in list(getattr(session, "pending_decisions", None) or [])
+        if isinstance(d, dict) and str(d.get("kind") or d.get("type") or "").lower() not in (
+            "storyline",
+            "story",
+            "press",
+            "press_conference",
+            "social",
+        )
+    ]
+    session.pending_decisions = pending
+
+
+def _drop_stories_before_season(session: FranchiseSession, season_year: int) -> None:
+    """Remove wire items dated before this season when the new year is already underway."""
+    cutoff = f"{int(season_year)}-09-01"
+
+    def _from_last_year(row: Any) -> bool:
+        if not isinstance(row, dict):
+            return False
+        raw_sy = row.get("season_year", row.get("season"))
+        try:
+            if raw_sy is not None and int(raw_sy) < int(season_year):
+                return True
+        except (TypeError, ValueError):
+            pass
+        iso = str(row.get("calendar_iso") or row.get("date") or row.get("ts") or "")[:10]
+        return bool(iso) and iso < cutoff
+
+    session.storyline_events = [
+        ev for ev in list(getattr(session, "storyline_events", None) or []) if not _from_last_year(ev)
+    ]
+    session.social_posts = [
+        ev for ev in list(getattr(session, "social_posts", None) or []) if not _from_last_year(ev)
+    ]
+    session.story_arcs = [
+        ev for ev in list(getattr(session, "story_arcs", None) or []) if not _from_last_year(ev)
+    ]
+    session.active_cause_storylines = [
+        ev for ev in list(getattr(session, "active_cause_storylines", None) or []) if not _from_last_year(ev)
+    ]
+    session.reddit_threads = [
+        ev for ev in list(getattr(session, "reddit_threads", None) or []) if not _from_last_year(ev)
+    ]
+
+
 def generate_next_season(session: FranchiseSession) -> Dict[str, Any]:
     """Build new schedule/calendar — only increments year when data exists."""
-    from services.contract_economy import run_cap_compliance_before_season
+    from services.contract_economy import release_unresigned_free_agents, run_cap_compliance_before_season
 
-    sync_hub_compliance_warnings(session)
-    run_cap_compliance_before_season(session)
     from app.sim_engine.league import generate_regular_season_schedule
     from app.sim_engine.league.standings import StandingsTable
     from services.franchise_sim import (
@@ -7133,6 +7338,14 @@ def generate_next_season(session: FranchiseSession) -> Dict[str, Any]:
 
     if session.next_season_generated and session.next_season_payload:
         return {"next_season": session.next_season_payload, "already_generated": True}
+
+    try:
+        release_unresigned_free_agents(session)
+        _scrub_lines_of_departed_players(session)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    sync_hub_compliance_warnings(session)
+    run_cap_compliance_before_season(session)
 
     sim = session.sim
     try:
@@ -7255,6 +7468,7 @@ def generate_next_season(session: FranchiseSession) -> Dict[str, Any]:
     # Season-scoped lifecycle flags that previously leaked across years.
     session._year_end_progression_done = False
     session.contracts_ticked = False
+    session.july1_contracts_expired = False
     session.development_report_done = False
     session.development_report_completed_season = 0
     session.development_report_generated_at = ""
@@ -7300,6 +7514,8 @@ def generate_next_season(session: FranchiseSession) -> Dict[str, Any]:
         _swallowed_log.debug("suppressed exception", exc_info=True)
     # Keep next_season_generated False until payload is ready below; cleared again
     # when the new season actually starts (_finalize_next_season_reveal).
+    _clear_prior_season_stories(session)
+    session._stories_cleared_for = next_sy
     session.season_calendar_year = next_sy
     # Re-sync ages to Sept 15 of the new season year (birth-date accurate).
     try:

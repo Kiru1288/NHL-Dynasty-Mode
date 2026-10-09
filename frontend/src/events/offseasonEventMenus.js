@@ -12,7 +12,7 @@ import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
 import "./freeAgency/FreeAgencyBoard.css";
 import NegotiationMeetingPanel from "../components/contracts/NegotiationMeetingPanel";
 import { getContractOffice, reSignContract, qualifyRfa, releaseRfaRights, evaluateContractOffer, prospectRightsDecision, previewElcOffer, submitElcOffer, fileArbitration, settleArbitration, matchOfferSheet, declineOfferSheet, advanceFreeAgencyDay, advanceContractNegotiationDay, signFreeAgent, getFreeAgentDetail, getFreeAgencyDesk } from "../services/franchiseService";
-import { estimateOfferInterestM } from "../utils/contractNegotiation";
+import { estimateOfferInterestM, maxNegotiationOfferAavM, projectNegotiationCap } from "../utils/contractNegotiation";
 import { formatMoney, formatPick, getPlayerName, getPlayerOverall, getPlayerPosition, pickFranchiseData, safeArray } from "./shared/eventHelpers";
 
 function computeOfferCapHitM(aav, years, signingBonus = 0) {
@@ -425,23 +425,78 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
     setError("");
   }, [selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const resignSeasonYear = intOr(payload?.season_year, 0);
+
+  const resignRowStatus = (row) => {
+    if (!row) return "—";
+    if (row.extension_signed) return "Extended";
+    const phase = String(row.phase_status || row.negotiation_status || "").toLowerCase();
+    if (phase === "accepted") return "Accepted";
+    if (phase === "rejected") return "Rejected";
+    if (phase === "countered") return "Countered";
+    if (phase === "pending") return "Pending";
+    if (phase === "released") return "Released";
+    if (phase === "lapsed") return "Lapsed";
+    if (row.contract_status === "rfa_rights") return "RFA Rights";
+    if (!resignIsThisJuly(row, resignSeasonYear) && intOr(row.years_remaining, 0) > 0) {
+      const clause = String(row.clause_label || "");
+      if (clause && clause !== "None") return clause;
+      return "Signed";
+    }
+    if (resignIsThisJuly(row, resignSeasonYear)) return "Expiring";
+    return row.expiry_status || row.contract_status || "—";
+  };
+
+  const resignOffer = (row) => {
+    const phase = String(row?.phase_status || row?.negotiation_status || "").toLowerCase();
+    if (phase === "pending") return row?.pending_offer || row?.phase_last_offer || null;
+    if (phase === "accepted") return row?.phase_terms || null;
+    return null;
+  };
+
+  const resignMoney = (row) => {
+    const offer = resignOffer(row);
+    const phase = String(row?.phase_status || row?.negotiation_status || "").toLowerCase();
+    if (offer && offer.aav_m != null && (phase === "pending" || (phase === "accepted" && resignIsThisJuly(row, resignSeasonYear)))) {
+      return offer.aav_m;
+    }
+    return row?.aav_m ?? row?.cap_hit_m ?? row?.current_cap_hit;
+  };
+
+  const resignTermText = (row) => {
+    const phase = String(row?.phase_status || row?.negotiation_status || "").toLowerCase();
+    const offer = resignOffer(row);
+    if (phase === "pending" && offer?.years) return `Offer ${offer.years}y`;
+    if (phase === "accepted" && offer?.years && resignIsThisJuly(row, resignSeasonYear)) {
+      return [offer.expiry_year, `${offer.years}y`].filter(Boolean).join(" · ");
+    }
+    return (
+      [row?.expiry_year, row?.years_remaining != null ? `${row.years_remaining}y` : null]
+        .filter(Boolean)
+        .join(" · ") || "—"
+    );
+  };
+
   const filterCounts = React.useMemo(() => {
     const rows = contracts;
+    const thisJuly = (r) => resignIsThisJuly(r, resignSeasonYear);
     return {
       all: rows.length,
-      expiring: rows.filter((r) => intOr(r.years_remaining, 99) <= 1 || r.contract_status === "expiring").length,
-      ufa: rows.filter((r) => String(r.expiry_status || r.expiry_type || "").toUpperCase() === "UFA").length,
+      expiring: rows.filter((r) => !r.extension_signed && thisJuly(r)).length,
+      ufa: rows.filter(
+        (r) => thisJuly(r) && (String(r.expiry_status || r.expiry_type || "").toUpperCase() === "UFA" || r.own_ufa),
+      ).length,
       rfa: rows.filter(
         (r) =>
-          String(r.expiry_status || r.expiry_type || "").toUpperCase() === "RFA" ||
-          r.contract_status === "rfa_rights"
+          r.contract_status === "rfa_rights" ||
+          (thisJuly(r) && String(r.expiry_status || r.expiry_type || "").toUpperCase() === "RFA"),
       ).length,
-      signed: rows.filter((r) => intOr(r.years_remaining, 0) > 1 && r.contract_status !== "rfa_rights").length,
+      signed: rows.filter((r) => !thisJuly(r) && intOr(r.years_remaining, 0) > 0 && r.contract_status !== "rfa_rights").length,
       extension: rows.filter((r) => r.extension_eligible === true).length,
       minors: rows.filter((r) => r.in_minors || String(r.role || "").toLowerCase().includes("minor")).length,
       unsigned: rows.filter((r) => r.contract_status === "rfa_rights" || r.qualifying_offer_eligible).length,
     };
-  }, [contracts]);
+  }, [contracts, resignSeasonYear]);
 
   const visibleRows = React.useMemo(() => {
     let rows = [...contracts];
@@ -451,18 +506,8 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
     const isPhaseRejected = (r) => phaseStatus(r) === "rejected";
     const wasExpiring = (r) => {
       if (isPhaseAccepted(r) || r.pending_extension || r.extension_signed) return false;
-      if (intOr(r.years_remaining, 0) > 1 && !r.own_ufa && r.contract_status !== "expiring") return false;
-      return (
-        intOr(r.years_remaining, 99) <= 1 ||
-        r.own_ufa === true ||
-        r.contract_status === "own_ufa" ||
-        r.contract_status === "expiring" ||
-        r.contract_status === "rfa_rights" ||
-        r.contract_status === "released" ||
-        isPhaseReleased(r) ||
-        isPhaseRejected(r) ||
-        ["pending", "countered", "open"].includes(phaseStatus(r))
-      );
+      if (isPhaseReleased(r) || isPhaseRejected(r)) return true;
+      return resignIsThisJuly(r, resignSeasonYear);
     };
 
     if (filter === "expiring") {
@@ -470,23 +515,27 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
     } else if (filter === "ufa") {
       rows = rows.filter(
         (r) =>
-          String(r.expiry_status || r.expiry_type || "").toUpperCase() === "UFA" ||
-          (isPhaseAccepted(r) && String(r.expiry_status || "").toUpperCase() === "UFA") ||
+          r.own_ufa === true ||
+          (resignIsThisJuly(r, resignSeasonYear) &&
+            String(r.expiry_status || r.expiry_type || "").toUpperCase() === "UFA") ||
           (isPhaseRejected(r) && String(r.expiry_status || "").toUpperCase() === "UFA")
       );
     } else if (filter === "rfa") {
       rows = rows.filter(
         (r) =>
-          String(r.expiry_status || r.expiry_type || "").toUpperCase() === "RFA" ||
           r.contract_status === "rfa_rights" ||
-          (isPhaseAccepted(r) && String(r.expiry_status || "").toUpperCase() === "RFA") ||
+          (resignIsThisJuly(r, resignSeasonYear) &&
+            String(r.expiry_status || r.expiry_type || "").toUpperCase() === "RFA") ||
           (isPhaseReleased(r) && String(r.expiry_status || r.expiry_type || "").toUpperCase() === "RFA")
       );
     } else if (filter === "signed") {
       rows = rows.filter(
         (r) =>
           isPhaseAccepted(r) ||
-          (intOr(r.years_remaining, 0) > 1 && r.contract_status !== "rfa_rights" && r.contract_status !== "released")
+          (!resignIsThisJuly(r, resignSeasonYear) &&
+            intOr(r.years_remaining, 0) > 0 &&
+            r.contract_status !== "rfa_rights" &&
+            r.contract_status !== "released")
       );
     } else if (filter === "extension") {
       // Current free-agency / re-sign class only — not players still owed another season.
@@ -506,7 +555,7 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
       return String(a.name || "").localeCompare(String(b.name || ""));
     });
     return rows;
-  }, [contracts, filter, sortKey, sortDir]);
+  }, [contracts, filter, sortKey, sortDir, resignSeasonYear]);
 
   const selectPlayer = (id, { openNegotiate = false } = {}) => {
     setSelectedId(String(id));
@@ -540,7 +589,13 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
     : 0;
   const offerBonusNum = Math.min(bonusCapM, Math.max(0, Number(offerBonus) || 0));
   const offerCapHitNum = computeOfferCapHitM(offerAavNum, offerYearsNum, offerBonusNum);
-  const projectedSpace = Number.isFinite(capSpace) ? capSpace - offerCapHitNum : null;
+  const capProj = projectNegotiationCap({
+    capSnapshot: cap,
+    playerRow: selected || {},
+    offerCapHitM: offerCapHitNum,
+  });
+  const projectedSpace = capProj.projectedAfterM;
+  const projectedNextSeason = capProj.projectedNextSeasonM;
   const askAav = Number(
     selected?.player_ask_aav_m ??
       selected?.requested_cap_hit ??
@@ -736,14 +791,11 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
         : offerDiff > 0
           ? `+${formatMoney(offerDiff)} above ask`
           : `${formatMoney(offerDiff)} below ask`;
-  const sliderMax = Math.min(
-    Number(resignBonusRules.max_salary_m || 99),
-    Math.max(
-    12,
-    askAav * 1.4 || 0,
-    offerAavNum || 0,
-    Number(selected?.aav_m || 0) * 1.8 || 0
-  ));
+  const sliderMax = maxNegotiationOfferAavM({
+    capSnapshot: cap,
+    playerRow: selected || {},
+    cbaMaxSalaryM: resignBonusRules.max_salary_m,
+  });
   const sliderMin = 0.775;
   const agentBits = resignAgentBits(selected, askAav, askYears);
   const decisionCount = summary.pendingDecisions ?? pending.length;
@@ -885,22 +937,7 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
                         player_id: id,
                       });
                       const phase = String(row.phase_status || row.negotiation_status || "").toLowerCase();
-                      const status =
-                        phase === "accepted"
-                          ? "Accepted"
-                          : phase === "rejected"
-                            ? "Rejected"
-                            : phase === "countered"
-                              ? "Countered"
-                              : phase === "pending"
-                                ? "Pending"
-                                : phase === "released"
-                                  ? "Released"
-                                  : phase === "lapsed"
-                                    ? "Lapsed"
-                                    : row.contract_status === "rfa_rights"
-                                      ? "RFA Rights"
-                                      : row.expiry_status || row.expiry_type || row.contract_status || "—";
+                      const status = resignRowStatus(row);
                       const statusTone =
                         phase === "accepted"
                           ? "accepted"
@@ -957,15 +994,8 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
                               {status}
                             </span>
                           </td>
-                          <td>{formatMoney(row.aav_m ?? row.cap_hit_m ?? row.current_cap_hit)}</td>
-                          <td>
-                            {[
-                              row.expiry_year,
-                              row.years_remaining != null ? `${row.years_remaining}y` : null,
-                            ]
-                              .filter(Boolean)
-                              .join(" · ") || "—"}
-                          </td>
+                          <td>{formatMoney(resignMoney(row))}</td>
+                          <td>{resignTermText(row)}</td>
                           <td>
                             <span
                               className={`${prefix}-interest-pill tone-${resignInterestTone(interest)}`}
@@ -1171,6 +1201,16 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
                               }
                             >
                               {projectedSpace != null ? formatMoney(projectedSpace) : "—"}
+                            </strong>
+                          </div>
+                          <div>
+                            <span>Next season</span>
+                            <strong
+                              className={
+                                projectedNextSeason != null && projectedNextSeason < 0 ? "is-red" : "is-green"
+                              }
+                            >
+                              {projectedNextSeason != null ? formatMoney(projectedNextSeason) : "—"}
                             </strong>
                           </div>
                         </div>
@@ -1585,10 +1625,7 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
             const active = id === String(selectedId);
             const ovr = p.overall ?? p.ovr ?? getPlayerOverall(p);
             const interest = resignInterestLabel(p);
-            const status =
-              p.contract_status === "rfa_rights"
-                ? "RFA"
-                : p.expiry_status || p.expiry_type || p.rights_status || "—";
+            const status = resignRowStatus(p);
             return (
               <button
                 key={id}
@@ -1619,6 +1656,24 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
   );
 }
 
+
+/** This July's free-agent class. A year that still covers next season is a signed deal. */
+function resignIsThisJuly(row, seasonYear) {
+  if (!row) return false;
+  if (row.extension_signed || row.pending_extension) return false;
+  const phase = String(row.phase_status || row.negotiation_status || "").toLowerCase();
+  if (phase === "accepted") return false;
+  if (row.own_ufa === true || row.contract_status === "own_ufa") return true;
+  if (row.contract_status === "rfa_rights") return true;
+  const yrs = intOr(row.years_remaining, 0);
+  const expiry = intOr(row.expiry_year, 0);
+  const july = Boolean(row.pending_july1_expiry);
+  const faYear = intOr(seasonYear, 0) + 1;
+  if (yrs > 1 && !july) return false;
+  if (expiry > faYear && !july) return false;
+  if (july && yrs <= 1) return true;
+  return yrs <= 1 && (expiry <= 0 || expiry <= faYear);
+}
 
 function intOr(value, fallback) {
   const n = Number(value);
@@ -1870,7 +1925,13 @@ export function FreeAgencyEventMenu({
     : 0;
   const offerBonusNum = Math.min(bonusCapM, Math.max(0, Number(offerBonus) || 0));
   const offerCapHitNum = computeOfferCapHitM(offerAavNum, offerYearsNum, offerBonusNum);
-  const projectedSpace = Number.isFinite(capSpace) ? capSpace - offerCapHitNum : null;
+  const capProj = projectNegotiationCap({
+    capSnapshot: capSnap,
+    playerRow: deskPlayer || {},
+    offerCapHitM: offerCapHitNum,
+    replaceCurrentHit: false,
+  });
+  const projectedSpace = capProj.projectedAfterM;
   const negoInterest = Number(response?.evaluation?.interest ?? response?.player_response?.interest ?? 0) || 0;
   const negoFeedback =
     response?.player_response?.feedback ||
@@ -1954,6 +2015,10 @@ export function FreeAgencyEventMenu({
       });
     } else if (filter === "vet") {
       list = list.filter((p) => Number(p.age || 0) >= 32);
+    } else if (filter === "ufa") {
+      list = list.filter((p) => String(p.ufaOrRfa || p.status || "").toUpperCase() === "UFA");
+    } else if (filter === "rfa") {
+      list = list.filter((p) => String(p.ufaOrRfa || p.status || "").toUpperCase() === "RFA");
     } else if (filter === "young") {
       list = list.filter((p) => Number(p.age || 0) <= 26);
     } else if (filter === "watch") {
@@ -2244,6 +2309,9 @@ export function FreeAgencyEventMenu({
             <span className={bonusAllowed ? "is-ok" : "is-bad"}>
               Bonus {bonusAllowed ? "OK" : `Locked $${Math.round(Number(bonus.floor_m) || 155)}M`}
             </span>
+            {market.cap_release?.text ? (
+              <span className={`${prefix}-fa-cap`}>{market.cap_release.text}</span>
+            ) : null}
             <button type="button" className={`${prefix}-sim-btn`} disabled={busy} onClick={() => advanceDay(1)}>
               Sim day
             </button>
@@ -2269,6 +2337,8 @@ export function FreeAgencyEventMenu({
                 ["G", "Goalies"],
                 ["young", "Young"],
                 ["vet", "Veterans"],
+                ["ufa", "UFA"],
+                ["rfa", "RFA"],
                 ["cheap", "Cheap"],
                 ["hot", "Bidding"],
                 ["watch", "Watch"],
@@ -2322,7 +2392,16 @@ export function FreeAgencyEventMenu({
                       <span className={`${prefix}-fa-row-body`}>
                         <strong>{getPlayerName(p)}</strong>
                         <em>
-                          {[getPlayerPosition(p), p.age != null ? `Age ${p.age}` : null, prevAbbr || null]
+                          {[
+                            getPlayerPosition(p),
+                            p.age != null ? `Age ${p.age}` : null,
+                            String(p.ufaOrRfa || p.status || "").toUpperCase() === "RFA"
+                              ? "RFA"
+                              : String(p.ufaOrRfa || p.status || "").toUpperCase() === "UFA"
+                                ? "UFA"
+                                : null,
+                            prevAbbr || null,
+                          ]
                             .filter(Boolean)
                             .join(" · ")}
                         </em>
@@ -2410,6 +2489,11 @@ export function FreeAgencyEventMenu({
                         {[
                           getPlayerPosition(deskPlayer),
                           deskPlayer.age != null ? `Age ${deskPlayer.age}` : null,
+                          String(deskPlayer.ufaOrRfa || deskPlayer.status || "").toUpperCase() === "RFA"
+                            ? "RFA"
+                            : String(deskPlayer.ufaOrRfa || deskPlayer.status || "").toUpperCase() === "UFA"
+                              ? "UFA"
+                              : null,
                           deskPlayer.potential != null ? `POT ${deskPlayer.potential}` : null,
                           deskPlayer.role,
                         ]
@@ -2437,10 +2521,7 @@ export function FreeAgencyEventMenu({
                     <div className={`${prefix}-fa-captrack`}>
                       <span
                         style={{
-                          width: `${Math.max(
-                            4,
-                            Math.min(100, ((offerAavNum || 0) / Math.max(capSpace || 1, 1)) * 100)
-                          )}%`,
+                          width: `${Math.max(0, Math.min(100, capProj.capBarPct ?? 0))}%`,
                         }}
                       />
                     </div>

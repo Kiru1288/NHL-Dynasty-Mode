@@ -142,30 +142,30 @@ def _pipeline_talent_scalar(pipeline_tier: str, rng) -> Tuple[str, float]:
     """Map pipeline slot to (attribute-gen tier label, talent scalar)."""
     pt = str(pipeline_tier or "middle").lower()
     if pt == "franchise":
-        return "franchise", rng.uniform(0.87, 0.95)
+        return "franchise", rng.uniform(0.90, 0.98)
     if pt == "elite":
-        return "elite", rng.uniform(0.78, 0.91)
+        return "elite", rng.uniform(0.82, 0.94)
     if pt == "top":
-        return "normal", rng.uniform(0.70, 0.86)
+        return "normal", rng.uniform(0.74, 0.88)
     if pt == "middle":
-        return "normal", rng.uniform(0.60, 0.77)
-    return "project", rng.uniform(0.48, 0.68)
+        return "normal", rng.uniform(0.66, 0.82)
+    return "project", rng.uniform(0.54, 0.74)
 
 
 def _potential_ceiling_for_pipeline(pipeline_tier: str, rng, *, bust: bool) -> float:
     pt = str(pipeline_tier or "middle").lower()
     if pt == "franchise":
-        ce = rng.uniform(0.92, 0.97)
+        ce = rng.uniform(0.94, 0.99)
     elif pt == "elite":
-        ce = rng.uniform(0.86, 0.93)
+        ce = rng.uniform(0.88, 0.95)
     elif pt == "top":
-        ce = rng.uniform(0.80, 0.88)
+        ce = rng.uniform(0.83, 0.91)
     elif pt == "middle":
-        ce = rng.uniform(0.75, 0.82)
+        ce = rng.uniform(0.78, 0.86)
     else:
-        ce = rng.uniform(0.62, 0.78)
+        ce = rng.uniform(0.68, 0.82)
     if bust:
-        ce -= rng.uniform(0.045, 0.13)
+        ce -= rng.uniform(0.03, 0.08)
     return max(0.52, min(0.99, ce))
 
 
@@ -174,11 +174,11 @@ def _build_skater_pipeline_slots(rng: random.Random, sk: int, *, elite_boost: in
     if sk <= 0:
         return [], "empty"
     q = rng.random()
-    if q < 0.11:
+    if q < 0.06:
         qual = "weak"
-    elif q < 0.67:
+    elif q < 0.62:
         qual = "normal"
-    elif q < 0.90:
+    elif q < 0.88:
         qual = "strong"
     else:
         qual = "legendary"
@@ -188,13 +188,13 @@ def _build_skater_pipeline_slots(rng: random.Random, sk: int, *, elite_boost: in
         return max(0, int(round(rng.randint(a, b) * scale)))
 
     if qual == "weak":
-        fc, el, tp, md = rn(0, 1), rn(4, 7), rn(12, 20), rn(36, 52)
+        fc, el, tp, md = rn(1, 2), rn(6, 10), rn(16, 26), rn(40, 56)
     elif qual == "normal":
-        fc, el, tp, md = rn(1, 2), rn(6, 10), rn(16, 25), rn(40, 58)
+        fc, el, tp, md = rn(2, 4), rn(10, 16), rn(22, 34), rn(48, 68)
     elif qual == "strong":
-        fc, el, tp, md = rn(2, 3), rn(8, 11), rn(18, 28), rn(44, 62)
+        fc, el, tp, md = rn(3, 5), rn(12, 18), rn(26, 38), rn(50, 70)
     else:
-        fc, el, tp, md = rn(2, 3), rn(9, 13), rn(22, 32), rn(48, 66)
+        fc, el, tp, md = rn(4, 6), rn(14, 20), rn(30, 42), rn(52, 72)
 
     el += max(0, int(elite_boost))
     slots: List[str] = ["franchise"] * fc + ["elite"] * el + ["top"] * tp + ["middle"] * md
@@ -298,7 +298,7 @@ def generate_player_profile_for_pipeline_slot(
     if steal:
         pt = "top"
     bust = False
-    if pt in ("franchise", "elite", "top", "middle") and rng.random() < rng.uniform(0.10, 0.22):
+    if pt in ("franchise", "elite", "top", "middle") and rng.random() < rng.uniform(0.06, 0.14):
         bust = True
 
     ident = generate_human_identity(rng, nationality=forced_nationality)

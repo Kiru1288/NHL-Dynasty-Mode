@@ -335,6 +335,9 @@ function resolveBackendTradeValue(row, tradeAssets, teamId) {
       tradeable: apiTrade.tradeable !== false,
       tradeBlockReason: String(apiTrade.trade_block_reason || ""),
       clauseLabel: String(apiTrade.clause_label || ""),
+      clauseDisplay: String(apiTrade.clause_display || ""),
+      clausePending: String(apiTrade.clause_pending || ""),
+      clauseKicksInYear: apiTrade.clause_kicks_in_year || null,
       approvedTradeTeams: safeArray(apiTrade.approved_trade_teams || apiTrade.approved_trade_team_ids),
       canTradeToPartner: apiTrade.can_trade_to_partner,
       requiresNtcWaive: Boolean(apiTrade.requires_ntc_waive),
@@ -357,6 +360,9 @@ function resolveBackendTradeValue(row, tradeAssets, teamId) {
       tradeable: row?.tradeable !== false,
       tradeBlockReason: String(row?.trade_block_reason || ""),
       clauseLabel: String(row?.clause_label || row?.protection || ""),
+      clauseDisplay: String(row?.clause_display || row?.contract?.clause_display || ""),
+      clausePending: String(row?.clause_pending || row?.contract?.clause_pending || ""),
+      clauseKicksInYear: row?.clause_kicks_in_year || row?.contract?.clause_kicks_in_year || null,
       approvedTradeTeams: safeArray(row?.approved_trade_teams || row?.approved_trade_team_ids),
       canTradeToPartner: row?.can_trade_to_partner,
       requiresNtcWaive: Boolean(row?.requires_ntc_waive),
@@ -381,6 +387,9 @@ function resolveBackendTradeValue(row, tradeAssets, teamId) {
       tradeable: apiTrade?.tradeable !== false && row?.tradeable !== false,
       tradeBlockReason: String(apiTrade?.trade_block_reason || row?.trade_block_reason || ""),
       clauseLabel: String(apiTrade?.clause_label || row?.clause_label || row?.protection || ""),
+      clauseDisplay: String(apiTrade?.clause_display || row?.clause_display || row?.contract?.clause_display || ""),
+      clausePending: String(apiTrade?.clause_pending || row?.clause_pending || row?.contract?.clause_pending || ""),
+      clauseKicksInYear: apiTrade?.clause_kicks_in_year || row?.clause_kicks_in_year || row?.contract?.clause_kicks_in_year || null,
       approvedTradeTeams: safeArray(
         apiTrade?.approved_trade_teams ||
           apiTrade?.approved_trade_team_ids ||
@@ -406,6 +415,9 @@ function resolveBackendTradeValue(row, tradeAssets, teamId) {
     tradeable: true,
     tradeBlockReason: "",
     clauseLabel: "",
+    clauseDisplay: "",
+    clausePending: "",
+    clauseKicksInYear: null,
     requiresNtcWaive: false,
     ntcWaived: false,
     ntcWaiverReason: "",
@@ -652,6 +664,20 @@ function clauseProtectionKind(raw) {
   return "NONE";
 }
 
+function clauseTimingText(asset) {
+  const display = String(asset?.clauseDisplay || asset?.clause_display || "").trim();
+  if (display && display !== "None") return display;
+  const pending = String(asset?.clausePending || asset?.clause_pending || "").trim();
+  const year = Number(asset?.clauseKicksInYear || asset?.clause_kicks_in_year || 0);
+  if (pending && year) {
+    const yy = String(year + 1).slice(-2);
+    return `${pending} starts ${year}-${yy}`;
+  }
+  const active = String(asset?.protection || asset?.clauseLabel || "").trim();
+  if (active && active !== "None" && active !== "NONE") return active;
+  return "";
+}
+
 function clauseFromRow(row, contract) {
   const clause = String(
     row?.clause_label || row?.protection || contract?.clause_label || contract?.clause || "",
@@ -756,6 +782,15 @@ function normalizePlayerFromRow(row, teamId, franchiseState, isUserTeam = false,
     tradeBlockReason: blockReason,
     conductTradeRestricted: conductRestricted,
     clauseLabel: tradeMeta.clauseLabel || protection,
+    clauseDisplay: String(
+      contract.clause_display ||
+        contract.clauseDisplay ||
+        tradeMeta.clauseDisplay ||
+        ""
+    ),
+    clausePending: String(contract.clause_pending || contract.clausePending || tradeMeta.clausePending || ""),
+    clauseKicksInYear:
+      contract.clause_kicks_in_year || contract.clauseKicksInYear || tradeMeta.clauseKicksInYear || null,
     approvedTradeTeams: tradeMeta.approvedTradeTeams,
     requiresNtcWaive,
     ntcWaived,
@@ -1983,10 +2018,7 @@ function AssetCard({
     headshot_id: asset.headshot_id,
     headshot_url: asset.headshot_url,
   });
-  const clauseMini =
-    asset.protection && asset.protection !== "None"
-      ? String(asset.protection).replace(/no[- ]?trade/i, "NTC").replace(/no[- ]?movement/i, "NMC").slice(0, 6)
-      : null;
+  const clauseMini = clauseTimingText(asset);
   const rumorMod = activeTradeRumorModifier(asset);
 
   return (
@@ -2024,7 +2056,14 @@ function AssetCard({
           <PositionIcon pos={asset.pos} />
           <span>{asset.age}Y</span>
           <span>{assetCardTermLabel(asset)}</span>
-          {clauseMini && <span className="trade-asset-clause-mini">{clauseMini}</span>}
+          {clauseMini && (
+            <span
+              className={`trade-asset-clause-mini${asset.clausePending || /starts/i.test(clauseMini) ? " is-pending" : ""}`}
+              title={clauseMini}
+            >
+              {clauseMini}
+            </span>
+          )}
         </div>
         {asset.potentialGrade && (
           <div className="trade-asset-pot-big">POT {asset.potentialGrade}</div>
@@ -3307,7 +3346,7 @@ function AssetContextMenu({
               <div><span>VALUE</span><strong>{assetValueLabel(asset)}</strong></div>
               <div><span>ROLE</span><strong>{asset.role || roleFromOverall(asset.ovr, asset.pos)}</strong></div>
               <div><span>POT</span><strong>{asset.potentialGrade || "—"}</strong></div>
-              <div><span>CLAUSE</span><strong>{asset.clauseLabel || (asset.protection && asset.protection !== "None" ? asset.protection : "—")}</strong></div>
+              <div><span>CLAUSE</span><strong>{clauseTimingText(asset) || "—"}</strong></div>
             </>
           )}
         </div>
@@ -3614,7 +3653,7 @@ function AssetDetailDrawer({
                           <span>Role</span><strong>{asset.role || roleFromOverall(asset.ovr, asset.pos)}</strong>
                           <span>Need fit</span><strong>{needFit}</strong>
                           <span>Contract</span><strong>{asset.contractType || "—"}</strong>
-                          <span>Clause</span><strong>{asset.clauseLabel || "None"}</strong>
+                          <span>Clause</span><strong>{clauseTimingText(asset) || "None"}</strong>
                         </div>
                       </div>
                       {riskFlags.length > 0 && (
@@ -3646,7 +3685,7 @@ function AssetDetailDrawer({
                     <span>Cap Hit</span><strong>{formatPlayerCapLabel(asset)}</strong>
                     <span>Years</span><strong>{asset.years > 0 ? asset.years : "—"}</strong>
                     <span>Type</span><strong>{asset.contractType || "—"}</strong>
-                    <span>Clause</span><strong>{asset.clauseLabel || asset.protection || "—"}</strong>
+                    <span>Clause</span><strong>{clauseTimingText(asset) || "—"}</strong>
                   </div>
                   {asset.tradeBlockReason && <p className="trade-drawer-warn">{asset.tradeBlockReason}</p>}
                   {safeArray(asset.approvedTradeTeams).length > 0 && (
@@ -5898,6 +5937,7 @@ function finderAssetMeta(a) {
     a.age ? `${a.age}y` : null,
     a.level === "AHL" ? "AHL" : null,
     (a.cap_full_m ?? a.cap_m) ? `$${Number(a.cap_full_m ?? a.cap_m).toFixed(2)}M` : null,
+    a.clause_display && a.clause_display !== "None" ? a.clause_display : null,
     Number(a.retained) > 0 ? `${a.retained}% retained` : null,
   ].filter(Boolean).join(" · ");
 }
@@ -9241,6 +9281,12 @@ const TRADE_HUB_CSS = `
   color: #ff9aa3;
   font-size: 11px;
   font-weight: 900;
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+.trade-asset-clause-mini.is-pending {
+  border-color: rgba(232, 197, 71, 0.35);
+  color: #e8c547;
 }
 .trade-asset-card-right {
   display: flex;

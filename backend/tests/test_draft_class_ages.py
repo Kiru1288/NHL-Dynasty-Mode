@@ -102,3 +102,31 @@ def test_pipeline_stars_are_first_year_eligible():
     assert stars
     first_year = sum(1 for p in stars if p.identity.age <= 18)
     assert first_year >= int(len(stars) * 0.7)
+
+
+def test_first_round_is_eighteen_year_olds():
+    from services.draft_ranking_logic import enforce_first_round_draft_age
+
+    board = []
+    for i in range(70):
+        if i < 8:
+            age = 20
+        elif i < 14:
+            age = 19
+        else:
+            age = 18
+        board.append({
+            "key": f"p{i}",
+            "name": f"P{i}",
+            "age": age,
+            "position": "C",
+            "_score": 200 - i,
+        })
+    enforce_first_round_draft_age(board)
+    top10 = [int(r["age"]) for r in board[:10]]
+    round1 = [int(r["age"]) for r in board[:32]]
+    assert top10 == [18] * 10
+    assert sum(1 for age in round1 if age == 19) == 1
+    assert all(age < 20 for age in round1)
+    assert int(board[31]["age"]) == 19
+    assert all(int(r["age"]) >= 19 for r in board[32:40])

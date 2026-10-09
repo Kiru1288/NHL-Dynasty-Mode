@@ -21,7 +21,8 @@ function PlayerChip({ p }) {
 
 function Unit({ label, unit, slots }) {
   const players = arr(unit?.players);
-  const padded = [...players, ...Array(Math.max(0, slots - players.length)).fill(null)].slice(0, Math.max(slots, players.length));
+  const capped = players.slice(0, slots);
+  const padded = [...capped, ...Array(Math.max(0, slots - capped.length)).fill(null)];
   return (
     <div className="tlv-unit">
       <div className="tlv-unit__head">

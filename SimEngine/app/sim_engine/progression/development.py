@@ -2107,7 +2107,7 @@ def reevaluate_ceilings_from_performance(player: Any, rng: Any) -> Dict[str, Any
 
     profile = resolve_development_profile(player)
     age = _get_player_age(player)
-    if age > 29:
+    if age > 35:
         return {"applied": False, "reason": "outside_window"}
 
     current = float(profile.get("current_ovr", _get_player_ovr(player)))
@@ -2162,6 +2162,11 @@ def reevaluate_ceilings_from_performance(player: Any, rng: Any) -> Dict[str, Any
         label = "solid"
     else:
         return {"applied": False, "reason": "borderline", "momentum": new_mom}
+
+    if age >= 30:
+        proj_delta *= 0.65
+        active_delta *= 0.65
+        max_delta *= 0.50
 
     # Low-pot stars: allow climbing toward maximum even when near expected.
     new_expected = clamp01(expected + proj_delta)
@@ -2286,6 +2291,35 @@ def apply_player_development(player: Any, rng: Any) -> None:
 
     dev_type = str(getattr(player, "dev_type", "standard") or "standard").lower()
     age = _get_player_age(player)
+    surplus_now = float(getattr(player, "_dev_season_points_surplus", 0.0) or 0.0)
+    gp_dev = int(getattr(player, "gp", 0) or getattr(player, "games_played", 0) or 0)
+    career_year = gp_dev >= 40 and surplus_now >= 12.0
+    if career_year:
+        # A season well above his projection has to open the ceiling. Otherwise
+        # the year-end pass sees gap ≈ 0 and throws the surplus away.
+        cur = float(profile.get("current_ovr", ovr_before) or ovr_before)
+        exp = float(profile.get("expected_ceiling", potential) or potential)
+        lift = 0.04 if surplus_now < 25.0 else (0.06 if surplus_now < 40.0 else 0.08)
+        if age >= 33:
+            lift *= 0.55
+        elif age >= 30:
+            lift *= 0.75
+        new_exp = min(0.99, max(exp, cur + lift))
+        profile["expected_ceiling"] = new_exp
+        profile["maximum_ceiling"] = min(
+            0.99,
+            max(float(profile.get("maximum_ceiling", new_exp) or new_exp), new_exp),
+        )
+        profile["active_development_ceiling"] = max(
+            float(profile.get("active_development_ceiling", new_exp) or new_exp),
+            new_exp,
+        )
+        potential = new_exp
+        try:
+            setattr(player, "development_profile", profile)
+            setattr(player, "potential", float(new_exp))
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     career_stage = determine_development_career_stage(player)
     _safe_setattr(player, "development_career_stage", career_stage)
     calculate_nhl_readiness_score(player)
@@ -2294,11 +2328,11 @@ def apply_player_development(player: Any, rng: Any) -> None:
     calculate_age_decline_profile(player)
     apply_prime_refinement(player)
 
-    growth_eligible = age <= 29
+    growth_eligible = age <= 31 or (career_year and age <= 35)
     if not growth_eligible:
-        if _is_goalie(player) and 24 <= age <= 31 and (dev_type == "late_bloomer" or rng.random() <= 0.28):
+        if _is_goalie(player) and 24 <= age <= 33 and (dev_type == "late_bloomer" or rng.random() <= 0.28):
             growth_eligible = True
-        elif 29 <= age <= 32 and rng.random() <= 0.22:
+        elif 31 < age <= 33 and rng.random() <= 0.22:
             growth_eligible = True
 
     if not growth_eligible:
@@ -2440,7 +2474,7 @@ def apply_player_development(player: Any, rng: Any) -> None:
     # (see PLAYER_DEVELOPMENT_SYSTEM_REPORT.md §9.3). Only players with real,
     # if small, remaining gap (0.004 < gap <= 0.02) get a floor.
     gap_now = float(normalize_rating_gap(ovr_before, potential))
-    if gap_now <= 0.004 and dev_phase not in ("REGRESSION", "SPIKE"):
+    if gap_now <= 0.004 and dev_phase not in ("REGRESSION", "SPIKE") and not career_year:
         budget = min(max(budget, 0.0), 0.006)
     elif gap_now <= 0.02 and dev_phase == "NORMAL" and budget > 0:
         budget = max(budget, 0.018)
@@ -2451,6 +2485,15 @@ def apply_player_development(player: Any, rng: Any) -> None:
     _net_in = float(getattr(player, "_in_season_growth_net_01", 0.0) or 0.0)
     if budget > 0:
         budget = max(0.0, float(budget) - max(0.0, _net_in))
+    if career_year and budget >= 0 and dev_phase != "REGRESSION":
+        # In-season pulses were calculated against the old ceiling. A year that
+        # beat his projection still has to land on the card.
+        floor = 0.030 if surplus_now < 25.0 else (0.045 if surplus_now < 40.0 else 0.060)
+        if age >= 33:
+            floor *= 0.60
+        elif age >= 30:
+            floor *= 0.80
+        budget = max(budget, floor)
     elif budget < 0:
         budget = min(0.0, float(budget) - min(0.0, _net_in))
         # Aging decline: about -1 a year at 30-31, -2 at 32-34, steeper after 35.
