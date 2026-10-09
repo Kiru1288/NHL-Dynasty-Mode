@@ -238,6 +238,10 @@ class Team:
         rng: random.Random,
     ):
         self.team_id = team_id
+        # String id alongside team_id. Code all over the backend resolves a club as
+        # `team_id or id`; team_id 0 (Boston) is falsy, so without a truthy id that
+        # club resolved to "" and was skipped (no CPU free agency, RFAs, offer sheets).
+        self.id = str(team_id)
         self.city = city
         self.name = name
         self.division = division

@@ -139,7 +139,9 @@ def _year_from_spotrac_url(url: str) -> Optional[int]:
         return None
 
 
-def _parse_yearly_row(row: str, season_year: Optional[int] = None) -> Optional[Dict[str, Any]]:
+def _parse_yearly_row(
+    row: str, season_year: Optional[int] = None, *, minor: bool = False
+) -> Optional[Dict[str, Any]]:
     """One Spotrac yearly <tr> → contract dict, or None if it is not a player row."""
     pl = re.search(
         r'nhl/player/_/id/(\d+)/([^"]+)"[^>]*>\s*([^<]+)',
@@ -155,14 +157,27 @@ def _parse_yearly_row(row: str, season_year: Optional[int] = None) -> Optional[D
     seasons: List[float] = []
     clauses: List[str] = []
     loose = ""
+    age: Optional[int] = None
     if cells:
         for attrs, inner in cells:
+            plain = re.sub(r"<[^>]+>", " ", inner).strip()
+            if age is None and not seasons and re.fullmatch(r"\d{2}", plain):
+                if 17 <= int(plain) <= 45:
+                    age = int(plain)
+                    continue
             money = None
             for s in re.findall(r'data-sort="([^"]*)"', f"{attrs} {inner}"):
                 parsed = _parse_money_sort(s)
                 if parsed is not None and parsed > 0.05:
                     money = parsed
                     break
+            if money is None:
+                # The Minor table carries the dollar figure in a hidden span instead.
+                for s in re.findall(r'display:\s*none[^>]*>\s*([0-9][0-9,]*)\s*<', inner):
+                    parsed = _parse_money_sort(s)
+                    if parsed is not None and parsed > 0.05:
+                        money = parsed
+                        break
             clause = _cell_clause_token(inner)
             if money is not None:
                 seasons.append(float(money))
@@ -209,8 +224,11 @@ def _parse_yearly_row(row: str, season_year: Optional[int] = None) -> Optional[D
     nmc = active == "NMC"
     mntc = active == "M-NTC"
     ntc = active == "NTC"
-    ctype = "ELC" if aav_m <= 1.0 and years_remaining <= 3 else "STANDARD"
-    entry = {
+    # A cheap short deal is only an ELC for a young player; veterans on the
+    # minimum (Matinpalo, Crotty) were being flagged entry-level.
+    elc_ceiling = 1.1 if (age is not None and age <= 22) else 1.0
+    ctype = "ELC" if aav_m <= elc_ceiling and years_remaining <= 3 and (age is None or age <= 24) else "STANDARD"
+    entry: Dict[str, Any] = {
         "name": display,
         "name_key": key,
         "spotrac_id": int(pl.group(1)),
@@ -244,6 +262,11 @@ def _parse_yearly_row(row: str, season_year: Optional[int] = None) -> Optional[D
         entry["clause_kicks_in_year"] = (sy + future_i) if sy else 0
     if pending_ext:
         entry["pending_extension"] = pending_ext
+    if age is not None:
+        entry["age"] = age
+    if minor:
+        entry["spotrac_minor"] = True
+        entry["two_way"] = True
     return entry
 
 
@@ -254,9 +277,17 @@ def _parse_yearly_team_html(html: str, season_year: Optional[int] = None) -> Dic
     sit in a later tbody; the first table alone was stamping them as 1-year deals.
     """
     out: Dict[str, Dict[str, Any]] = {}
-    bodies = re.findall(r"<tbody[^>]*>(.*?)</tbody>", html or "", re.S)
+    text = html or ""
+    # (tbody, is_minor_table). The Minor table holds the AHL-assigned SPCs; without it
+    # every farmhand fell back to an estimated market-value deal and was charged as
+    # buried cap.
+    bodies: List[Tuple[str, bool]] = []
+    for m in re.finditer(r"<tbody[^>]*>(.*?)</tbody>", text, re.S):
+        table_at = text.rfind("<table", 0, m.start())
+        table_tag = text[table_at : text.find(">", table_at) + 1] if table_at >= 0 else ""
+        bodies.append((m.group(1), "minors" in table_tag.lower()))
     if not bodies:
-        bodies = [html or ""]
+        bodies = [(text, False)]
 
     def _keep(existing: Dict[str, Any], fresh: Dict[str, Any]) -> Dict[str, Any]:
         old_hits = existing.get("season_cap_hits") or []
@@ -265,15 +296,17 @@ def _parse_yearly_team_html(html: str, season_year: Optional[int] = None) -> Dic
             return fresh
         return existing
 
-    for tbody in bodies:
+    for tbody, is_minor in bodies:
         if "player/_/id/" not in tbody and "nhl/player/" not in tbody:
             continue
         for row in re.findall(r"<tr[^>]*>(.*?)</tr>", tbody, re.S):
-            entry = _parse_yearly_row(row, season_year)
+            entry = _parse_yearly_row(row, season_year, minor=is_minor)
             if entry is None:
                 continue
             key = entry.pop("name_key")
             existing = out.get(key)
+            if is_minor and existing is not None:
+                continue  # an NHL-table row for the same name wins
             if existing is None:
                 out[key] = entry
             elif isinstance(existing, list):

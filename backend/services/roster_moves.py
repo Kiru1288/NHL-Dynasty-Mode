@@ -316,6 +316,40 @@ def _waive_live(session: Any, team: Any, player: Any, reason: str) -> Dict[str, 
     }
 
 
+def _call_up_cap_block(session: Any, team: Any, league: Any, player: Any) -> Optional[str]:
+    """A recall has to fit under the cap: his full hit replaces the buried residual."""
+    try:
+        from app.sim_engine.economy.cap_engine import (
+            buried_cap_hit_millions,
+            player_cap_hit_millions,
+        )
+        from services.contract_economy import cap_books_for_session, get_team_cap_snapshot_full
+
+        books = cap_books_for_session(session)
+        if not books.get("in_season"):
+            return None  # offseason rosters are not held to the cap day to day
+        snap = get_team_cap_snapshot_full(
+            team,
+            league,
+            season_year=books["season_year"],
+            calendar_cursor=books["calendar_cursor"],
+            regular_season_last_index=books["regular_season_last_index"],
+            count_expiring=True,
+        )
+        full = float(player_cap_hit_millions(player) or 0.0)
+        residual = float(buried_cap_hit_millions(player, season_start_year=books["season_year"]) or 0.0)
+        added = max(0.0, full - residual)
+        space = float(snap.get("usable_cap_space_m") or 0.0)
+        if added > space + 1e-6:
+            return (
+                f"Calling him up adds ${added:.2f}M against the cap and you have "
+                f"${max(0.0, space):.2f}M of space. Clear room first."
+            )
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    return None
+
+
 def execute_roster_move(session: Any, body: Dict[str, Any]) -> Dict[str, Any]:
     from services.contract_economy import (
         bury_player_contract,
@@ -342,6 +376,10 @@ def execute_roster_move(session: Any, body: Dict[str, Any]) -> Dict[str, Any]:
         return {"ok": False, "reason": "Player not found on your organization"}
 
     result: Dict[str, Any]
+    if action in ("call_up_ahl", "call_up_junior"):
+        blocked = _call_up_cap_block(session, team, league, player)
+        if blocked:
+            return {"ok": False, "reason": blocked}
     if action == "call_up_ahl":
         if loc not in ("ahl", "echl") and not (
             loc == "nhl"

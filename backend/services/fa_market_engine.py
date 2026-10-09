@@ -31,6 +31,10 @@ STAR_FA_CAP_PER_TEAM = 1
 STAR_FA_CAP_RICH = 2  # clubs with a truly huge war chest may land a second
 
 
+#: Roster size CPU clubs keep room to reach while they bid in free agency.
+ROSTER_FILL_TARGET = 21
+
+
 def _team_star_fa_count(book: Dict[str, Any], tid: str) -> int:
     n = 0
     for e in (book.get("entries") or {}).values():
@@ -371,6 +375,60 @@ def _serious_cpu_offer_aav(
     return round(max(LEAGUE_MINIMUM_AAV_M, offer), 3)
 
 
+def _cpu_offer_vs_ask(
+    *,
+    ask: float,
+    ovr: float,
+    cap_space_m: float,
+    need: float,
+    window: str,
+    roster_count: int,
+    rng: Any,
+) -> Optional[float]:
+    """CPU bid anchored on the player's ask.
+
+    Bids used to start from fair value with a discount, so most landed 5-10% under
+    the ask and the user could win anyone by simply meeting it. Clubs now meet the
+    ask; a desperate club (a real hole, a short roster, a contender with need) goes
+    over it; rebuilders and cap-strapped clubs shade slightly under.
+    """
+    ask = max(LEAGUE_MINIMUM_AAV_M, float(ask or 0.0))
+    space = float(cap_space_m or 0.0)
+    desperate = need >= 0.6 or roster_count < 20 or (window == "contender" and need >= 0.45)
+    if window == "cap_strapped":
+        lo, hi = 0.95, 1.0
+    elif window == "rebuilder":
+        lo, hi = 0.97, 1.03
+    elif desperate:
+        lo, hi = 1.0, 1.15
+    else:
+        lo, hi = 0.99, 1.06
+    target = ask * rng.uniform(lo, hi)
+    offer = min(target, space * (0.98 if ovr >= 86 else 0.95))
+    # A club that cannot get close to the ask stays out instead of posting a
+    # number the player would laugh at.
+    if offer < ask * (0.9 if ovr >= 80 else 0.85):
+        return None
+    return round(max(LEAGUE_MINIMUM_AAV_M, offer), 3)
+
+
+def _user_pending_offer_aav(session: Any, pid: str) -> float:
+    """AAV of the user's pending (not yet answered) free-agent offer for this player."""
+    neg = (getattr(session, "resign_negotiations", None) or {}).get(str(pid))
+    if not isinstance(neg, dict):
+        return 0.0
+    pending = neg.get("pending_offer")
+    if not isinstance(pending, dict):
+        return 0.0
+    ctx = str(pending.get("context") or "").lower()
+    if ctx and ctx not in ("ufa", "free_agency", "fa"):
+        return 0.0
+    try:
+        return float(pending.get("aav_m") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _fa_lineup_gain(team: Any, player: Any) -> Optional[float]:
     try:
         from app.sim_engine.trades.lineup_impact import roster_delta  # noqa: WPS433
@@ -549,6 +607,17 @@ def _collect_cpu_offers(
                 continue  # can't put the cash up front this player insists on
             spendable = float(ctx.get("spendable_cap_space_m", ctx.get("cap_space_m", 0)) or 0)
             spendable -= max(0.0, committed_m.get(tid, 0.0) - prior_here)
+            # Keep room to fill the roster. Clubs used to sink all their space into
+            # one or two opening-day star bids and then sat at 13-17 players for
+            # weeks while those stars decided.
+            _on_roster = ctx.get("roster_count")
+            if _on_roster is None:
+                _on_roster = sum(int(v or 0) for v in (ctx.get("counts") or {}).values())
+            bodies_needed = max(
+                0,
+                ROSTER_FILL_TARGET - int(_on_roster or 0) - committed_n.get(tid, 0) + (1 if prior_here else 0),
+            )
+            spendable -= max(0, bodies_needed - 1) * LEAGUE_MINIMUM_AAV_M * 1.1
             if spendable < LEAGUE_MINIMUM_AAV_M * 1.02:
                 continue
 
@@ -587,16 +656,26 @@ def _collect_cpu_offers(
 
             fair = compute_fair_aav(player, team, league) or fair_base
             _ask_anchor = float(entry.get("ask_aav_m") or 0) or float(fair)
-            offer_aav = _serious_cpu_offer_aav(
-                fair=max(float(fair), _ask_anchor),
+            _on_roster_now = ctx.get("roster_count")
+            if _on_roster_now is None:
+                _on_roster_now = sum(int(v or 0) for v in (ctx.get("counts") or {}).values())
+            offer_aav = _cpu_offer_vs_ask(
+                ask=_ask_anchor,
                 ovr=ovr,
                 cap_space_m=spendable,
-                discount=discount,
+                need=need,
+                window=str(window or ""),
+                roster_count=int(_on_roster_now or 0),
                 rng=rng,
-                days_on_market=int(entry.get("days_on_market") or day),
             )
             if offer_aav is None:
                 continue
+            try:
+                from services.contract_economy import league_max_salary_m
+
+                offer_aav = round(min(float(offer_aav), league_max_salary_m(league)), 3)
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             if value_buy:
                 # Bargain bin: pay roughly his (already-softened) ask, not a bidding-war price.
                 ask_now = float(entry.get("ask_aav_m") or 0) or float(fair)
@@ -881,6 +960,13 @@ def _try_sign_leaning_players(
             ),
         )
         if not offers:
+            continue
+        # The user's pending offer is on the table too. If it is the best one, he
+        # waits for it to resolve instead of taking a lower CPU bid.
+        user_bid = _user_pending_offer_aav(session, str(entry.get("player_id") or ""))
+        if user_bid > 0 and user_bid >= float(offers[0].get("aav_m") or 0) - 1e-6:
+            entry["state"] = STATE_EVALUATING
+            entry["reason"] = "Leaning toward your offer"
             continue
 
         signed = False
@@ -1544,6 +1630,26 @@ def annotate_fa_rows_with_decisions(session: Any, rows: List[Dict[str, Any]]) ->
             r["market_offers"] = int(e.get("offer_count") or 0)
             r["best_offer_m"] = e.get("best_offer_m")
             r["ask_aav_m"] = e.get("ask_aav_m") or r.get("ask_aav_m") or r.get("asking_aav") or r.get("askingAav")
+            # Show the ask the player actually negotiates from (book ask, demand term,
+            # expected clause). The list used to show a different projected number.
+            _pl_terms = e.get("player_ref")
+            if _pl_terms is not None:
+                try:
+                    from services.contract_economy import fa_board_terms
+
+                    terms = fa_board_terms(
+                        _pl_terms,
+                        user_team,
+                        getattr(getattr(session, "sim", None), "league", None),
+                        board_ask_m=float(e.get("ask_aav_m") or 0.0),
+                        days_on_market=int(e.get("days_on_market") or 0),
+                    )
+                    r["ask_aav_m"] = terms["ask_aav_m"]
+                    r["askingAav"] = r["asking_aav"] = terms["ask_aav_m"]
+                    r["askingTerm"] = r["asking_term"] = terms["ask_years"]
+                    r["wants_clause"] = terms["wants_clause"]
+                except Exception:
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
             r["asking_aav_m"] = r.get("ask_aav_m")
             r["min_acceptable_aav_m"] = e.get("fair_aav_m")
             r["ideal_aav_m"] = e.get("ask_aav_m")

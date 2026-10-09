@@ -1371,6 +1371,16 @@ def _stage_handler(session: FranchiseSession, stage: str) -> Dict[str, Any]:
     return out
 
 
+def _refresh_cap_books(session: FranchiseSession) -> None:
+    """Stamp the current cap books on the league so CPU cap reads match the screens."""
+    try:
+        from services.contract_economy import cap_books_for_session
+
+        cap_books_for_session(session)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+
+
 def continue_offseason(
     session: FranchiseSession,
     *,
@@ -1396,6 +1406,7 @@ def continue_offseason(
         _swallowed_log.debug("suppressed exception", exc_info=True)
 
     _sync_phase_fields(session)
+    _refresh_cap_books(session)
     client_stage = str(from_stage or "").strip().lower()
 
     # Playoff hub "Continue to Awards" used to call this while phase was still
@@ -1650,7 +1661,7 @@ def build_free_agency_desk(session: FranchiseSession, *, open_market: bool = Fal
         "major_available": top,
         "free_agents": fa_list,
         "overseas_free_agents": overseas_list,
-        "market_news": news[-16:],
+        "market_news": _dedupe_news(news)[-16:],
         "cap_space_m": float(cap.get("usable_cap_space_m") or cap.get("cap_space_m") or 0),
         "cap_snapshot": cap,
         "contract_slots": office.get("contract_slots") or {},
@@ -1903,6 +1914,7 @@ def _tick_league_contracts(session: FranchiseSession) -> Dict[str, Any]:
                     continue
                 kept.append(p)
             setattr(team, attr, kept)
+        team._contract_year_burned = True
 
     # Refresh every club's cached cap mirrors (team.cap_space / total_cap_hit /
     # cap_snapshot) now that rosters changed — not just the user's team — so
@@ -6028,6 +6040,29 @@ def _warn_user_fa_holes(session: FranchiseSession) -> None:
     })
 
 
+def _dedupe_news(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The wire merges the signing log and the market log, which both carry each signing."""
+    seen: set = set()
+    out: List[Dict[str, Any]] = []
+    for row in items:
+        key = str((row or {}).get("text") or "")
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(row)
+    return out
+
+
+def _offer_sheet_payload(session: FranchiseSession) -> Dict[str, Any]:
+    try:
+        from services.contract_economy import list_offer_sheet_targets
+
+        return list_offer_sheet_targets(session)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+        return {"targets": [], "tiers": [], "max_term": 0}
+
+
 def _open_free_agency(session: FranchiseSession, *, force: bool = False) -> Dict[str, Any]:
     from services.contract_economy import (
         build_contract_office,
@@ -6043,6 +6078,7 @@ def _open_free_agency(session: FranchiseSession, *, force: bool = False) -> Dict
         tick_free_agency_market,
     )
 
+    _refresh_cap_books(session)
     window = own_fa_window_status(session)
     # Entering the Free Agency stage always opens the market (July 1). The
     # exclusive window is optional negotiating time on the re-sign desk — it must
@@ -6206,7 +6242,7 @@ def _open_free_agency(session: FranchiseSession, *, force: bool = False) -> Dict
         "major_available": top,
         "free_agents": fa_list,
         "overseas_free_agents": overseas_list,
-        "market_news": news[-16:],
+        "market_news": _dedupe_news(news)[-16:],
         "cap_space_m": (
             float(cap["usable_cap_space_m"])
             if cap.get("usable_cap_space_m") is not None
@@ -6220,6 +6256,7 @@ def _open_free_agency(session: FranchiseSession, *, force: bool = False) -> Dict
         "recent_league_signings": recent,
         "cpu_signings_count": len(list(cpu.get("signings") or [])),
         "decision_snapshot": decisions,
+        "offer_sheets": _offer_sheet_payload(session),
         "cap_release": dict(getattr(session, "fa_cap_release_note", None) or {}),
         "stage_status": "ready",
         "can_continue": True,
@@ -6390,6 +6427,47 @@ def advance_contract_negotiation_day(session: FranchiseSession, *, days: int = 1
         "re_sign": refreshed.get("re_sign") or refreshed.get("contracts"),
         "contracts": refreshed.get("contracts") or refreshed.get("re_sign"),
     }
+
+
+def _user_targets_lost_to_cpu(session: FranchiseSession, tick: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Players the user had an offer out to who signed with a CPU club this tick."""
+    neg_map = getattr(session, "resign_negotiations", None)
+    if not isinstance(neg_map, dict):
+        return []
+    user_tid = str(getattr(session, "user_team_id", "") or "")
+    lost: List[Dict[str, Any]] = []
+    for s in list(tick.get("signings") or []):
+        pid = str(s.get("player_id") or "")
+        if not pid or str(s.get("team_id") or "") == user_tid:
+            continue
+        entry = neg_map.get(pid)
+        pending = entry.get("pending_offer") if isinstance(entry, dict) else None
+        if not isinstance(pending, dict):
+            continue
+        ctx = str(pending.get("context") or "").lower()
+        if ctx and ctx not in ("ufa", "free_agency", "fa"):
+            continue
+        entry["status"] = "lapsed"
+        entry["pending_offer"] = None
+        name = str(s.get("name") or pid)
+        team = str(s.get("team_name") or s.get("team_abbrev") or "another club")
+        lost.append({
+            "player_id": pid,
+            "name": name,
+            "reason": "signed_elsewhere",
+            "signed_team_id": str(s.get("team_id") or ""),
+            "signed_team_name": team,
+            "signed_team_abbrev": str(s.get("team_abbrev") or ""),
+            "aav_m": s.get("aav_m"),
+            "years": s.get("years"),
+            "your_aav_m": pending.get("aav_m"),
+            "your_years": pending.get("years"),
+            "feedback": (
+                f"{name} signed with {team} · {s.get('aav_m')}M × {s.get('years')}y "
+                f"(your offer: {pending.get('aav_m')}M × {pending.get('years')}y)"
+            ),
+        })
+    return lost
 
 
 def resolve_user_fa_pending_offers(session: FranchiseSession, *, days: int = 1) -> Dict[str, Any]:
@@ -6565,6 +6643,19 @@ def advance_free_agency_day(session: FranchiseSession, *, days: int = 1) -> Dict
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
     tick = tick_free_agency_market(session, days=days)
+    try:
+        # CPU clubs settle the RFAs they held back for the offer-sheet window.
+        from services.contract_economy import run_cpu_rfa_decisions
+
+        _day_now = int(tick.get("day") or getattr(session, "fa_market_day", 0) or 0)
+        _late = run_cpu_rfa_decisions(session, fa_day=_day_now)
+        _prior = dict(getattr(session, "cpu_rfa_decisions", None) or {})
+        for _k in ("re_signed", "walked"):
+            _prior[_k] = list(_prior.get(_k) or []) + list(_late.get(_k) or [])
+            _prior[f"{_k}_count"] = len(_prior[_k])
+        session.cpu_rfa_decisions = _prior
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     session._last_fa_market_tick = tick
     refreshed = _open_free_agency(session, force=False)
     market = dict(refreshed.get("free_agency_market") or {})
@@ -6588,12 +6679,18 @@ def advance_free_agency_day(session: FranchiseSession, *, days: int = 1) -> Dict
                 f"({p.get('days_held')}/{p.get('resolve_days')} days) · {p.get('player_id')}"
             ),
         })
+    lost = _user_targets_lost_to_cpu(session, tick)
+    if lost:
+        user_resolve["rejected"] = list(user_resolve.get("rejected") or []) + lost
+        for row in lost:
+            wire.append({"kind": "lost", "text": row["feedback"]})
     market["market_news"] = wire[-24:]
     market["day_events"] = {
         "cpu_signings": len(tick.get("signings") or []),
         "new_offers": len(tick.get("offers") or []),
-        "recent_signings": list(tick.get("signings") or [])[:8],
+        "recent_signings": list(tick.get("signings") or []),
         "user_signings": list(user_resolve.get("signed") or []),
+        "user_lost": lost,
         "user_pending": list(user_resolve.get("still_pending") or []),
         "decision_snapshot": tick.get("decision_snapshot"),
         "days_advanced": days,
@@ -6724,6 +6821,13 @@ def _run_roster_cleanup(session: FranchiseSession, *, force: bool = False) -> Di
 
     offer_sheets = resolve_offer_sheets(session)
     session.offer_sheet_resolutions = offer_sheets
+    try:
+        # Any RFA a CPU club still holds is settled before camp.
+        from services.contract_economy import run_cpu_rfa_decisions
+
+        run_cpu_rfa_decisions(session, final=True)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     promo = run_prospect_promotion_pass(session)
     compliance = run_cap_compliance_pipeline(session, include_buyouts=True)
     # Trim first, then fill: relief can free the spots the floor pass needs.
@@ -7344,6 +7448,17 @@ def generate_next_season(session: FranchiseSession) -> Dict[str, Any]:
         _scrub_lines_of_departed_players(session)
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
+    try:
+        # Pending offer sheets and RFAs CPU clubs still hold are settled before
+        # camp (this used to live only in the unused roster-cleanup stage, so
+        # leftover sheets and rights never resolved).
+        from services.contract_economy import resolve_offer_sheets, run_cpu_rfa_decisions
+
+        session.offer_sheet_resolutions = resolve_offer_sheets(session)
+        run_cpu_rfa_decisions(session, final=True)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    _refresh_cap_books(session)
     sync_hub_compliance_warnings(session)
     run_cap_compliance_before_season(session)
 
@@ -7468,6 +7583,16 @@ def generate_next_season(session: FranchiseSession) -> Dict[str, Any]:
     # Season-scoped lifecycle flags that previously leaked across years.
     session._year_end_progression_done = False
     session.contracts_ticked = False
+    for _team in list(getattr(getattr(session.sim, "league", None), "teams", None) or []):
+        try:
+            _team._contract_year_burned = False
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    try:
+        # New season: drop the offseason books so cap reads go back to this year.
+        session.sim.league._session_cap_books = None
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     session.july1_contracts_expired = False
     session.development_report_done = False
     session.development_report_completed_season = 0

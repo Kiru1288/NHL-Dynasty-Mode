@@ -353,14 +353,35 @@ def pending_extension_cap_hit_millions(player: Any) -> float:
         return 0.0
 
 
+def contract_year_burned(team: Any) -> bool:
+    """True once this offseason's salary-cap stage has burned a contract year.
+
+    After the burn, ``years_remaining`` counts seasons from next season on, so a
+    deal at 1 year is next season's final year, not one that is expiring.
+    """
+    return bool(_get(team, "_contract_year_burned", False))
+
+
+def _off_next_season_books(player: Any, *, burned: bool) -> bool:
+    """Whether this deal is gone by opening night (ignoring a signed extension)."""
+    yrs = _contract_years_left(player)
+    if burned:
+        # Only deferred July-1 UFAs and dead deals are leaving now. Counting every
+        # 1-year deal as expiring wiped next season's final-year contracts (and
+        # every 1-year deal signed this summer) off the re-sign and FA books.
+        return yrs <= 0 or _is_pending_july1_expiry(player)
+    return yrs <= 1
+
+
 def team_following_season_active_cap_hit_millions(team: Any, *, include_expiring: bool = False) -> float:
     """Active-roster cap hit for the season after this one.
 
-    Final-year deals drop off. A signed extension replaces that hit with the
-    new AAV. Deals with term left keep their current hit.
+    Deals that end this summer drop off. A signed extension replaces that hit
+    with the new AAV. Deals with term left keep their current hit.
     """
     del include_expiring
     _dedupe_roster_attr(team, "roster")
+    burned = contract_year_burned(team)
     total = 0.0
     seen: set = set()
     for p in _iter_team_roster(team):
@@ -371,12 +392,8 @@ def team_following_season_active_cap_hit_millions(team: Any, *, include_expiring
         if key in seen:
             continue
         seen.add(key)
-        yrs = _contract_years_left(p)
-        ext_hit = pending_extension_cap_hit_millions(p)
-        if yrs <= 1 and ext_hit > 0:
-            total += ext_hit
-            continue
-        if yrs <= 1:
+        if _off_next_season_books(p, burned=burned):
+            total += pending_extension_cap_hit_millions(p)
             continue
         total += player_cap_hit_millions(p)
     return max(0.0, total)
@@ -438,6 +455,7 @@ def team_buried_cap_hit_millions(
     total = 0.0
     seen: set = set()
     relief = nhl_bury_threshold_millions(season_start_year) if season_start_year is not None else 1.15
+    burned = contract_year_burned(team)
     for p in _iter_org_contracted_players(team):
         if bool(_get(p, "retired", False)):
             continue
@@ -449,15 +467,12 @@ def team_buried_cap_hit_millions(
         if key in seen:
             continue
         seen.add(key)
-        if opening_day:
-            yrs = _contract_years_left(p)
-            ext_hit = pending_extension_cap_hit_millions(p)
+        if opening_day and _off_next_season_books(p, burned=burned):
             # A contract that dies this July does not bury against next year's cap.
-            if yrs <= 1 and ext_hit <= 0:
-                continue
-            if yrs <= 1 and ext_hit > 0:
+            ext_hit = pending_extension_cap_hit_millions(p)
+            if ext_hit > 0:
                 total += max(0.0, ext_hit - relief)
-                continue
+            continue
         total += buried_cap_hit_millions(p, season_start_year=season_start_year)
     return max(0.0, total)
 
@@ -838,17 +853,21 @@ def calculate_team_cap_snapshot(
     buyout_m = team_buyout_cap_hit_millions(team, season_label=season_label)
     bonus_overage_m = team_bonus_overage_millions(team, season_label=season_label)
     bonus_reserve_m = team_performance_bonus_reserve_millions(team)
-    if opening_day and bonus_reserve_m > 0:
+    if bonus_reserve_m > 0:
         # Last season's unearned ELC hold is released at year end. A reserve
         # with no season stamp, or a stamp for a year that already ended,
-        # must not keep taxing July cap space.
+        # must not keep taxing July cap space -- nor the next season's cap
+        # (it was still charging every club ~$1.3M after the year rolled).
         stamp = _get(team, "performance_bonus_reserve_season", None)
         stamp_y = 0
         try:
             stamp_y = int(stamp) if stamp is not None else 0
         except (TypeError, ValueError):
             stamp_y = 0
-        if season_y is None or stamp_y != int(season_y):
+        if opening_day:
+            if season_y is None or stamp_y != int(season_y):
+                bonus_reserve_m = 0.0
+        elif stamp_y and season_y is not None and stamp_y < int(season_y):
             bonus_reserve_m = 0.0
     ltir_pool_m = team_ltir_pool_millions(team)
     # Season-scoped pools (e.g. the opening-day allowance) expire when the season rolls.

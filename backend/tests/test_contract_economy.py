@@ -1408,7 +1408,12 @@ def test_cpu_rfa_pass_re_signs_valuable_player():
     _rfa_on_team(team, "rfa_star", 84, 23, "C", prev_aav=2.5)
 
     session = _cpu_session(team, league, user_tid="OTHER")
-    result = run_cpu_rfa_decisions(session)
+    # Opening Day: a notable RFA is qualified and held for the offer-sheet window.
+    opening = run_cpu_rfa_decisions(session)
+    assert opening["deferred_count"] == 1
+    assert len(team.rfa_rights) == 1
+    # The club settles him before camp.
+    result = run_cpu_rfa_decisions(session, final=True)
     assert result["re_signed_count"] == 1
     assert result["walked_count"] == 0
     assert any(_player_id(p) == "rfa_star" for p in team.roster)
@@ -1448,8 +1453,12 @@ def test_cpu_rfa_pass_leaves_no_stranded_rights():
         _rfa_on_team(team, f"rfa{i}", 72 + i, 22 + (i % 4), ("C", "LW", "RD", "G")[i % 4], prev_aav=1.0 + i * 0.3)
 
     session = _cpu_session(team, league, user_tid="OTHER")
-    result = run_cpu_rfa_decisions(session)
-    assert result["re_signed_count"] + result["walked_count"] == 6
+    opening = run_cpu_rfa_decisions(session)
+    result = run_cpu_rfa_decisions(session, final=True)
+    assert (
+        opening["re_signed_count"] + opening["walked_count"]
+        + result["re_signed_count"] + result["walked_count"]
+    ) == 6
     assert len(team.rfa_rights) == 0
 
 

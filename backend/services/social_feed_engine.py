@@ -1457,6 +1457,66 @@ def _gen_roster_moves(F: _Pass) -> None:
         posted += 1
 
 
+def _gen_fa_signings(F: _Pass) -> None:
+    """Free-agent signings (CPU and user) on the feed: insider, fans, the player."""
+    rows, seen = _seen(F.st, "fa_sign")
+    posted = 0
+    for s in list((getattr(F.session, "cpu_fa_signings", None) or {}).get("signings") or [])[-80:]:
+        if not isinstance(s, dict):
+            continue
+        pid = str(s.get("player_id") or "")
+        tid = str(s.get("team_id") or "")
+        key = f"{F.season}:{pid}:{tid}"
+        if not pid or key in seen:
+            continue
+        _mark_seen(F.st, "fa_sign", key)
+        seen.add(key)
+        if tid not in F.teams or posted >= 24:
+            continue
+        tm = F.team(tid)
+        info = F.pinfo(pid, str(s.get("name") or ""), team_id=tid)
+        name = info["name"] or str(s.get("name") or "")
+        if not name:
+            continue
+        aav = _sf(s.get("aav_m"))
+        yrs = _si(s.get("years"), 1)
+        ovr = _sf(s.get("overall")) or _sf(info.get("ovr"))
+        rng = F.rand("fa_sign", key)
+        star = _clamp(0.7 + max(0.0, ovr - 70.0) / 9.0, 0.6, 3.4)
+        user = tid == F.utid
+        when = F.stamp(F.iso, 9 * 60, 22 * 60, rng)
+        text = _pick(rng, [
+            f"SIGNED: {tm.get('abbr')} land {name} on a {_plural(yrs, 'year')} deal, {_money(aav)} AAV.",
+            f"Done deal: {name} to the {tm.get('nick')}. {yrs}x{_money(aav)}.",
+            f"Source: {name} has agreed with {tm.get('abbr')}. Term {yrs}, AAV {_money(aav)}.",
+        ])
+        _add_post(F, _insider(_pick(rng, ["ellison", "vargas", "reid"])), text, kind="fa_signing", cat="signing", when=when,
+                  team_ids=[tid], player_id=pid, player_name=name, mag=0.9 + 0.5 * user + max(0.0, ovr - 80) * 0.08,
+                  star=star, knowledge="confirmed")
+        posted += 1
+        if ovr >= 80 or user:
+            fan = _fan_account(F, tid, "homer", rng)
+            pool = [
+                f"{info['last'] or name} in {tm.get('fan')} colours. love it",
+                f"{_money(aav)} for {info['last'] or name}? fair price honestly",
+                f"GM cooked with this one. welcome {info['last'] or name}",
+                f"not sure about {yrs} years but the player is legit",
+            ]
+            if aav >= 7.0:
+                pool.append(f"{_money(aav)} a year... he better be a difference maker")
+            _add_post(F, fan, _pick(rng, pool), kind="fa_reaction", cat="signing",
+                      when=F.stamp(F.iso, 10 * 60, 23 * 60, rng), team_ids=[tid], player_id=pid, player_name=name,
+                      mag=0.5 + 0.2 * user, sentiment=0.5)
+        if ovr >= 82 or user:
+            acct = _player_account(F, {**info, "team_id": tid})
+            _add_post(F, acct, _pick(rng, [
+                f"Excited to join the {tm.get('nick')}. Can't wait to get to work.",
+                f"New chapter. Thank you to everyone who got me here. Let's go {tm.get('fan')}!",
+                f"Grateful for the opportunity in {tm.get('city')}. See you at camp.",
+            ]), kind="fa_player", cat="signing", when=F.stamp(F.iso, 12 * 60, 23 * 60, rng),
+                      team_ids=[tid], player_id=pid, player_name=name, mag=0.7 + 0.3 * user, star=star, sentiment=0.8)
+
+
 def _gen_trades(F: _Pass) -> None:
     league = getattr(getattr(F.session, "sim", None), "league", None)
     rows, seen = _seen(F.st, "trade")
@@ -1725,8 +1785,8 @@ def _games_on_day(session: Any, day_idx: int) -> List[Dict[str, Any]]:
     return out
 
 
-_DAY_GENERATORS = ("games", "daily", "streaks", "injuries", "trades", "moves", "stories", "demands", "rumors", "standings", "gov", "carry", "players")
-_EVENT_GENERATORS = ("injuries", "trades", "moves", "stories", "demands", "gov", "carry")
+_DAY_GENERATORS = ("games", "daily", "streaks", "injuries", "trades", "moves", "signings", "stories", "demands", "rumors", "standings", "gov", "carry", "players")
+_EVENT_GENERATORS = ("injuries", "trades", "moves", "signings", "stories", "demands", "gov", "carry")
 
 
 def run_social_feed_day(session: Any, day_idx: int, *, lines: Optional[Dict[str, Dict[str, Any]]] = None, events_only: bool = False) -> int:
@@ -1744,7 +1804,8 @@ def run_social_feed_day(session: Any, day_idx: int, *, lines: Optional[Dict[str,
         lines = {} if events_only else _day_lines(F)
     gens = {
         "games": (_gen_games, (F, games, lines)), "daily": (_gen_daily_thread, (F, games, lines)), "streaks": (_gen_streaks, (F, lines)),
-        "injuries": (_gen_injuries, (F,)), "trades": (_gen_trades, (F,)), "moves": (_gen_roster_moves, (F,)), "stories": (_gen_storylines, (F,)),
+        "injuries": (_gen_injuries, (F,)), "trades": (_gen_trades, (F,)), "moves": (_gen_roster_moves, (F,)),
+        "signings": (_gen_fa_signings, (F,)), "stories": (_gen_storylines, (F,)),
         "demands": (_gen_demands, (F,)), "rumors": (_gen_burner_rumors, (F,)), "standings": (_gen_standings, (F,)),
         "gov": (_gen_governance, (F,)), "carry": (_gen_carryover, (F,)), "players": (_gen_player_voices, (F, games, lines)),
     }
@@ -1877,6 +1938,8 @@ def _match_tab(item: Dict[str, Any], tab: str, utid: str) -> bool:
         return item.get("cat") in ("game", "analytics", "standings")
     if tab == "trades":
         return item.get("cat") == "trade"
+    if tab == "fa":
+        return item.get("cat") == "signing" or item.get("kind") in ("fa_signing", "fa_reaction", "fa_player")
     if tab == "players":
         return item.get("cat") == "players" or item.get("author_type") == "player"
     return True

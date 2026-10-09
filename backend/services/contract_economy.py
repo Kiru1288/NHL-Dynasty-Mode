@@ -21,7 +21,6 @@ import logging as _logging_swallow
 _swallowed_log = _logging_swallow.getLogger(__name__)
 
 CONTRACT_SCHEMA_VERSION = 2
-OFFER_SHEET_ELIGIBLE_AAV_CEILING_M = 3.613  # NHL Group-2 offer-sheet threshold (millions)
 OFFER_SHEET_MATCH_WINDOW_DAYS = 7
 DEFAULT_MNTC_TEAM_COUNT = 10
 
@@ -77,18 +76,12 @@ def _contract_ntc_fields_from_offer(offer: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def rfa_offer_sheet_eligible(player: Any, entry: Optional[Dict[str, Any]] = None) -> bool:
-    """Group-2 style gate: age ≥ 20 and prior salary below offer-sheet compensation floor."""
-    age = _player_age(player)
-    if age < 20:
-        return False
-    prev = 0.0
-    if isinstance(entry, dict):
-        prev = float(entry.get("previous_aav_m") or entry.get("qualifying_offer_aav_m") or 0.0)
-    if prev <= 0:
-        prev = float(player_cap_hit_millions(player) or 0.0)
-    if prev <= 0:
-        prev = float(compute_market_value(player, None) or LEAGUE_MINIMUM_AAV_M)
-    return prev < OFFER_SHEET_ELIGIBLE_AAV_CEILING_M
+    """Group-2 RFA: any restricted free agent who is not still a junior-age player.
+
+    The CBA does not cap the prior salary of an offer-sheet target; the old
+    $3.6M ceiling locked every established RFA out of offer sheets.
+    """
+    return _player_age(player) >= 20
 
 
 def _emit_contract_storyline(session: Any, text: str, *, kind: str = "contracts", severity: str = "medium") -> None:
@@ -181,6 +174,15 @@ def league_minimum_aav(league: Any = None) -> float:
         else:
             base = LEAGUE_MINIMUM_SCHEDULE_M.get(sy, base)
     return max(0.5, base + delta)
+
+
+def league_max_salary_m(league: Any = None) -> float:
+    """CBA maximum AAV for the season the books are on."""
+    try:
+        cap_ul = float(_league_salary_cap_upper_limit(league) or MARKET_VALUE_CAP_ANCHOR_M)
+    except Exception:
+        cap_ul = MARKET_VALUE_CAP_ANCHOR_M
+    return round(max_salary_share_of_cap(league) * cap_ul, 3)
 
 
 def cba_max_term(league: Any = None, *, own_team: bool = True) -> int:
@@ -1196,6 +1198,10 @@ def _apply_contract_type_truth(c: Dict[str, Any]) -> None:
     cap = float(c.get("cap_hit_m") or c.get("aav_m") or 0.0)
     ctype = str(c.get("type") or c.get("contract_type") or "STANDARD").upper()
     true_elc_cap = cap > 0 and abs(cap - ELC_AAV_M) <= ELC_AAV_TOLERANCE
+    if ctype == "ELC" and str(c.get("source") or "").startswith("real_nhl") and 0.5 <= cap <= 1.2:
+        # Real entry-level deals carry their actual hit ($929K, $942K...). Keep the
+        # ELC label (waiver exemption, slide) and the real number.
+        return
     if ctype == "ELC":
         if true_elc_cap:
             c["cap_hit_m"] = ELC_AAV_M
@@ -1628,6 +1634,25 @@ def cap_books_for_session(session: Any) -> Dict[str, Any]:
     except (TypeError, ValueError):
         sy = 2025
     cap_year = sy
+    if not in_season and bool(getattr(session, "next_season_generated", False)):
+        # The new league year already rolled (season reveal / preseason): this
+        # season's books are the real ones. Opening-day mode here dropped every
+        # deal in its final season and hid clubs that were over the cap.
+        books = {
+            "in_season": False,
+            "season_year": sy,
+            "count_expiring": True,
+            "opening_day": False,
+            "calendar_cursor": int(getattr(session, "calendar_cursor", 0) or 0),
+            "regular_season_last_index": int(getattr(session, "nhl_regular_season_last_index", 192) or 192),
+        }
+        try:
+            league = getattr(getattr(session, "sim", None), "league", None)
+            if league is not None:
+                league._session_cap_books = dict(books)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+        return books
     if not in_season:
         league = getattr(getattr(session, "sim", None), "league", None)
         sched = getattr(league, "cap_schedule_m", None) if league is not None else None
@@ -1637,7 +1662,7 @@ def cap_books_for_session(session: Any) -> Dict[str, Any]:
                     cap_year = sy + 1
             except (TypeError, ValueError):
                 pass
-    return {
+    books = {
         "in_season": in_season,
         "season_year": cap_year,
         "count_expiring": in_season,
@@ -1645,6 +1670,38 @@ def cap_books_for_session(session: Any) -> Dict[str, Any]:
         "calendar_cursor": int(getattr(session, "calendar_cursor", 0) or 0),
         "regular_season_last_index": int(getattr(session, "nhl_regular_season_last_index", 192) or 192),
     }
+    try:
+        league = getattr(getattr(session, "sim", None), "league", None)
+        if league is not None:
+            league._session_cap_books = dict(books)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    return books
+
+
+def offseason_books_snapshot(team: Any, league: Any) -> Optional[Dict[str, Any]]:
+    """Opening-day cap snapshot on the same books the offseason screens show.
+
+    Free-agent offers used to be checked against this season's cap while the
+    desk displayed next season's opening-day space, so the two disagreed.
+    Returns None during the season (the in-season snapshot is already right).
+    """
+    books = _get(league, "_session_cap_books", None)
+    if not isinstance(books, dict) or books.get("in_season") or not books.get("opening_day"):
+        return None
+    try:
+        return get_team_cap_snapshot_full(
+            team,
+            league,
+            season_year=books.get("season_year"),
+            calendar_cursor=int(books.get("calendar_cursor") or 0),
+            regular_season_last_index=int(books.get("regular_season_last_index") or 192),
+            count_expiring=False,
+            opening_day=True,
+        )
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+        return None
 
 
 def _phase_is_in_season(session: Any) -> bool:
@@ -1754,6 +1811,25 @@ def get_team_cap_snapshot_full(
     count_expiring: bool = False,
     opening_day: bool = False,
 ) -> Dict[str, Any]:
+    # Offseason: every snapshot is taken on the opening-day books the screens show
+    # (next season's cap, deals ending this summer off). CPU clubs were budgeting
+    # against the old cap and kept 10M+ of real room unspent, leaving rosters short.
+    books = _get(league, "_session_cap_books", None)
+    if (
+        isinstance(books, dict)
+        and books.get("opening_day")
+        and not books.get("in_season")
+        and not count_expiring
+        and not opening_day
+    ):
+        opening_day = True
+        if books.get("season_year"):
+            season_year = int(books["season_year"])
+    if season_year is None and isinstance(books, dict) and books.get("season_year"):
+        # No season given: use the books' season, not league.salary_cap_m (which
+        # lags a year until something asks for the new season).
+        season_year = int(books["season_year"])
+
     season_label = None
     if season_year is not None:
         season_label = f"{int(season_year)}-{(int(season_year) + 1) % 100:02d}"
@@ -3105,6 +3181,20 @@ def resolve_offer_sheet_tiers(current_cap_upper_limit: float) -> List[Dict[str, 
 
 
 def _league_salary_cap_upper_limit(league: Any) -> float:
+    # In the offseason the screens show next season's cap. Read that season's
+    # table value instead of league.salary_cap_m, which only flips to the new
+    # cap once some snapshot happens to ask for next season (so max salary and
+    # offer-sheet tiers changed depending on which screen loaded first).
+    books = _get(league, "_session_cap_books", None)
+    if isinstance(books, dict) and books.get("season_year"):
+        try:
+            from app.sim_engine.economy.cap_engine import nhl_upper_limit_millions
+
+            cap = float(nhl_upper_limit_millions(int(books["season_year"]), league))
+            if cap > 0:
+                return cap
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         from app.sim_engine.economy.cap_engine import normalize_money_to_millions
 
@@ -3131,7 +3221,14 @@ def refresh_offer_sheet_compensation_tiers(league: Any) -> List[Dict[str, Any]]:
 def _active_offer_sheet_tiers(league: Any = None) -> List[Dict[str, Any]]:
     if league is not None:
         cached = _get(league, "offer_sheet_compensation_tiers", None)
-        if isinstance(cached, list) and cached:
+        try:
+            same_cap = abs(
+                float(_get(league, "offer_sheet_compensation_cap_m", 0.0) or 0.0)
+                - float(_league_salary_cap_upper_limit(league))
+            ) < 1e-6
+        except (TypeError, ValueError):
+            same_cap = False
+        if isinstance(cached, list) and cached and same_cap:
             return list(cached)
         _league_salary_cap_upper_limit(league)
         return refresh_offer_sheet_compensation_tiers(league)
@@ -3871,6 +3968,14 @@ def run_waiver_claim_pass(
 
         claim_tid = str(_get(best_team, "team_id", "") or _get(best_team, "id", ""))
         _transfer_waiver_player(player, orig_team, best_team, league)
+        try:
+            # The claim lands on the NHL roster; the claimer makes room like a real club.
+            from app.sim_engine.trades.roster_balance import auto_send_down_overflow
+
+            auto_send_down_overflow(best_team, protect_ids=[str(entry.get("player_id") or "")])
+            sync_team_cap_fields(best_team, league)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         entry["claimed_by"] = claim_tid
         entry["waiver_status"] = "claimed"
         claims.append({
@@ -4021,7 +4126,13 @@ def run_cpu_buyout_pass(session: Any, *, max_buyouts: int = 8) -> Dict[str, Any]
     return {"buyouts": executed, "count": len(executed)}
 
 
-def run_cap_compliance_pipeline(session: Any, *, include_buyouts: bool = True) -> Dict[str, Any]:
+def run_cap_compliance_pipeline(
+    session: Any,
+    *,
+    include_buyouts: bool = True,
+    teams: Optional[List[Any]] = None,
+    cap_casualty_trades: bool = True,
+) -> Dict[str, Any]:
     """
     Cap order: exempt down -> bury -> waive -> claim pass -> clear/bury -> buyout
     -> recalc cap -> cap casualty trades -> final sync.
@@ -4041,7 +4152,8 @@ def run_cap_compliance_pipeline(session: Any, *, include_buyouts: bool = True) -
         "cap_casualty_trades": [],
     }
 
-    teams = list(_get(league, "teams", None) or [])
+    all_teams = list(_get(league, "teams", None) or [])
+    teams = list(teams) if teams is not None else all_teams
     for team in teams:
         tid = str(_get(team, "team_id", "") or _get(team, "id", ""))
 
@@ -4088,19 +4200,24 @@ def run_cap_compliance_pipeline(session: Any, *, include_buyouts: bool = True) -
                 key=lambda p: (_player_ovr(p), -player_cap_hit_millions(p)),
             )
             moved = False
-            for p in candidates:
-                if is_waiver_exempt(p, team, league):
-                    res = bury_player_contract(team, p, league, skip_waiver_check=True)
+            # First pass spares 80+ players; if every extra body is that good, the
+            # weakest one still has to go or the club opens the season at 24-25.
+            for ovr_guard in (80.0, 999.0):
+                for p in candidates:
+                    if is_waiver_exempt(p, team, league):
+                        res = bury_player_contract(team, p, league, skip_waiver_check=True)
+                        if res.get("ok"):
+                            report["exempt_sent_down"].append({"team_id": tid, "player_id": _player_id(p), **res})
+                            moved = True
+                            break
+                    if _player_ovr(p) >= ovr_guard:
+                        continue
+                    res = expose_player_to_waivers(team, p, league, reason="roster_trim", season_year=season_year)
                     if res.get("ok"):
-                        report["exempt_sent_down"].append({"team_id": tid, "player_id": _player_id(p), **res})
+                        report["waived"].append({"team_id": tid, "player_id": _player_id(p), **res})
                         moved = True
                         break
-                if _player_ovr(p) >= 80:
-                    continue
-                res = expose_player_to_waivers(team, p, league, reason="roster_trim", season_year=season_year)
-                if res.get("ok"):
-                    report["waived"].append({"team_id": tid, "player_id": _player_id(p), **res})
-                    moved = True
+                if moved:
                     break
             if not moved:
                 break
@@ -4175,8 +4292,9 @@ def run_cap_compliance_pipeline(session: Any, *, include_buyouts: bool = True) -
     for team in teams:
         sync_team_cap_fields(team, league, sim, season_year=season_year)
 
-    cap_pass = run_cpu_cap_casualty_trade_pass(session)
-    report["cap_casualty_trades"] = cap_pass.get("cap_casualty_trades") or []
+    if cap_casualty_trades:
+        cap_pass = run_cpu_cap_casualty_trade_pass(session)
+        report["cap_casualty_trades"] = cap_pass.get("cap_casualty_trades") or []
 
     for team in teams:
         sync_team_cap_fields(team, league, sim, season_year=season_year)
@@ -4407,6 +4525,49 @@ def compute_player_demand(
     }
 
 
+def fa_preferred_clause(ovr: float, years: int, security: float, days_unsigned: int = 0) -> str:
+    """Trade protection a player expects for this term. Stars / security-minded want clauses."""
+    if days_unsigned >= 25 and ovr >= 88:
+        # Late-market unsigned stars soften clause demands rather than stay unsigned forever.
+        return "NTC" if years >= 5 and security >= 0.7 else "None"
+    if years >= 5 and ovr >= 88 and security >= 0.45:
+        return "NMC"
+    if years >= 4 and ovr >= 84 and security >= 0.55:
+        return "NTC"
+    if years >= 5 and ovr >= 82 and security >= 0.75:
+        return "NTC"
+    if years >= 4 and 80 <= ovr < 88 and 0.40 <= security < 0.65:
+        return "M-NTC"
+    return "None"
+
+
+def fa_board_terms(
+    player: Any,
+    team: Any,
+    league: Any,
+    *,
+    board_ask_m: Optional[float] = None,
+    days_on_market: int = 0,
+) -> Dict[str, Any]:
+    """The ask the FA board shows: the same AAV, term and clause the player judges offers by.
+
+    The board used to show a separate projected ask, so offering the listed ask could
+    still land at 20-40 interest. Asks are also held to the CBA (max salary, UFA term).
+    """
+    demand = compute_player_demand(player, team, league, context="ufa", days_on_market=int(days_on_market or 0))
+    aav = float(board_ask_m or 0.0) or float(demand.get("want_aav_m") or 0.0)
+    try:
+        cap_ul = float(_league_salary_cap_upper_limit(league) or MARKET_VALUE_CAP_ANCHOR_M)
+    except Exception:
+        cap_ul = MARKET_VALUE_CAP_ANCHOR_M
+    max_sal = round(max_salary_share_of_cap(league) * cap_ul, 3)
+    aav = round(min(max(aav, league_minimum_aav(league)), max_sal), 3)
+    years = max(1, min(int(demand.get("want_years") or 1), cba_max_term(league, own_team=False)))
+    security = float((demand.get("profile") or {}).get("security_pref") or 0.5)
+    clause = fa_preferred_clause(_player_ovr(player), years, security, int(days_on_market or 0))
+    return {"ask_aav_m": aav, "ask_years": years, "wants_clause": clause}
+
+
 def evaluate_contract_offer(
     player: Any,
     team: Any,
@@ -4458,6 +4619,19 @@ def evaluate_contract_offer(
                 demand["min_acceptable_aav_m"] = min_acceptable
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
+        # A max-salary offer meets any ask; a max-term offer meets any term demand.
+        try:
+            _cap_ul = float(_league_salary_cap_upper_limit(league) or MARKET_VALUE_CAP_ANCHOR_M)
+            _max_sal = round(max_salary_share_of_cap(league) * _cap_ul, 3)
+            if want_aav > _max_sal:
+                min_acceptable = min(min_acceptable, _max_sal)
+                want_aav = _max_sal
+                demand["want_aav_m"] = want_aav
+                demand["min_acceptable_aav_m"] = min_acceptable
+            want_years = min(int(want_years), cba_max_term(league, own_team=False))
+            demand["want_years"] = want_years
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     prof = demand["profile"]
     security = float(prof["security_pref"])
     gamble = float(prof["gamble_pref"])
@@ -4471,20 +4645,8 @@ def evaluate_contract_offer(
         morale = 70.0
 
     # Preferred protection: stars / security-minded want real clauses.
-    # Late-market unsigned stars soften clause demands rather than stay unsigned forever.
     days_unsigned = int(offer.get("days_on_market") or getattr(player, "days_on_market", 0) or 0)
-    if days_unsigned >= 25 and ovr >= 88:
-        preferred_clause = "NTC" if years >= 5 and security >= 0.7 else "None"
-    elif years >= 5 and ovr >= 88 and security >= 0.45:
-        preferred_clause = "NMC"
-    elif years >= 4 and ovr >= 84 and security >= 0.55:
-        preferred_clause = "NTC"
-    elif years >= 5 and ovr >= 82 and security >= 0.75:
-        preferred_clause = "NTC"
-    elif years >= 4 and 80 <= ovr < 88 and 0.40 <= security < 0.65:
-        preferred_clause = "M-NTC"
-    else:
-        preferred_clause = "None"
+    preferred_clause = fa_preferred_clause(ovr, years, security, days_unsigned)
 
     # --- Continuous interest (0..100) ---
     # Cap hit is the number on the offer sheet (AAV plus amortized bonus).
@@ -4749,9 +4911,13 @@ def evaluate_contract_offer(
     cap_delta_m: Optional[float] = None
     in_season_cap = _phase_is_in_season(offer.get("_session") or offer.get("_franchise_session"))
     try:
-        snap = get_team_cap_snapshot_full(team, league, count_expiring=in_season_cap)
-        usable = float(snap["usable_cap_space_m"])
         ctx_l = str(context or "").lower()
+        snap = None
+        if not in_season_cap and ctx_l not in ("re_sign", "extension", "rfa"):
+            snap = offseason_books_snapshot(team, league)
+        if snap is None:
+            snap = get_team_cap_snapshot_full(team, league, count_expiring=in_season_cap)
+        usable = float(snap["usable_cap_space_m"])
         old_hit = max(0.0, float(player_cap_hit_millions(player)))
         if ctx_l in ("re_sign", "extension", "rfa") and old_hit > 0:
             yrs_left = max(0, int(_contract_years_remaining(player)))
@@ -5420,13 +5586,23 @@ def _validate_sign_cap(
                 hit_counted = True
             if old_hit > 0 and hit_counted:
                 needed = max(0.0, needed - old_hit)
-    return can_sign_player(
+    result = can_sign_player(
         team,
         needed,
         league=league,
         player=player,
         include_expiring=bool(in_season),
     )
+    if not on_team and not in_season:
+        snap = offseason_books_snapshot(team, league)
+        if snap is not None:
+            # No 23-man limit in the summer (only the 50-contract cap). The
+            # compliance pipeline trims to 23 before opening night; refusing here
+            # walked 80-OVR RFAs and stalled CPU free agency.
+            if float(snap.get("usable_cap_space_m") or 0.0) < needed:
+                return {"ok": False, "reason": "Insufficient usable cap space", "snapshot": snap.get("_raw")}
+            return {"ok": True, "reason": "ok", "snapshot": snap.get("_raw")}
+    return result
 
 
 def _find_player_in_league(league: Any, player_id: str) -> Tuple[Optional[Any], Optional[Any]]:
@@ -5944,6 +6120,15 @@ def sign_player_to_team(
         )
         if _gate is not None:
             return _gate
+    if _ctx not in ("bootstrap",) and offer.get("force"):
+        # Forced (CPU) signings skip the user-facing checks below, but the CBA
+        # salary bounds still apply: CPU clubs were handing out $25M AAVs.
+        _hi = league_max_salary_m(league)
+        _lo = league_minimum_aav(league)
+        if aav_m > _hi:
+            aav_m = _hi
+        elif aav_m < _lo and category not in ("elc", "entry_level"):
+            aav_m = round(_lo, 3)
     if _ctx not in ("bootstrap",) and not offer.get("force"):
         try:
             _cap_ul = float(_league_salary_cap_upper_limit(league) or MARKET_VALUE_CAP_ANCHOR_M)
@@ -6824,8 +7009,14 @@ def execute_buyout(team: Any, player: Any, league: Any, season_year: int) -> Dic
     buyouts = _get(team, "buyout_cap_hits", None)
     if not isinstance(buyouts, list):
         buyouts = []
+    start_year = int(season_year)
+    books = _get(league, "_session_cap_books", None)
+    if isinstance(books, dict) and books.get("opening_day") and books.get("season_year"):
+        # Summer buyouts hit the coming season first. Starting at the season that
+        # just ended threw away the first year of the penalty.
+        start_year = max(start_year, int(books["season_year"]))
     for i in range(int(est["years"])):
-        yr = int(season_year) + i
+        yr = start_year + i
         label = f"{yr}-{(yr + 1) % 100:02d}"
         buyouts.append({
             "season": label,
@@ -6932,13 +7123,7 @@ def execute_offer_sheet(
     if not entry:
         return {"ok": False, "reason": "RFA rights not found"}
     if not rfa_offer_sheet_eligible(player, entry):
-        return {
-            "ok": False,
-            "reason": (
-                f"Player not offer-sheet eligible (age ≥ 20 and prior AAV < "
-                f"${OFFER_SHEET_ELIGIBLE_AAV_CEILING_M:.3f}M required)"
-            ),
-        }
+        return {"ok": False, "reason": "Player not offer-sheet eligible (must be 20 or older)"}
 
     cap_hit = compute_prorated_cap_hit_m(aav_m, years, float(offer.get("signing_bonus_m") or 0))
     check = _validate_sign_cap(offering_team, cap_hit, league)
@@ -8373,7 +8558,22 @@ def run_cpu_in_season_free_agency(
     return {"signings": signings, "count": len(signings)}
 
 
-def run_cpu_rfa_decisions(session: Any) -> Dict[str, Any]:
+#: CPU RFAs at or above this OVR stay qualified-but-unsigned for the first days of
+#: free agency, so they can be offer-sheeted (by the user or another club).
+RFA_OFFER_SHEET_WINDOW_MIN_OVR = 75.0
+
+
+def _rfa_entry_has_live_sheet(entry: Dict[str, Any]) -> bool:
+    sheet = entry.get("offer_sheet_pending")
+    return isinstance(sheet, dict) and str(sheet.get("status") or "pending") == "pending"
+
+
+def run_cpu_rfa_decisions(
+    session: Any,
+    *,
+    fa_day: Optional[int] = None,
+    final: bool = False,
+) -> Dict[str, Any]:
     """Resolve every CPU team's restricted free agents each offseason.
 
     Without this pass, expiring RFAs are stripped off CPU rosters into `rfa_rights`
@@ -8391,6 +8591,7 @@ def run_cpu_rfa_decisions(session: Any) -> Dict[str, Any]:
 
     re_signed: List[Dict[str, Any]] = []
     walked: List[Dict[str, Any]] = []
+    deferred: List[Dict[str, Any]] = []
 
     for team in _get(league, "teams", None) or []:
         tid = str(_get(team, "team_id", "") or _get(team, "id", ""))
@@ -8399,6 +8600,36 @@ def run_cpu_rfa_decisions(session: Any) -> Dict[str, Any]:
         rights = list(_ensure_rfa_rights_list(team))
         if not rights:
             continue
+        # Offer-sheet window. Signing every RFA the moment the market opened left
+        # nobody to offer-sheet. Notable RFAs are qualified and stay unsigned for a
+        # few market days; a pending sheet is the rights team's match decision.
+        if not final:
+            due: List[Dict[str, Any]] = []
+            for entry in rights:
+                if _rfa_entry_has_live_sheet(entry):
+                    continue
+                player = entry.get("player_ref")
+                notable = player is not None and _player_ovr(player) >= RFA_OFFER_SHEET_WINDOW_MIN_OVR
+                if fa_day is None:
+                    if notable:
+                        entry["qualified"] = True
+                        entry["cpu_resolve_day"] = 3 + (
+                            _stable_seed("rfa-window", entry.get("player_id"), season_year) % 4
+                        )
+                        deferred.append({
+                            "team_id": tid,
+                            "player_id": str(entry.get("player_id") or ""),
+                            "resolve_day": entry["cpu_resolve_day"],
+                        })
+                        continue
+                elif int(entry.get("cpu_resolve_day") or 0) > int(fa_day):
+                    continue
+                due.append(entry)
+            rights = due
+            if not rights:
+                continue
+        else:
+            rights = [e for e in rights if not _rfa_entry_has_live_sheet(e)]
 
         # Re-evaluate need/cap once per team; the snapshot inside sign_player_to_team
         # keeps the hard cap/slot gates authoritative between individual signings.
@@ -8537,8 +8768,10 @@ def run_cpu_rfa_decisions(session: Any) -> Dict[str, Any]:
     return {
         "re_signed": re_signed,
         "walked": walked,
+        "deferred": deferred,
         "re_signed_count": len(re_signed),
         "walked_count": len(walked),
+        "deferred_count": len(deferred),
     }
 
 
@@ -8829,6 +9062,64 @@ def _apply_offer_sheet_decision(
     sync_team_cap_fields(rights_team, league)
     sheet["status"] = "signed_away"
     return {"ok": True, "outcome": "signed_away", "compensation": comp}
+
+
+def list_offer_sheet_targets(session: Any) -> Dict[str, Any]:
+    """Other clubs' unsigned RFAs the user can tender an offer sheet to."""
+    sim = getattr(session, "sim", None)
+    league = getattr(sim, "league", None)
+    user_tid = str(getattr(session, "user_team_id", "") or "")
+    targets: List[Dict[str, Any]] = []
+    if league is None:
+        return {"targets": targets, "tiers": [], "max_term": 0}
+    sheets_by_pid = {
+        str(sh.get("player_id") or ""): sh
+        for sh in list(_get(league, "pending_offer_sheets", None) or [])
+        if str(sh.get("status") or "pending") == "pending"
+    }
+    for team in _get(league, "teams", None) or []:
+        tid = str(_get(team, "team_id", "") or _get(team, "id", ""))
+        if not tid or tid == user_tid:
+            continue
+        for entry in list(_ensure_rfa_rights_list(team)):
+            player = entry.get("player_ref")
+            if player is None or not rfa_offer_sheet_eligible(player, entry):
+                continue
+            pid = _player_id(player)
+            sheet = sheets_by_pid.get(pid)
+            try:
+                demand = compute_player_demand(player, team, league, context="ufa")
+            except Exception:
+                demand = {}
+            market = float(demand.get("market_value_m") or compute_market_value(player, league) or 0.0)
+            targets.append({
+                "id": pid,
+                "player_id": pid,
+                "name": _player_name(player),
+                "position": _player_pos(player),
+                "age": _player_age(player),
+                "overall": round(_player_ovr(player)),
+                "potential": int(float((_get(player, "ratings", None) or {}).get("dev_potential", 0) or 0)) or None,
+                "status": "RFA",
+                "ufaOrRfa": "RFA",
+                "rights_team_id": tid,
+                "rights_team_name": str(_get(team, "name", "") or ""),
+                "rights_team_abbrev": _team_abbrev(team),
+                "previous_aav_m": round(float(entry.get("previous_aav_m") or 0.0), 3),
+                "qualifying_offer_aav_m": round(float(entry.get("qualifying_offer_aav_m") or 0.0), 3),
+                "market_value_m": round(market, 3),
+                "want_aav_m": round(float(demand.get("want_aav_m") or market), 3),
+                "want_years": int(demand.get("want_years") or 0) or None,
+                "offer_sheet_pending": bool(sheet),
+                "offer_sheet_by_user": bool(sheet and str(sheet.get("offering_team_id")) == user_tid),
+                "rights_team_decides_day": int(entry.get("cpu_resolve_day") or 0) or None,
+            })
+    targets.sort(key=lambda r: -float(r.get("overall") or 0))
+    return {
+        "targets": targets,
+        "tiers": _active_offer_sheet_tiers(league),
+        "max_term": cba_max_term(league, own_team=False),
+    }
 
 
 def run_cpu_offer_sheet_pass(session: Any, *, max_sheets: int = 4) -> Dict[str, Any]:
@@ -11214,6 +11505,23 @@ def handle_contract_action(session: Any, action: str, body: Dict[str, Any]) -> D
                     )
                 if status == "accepted":
                     mark_fa_player_signed(session, player_id)
+                    cpu_log = getattr(session, "cpu_fa_signings", None)
+                    if not isinstance(cpu_log, dict):
+                        cpu_log = {"signings": []}
+                        session.cpu_fa_signings = cpu_log
+                    cpu_log.setdefault("signings", []).append({
+                        "team_id": str(_get(user_team, "team_id", "") or _get(user_team, "id", "")),
+                        "team_name": str(_get(user_team, "name", "") or "Your club"),
+                        "team_abbrev": _team_abbrev(user_team),
+                        "player_id": str(player_id),
+                        "name": _player_name(player),
+                        "aav_m": round(float(body.get("aav_m") or 0), 3),
+                        "years": int(body.get("years") or 1),
+                        "position": _player_pos(player),
+                        "overall": round(_player_ovr(player)),
+                        "day": int(getattr(session, "fa_market_day", 0) or 0),
+                        "source": "user",
+                    })
             except Exception:
                 _swallowed_log.debug("suppressed exception", exc_info=True)
             # Always refresh FA board after a user offer so signed players leave the list.
@@ -11471,6 +11779,37 @@ def _fill_candidate_sort_key(player: Any) -> float:
     return -_player_ovr(player)
 
 
+def _fill_candidate_key_for_cap(team: Any, league: Any):
+    """Best recall that fits under the cap; if none fits, the cheapest one.
+
+    Sorting by OVR alone recalled the expensive veteran the cap pass had just
+    buried (his relief undone), so clubs looped over the cap at opening night.
+    """
+    try:
+        space = float(get_team_cap_snapshot_full(team, league)["usable_cap_space_m"])
+    except Exception:
+        space = None
+
+    def _added(p: Any) -> float:
+        full = float(player_cap_hit_millions(p) or 0.0)
+        try:
+            from app.sim_engine.economy.cap_engine import buried_cap_hit_millions
+
+            return max(0.0, full - float(buried_cap_hit_millions(p) or 0.0))
+        except Exception:
+            return full
+
+    def _key(p: Any):
+        if space is None:
+            return (0, -_player_ovr(p))
+        cost = _added(p)
+        if cost <= space + 1e-6:
+            return (0, -_player_ovr(p))
+        return (1, cost)
+
+    return _key
+
+
 def _strip_player_from_all_org_lists(league: Any, player: Any) -> None:
     """Remove a player from every NHL/AHL/ECHL/prospect list before reassignment."""
     pid = _player_id(player)
@@ -11640,8 +11979,24 @@ def run_roster_fill_pass(session: Any, *, teams: Optional[List[Any]] = None) -> 
                 if _matches(p) and (_get(p, "is_buried", False) or _get(p, "in_minors", False))
             ]
             moved = False
+            # One cap-aware ranking across buried NHL-list players and affiliates.
+            # Trying buried players first re-recalled the veteran the cap pass had
+            # just buried, undoing the relief every time.
+            cap_key = _fill_candidate_key_for_cap(team, league)
+            affiliate_best = None
+            for attr in ("ahl_roster", "echl_roster"):
+                aff = [
+                    p for p in (_get(team, attr, None) or [])
+                    if _matches(p) and uses_nhl_contract_slot(p)
+                ] or [p for p in (_get(team, attr, None) or []) if _matches(p)]
+                for p in aff:
+                    if affiliate_best is None or cap_key(p) < cap_key(affiliate_best[0]):
+                        affiliate_best = (p, attr)
             if buried:
-                buried.sort(key=_fill_candidate_sort_key)
+                buried.sort(key=cap_key)
+                if affiliate_best is not None and cap_key(affiliate_best[0]) < cap_key(buried[0]):
+                    buried = []
+            if buried:
                 pick = buried[0]
                 try:
                     pick.is_buried = False
@@ -11660,27 +12015,16 @@ def run_roster_fill_pass(session: Any, *, teams: Optional[List[Any]] = None) -> 
                 except Exception:
                     moved = False
 
-            if not moved:
-                for attr in ("ahl_roster", "echl_roster"):
-                    pool = [
-                        p for p in (_get(team, attr, None) or [])
-                        if _matches(p) and uses_nhl_contract_slot(p)
-                    ]
-                    if not pool:
-                        # Floor legality outranks two-way bookkeeping — promote any match.
-                        pool = [p for p in (_get(team, attr, None) or []) if _matches(p)]
-                    if not pool:
-                        continue
-                    pool.sort(key=_fill_candidate_sort_key)
-                    if _recall_affiliate_player(team, pool[0], league, attr):
-                        moved = True
-                        recalls.append({
-                            "team_id": tid,
-                            "player_id": _player_id(pool[0]),
-                            "source": attr,
-                            "need": need,
-                        })
-                        break
+            if not moved and affiliate_best is not None:
+                pick, attr = affiliate_best
+                if _recall_affiliate_player(team, pick, league, attr):
+                    moved = True
+                    recalls.append({
+                        "team_id": tid,
+                        "player_id": _player_id(pick),
+                        "source": attr,
+                        "need": need,
+                    })
 
             if not moved:
                 # Last resort: sign a cheap free agent so clubs can ice a legal roster.
@@ -11768,6 +12112,36 @@ def run_roster_fill_pass(session: Any, *, teams: Optional[List[Any]] = None) -> 
     }
 
 
+def _league_compliance_violations(session: Any) -> List[str]:
+    """Clubs that would open the season illegal: over the cap, over 23, or short."""
+    from services.roster_compliance import (
+        ACTIVE_ROSTER_MIN,
+        MIN_DEFENSE,
+        MIN_FORWARDS,
+        MIN_GOALIES,
+        summarize_team_roster_capacity,
+    )
+
+    league = getattr(getattr(session, "sim", None), "league", None)
+    out: List[str] = []
+    for team in _get(league, "teams", None) or []:
+        try:
+            snap = get_team_cap_snapshot_full(team, league, session.sim)
+            cap = summarize_team_roster_capacity(team)
+            if (
+                float(snap["usable_cap_space_m"]) < -0.01
+                or len(_active_roster(team)) > 23
+                or int(cap["nhl_count"]) < ACTIVE_ROSTER_MIN
+                or int(cap["goalies"]) < MIN_GOALIES
+                or int(cap["defense"]) < MIN_DEFENSE
+                or int(cap["forwards"]) < MIN_FORWARDS
+            ):
+                out.append(str(_get(team, "team_id", "") or _get(team, "id", "")))
+        except Exception:
+            continue
+    return out
+
+
 def run_cap_compliance_before_season(session: Any, *, allow_rebalance: bool = False) -> Dict[str, Any]:
     pipeline = run_cap_compliance_pipeline(session, include_buyouts=True)
     actions = []
@@ -11778,6 +12152,22 @@ def run_cap_compliance_before_season(session: Any, *, allow_rebalance: bool = Fa
     fill = run_roster_fill_pass(session)
     if fill.get("recall_count"):
         actions.append({"action": "affiliate_recalls", "count": fill["recall_count"]})
+    # Recalls add full cap hits after the cap pass ran, and waiver claims / cap
+    # trades land players on clubs that were already trimmed. Repeat cap pass +
+    # fill until every club is legal (23-man max, cap, position floors). A buried
+    # contract only frees the bury relief (~$1.3M), so a club well over the cap
+    # needs several passes.
+    league = getattr(session.sim, "league", None)
+    for _ in range(6):
+        bad_ids = set(_league_compliance_violations(session))
+        if not bad_ids:
+            break
+        bad = [
+            t for t in (_get(league, "teams", None) or [])
+            if str(_get(t, "team_id", "") or _get(t, "id", "")) in bad_ids
+        ]
+        run_cap_compliance_pipeline(session, include_buyouts=True, teams=bad, cap_casualty_trades=False)
+        run_roster_fill_pass(session, teams=bad)
     if allow_rebalance:
         league = getattr(session.sim, "league", None)
         season_year = int(getattr(session, "season_calendar_year", 2025) or 2025)

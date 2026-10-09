@@ -1076,6 +1076,50 @@ def _ensure_estimated_contract(player: Any, *, season_year: int, rng: Any = None
         _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
+def _clamp_estimated_contract_to_minor_level(player: Any, *, season_year: int) -> bool:
+    """An unmatched farmhand gets a two-way deal near the league minimum.
+
+    The market-value estimate is fine for an NHL regular we failed to match, but for
+    an AHL goalie it invented $3M+ deals (Merilainen) that were then charged to the
+    parent club as buried cap.
+    """
+    c = getattr(player, "contract", None)
+    src = str((c.get("source") if isinstance(c, dict) else getattr(c, "source", "")) or "")
+    if src != "estimated" and str(getattr(player, "contract_source", "") or "") != "estimated":
+        return False
+    try:
+        from app.sim_engine.economy.cap_engine import nhl_minimum_salary_millions
+        from services.contract_economy import apply_contract_to_player
+
+        floor = float(nhl_minimum_salary_millions(int(season_year)))
+        cur = float((c.get("aav_m") if isinstance(c, dict) else getattr(c, "aav_m", 0)) or 0.0)
+        aav = round(min(max(cur, floor), floor + 0.15), 3)
+        yrs = int((c.get("years_remaining") if isinstance(c, dict) else getattr(c, "years_remaining", 1)) or 1)
+        yrs = max(1, min(yrs, 2))
+        rights = str((c.get("rights_status") if isinstance(c, dict) else getattr(c, "rights_status", "")) or "UFA")
+        apply_contract_to_player(
+            player,
+            {
+                "aav_m": aav,
+                "cap_hit_m": aav,
+                "years": yrs,
+                "years_remaining": yrs,
+                "expiry_year": int(season_year) + yrs,
+                "contract_type": "STANDARD",
+                "two_way": True,
+                "minor_salary_m": 0.1,
+                "rights_status": rights,
+                "source": "estimated",
+                "is_nhl_spc": True,
+            },
+            int(season_year),
+        )
+        return True
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+        return False
+
+
 def _apply_real_contract(
     player: Any,
     *,
@@ -1898,6 +1942,8 @@ def import_real_minor_goalies(
     skip_ledger_finalize: bool = False,
     use_api: bool = True,
     min_ahl_goalies: int = 2,
+    league_names: Optional[set] = None,
+    contracts_by_team: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> int:
     """Stock each AHL affiliate with its real goalies.
 
@@ -1926,12 +1972,29 @@ def import_real_minor_goalies(
             nm = f"{_localized_name(row.get('firstName'))} {_localized_name(row.get('lastName'))}".strip()
             if nm:
                 api_rows[_norm_simple(nm)] = row
-    existing_names = set()
+    # League-wide, not just this org: the ratings file still lists some goalies under
+    # their old affiliate, which put the same person on two clubs (Poirier NJD+DAL,
+    # Stevenson WSH AHL + WPG).
+    existing_names = league_names if league_names is not None else set()
     for attr in ("roster", "ahl_roster", "echl_roster", "prospect_pool"):
         for p in list(getattr(team, attr, None) or []):
             nm = str(getattr(getattr(p, "identity", None), "name", "") or getattr(p, "name", "") or "")
             if nm:
                 existing_names.add(_norm_simple(nm))
+    contracts_by_team = contracts_by_team or {}
+    own_contracts = contracts_by_team.get(str(abbr or "").upper()) or {}
+
+    def _contract_elsewhere(key: str) -> bool:
+        if key in own_contracts:
+            return False
+        return any(key in (m or {}) for a, m in contracts_by_team.items() if a != str(abbr or "").upper())
+
+    def _own_contract(key: str) -> Optional[Dict[str, Any]]:
+        hit = own_contracts.get(key)
+        if isinstance(hit, list):
+            hit = hit[0] if len(hit) == 1 else None
+        return dict(hit) if isinstance(hit, dict) else None
+
     real_new: List[Any] = []
     for e in entries:
         raw = str(getattr(e, "raw_name", "") or "").strip()
@@ -1940,6 +2003,8 @@ def import_real_minor_goalies(
         key = _norm_simple(raw)
         if key in existing_names or any(_same_person_name(raw, existing) for existing in existing_names):
             continue
+        if _contract_elsewhere(key):
+            continue  # Spotrac has him under another organization
         first, last = raw.split(" ", 1)
         row = dict(api_rows.get(key) or {})
         if not row:
@@ -1970,6 +2035,7 @@ def import_real_minor_goalies(
                 dynasty_registry=dynasty_registry,
                 align_rounds=align_rounds,
                 skip_ledger_finalize=skip_ledger_finalize,
+                contract=_own_contract(key),
             )
         except Exception:
             continue
@@ -1979,6 +2045,7 @@ def import_real_minor_goalies(
             apply_dynasty_entry_to_player(player, e, seed=int(rng.random() * 1e9), align_rounds=align_rounds)
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
+        _clamp_estimated_contract_to_minor_level(player, season_year=int(season_year))
         try:
             from services.contract_economy import apply_contract_to_player, has_active_contract
 
@@ -2014,6 +2081,8 @@ def import_real_minor_goalies(
                 _same_person_name(key, existing) for existing in existing_names
             ):
                 continue
+            if _contract_elsewhere(key):
+                continue
             try:
                 by = int(str(row.get("birthDate") or "0")[:4] or 0)
             except ValueError:
@@ -2027,10 +2096,12 @@ def import_real_minor_goalies(
                     skater_stats_a={}, skater_stats_b={}, goalie_stats_a={}, goalie_stats_b={},
                     dynasty_registry=dynasty_registry, align_rounds=align_rounds,
                     skip_ledger_finalize=skip_ledger_finalize,
+                    contract=_own_contract(key),
                 )
             except Exception:
                 continue
             _ensure_estimated_contract(player, season_year=int(season_year), rng=rng)
+            _clamp_estimated_contract_to_minor_level(player, season_year=int(season_year))
             _assign_player_to_ahl(player, team)
             setattr(player, "real_minor_import", True)
             real_new.append(player)
@@ -2133,6 +2204,7 @@ def trim_team_roster_to_nhl_limit(
     team: Any,
     *,
     limit: int = NHL_OPENING_ROSTER_MAX,
+    season_year: Optional[int] = None,
 ) -> Dict[str, int]:
     """Keep <=23 on NHL roster; move the rest to team.ahl_roster."""
     roster = list(getattr(team, "roster", None) or [])
@@ -2147,6 +2219,8 @@ def trim_team_roster_to_nhl_limit(
     moved = 0
     for p in overflow:
         _assign_player_to_ahl(p, team)
+        if season_year is not None:
+            _clamp_estimated_contract_to_minor_level(p, season_year=int(season_year))
         # Avoid duplicates if already queued.
         if p not in team.ahl_roster:
             team.ahl_roster.append(p)
@@ -2459,6 +2533,7 @@ def build_real_nhl_league_players(
     except Exception:  # pragma: no cover
         _norm_name = lambda s: str(s or "").strip().lower()  # noqa: E731
 
+    minor_goalie_queue: List[Tuple[Any, str]] = []
     for team in teams:
         abbr = str(
             getattr(team, "abbreviation", None)
@@ -2558,28 +2633,10 @@ def build_real_nhl_league_players(
             count += 1
             imported += 1
 
-        trim_info = trim_team_roster_to_nhl_limit(team)
+        trim_info = trim_team_roster_to_nhl_limit(team, season_year=sy)
         per_team[abbr] = int(trim_info.get("nhl") or len(team.roster))
         sent_to_ahl += int(trim_info.get("sent_to_ahl") or 0)
-        try:
-            import_real_minor_goalies(
-                team,
-                abbr,
-                league=league,
-                rng=rng,
-                season_year=sy,
-                as_of=as_of,
-                dynasty_registry=dynasty_registry,
-                align_rounds=align_rounds,
-                skip_ledger_finalize=skip_ledger_finalize,
-                use_api=not fast_import,
-            )
-        except Exception as e:  # noqa: BLE001
-            failures.append(f"{abbr} AHL goalie import failed: {e}")
-        try:
-            _drop_org_name_duplicates(team)
-        except Exception:
-            _swallowed_log.debug("suppressed exception", exc_info=True)
+        minor_goalie_queue.append((team, abbr))
 
         # Spotrac dead money (buyouts / retained) — previously never imported, so
         # clubs looked ~$5M too loose vs CapFriendly/Spotrac once AAVs were fixed.
@@ -2605,6 +2662,39 @@ def build_real_nhl_league_players(
                     reverse=True,
                 )[:12]
                 team.state.competitive_score = sum(ovrs) / len(ovrs) if ovrs else 0.5
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+
+    # Minor goalies go in after every NHL roster exists, checked against the whole
+    # league, so a goalie the ratings file still lists under an old affiliate is not
+    # created a second time.
+    league_names: set = set()
+    for t in teams:
+        for attr in ("roster", "ahl_roster", "echl_roster", "prospect_pool"):
+            for p in list(getattr(t, attr, None) or []):
+                nm = str(getattr(getattr(p, "identity", None), "name", "") or getattr(p, "name", "") or "")
+                if nm:
+                    league_names.add(_norm_simple(nm))
+    for team, abbr in minor_goalie_queue:
+        try:
+            import_real_minor_goalies(
+                team,
+                abbr,
+                league=league,
+                rng=rng,
+                season_year=sy,
+                as_of=as_of,
+                dynasty_registry=dynasty_registry,
+                align_rounds=align_rounds,
+                skip_ledger_finalize=skip_ledger_finalize,
+                use_api=not fast_import,
+                league_names=league_names,
+                contracts_by_team=contracts_by_team,
+            )
+        except Exception as e:  # noqa: BLE001
+            failures.append(f"{abbr} AHL goalie import failed: {e}")
+        try:
+            _drop_org_name_duplicates(team)
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
 

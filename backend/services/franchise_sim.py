@@ -25158,14 +25158,20 @@ def _recompute_free_agent_stock(p: Any, session: Any, *, persist: bool = True) -
     prev_ovr = float(prior.get("_ovr_snapshot", ovr))
     dev_delta = round(ovr - prev_ovr, 1)
 
-    market_value = float(LEAGUE_MINIMUM_AAV_M)
+    try:
+        from services.contract_economy import league_minimum_aav
+
+        floor_m = float(league_minimum_aav(getattr(getattr(session, "sim", None), "league", None)))
+    except Exception:
+        floor_m = float(LEAGUE_MINIMUM_AAV_M)
+    market_value = floor_m
     try:
         from services.contract_economy import compute_market_value
 
         market_value = float(compute_market_value(p, getattr(getattr(session, "sim", None), "league", None)))
     except Exception:
-        market_value = round(max(LEAGUE_MINIMUM_AAV_M, (ovr - 58) * 0.14) * (0.85 + perf * 0.5), 3)
-    market_value = max(LEAGUE_MINIMUM_AAV_M, round(market_value, 3))
+        market_value = round(max(floor_m, (ovr - 58) * 0.14) * (0.85 + perf * 0.5), 3)
+    market_value = max(floor_m, round(market_value, 3))
     prev_market = float(prior.get("current_market_value", market_value))
 
     # Leverage compresses the ask toward the league minimum for low-OVR / no-leverage FAs
@@ -25174,12 +25180,12 @@ def _recompute_free_agent_stock(p: Any, session: Any, *, persist: bool = True) -
     ask_rng = random.Random(_fa_seed(pid, season_year, "ask"))
     base_ask, base_term = _free_agent_asking_terms(float(ovr), age, ask_rng, pos)
     # Anchor to live market value so depth FAs ask near the minimum, not stale $3M.
-    anchor = max(LEAGUE_MINIMUM_AAV_M, min(float(base_ask), market_value * 1.08))
-    premium = anchor * (0.9 + perf * 0.35) - LEAGUE_MINIMUM_AAV_M
-    asking = round(LEAGUE_MINIMUM_AAV_M + max(0.0, premium) * (0.2 + 0.8 * lev), 3)
+    anchor = max(floor_m, min(float(base_ask), market_value * 1.08))
+    premium = anchor * (0.9 + perf * 0.35) - floor_m
+    asking = round(floor_m + max(0.0, premium) * (0.2 + 0.8 * lev), 3)
     if ovr < 75:
-        asking = min(asking, LEAGUE_MINIMUM_AAV_M + 0.95 + max(0.0, ovr - 65.0) * 0.08)
-    asking = max(LEAGUE_MINIMUM_AAV_M, asking)
+        asking = min(asking, floor_m + 0.95 + max(0.0, ovr - 65.0) * 0.08)
+    asking = max(floor_m, asking)
     term = max(1, int(round(1 + lev * (base_term - 1))))
     prev_ask = float(prior.get("asking_aav", asking))
 
@@ -25269,6 +25275,55 @@ def _fa_list_stat(season_stats: Dict[str, Any]) -> Dict[str, Any]:
     return {"is_goalie": False, "gp": s.get("gp", 0), "points": s.get("points", 0)}
 
 
+def _fa_nhl_season_line(p: Any, session: Any) -> Optional[Dict[str, Any]]:
+    """The NHL club and stat line a free agent just played for, if he played this season.
+
+    A UFA who walked from an NHL roster was shown with an invented KHL/SHL "current
+    team" and projected numbers instead of the season he actually had.
+    """
+    if session is None:
+        return None
+    pid = str(getattr(p, "id", "") or "")
+    row = (getattr(session, "player_season_stats", None) or {}).get(pid)
+    if not isinstance(row, dict) or int(row.get("gp") or 0) <= 0:
+        return None
+    tid = str(row.get("team_id") or "")
+    team = (getattr(session, "team_by_id", None) or {}).get(tid)
+    if team is None:
+        return None
+    gp = int(row.get("gp") or 0)
+    is_goalie = _pos_str(p) == "G"
+    if is_goalie:
+        sa = float(row.get("shots_against") or row.get("goalie_shots_against") or 0)
+        ga = float(row.get("goalie_ga") or row.get("ga") or 0)
+        toi_h = float(row.get("toi_sec") or 0) / 3600.0
+        line = {
+            "is_goalie": True,
+            "gp": gp,
+            "wins": int(row.get("w") or 0),
+            "save_pct": round((sa - ga) / sa, 3) if sa > 0 else None,
+            "gaa": round(ga / toi_h, 2) if toi_h > 0 else None,
+            "shutouts": int(row.get("so") or 0),
+        }
+    else:
+        pts = int(row.get("pts") or (int(row.get("g") or 0) + int(row.get("a") or 0)))
+        line = {
+            "is_goalie": False,
+            "gp": gp,
+            "goals": int(row.get("g") or 0),
+            "assists": int(row.get("a") or 0),
+            "points": pts,
+            "ppg": round(pts / gp, 2) if gp else 0.0,
+            "shots": int(row.get("sog") or 0),
+            "plus_minus": int(row.get("plus_minus") or 0),
+        }
+    return {
+        "team_name": _display_team(team),
+        "team_abbrev": _team_abbr(team, tid),
+        "line": line,
+    }
+
+
 def _build_free_agent_row(p: Any, season_year: int, session: Any = None, *, detail: bool = False) -> Dict[str, Any]:
     """Build a free-agent row.
 
@@ -25279,12 +25334,11 @@ def _build_free_agent_row(p: Any, season_year: int, session: Any = None, *, deta
     age = _player_age_int(p)
     ovr = round(_player_ovr99(p))
     pos = _pos_str(p)
-    try:
-        from services.contract_economy import resolved_rights_status
-
-        fa_rights = resolved_rights_status(p)
-    except Exception:
-        fa_rights = "RFA" if age < 27 else "UFA"
+    # Nobody holds a pool free agent's rights, so he is unrestricted: anyone can
+    # sign him with no compensation. (Labelling young FAs "RFA" by age alone
+    # suggested an offer-sheet / qualifying-offer process that does not apply.)
+    # Real RFAs still held by a club are listed separately as offer-sheet targets.
+    fa_rights = "UFA"
     ident = getattr(p, "identity", None)
     meta = getattr(p, "_franchise_assignment", None) or {}
     pot = getattr(p, "ratings", None) or {}
@@ -25331,6 +25385,12 @@ def _build_free_agent_row(p: Any, season_year: int, session: Any = None, *, deta
     ask = float(stock.get("asking_aav") or LEAGUE_MINIMUM_AAV_M)
     term = int(stock.get("asking_term") or 1)
     season_stats = stats.get("season_stats") or {}
+    nhl = _fa_nhl_season_line(p, session)
+    if nhl is not None:
+        cur_team = nhl["team_name"]
+        cur_league = "NHL"
+        season_stats = nhl["line"]
+        row["previous_team_abbrev"] = nhl["team_abbrev"]
 
     if not detail:
         # Slim list row: identity + columns + trend/ask only.
@@ -25352,7 +25412,7 @@ def _build_free_agent_row(p: Any, season_year: int, session: Any = None, *, deta
     row.update({
         "current_league": cur_league,
         "current_team": cur_team,
-        "league_level": stats.get("league_level"),
+        "league_level": "nhl" if nhl is not None else stats.get("league_level"),
         "season": season_year,
         "stat_scope": "season_to_date",
         "stat_projected": True,

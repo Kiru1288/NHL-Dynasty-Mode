@@ -9,9 +9,10 @@ import PlayerHeadshot from "../components/PlayerHeadshot";
 import TeamLogoBadge from "../components/ui/TeamLogoBadge";
 import { ensurePlayerHeadshotFields } from "../utils/playerHeadshots";
 import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
+import "./shared/edraftSkin.css";
 import "./freeAgency/FreeAgencyBoard.css";
 import NegotiationMeetingPanel from "../components/contracts/NegotiationMeetingPanel";
-import { getContractOffice, reSignContract, qualifyRfa, releaseRfaRights, evaluateContractOffer, prospectRightsDecision, previewElcOffer, submitElcOffer, fileArbitration, settleArbitration, matchOfferSheet, declineOfferSheet, advanceFreeAgencyDay, advanceContractNegotiationDay, signFreeAgent, getFreeAgentDetail, getFreeAgencyDesk } from "../services/franchiseService";
+import { getContractOffice, reSignContract, qualifyRfa, releaseRfaRights, evaluateContractOffer, prospectRightsDecision, previewElcOffer, submitElcOffer, fileArbitration, settleArbitration, matchOfferSheet, declineOfferSheet, submitOfferSheet, advanceFreeAgencyDay, advanceContractNegotiationDay, signFreeAgent, getFreeAgentDetail, getFreeAgencyDesk, getSocialFeed } from "../services/franchiseService";
 import { estimateOfferInterestM, maxNegotiationOfferAavM, projectNegotiationCap } from "../utils/contractNegotiation";
 import { formatMoney, formatPick, getPlayerName, getPlayerOverall, getPlayerPosition, pickFranchiseData, safeArray } from "./shared/eventHelpers";
 
@@ -1775,6 +1776,109 @@ function sortValue(row, key) {
   return 0;
 }
 
+function dedupeWire(items) {
+  const seen = new Set();
+  const out = [];
+  for (const n of safeArray(items)) {
+    const key = String(n?.text || `${n?.team_id}|${n?.player_id}|${n?.aav_m}`);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(n);
+  }
+  return out;
+}
+
+function FaSigningRow({ prefix, row, tone }) {
+  const abbrev = row.team_abbrev || "";
+  return (
+    <div className={`${prefix}-day-row${tone ? ` is-${tone}` : ""}`}>
+      <TeamLogoBadge
+        teamLogo={resolveFranchiseTeamLogo(
+          { abbrev, team_abbrev: abbrev, name: row.team_name },
+          row.team_name || abbrev
+        )}
+        teamName={row.team_name || abbrev}
+        size={26}
+        variant="circle"
+      />
+      <div className={`${prefix}-day-main`}>
+        <strong>{row.name || row.player_id}</strong>
+        <em>
+          {[row.position, row.overall ? `${row.overall} OVR` : null].filter(Boolean).join(" · ")}
+          {" → "}
+          {row.team_name || abbrev || "—"}
+        </em>
+      </div>
+      <span className={`${prefix}-day-terms`}>
+        {row.aav_m != null ? formatMoney(row.aav_m) : "—"}
+        <i>× {row.years || "?"}y</i>
+      </span>
+    </div>
+  );
+}
+
+function FaSocialPost({ prefix, post }) {
+  const name = post.author_name || "Puckr";
+  const handle = post.handle || "";
+  const color = post.author_color || null;
+  const verified = Boolean(post.verified);
+  const initials = String(name)
+    .split(/\s+/)
+    .map((w) => w[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
+  return (
+    <article className={`${prefix}-social-post`}>
+      <span className={`${prefix}-social-avatar`} style={color ? { background: color } : undefined}>
+        {initials}
+      </span>
+      <div>
+        <header>
+          <strong>{name}</strong>
+          {verified ? <i className={`${prefix}-social-check`}>✓</i> : null}
+          <span>{handle}</span>
+          {post.time ? <span>· {post.time}</span> : null}
+        </header>
+        <p>{post.text}</p>
+      </div>
+    </article>
+  );
+}
+
+function rightsTag(row) {
+  const s = String(row?.ufaOrRfa || row?.status || row?.expiry_status || "").toUpperCase();
+  if (s.includes("RFA")) return "RFA";
+  if (s.includes("UFA")) return "UFA";
+  return null;
+}
+
+function RightsBadge({ prefix, row }) {
+  const tag = rightsTag(row);
+  if (!tag) return null;
+  return (
+    <span
+      className={`${prefix}-rights-badge is-${tag.toLowerCase()}`}
+      title={
+        tag === "RFA"
+          ? "Restricted free agent: his club holds his rights (offer sheet / qualifying offer)"
+          : "Unrestricted free agent: free to sign anywhere"
+      }
+    >
+      {tag}
+    </span>
+  );
+}
+
+function offerSheetCompensation(tiers, aavM) {
+  const aav = Number(aavM) || 0;
+  const sorted = safeArray(tiers)
+    .filter((t) => t && t.tier !== "none")
+    .sort((a, b) => Number(b.aav_floor_m || 0) - Number(a.aav_floor_m || 0));
+  const hit = sorted.find((t) => aav >= Number(t.aav_floor_m || 0));
+  return hit ? hit.label || safeArray(hit.rounds).join(", ") : "No compensation";
+}
+
 export function FreeAgencyEventMenu({
   franchiseState = {},
   eventData = {},
@@ -1831,11 +1935,16 @@ export function FreeAgencyEventMenu({
   const [offerAav, setOfferAav] = React.useState("");
   const [offerYears, setOfferYears] = React.useState("2");
   const [offerNtc, setOfferNtc] = React.useState(false);
-  const [offerNtcMode, ] = React.useState("NONE");
+  const [offerNtcModified, setOfferNtcModified] = React.useState(false);
   const [offerNmc, setOfferNmc] = React.useState(false);
+  const offerNtcMode = offerNmc ? "NONE" : offerNtc ? (offerNtcModified ? "MODIFIED" : "FULL") : "NONE";
   const [offerBonus, setOfferBonus] = React.useState("0");
   const [contractCategory, setContractCategory] = React.useState("nhl_one_way");
   const [faMeetingRev, setFaMeetingRev] = React.useState(0);
+  const [railTab, setRailTab] = React.useState("today");
+  const [dayReport, setDayReport] = React.useState(null);
+  const [socialRev, setSocialRev] = React.useState(0);
+  const [social, setSocial] = React.useState({ posts: [], loading: false, error: "" });
 
   // Stale empty market payloads (version stamped, 0 agents) left the Wire blank.
   // Always refresh from the desk so overseas / July 1 pools appear.
@@ -1863,6 +1972,22 @@ export function FreeAgencyEventMenu({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  React.useEffect(() => {
+    if (railTab !== "social") return undefined;
+    let cancelled = false;
+    setSocial((prev) => ({ ...prev, loading: true, error: "" }));
+    getSocialFeed(franchiseState?.session_id, { tab: "fa" })
+      .then((feed) => {
+        if (!cancelled) setSocial({ posts: safeArray(feed?.puckr), loading: false, error: "" });
+      })
+      .catch(() => {
+        if (!cancelled) setSocial((prev) => ({ ...prev, loading: false, error: "Couldn't load the feed." }));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [railTab, socialRev, franchiseState?.session_id]);
+
   const bonus = market.signing_bonus || {};
   const bonusAllowed = Boolean(bonus.eligible);
   const recent = safeArray(market.recent_league_signings);
@@ -1872,10 +1997,34 @@ export function FreeAgencyEventMenu({
     capSnap.usable_cap_space_m ?? market.cap_space_m ?? 0
   );
   const slots = market.contract_slots || {};
+  const offerSheetInfo = market.offer_sheets || {};
+  const sheetTargets = React.useMemo(
+    () => safeArray(market?.offer_sheets?.targets).map((t) => ({ ...t, _offerSheet: true })),
+    [market]
+  );
   const selected =
-    rows.find((p) => String(p.player_id || p.id) === String(selectedId)) || null;
+    (filter === "offersheet" ? sheetTargets : rows).find(
+      (p) => String(p.player_id || p.id) === String(selectedId)
+    ) ||
+    rows.find((p) => String(p.player_id || p.id) === String(selectedId)) ||
+    null;
+  const isOfferSheet = Boolean(selected?._offerSheet);
+  const minSalaryM = Number(bonus.min_salary_m || 0.85);
+  // The detail payload carries a projected ask; the board row carries the live
+  // market ask the player negotiates from. Keep the board's ask fields.
   const deskPlayer = faDetail?.free_agent
-    ? { ...selected, ...faDetail.free_agent }
+    ? {
+        ...selected,
+        ...faDetail.free_agent,
+        askingAav: selected?.askingAav,
+        asking_aav: selected?.asking_aav,
+        ask_aav_m: selected?.ask_aav_m,
+        askingTerm: selected?.askingTerm,
+        asking_term: selected?.asking_term,
+        wants_clause: selected?.wants_clause,
+        bonus_demand_label: selected?.bonus_demand_label,
+        bonus_demand_pct: selected?.bonus_demand_pct,
+      }
     : selected;
 
   React.useEffect(() => {
@@ -1886,6 +2035,10 @@ export function FreeAgencyEventMenu({
     }
     let cancelled = false;
     setFaDetail(null);
+    if (filter === "offersheet") {
+      setFaDetailLoading(false);
+      return undefined;
+    }
     setFaDetailLoading(true);
     getFreeAgentDetail(selectedId)
       .then((res) => {
@@ -1900,17 +2053,29 @@ export function FreeAgencyEventMenu({
     return () => {
       cancelled = true;
     };
-  }, [selectedId]);
+  }, [selectedId, filter]);
 
   React.useEffect(() => {
     if (!selected) return;
     const ask =
-      selected.askingAav ?? selected.asking_aav_m ?? selected.ask_aav_m ?? selected.asking_price;
+      selected.askingAav ??
+      selected.asking_aav_m ??
+      selected.ask_aav_m ??
+      selected.asking_price ??
+      selected.want_aav_m;
     setOfferAav(ask != null ? String(Number(ask).toFixed(3)) : "1.000");
-    setOfferYears(String(selected.askingTerm || selected.asking_term || 2));
-    setOfferNtc(false);
-    setOfferNmc(false);
-    setOfferBonus("0");
+    const term = Number(selected.askingTerm || selected.asking_term || selected.want_years || 2);
+    setOfferYears(String(term));
+    const wants = String(selected.wants_clause || "None").toUpperCase();
+    setOfferNmc(wants === "NMC");
+    setOfferNtc(wants === "NTC" || wants === "M-NTC" || wants === "NMC");
+    setOfferNtcModified(wants === "M-NTC");
+    const bonusPct = Number(selected.bonus_demand_pct || 0);
+    setOfferBonus(
+      bonusPct > 0 && ask != null && bonusAllowed
+        ? (Math.ceil(Number(ask) * term * bonusPct * 40) / 40).toFixed(3)
+        : "0"
+    );
     setError("");
     setFeedback("");
     setResponse(null);
@@ -1941,6 +2106,10 @@ export function FreeAgencyEventMenu({
 
   React.useEffect(() => {
     if (!selected?.player_id && !selected?.id) return undefined;
+    if (selected?._offerSheet) {
+      setResponse(null);
+      return undefined;
+    }
     let cancelled = false;
     const t = window.setTimeout(async () => {
       try {
@@ -1970,7 +2139,7 @@ export function FreeAgencyEventMenu({
   }, [selectedId, offerAav, offerYears, offerNtcMode, offerNmc, offerBonus, contractCategory, faMeetingRev]);
 
   const filtered = React.useMemo(() => {
-    let list = [...rows];
+    let list = filter === "offersheet" ? [...sheetTargets] : [...rows];
     const q = search.trim().toLowerCase();
     if (q) {
       list = list.filter((p) => {
@@ -2032,7 +2201,7 @@ export function FreeAgencyEventMenu({
         sortKey === "age"
           ? Number(a.age || 0)
           : sortKey === "ask"
-            ? Number(a.askingAav ?? a.asking_aav_m ?? a.ask_aav_m ?? 0)
+            ? Number(a.askingAav ?? a.asking_aav_m ?? a.ask_aav_m ?? a.want_aav_m ?? 0)
             : sortKey === "interest"
               ? Number(a.interest_to_user || 0)
               : Number(getPlayerOverall(a) || 0);
@@ -2040,7 +2209,7 @@ export function FreeAgencyEventMenu({
         sortKey === "age"
           ? Number(b.age || 0)
           : sortKey === "ask"
-            ? Number(b.askingAav ?? b.asking_aav_m ?? b.ask_aav_m ?? 0)
+            ? Number(b.askingAav ?? b.asking_aav_m ?? b.ask_aav_m ?? b.want_aav_m ?? 0)
             : sortKey === "interest"
               ? Number(b.interest_to_user || 0)
               : Number(getPlayerOverall(b) || 0);
@@ -2048,7 +2217,7 @@ export function FreeAgencyEventMenu({
       return av < bv ? -1 * (sortKey === "age" || sortKey === "ask" ? 1 : dir) : 1 * (sortKey === "age" || sortKey === "ask" ? 1 : dir);
     });
     return list;
-  }, [rows, filter, search, sortKey, watch]);
+  }, [rows, sheetTargets, filter, search, sortKey, watch]);
 
   const applyMarketPayload = (result) => {
     const nextMarket = result?.free_agency_market;
@@ -2103,8 +2272,23 @@ export function FreeAgencyEventMenu({
       const result = await advanceFreeAgencyDay(days);
       applyMarketPayload(result);
       const userSigned = safeArray(result?.user_resolve?.signed);
-      const userRejected = safeArray(result?.user_resolve?.rejected);
-      const cpuSigned = safeArray(result?.free_agency_market?.day_events?.recent_signings);
+      const dayEvents = result?.free_agency_market?.day_events || {};
+      const userLost = safeArray(dayEvents.user_lost);
+      const lostIds = new Set(userLost.map((x) => String(x.player_id)));
+      const userRejected = safeArray(result?.user_resolve?.rejected).filter(
+        (x) => !lostIds.has(String(x.player_id))
+      );
+      const cpuSigned = safeArray(dayEvents.recent_signings);
+      setDayReport({
+        day: result?.day || result?.free_agency_market?.fa_market_day,
+        days: days,
+        signings: cpuSigned,
+        userSigned,
+        userLost,
+        userRejected,
+      });
+      setRailTab("today");
+      setSocialRev((v) => v + 1);
       const names = [
         ...userSigned.map((s) => s.name || s.player_id),
         ...cpuSigned.map((s) => s.name || s.player_id),
@@ -2116,7 +2300,21 @@ export function FreeAgencyEventMenu({
           result?.free_agency_market?.market_phase_label || ""
         }${names.length ? ` · ${names.join(", ")}` : " · Market moved"}`
       );
-      if (userSigned.length) {
+      if (userLost.length) {
+        const first = userLost[0];
+        setDealPopup({
+          tone: "deny",
+          kicker: "Free agency",
+          title: "Signed elsewhere",
+          player: first.name || first.player_id,
+          body: `${first.name || "He"} took ${first.signed_team_name || "another club"}'s offer instead of yours${
+            first.your_aav_m != null ? ` (you offered ${formatMoney(first.your_aav_m)} × ${first.your_years}y)` : ""
+          }.${userLost.length > 1 ? ` ${userLost.length - 1} more of your targets also signed elsewhere.` : ""}`,
+          terms:
+            first.aav_m != null ? `${first.signed_team_abbrev || ""} · ${formatMoney(first.aav_m)} × ${first.years}y` : null,
+          cta: "Close",
+        });
+      } else if (userSigned.length) {
         const first = userSigned[0];
         setDealPopup({
           tone: "accept",
@@ -2239,6 +2437,56 @@ export function FreeAgencyEventMenu({
     }
   };
 
+  const submitSheet = async () => {
+    if (!selected || busy) return;
+    setBusy(true);
+    setError("");
+    setFeedback("");
+    try {
+      const pid = selected.player_id || selected.id;
+      const result = await submitOfferSheet({
+        player_id: pid,
+        rights_team_id: selected.rights_team_id,
+        aav_m: offerAavNum,
+        years: offerYearsNum,
+        signing_bonus_m: offerBonusNum,
+      });
+      if (result?.ok) {
+        const comp =
+          result?.offer_sheet?.compensation_label || offerSheetCompensation(offerSheetInfo.tiers, offerCapHitNum);
+        setDealPopup({
+          tone: "pending",
+          kicker: "Offer sheet",
+          title: "Offer sheet tendered",
+          player: getPlayerName(selected),
+          body: `${selected.rights_team_name || selected.rights_team_abbrev || "His club"} has ${
+            result?.offer_sheet?.match_deadline_days ?? 7
+          } days to match. If they decline, he signs with you and you owe: ${comp}.`,
+          terms: `${formatMoney(offerAavNum)} × ${offerYearsNum}y`,
+          cta: "Got it",
+        });
+        setMarket((prev) => ({
+          ...prev,
+          offer_sheets: {
+            ...(prev.offer_sheets || {}),
+            targets: safeArray(prev.offer_sheets?.targets).map((t) =>
+              String(t.player_id || t.id) === String(pid)
+                ? { ...t, offer_sheet_pending: true, offer_sheet_by_user: true }
+                : t
+            ),
+          },
+        }));
+        setFeedback(`Offer sheet tendered to ${getPlayerName(selected)} — Sim Day for the match decision.`);
+      } else {
+        setError(result?.reason || "Offer sheet rejected");
+      }
+    } catch (e) {
+      setError(e?.message || "Offer sheet failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const toggleWatch = (id) => {
     setWatch((prev) => {
       const next = new Set(prev);
@@ -2282,7 +2530,7 @@ export function FreeAgencyEventMenu({
       phaseLabel="FREE AGENCY WIRE"
       phaseStyle="text"
       titleVariant="market"
-      rootClassName={`${prefix}-root--market`}
+      rootClassName={`${prefix}-root--market edraft-skin`}
       seasonLabel={seasonLabel(franchiseState)}
       title="Market Board"
       hideTitle
@@ -2292,33 +2540,49 @@ export function FreeAgencyEventMenu({
       onContinue={continueHandler}
       onBack={onBack}
       footerAlign="split"
-      railTitle="Market Wire"
+      railTitle={null}
       railHint={null}
       heroContent={
         <div className={`${prefix}-workspace`}>
           <div className={`${prefix}-fa-bar`}>
-            <strong>{market.market_phase_label || "Open market"}</strong>
-            <span>Day {market.fa_market_day ?? 0}</span>
-            <span>{market.available_count ?? rows.length} available</span>
-            <span className={`${prefix}-fa-cap`}>{formatMoney(capSpace)} space</span>
-            <span>
-              {slotUsed != null && slots.limit != null
-                ? `${slotUsed}/${slots.limit} contracts`
-                : `${slots.open ?? "—"} open slots`}
-            </span>
-            <span className={bonusAllowed ? "is-ok" : "is-bad"}>
-              Bonus {bonusAllowed ? "OK" : `Locked $${Math.round(Number(bonus.floor_m) || 155)}M`}
-            </span>
-            {market.cap_release?.text ? (
-              <span className={`${prefix}-fa-cap`}>{market.cap_release.text}</span>
-            ) : null}
-            <button type="button" className={`${prefix}-sim-btn`} disabled={busy} onClick={() => advanceDay(1)}>
-              Sim day
-            </button>
-            <button type="button" className={`${prefix}-sim-btn`} disabled={busy} onClick={() => advanceDay(7)}>
-              Sim week
-            </button>
+            <div className={`${prefix}-fa-phase`}>
+              <span>Free agency</span>
+              <strong>{market.market_phase_label || "Open market"}</strong>
+            </div>
+            <div className={`${prefix}-fa-stat`}>
+              <span>Day</span>
+              <strong>{market.fa_market_day ?? 0}</strong>
+            </div>
+            <div className={`${prefix}-fa-stat`}>
+              <span>Available</span>
+              <strong>{market.available_count ?? rows.length}</strong>
+            </div>
+            <div className={`${prefix}-fa-stat is-cap`}>
+              <span>Cap space</span>
+              <strong>{formatMoney(capSpace)}</strong>
+            </div>
+            <div className={`${prefix}-fa-stat`}>
+              <span>Contracts</span>
+              <strong>
+                {slotUsed != null && slots.limit != null ? `${slotUsed}/${slots.limit}` : `${slots.open ?? "—"} open`}
+              </strong>
+            </div>
+            <div className={`${prefix}-fa-stat ${bonusAllowed ? "is-ok" : "is-bad"}`}>
+              <span>Signing bonus</span>
+              <strong>{bonusAllowed ? "Allowed" : `Locked`}</strong>
+            </div>
+            <div className={`${prefix}-fa-sim`}>
+              <button type="button" className={`${prefix}-sim-btn is-primary`} disabled={busy} onClick={() => advanceDay(1)}>
+                {busy ? "Simming…" : "Sim day"}
+              </button>
+              <button type="button" className={`${prefix}-sim-btn`} disabled={busy} onClick={() => advanceDay(7)}>
+                Sim week
+              </button>
+            </div>
           </div>
+          {market.cap_release?.text ? (
+            <p className={`${prefix}-fa-notice`}>{market.cap_release.text}</p>
+          ) : null}
 
           <div className={`${prefix}-fa-tools`}>
             <input
@@ -2338,7 +2602,7 @@ export function FreeAgencyEventMenu({
                 ["young", "Young"],
                 ["vet", "Veterans"],
                 ["ufa", "UFA"],
-                ["rfa", "RFA"],
+                ["offersheet", `RFAs · offer sheet (${sheetTargets.length})`],
                 ["cheap", "Cheap"],
                 ["hot", "Bidding"],
                 ["watch", "Watch"],
@@ -2375,7 +2639,7 @@ export function FreeAgencyEventMenu({
                 filtered.map((p, i) => {
                   const id = String(p.player_id || p.id || i);
                   const active = String(selectedId) === id;
-                  const prevAbbr = p.previous_team_abbrev || "";
+                  const prevAbbr = p.previous_team_abbrev || p.rights_team_abbrev || "";
                   const prevName = p.previous_team || p.current_team || prevAbbr || "FA";
                   const logos = safeArray(p.interested_teams).slice(0, 4);
                   const interest = p.interest_to_user_label || p.market_interest || "—";
@@ -2390,25 +2654,26 @@ export function FreeAgencyEventMenu({
                         <PlayerHeadshot player={ensurePlayerHeadshotFields({ ...p, id, player_id: id })} size="xs" />
                       </span>
                       <span className={`${prefix}-fa-row-body`}>
-                        <strong>{getPlayerName(p)}</strong>
+                        <strong>
+                          {getPlayerName(p)} <RightsBadge prefix={prefix} row={p} />
+                        </strong>
                         <em>
                           {[
                             getPlayerPosition(p),
                             p.age != null ? `Age ${p.age}` : null,
-                            String(p.ufaOrRfa || p.status || "").toUpperCase() === "RFA"
-                              ? "RFA"
-                              : String(p.ufaOrRfa || p.status || "").toUpperCase() === "UFA"
-                                ? "UFA"
-                                : null,
-                            prevAbbr || null,
+                            p._offerSheet ? `Rights: ${p.rights_team_abbrev || p.rights_team_name || "—"}` : prevAbbr || null,
                           ]
                             .filter(Boolean)
                             .join(" · ")}
                         </em>
                         <span className={`${prefix}-fa-row-meta`}>
-                          {String(p.decision_state || "awaiting").replace(/_/g, " ")}
-                          {" · "}
-                          Interest {String(interest)}
+                          {p._offerSheet
+                            ? p.offer_sheet_pending
+                              ? p.offer_sheet_by_user
+                                ? "Your offer sheet is pending"
+                                : "Offer sheet pending from another club"
+                              : `Qualified · QO ${formatMoney(p.qualifying_offer_aav_m)}`
+                            : `${String(p.decision_state || "awaiting").replace(/_/g, " ")} · Interest ${String(interest)}`}
                         </span>
                       </span>
                       <span className={`${prefix}-fa-rating`}>
@@ -2440,7 +2705,7 @@ export function FreeAgencyEventMenu({
                         ))}
                       </span>
                       <span className={`${prefix}-fa-ask`}>
-                        {formatMoney(p.askingAav ?? p.asking_aav_m ?? p.ask_aav_m)}
+                        {formatMoney(p.askingAav ?? p.asking_aav_m ?? p.ask_aav_m ?? p.want_aav_m)}
                       </span>
                       <span
                         className={`${prefix}-fa-star${watch.has(id) ? " is-on" : ""}`}
@@ -2464,7 +2729,13 @@ export function FreeAgencyEventMenu({
 
             <aside className={`${prefix}-fa-desk`}>
               {!selected ? (
-                <p className={`${prefix}-empty`}>Select a free agent to open the signing desk.</p>
+                <p className={`${prefix}-empty`}>
+                  {filter === "offersheet"
+                    ? sheetTargets.length
+                      ? "Select an RFA to draft an offer sheet."
+                      : "No unsigned RFAs right now. Clubs qualify their RFAs on Opening Day and settle them within the first week."
+                    : "Select a free agent to open the signing desk."}
+                </p>
               ) : (
                 <>
                   <div className={`${prefix}-fa-identity`}>
@@ -2484,24 +2755,33 @@ export function FreeAgencyEventMenu({
                     </div>
                     <div>
                       <span className={`${prefix}-fa-ovr`}>{getPlayerOverall(deskPlayer) ?? "—"} OVR</span>
-                      <h3>{String(getPlayerName(deskPlayer) || "").toUpperCase()}</h3>
+                      <h3>
+                        {String(getPlayerName(deskPlayer) || "").toUpperCase()}{" "}
+                        <RightsBadge prefix={prefix} row={deskPlayer} />
+                      </h3>
                       <p>
                         {[
                           getPlayerPosition(deskPlayer),
                           deskPlayer.age != null ? `Age ${deskPlayer.age}` : null,
-                          String(deskPlayer.ufaOrRfa || deskPlayer.status || "").toUpperCase() === "RFA"
-                            ? "RFA"
-                            : String(deskPlayer.ufaOrRfa || deskPlayer.status || "").toUpperCase() === "UFA"
-                              ? "UFA"
-                              : null,
                           deskPlayer.potential != null ? `POT ${deskPlayer.potential}` : null,
                           deskPlayer.role,
                         ]
                           .filter(Boolean)
                           .join(" · ")}
                       </p>
+                      {!isOfferSheet ? (
+                        <p className={`${prefix}-fa-prev-line`}>
+                          Asking {formatMoney(deskPlayer.askingAav ?? deskPlayer.ask_aav_m)} ×{" "}
+                          {deskPlayer.askingTerm ?? deskPlayer.asking_term ?? "—"}y
+                          {deskPlayer.wants_clause && deskPlayer.wants_clause !== "None"
+                            ? ` · Wants ${deskPlayer.wants_clause}`
+                            : ""}
+                          {deskPlayer.bonus_demand_label ? ` · ${deskPlayer.bonus_demand_label}` : ""}
+                        </p>
+                      ) : null}
                       <p className={`${prefix}-fa-prev-line`}>
-                        Former · {deskPlayer.previous_team || deskPlayer.current_team || deskPlayer.nhl_team || "Unsigned"}
+                        {isOfferSheet ? "Rights held by" : "Former"} ·{" "}
+                        {deskPlayer.rights_team_name || deskPlayer.previous_team || deskPlayer.current_team || deskPlayer.nhl_team || "Unsigned"}
                         {deskPlayer.nationality ? ` · ${deskPlayer.nationality}` : ""}
                       </p>
                     </div>
@@ -2527,6 +2807,27 @@ export function FreeAgencyEventMenu({
                     </div>
                   </div>
 
+                  {isOfferSheet ? (
+                    <div className={`${prefix}-nego-meter`}>
+                      <div className={`${prefix}-nego-meter-head`}>
+                        <span>Offer sheet</span>
+                        <strong>{offerSheetCompensation(offerSheetInfo.tiers, offerCapHitNum)}</strong>
+                      </div>
+                      <p className={`${prefix}-nego-meter-note`}>
+                        Draft-pick compensation you owe if{" "}
+                        {selected.rights_team_name || selected.rights_team_abbrev || "his club"} declines to match.
+                        Market value {formatMoney(selected.market_value_m)} · Previous AAV{" "}
+                        {formatMoney(selected.previous_aav_m)}. Clubs usually match offers near market value.
+                      </p>
+                      {selected.offer_sheet_pending ? (
+                        <p className={`${prefix}-warn`}>
+                          {selected.offer_sheet_by_user
+                            ? "Your offer sheet is already on the table."
+                            : "Another club already has an offer sheet pending on this player."}
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : (
                   <div className={`${prefix}-nego-meter`}>
                     <div className={`${prefix}-nego-meter-head`}>
                       <span>Deal interest</span>
@@ -2557,6 +2858,7 @@ export function FreeAgencyEventMenu({
                         }`}
                     </p>
                   </div>
+                  )}
 
                   {faDetailLoading ? (
                     <p className={`${prefix}-context`}>Loading Stats Central…</p>
@@ -2670,12 +2972,15 @@ export function FreeAgencyEventMenu({
                     </div>
                   ) : null}
 
-                  <NegotiationMeetingPanel
-                    playerId={selected.player_id || selected.id}
-                    onChanged={() => setFaMeetingRev((v) => v + 1)}
-                  />
+                  {isOfferSheet ? null : (
+                    <NegotiationMeetingPanel
+                      playerId={selected.player_id || selected.id}
+                      onChanged={() => setFaMeetingRev((v) => v + 1)}
+                    />
+                  )}
 
                   <div className={`${prefix}-fa-controls`}>
+                    {isOfferSheet ? null : (
                     <label className={`${prefix}-field`}>
                       Type
                       <div className={`${prefix}-select-wrap`}>
@@ -2691,6 +2996,7 @@ export function FreeAgencyEventMenu({
                         </select>
                       </div>
                     </label>
+                    )}
                     <div className={`${prefix}-slider-block`}>
                       <div className={`${prefix}-slider-head`}>
                         <span>Annual salary</span>
@@ -2699,12 +3005,12 @@ export function FreeAgencyEventMenu({
                       <input
                         type="range"
                         className={`${prefix}-salary-slider`}
-                        min={0.775}
+                        min={minSalaryM}
                         max={Math.min(Number(bonus.max_salary_m || 99), Math.max(12, offerAavNum * 1.35, Number(selected.ask_aav_m || selected.askingAav || 4) * 1.4))}
                         step="0.025"
                         value={Math.min(
                           Math.min(Number(bonus.max_salary_m || 99), Math.max(12, offerAavNum * 1.35, Number(selected.ask_aav_m || selected.askingAav || 4) * 1.4)),
-                          Math.max(0.775, offerAavNum || 0.775)
+                          Math.max(minSalaryM, offerAavNum || minSalaryM)
                         )}
                         disabled={busy}
                         onChange={(e) => setOfferAav(Number(e.target.value).toFixed(3))}
@@ -2726,15 +3032,31 @@ export function FreeAgencyEventMenu({
                         ))}
                       </div>
                     </div>
+                    {isOfferSheet ? null : (
                     <div className={`${prefix}-check-row is-clauses`}>
                       <label className={offerNtc ? "is-on" : ""}>
                         <input
                           type="checkbox"
                           checked={offerNtc}
                           disabled={busy || offerNmc}
-                          onChange={(e) => setOfferNtc(e.target.checked)}
+                          onChange={(e) => {
+                            setOfferNtc(e.target.checked);
+                            if (!e.target.checked) setOfferNtcModified(false);
+                          }}
                         />
                         NTC
+                      </label>
+                      <label className={offerNtc && offerNtcModified ? "is-on" : ""}>
+                        <input
+                          type="checkbox"
+                          checked={offerNtc && offerNtcModified}
+                          disabled={busy || offerNmc}
+                          onChange={(e) => {
+                            setOfferNtcModified(e.target.checked);
+                            if (e.target.checked) setOfferNtc(true);
+                          }}
+                        />
+                        M-NTC
                       </label>
                       <label className={offerNmc ? "is-on" : ""}>
                         <input
@@ -2749,6 +3071,7 @@ export function FreeAgencyEventMenu({
                         NMC
                       </label>
                     </div>
+                    )}
                     <div className={`${prefix}-slider-block`}>
                       <div className={`${prefix}-slider-head`}>
                         <span>Signing bonus</span>
@@ -2775,10 +3098,10 @@ export function FreeAgencyEventMenu({
                       <button
                         type="button"
                         className={`${prefix}-cta-btn ${prefix}-submit-btn`}
-                        disabled={busy}
-                        onClick={submitSign}
+                        disabled={busy || (isOfferSheet && selected.offer_sheet_pending)}
+                        onClick={isOfferSheet ? submitSheet : submitSign}
                       >
-                        {busy ? "Working…" : "Submit Offer"}
+                        {busy ? "Working…" : isOfferSheet ? "Tender Offer Sheet" : "Submit Offer"}
                       </button>
                     </div>
                   </div>
@@ -2789,25 +3112,137 @@ export function FreeAgencyEventMenu({
         </div>
       }
       railContent={
-        <>
-          {(news.length ? news : recent).slice(-18).reverse().map((n, i) => (
-            <p key={`${n.text || n.player_id || "wire"}-${i}`} className={`${prefix}-wire-item`}>
-              {n.text ||
-                [
-                  n.team_name || n.team_abbrev || (n.team_id && String(n.team_id).length > 3 ? n.team_id : null) || "A club",
-                  n.name || n.player_id,
-                  n.aav_m != null ? `${n.aav_m}M × ${n.years || "?"}y` : null,
-                ]
-                  .filter(Boolean)
-                  .join(" · ")}
-            </p>
-          ))}
-          {!news.length && !recent.length ? (
-            <p className={`${prefix}-empty`}>
-              Submit offers or Sim Day — signings and pending decisions land here.
-            </p>
+        <div className={`${prefix}-rail-shell`}>
+          <div className={`${prefix}-rail-tabs`} role="tablist">
+            {[
+              ["today", dayReport ? `Day ${dayReport.day ?? ""}` : "Signings"],
+              ["wire", "Wire"],
+              ["social", "Social"],
+            ].map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                role="tab"
+                aria-selected={railTab === id}
+                className={railTab === id ? "is-active" : ""}
+                onClick={() => setRailTab(id)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {railTab === "today" ? (
+            <div className={`${prefix}-rail-scroll`}>
+              {dayReport ? (
+                <>
+                  {safeArray(dayReport.userLost).length ? (
+                    <section className={`${prefix}-day-block is-lost`}>
+                      <h4>Lost to another club</h4>
+                      {safeArray(dayReport.userLost).map((x) => (
+                        <div key={`lost-${x.player_id}`} className={`${prefix}-day-row is-lost`}>
+                          <div className={`${prefix}-day-main`}>
+                            <strong>{x.name}</strong>
+                            <em>
+                              Signed with {x.signed_team_name || x.signed_team_abbrev || "another club"}
+                              {x.your_aav_m != null ? ` · your offer ${formatMoney(x.your_aav_m)} × ${x.your_years}y` : ""}
+                            </em>
+                          </div>
+                          <span className={`${prefix}-day-terms`}>
+                            {x.aav_m != null ? formatMoney(x.aav_m) : "—"}
+                            <i>× {x.years || "?"}y</i>
+                          </span>
+                        </div>
+                      ))}
+                    </section>
+                  ) : null}
+                  {safeArray(dayReport.userSigned).length ? (
+                    <section className={`${prefix}-day-block is-won`}>
+                      <h4>Signed with you</h4>
+                      {safeArray(dayReport.userSigned).map((x) => (
+                        <FaSigningRow
+                          key={`won-${x.player_id}`}
+                          prefix={prefix}
+                          tone="won"
+                          row={{ ...x, team_name: "Your club", team_abbrev: franchiseState?.team?.abbreviation }}
+                        />
+                      ))}
+                    </section>
+                  ) : null}
+                  {safeArray(dayReport.userRejected).length ? (
+                    <section className={`${prefix}-day-block is-lost`}>
+                      <h4>Turned you down</h4>
+                      {safeArray(dayReport.userRejected).map((x) => (
+                        <p key={`rej-${x.player_id}`} className={`${prefix}-day-note`}>
+                          <strong>{x.name || x.player_id}</strong> — {x.feedback || x.reason || "declined"}
+                        </p>
+                      ))}
+                    </section>
+                  ) : null}
+                  <section className={`${prefix}-day-block`}>
+                    <h4>
+                      {dayReport.days > 1 ? `Signings · last ${dayReport.days} days` : `Signings · day ${dayReport.day ?? ""}`}
+                      <span>{safeArray(dayReport.signings).length}</span>
+                    </h4>
+                    {safeArray(dayReport.signings).length ? (
+                      safeArray(dayReport.signings).map((x, i) => (
+                        <FaSigningRow key={`sig-${x.player_id}-${i}`} prefix={prefix} row={x} />
+                      ))
+                    ) : (
+                      <p className={`${prefix}-empty`}>Quiet day — nobody signed.</p>
+                    )}
+                  </section>
+                </>
+              ) : (
+                <section className={`${prefix}-day-block`}>
+                  <h4>
+                    Latest signings <span>{recent.length}</span>
+                  </h4>
+                  {recent.length ? (
+                    [...recent].reverse().map((x, i) => (
+                      <FaSigningRow key={`recent-${x.player_id}-${i}`} prefix={prefix} row={x} />
+                    ))
+                  ) : (
+                    <p className={`${prefix}-empty`}>Sim Day to see who signs where.</p>
+                  )}
+                </section>
+              )}
+            </div>
           ) : null}
-        </>
+
+          {railTab === "wire" ? (
+            <div className={`${prefix}-rail-scroll`}>
+              {dedupeWire(news.length ? news : recent).slice(-24).reverse().map((n, i) => (
+                <p key={`${n.text || n.player_id || "wire"}-${i}`} className={`${prefix}-wire-item is-${n.kind || "market"}`}>
+                  {n.text ||
+                    [
+                      n.team_name || n.team_abbrev || "A club",
+                      n.name || n.player_id,
+                      n.aav_m != null ? `${n.aav_m}M × ${n.years || "?"}y` : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                </p>
+              ))}
+              {!news.length && !recent.length ? (
+                <p className={`${prefix}-empty`}>Submit offers or Sim Day — signings and pending decisions land here.</p>
+              ) : null}
+            </div>
+          ) : null}
+
+          {railTab === "social" ? (
+            <div className={`${prefix}-rail-scroll`}>
+              {social.loading && !social.posts.length ? <p className={`${prefix}-empty`}>Loading the feed…</p> : null}
+              {social.error ? <p className={`${prefix}-warn`}>{social.error}</p> : null}
+              {social.posts.map((post, i) => (
+                <FaSocialPost key={post.id || `post-${i}`} prefix={prefix} post={post} />
+              ))}
+              {!social.loading && !social.error && !social.posts.length ? (
+                <p className={`${prefix}-empty`}>No chatter yet — Sim Day and the league will react to signings.</p>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
       }
     />
     </>

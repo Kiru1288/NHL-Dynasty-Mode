@@ -320,3 +320,444 @@
 .fa-root.fa-root--market .fa-nego-meter-head strong,
 .fa-root.fa-root--market .fa-fa-stats strong,
 .fa-root.fa-root--market .fa-slider-head strong { font-size: 18px; }
+
+/* UFA / RFA status pill on the board and the signing desk */
+.fa-root .fa-rights-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-family: var(--font-mono-data);
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  line-height: 1.5;
+  vertical-align: middle;
+  border: 1px solid currentColor;
+}
+.fa-root .fa-rights-badge.is-ufa {
+  color: var(--cyan);
+}
+.fa-root .fa-rights-badge.is-rfa {
+  color: var(--gold);
+}
+
+/* ==================================================================
+   Entry Draft skin for the Free Agency board (.edraft-skin on the root).
+   Same tokens, condensed broadcast type, rounded ops panels and gold CTA
+   as the Entry Draft floor.
+   ================================================================== */
+.fa-root.fa-root--market.edraft-skin {
+  --fa-radius: 10px;
+  --ed-head: "Barlow Condensed", var(--font-broadcast-display), "Archivo Black", "Rajdhani", "Arial Narrow", sans-serif;
+  font-family: var(--font-ops-ui);
+}
+.fa-root.fa-root--market.edraft-skin .fa-phase-text {
+  font-family: var(--ed-head);
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.fa-root.fa-root--market.edraft-skin .fa-season,
+.fa-root.fa-root--market.edraft-skin .fa-ghost-btn {
+  font-family: var(--ed-head);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* Floor: rounded panels with gutters, like the draft floor grid */
+.fa-root.fa-root--market.edraft-skin .fa-stage {
+  gap: 10px;
+  padding: 10px 12px 4.1rem;
+}
+.fa-root.fa-root--market.edraft-skin .fa-reveal,
+.fa-root.fa-root--market.edraft-skin .fa-panel {
+  border: 1px solid var(--line);
+  border-radius: var(--fa-radius);
+  background: var(--ops-panel);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+.fa-root.fa-root--market.edraft-skin .fa-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+}
+.fa-root.fa-root--market.edraft-skin .fa-rail {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Status strip: stat tiles + sim controls */
+.fa-root.fa-root--market.edraft-skin .fa-fa-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 8px;
+  padding: 0 0 10px;
+}
+.fa-root.fa-root--market.edraft-skin .fa-fa-phase {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding-right: 10px;
+  border-right: 1px solid var(--line);
+}
+.fa-root.fa-root--market.edraft-skin .fa-fa-phase span,
+.fa-root.fa-root--market.edraft-skin .fa-fa-stat span {
+  font-family: var(--ed-head);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.fa-root.fa-root--market.edraft-skin .fa-fa-phase strong {
+  font-family: var(--ed-head);
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--gold);
+  line-height: 1.05;
+}
+.fa-root.fa-root--market.edraft-skin .fa-fa-stat {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 82px;
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--ops-panel-2);
+}
+.fa-root.fa-root--market.edraft-skin .fa-fa-stat strong {
+  font-family: var(--font-mono-data);
+  font-size: 15px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  color: var(--text);
+}
+.fa-root.fa-root--market.edraft-skin .fa-fa-stat.is-cap strong {
+  color: var(--ops-success, #52df94);
+}
+.fa-root.fa-root--market.edraft-skin .fa-fa-stat.is-bad strong {
+  color: var(--ops-injury, #ff606d);
+}
+.fa-root.fa-root--market.edraft-skin .fa-fa-sim {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-left: auto;
+}
+.fa-root.fa-root--market.edraft-skin .fa-sim-btn {
+  font-family: var(--ed-head);
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 8px 16px;
+  border-radius: 8px;
+  background: rgba(19, 216, 231, 0.08);
+  border-color: rgba(19, 216, 231, 0.35);
+  color: var(--cyan);
+}
+.fa-root.fa-root--market.edraft-skin .fa-sim-btn.is-primary {
+  background: linear-gradient(180deg, #f3b94f, #e9a83c);
+  border-color: #e9a83c;
+  color: #1a1206;
+}
+.fa-root.fa-root--market.edraft-skin .fa-sim-btn.is-primary:hover:not(:disabled) {
+  filter: brightness(1.06);
+  background: linear-gradient(180deg, #f3b94f, #e9a83c);
+}
+.fa-root.fa-root--market.edraft-skin .fa-fa-notice {
+  margin: 0 0 10px;
+  padding: 7px 10px;
+  border: 1px solid rgba(233, 168, 60, 0.3);
+  border-left: 3px solid var(--gold);
+  border-radius: 8px;
+  background: var(--ops-gold-soft, rgba(233, 168, 60, 0.12));
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+/* Filters: condensed uppercase segmented control */
+.fa-root.fa-root--market.edraft-skin .fa-fa-filters {
+  border-radius: 8px;
+}
+.fa-root.fa-root--market.edraft-skin .fa-fa-chip {
+  font-family: var(--ed-head);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 6px 10px;
+}
+.fa-root.fa-root--market.edraft-skin .fa-fa-chip.is-active {
+  background: var(--ops-cyan-soft, rgba(19, 216, 231, 0.13));
+  color: var(--cyan);
+  box-shadow: inset 0 -2px 0 var(--cyan);
+}
+.fa-root.fa-root--market.edraft-skin .fa-fa-search,
+.fa-root.fa-root--market.edraft-skin .fa-fa-sort {
+  border-radius: 8px;
+}
+
+/* List + desk panels */
+.fa-root.fa-root--market.edraft-skin .fa-fa-layout {
+  gap: 10px;
+  border: 0;
+}
+.fa-root.fa-root--market.edraft-skin .fa-fa-list,
+.fa-root.fa-root--market.edraft-skin .fa-fa-desk {
+  border: 1px solid var(--line);
+  border-radius: var(--fa-radius);
+  background: var(--ops-panel-2);
+}
+.fa-root.fa-root--market.edraft-skin .fa-fa-count {
+  font-family: var(--ed-head);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: var(--ops-panel-2);
+  border-radius: var(--fa-radius) var(--fa-radius) 0 0;
+}
+.fa-root.fa-root--market.edraft-skin .fa-fa-row-body strong {
+  font-family: var(--ed-head);
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.fa-root.fa-root--market.edraft-skin .fa-fa-row-body em {
+  font-style: normal;
+  color: var(--muted);
+}
+.fa-root.fa-root--market.edraft-skin .fa-fa-ask {
+  color: var(--gold);
+}
+.fa-root.fa-root--market.edraft-skin .fa-fa-identity h3 {
+  font-family: var(--ed-head);
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+}
+.fa-root.fa-root--market.edraft-skin .fa-mini-label,
+.fa-root.fa-root--market.edraft-skin .fa-slider-head span,
+.fa-root.fa-root--market.edraft-skin .fa-nego-meter-head span,
+.fa-root.fa-root--market.edraft-skin .fa-field {
+  font-family: var(--ed-head);
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.fa-root.fa-root--market.edraft-skin .fa-submit-btn {
+  font-family: var(--ed-head);
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  background: linear-gradient(180deg, #f3b94f, #e9a83c);
+  border-radius: 8px;
+}
+
+/* Right rail: tabbed day results / wire / social */
+.fa-root.fa-root--market.edraft-skin .fa-rail-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+.fa-root.fa-root--market.edraft-skin .fa-rail-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  border-bottom: 1px solid var(--line);
+  background: var(--ops-panel-2);
+}
+.fa-root.fa-root--market.edraft-skin .fa-rail-tabs button {
+  border: 0;
+  border-right: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  padding: 10px 6px;
+  font-family: var(--ed-head);
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.fa-root.fa-root--market.edraft-skin .fa-rail-tabs button:last-child {
+  border-right: 0;
+}
+.fa-root.fa-root--market.edraft-skin .fa-rail-tabs button.is-active {
+  color: var(--gold);
+  box-shadow: inset 0 -2px 0 var(--gold);
+  background: rgba(233, 168, 60, 0.06);
+}
+.fa-root.fa-root--market.edraft-skin .fa-rail-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.fa-root.fa-root--market.edraft-skin .fa-day-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.fa-root.fa-root--market.edraft-skin .fa-day-block h4 {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin: 2px;
+  font-family: var(--ed-head);
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.fa-root.fa-root--market.edraft-skin .fa-day-block h4 span {
+  font-family: var(--font-mono-data);
+  color: var(--cyan);
+}
+.fa-root.fa-root--market.edraft-skin .fa-day-block.is-lost h4 {
+  color: var(--ops-injury, #ff606d);
+}
+.fa-root.fa-root--market.edraft-skin .fa-day-block.is-won h4 {
+  color: var(--ops-success, #52df94);
+}
+.fa-root.fa-root--market.edraft-skin .fa-day-row {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--ops-panel-2);
+}
+.fa-root.fa-root--market.edraft-skin .fa-day-row.is-lost {
+  grid-template-columns: minmax(0, 1fr) auto;
+  border-color: rgba(255, 96, 109, 0.4);
+  box-shadow: inset 3px 0 0 var(--ops-injury, #ff606d);
+}
+.fa-root.fa-root--market.edraft-skin .fa-day-row.is-won {
+  border-color: rgba(82, 223, 148, 0.4);
+  box-shadow: inset 3px 0 0 var(--ops-success, #52df94);
+}
+.fa-root.fa-root--market.edraft-skin .fa-day-main {
+  min-width: 0;
+}
+.fa-root.fa-root--market.edraft-skin .fa-day-main strong {
+  display: block;
+  font-family: var(--ed-head);
+  font-size: 16px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fa-root.fa-root--market.edraft-skin .fa-day-main em {
+  display: block;
+  font-style: normal;
+  font-size: 11.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fa-root.fa-root--market.edraft-skin .fa-day-terms {
+  font-family: var(--font-mono-data);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--gold);
+  text-align: right;
+  white-space: nowrap;
+}
+.fa-root.fa-root--market.edraft-skin .fa-day-terms i {
+  display: block;
+  font-style: normal;
+  font-size: 11px;
+  color: var(--muted);
+}
+.fa-root.fa-root--market.edraft-skin .fa-day-note {
+  margin: 0;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgba(255, 96, 109, 0.08);
+  font-size: 12px;
+}
+.fa-root.fa-root--market.edraft-skin .fa-wire-item {
+  margin: 0;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--ops-panel-2);
+  font-size: 12.5px;
+  line-height: 1.35;
+}
+.fa-root.fa-root--market.edraft-skin .fa-wire-item.is-lost {
+  border-color: rgba(255, 96, 109, 0.45);
+  color: #ffd2d6;
+}
+
+/* Social tab: Puckr cards */
+.fa-root.fa-root--market.edraft-skin .fa-social-post {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 8px;
+  padding: 8px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--ops-panel-2);
+}
+.fa-root.fa-root--market.edraft-skin .fa-social-avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: #24465c;
+  color: #fff;
+  font-family: var(--ed-head);
+  font-size: 13px;
+  font-weight: 800;
+}
+.fa-root.fa-root--market.edraft-skin .fa-social-post header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: baseline;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.fa-root.fa-root--market.edraft-skin .fa-social-post header strong {
+  color: var(--text);
+  font-size: 13px;
+}
+.fa-root.fa-root--market.edraft-skin .fa-social-check {
+  font-style: normal;
+  color: var(--cyan);
+  font-size: 11px;
+}
+.fa-root.fa-root--market.edraft-skin .fa-social-post p {
+  margin: 3px 0 0;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text);
+}

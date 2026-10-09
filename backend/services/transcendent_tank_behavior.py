@@ -25,7 +25,7 @@ def _team_id(team: Any) -> str:
     tid = getattr(team, "team_id", None)
     if tid is None:
         tid = getattr(team, "id", "")
-    return str(tid or "")
+    return "" if tid is None else str(tid)
 
 
 def _team_status_for_tank(team: Any, standings: Any = None) -> str:
