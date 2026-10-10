@@ -57,15 +57,36 @@ export async function startFranchise(payload) {
   }
 }
 
-/** @param {{ mode?: string, count?: number, auto_resolve?: boolean, auto_fill_lines?: boolean }} [opts] */
+/** Ask the running sim to stop at the next day boundary. Never throws (best effort). */
+export async function stopFranchiseAdvance() {
+  try {
+    const { data } = await api.post("/api/franchise/advance/stop", null, { timeout: 15000 });
+    return data;
+  } catch (e) {
+    return { ok: false, stop_requested: false, error: e?.message || "stop failed" };
+  }
+}
+
+/** Progress snapshot of the running sim ({ active, done, total, iso, ... }). Never throws. */
+export async function getFranchiseAdvanceProgress() {
+  try {
+    const { data } = await api.get("/api/franchise/advance/progress", { timeout: 8000 });
+    return data || { active: false };
+  } catch {
+    return { active: false };
+  }
+}
+
+/** @param {{ mode?: string, count?: number, auto_resolve?: boolean, auto_fill_lines?: boolean, target_iso?: string }} [opts] */
 export async function advanceFranchise(opts = {}) {
-  const { mode = "day", count = 1, auto_resolve = true, auto_fill_lines = false } = opts;
+  const { mode = "day", count = 1, auto_resolve = true, auto_fill_lines = false, target_iso } = opts;
   const m = String(mode || "day").toLowerCase();
   const heavy =
     m === "season" ||
     m === "days" ||
     m === "games" ||
     m === "next_game" ||
+    m === "to_date" ||
     (m === "day" && Number(count) > 1) ||
     Number(count) > 1;
   try {
@@ -76,6 +97,7 @@ export async function advanceFranchise(opts = {}) {
         count,
         auto_resolve,
         auto_fill_lines,
+        ...(target_iso ? { target_iso } : {}),
       },
       { timeout: heavy ? 600000 : 180000 }
     );

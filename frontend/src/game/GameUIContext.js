@@ -6,6 +6,7 @@ import {
   continueOffseason,
   dismissFranchisePopups,
   generateNextSeason,
+  getFranchiseAdvanceProgress,
   getFranchiseCrisis,
   getFranchiseNarrative,
   getFranchiseState,
@@ -15,6 +16,7 @@ import {
   reopenOffseasonStage,
   resetFranchiseStateCache,
   startFranchise,
+  stopFranchiseAdvance,
   submitDecision,
   submitStorylineChoice,
   enterPlayoffs,
@@ -233,9 +235,21 @@ function playGlobalBreakingSting(level) {
 
 const ADVANCE_SAFETY_MS = 12 * 60 * 1000;
 
-function advancingLabelFor({ mode = "day", count = 1 } = {}) {
+function formatSimDate(iso) {
+  const raw = String(iso || "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return "";
+  const d = new Date(`${raw}T12:00:00`);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
+function advancingLabelFor({ mode = "day", count = 1, targetIso = "" } = {}) {
   const m = String(mode || "day").toLowerCase();
   const c = Math.max(1, Number(count) || 1);
+  if (m === "to_date") {
+    const when = formatSimDate(targetIso);
+    return when ? `Simulating to ${when}…` : "Simulating to selected date…";
+  }
   if (m === "season") return "Simulating regular season…";
   if (m === "games") return c === 1 ? "Simulating next game…" : `Simulating ${c} games…`;
   if (m === "days" || (m === "day" && c > 1)) return `Simulating ${c} league days…`;
@@ -243,15 +257,65 @@ function advancingLabelFor({ mode = "day", count = 1 } = {}) {
   return "Simulating league day…";
 }
 
-function AdvancingOverlay({ label = "Simulating league day…" }) {
+function AdvancingOverlay({ label = "Simulating league day…", canStop = false }) {
+  const [progress, setProgress] = useState(null);
+  const [stopping, setStopping] = useState(false);
+
+  // Poll the lightweight progress endpoint while a stoppable (multi-day) sim runs.
+  useEffect(() => {
+    if (!canStop) return undefined;
+    let alive = true;
+    const tick = async () => {
+      const p = await getFranchiseAdvanceProgress();
+      if (alive && p && p.active) setProgress(p);
+    };
+    const id = setInterval(tick, 800);
+    tick();
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, [canStop]);
+
+  const handleStop = useCallback(async () => {
+    if (stopping) return;
+    setStopping(true);
+    await stopFranchiseAdvance();
+  }, [stopping]);
+
+  const total = Number(progress?.total) || 0;
+  const done = Number(progress?.done) || 0;
+  const pct = total > 0 ? Math.max(0, Math.min(100, Math.round((done / total) * 100))) : null;
+  const when = formatSimDate(progress?.iso);
+  const detail = stopping
+    ? "Stopping after the current day…"
+    : progress && total > 0
+      ? `Day ${Math.min(done, total)} of ${total}${when ? ` · ${when}` : ""}`
+      : "League office is processing results";
+
   return (
     <div className="franchise-advancing-overlay" role="status" aria-live="polite" aria-busy="true">
       <div className="franchise-advancing-card">
         <div className="franchise-advancing-spinner" aria-hidden />
         <div className="franchise-advancing-copy">
           <strong>{label}</strong>
-          <span>League office is processing results</span>
+          <span>{detail}</span>
+          {canStop && pct !== null ? (
+            <div className="franchise-advancing-bar" aria-hidden>
+              <div className="franchise-advancing-bar__fill" style={{ width: `${pct}%` }} />
+            </div>
+          ) : null}
         </div>
+        {canStop ? (
+          <button
+            type="button"
+            className="franchise-advancing-stop"
+            onClick={handleStop}
+            disabled={stopping}
+          >
+            {stopping ? "Stopping…" : "Stop sim"}
+          </button>
+        ) : null}
       </div>
     </div>
   );
@@ -551,6 +615,7 @@ export function GameUIProvider({ children }) {
   );
   const [advancing, setAdvancing] = useState(false);
   const [advancingLabel, setAdvancingLabel] = useState("Simulating league day…");
+  const [advancingCanStop, setAdvancingCanStop] = useState(false);
   const advancingDepthRef = useRef(0);
   const advancingSafetyTimerRef = useRef(null);
   const [franchiseEventForceOpen, setFranchiseEventForceOpen] = useState(false);
@@ -572,9 +637,10 @@ export function GameUIProvider({ children }) {
     }
   }, []);
 
-  const beginAdvancing = useCallback((label = "Simulating league day…") => {
+  const beginAdvancing = useCallback((label = "Simulating league day…", opts = {}) => {
     advancingDepthRef.current += 1;
     setAdvancingLabel(label);
+    setAdvancingCanStop(Boolean(opts && opts.canStop));
     setAdvancing(true);
     if (advancingSafetyTimerRef.current) {
       clearTimeout(advancingSafetyTimerRef.current);
@@ -598,6 +664,7 @@ export function GameUIProvider({ children }) {
         advancingSafetyTimerRef.current = null;
       }
       setAdvancing(false);
+      setAdvancingCanStop(false);
     }
   }, []);
 
@@ -1094,7 +1161,7 @@ export function GameUIProvider({ children }) {
   ]);
 
   const onAdvanceFranchise = useCallback(
-    async ({ mode = "day", count = 1, auto_resolve: autoResolve } = {}) => {
+    async ({ mode = "day", count = 1, auto_resolve: autoResolve, target_iso: targetIso = "" } = {}) => {
       if (!franchiseState) return null;
       const phase = String(franchiseState.phase || franchiseState.season_phase || "");
       if (phase === "complete") return null;
@@ -1129,12 +1196,13 @@ export function GameUIProvider({ children }) {
       const c = Math.max(1, Number(count) || 1);
       const soloDay = m === "day" && c === 1;
       if (soloDay && !franchiseState?.flags?.can_advance) return null;
+      if (m === "to_date" && !/^\d{4}-\d{2}-\d{2}$/.test(String(targetIso || ""))) return null;
       const multiDayBlock =
-        m === "days" || m === "games" || m === "next_game" || (m === "day" && c > 1);
+        m === "days" || m === "games" || m === "next_game" || m === "to_date" || (m === "day" && c > 1);
       const seasonBlock = m === "season";
       const bulkSim = multiDayBlock || seasonBlock;
       const effectiveAuto = autoResolve === undefined ? Boolean(bulkSim) : Boolean(autoResolve);
-      beginAdvancing(advancingLabelFor({ mode: m, count: c }));
+      beginAdvancing(advancingLabelFor({ mode: m, count: c, targetIso }), { canStop: Boolean(bulkSim) });
       setError(null);
       let res = null;
       try {
@@ -1143,17 +1211,20 @@ export function GameUIProvider({ children }) {
           const targetMode =
             m === "next_game"
               ? "next_game"
-              : seasonBlock
-                ? "season"
-                : m === "games"
-                  ? "games"
-                  : "days";
+              : m === "to_date"
+                ? "to_date"
+                : seasonBlock
+                  ? "season"
+                  : m === "games"
+                    ? "games"
+                    : "days";
           const targetCount = seasonBlock ? 1 : c;
           res = await advanceFranchise({
             mode: targetMode,
             count: targetCount,
             auto_resolve: effectiveAuto,
             auto_fill_lines: effectiveAuto,
+            ...(targetMode === "to_date" ? { target_iso: String(targetIso) } : {}),
           });
           mergeFranchiseState(res?.state);
         } else {
@@ -1174,7 +1245,7 @@ export function GameUIProvider({ children }) {
         const pausedForDesk = step?.bulk && stopped === "user_action";
         const stalled =
           status === "blocked"
-          || (step?.bulk && completed <= 0 && Boolean(stopped) && stopped !== "count");
+          || (step?.bulk && completed <= 0 && Boolean(stopped) && stopped !== "count" && stopped !== "user_stop");
         if (stalled || pausedForDesk) {
           setError(
             String(
@@ -1655,7 +1726,7 @@ export function GameUIProvider({ children }) {
     <FranchiseStateContext.Provider value={franchiseState}>
       <GameUIContext.Provider value={value}>
         {children}
-      {advancing ? <AdvancingOverlay label={advancingLabel} /> : null}
+      {advancing ? <AdvancingOverlay label={advancingLabel} canStop={advancingCanStop} /> : null}
       <BreakingNewsLayer franchiseState={franchiseState} screen={screen} setScreen={setScreen} />
       <ShowcasePopupLayer />
       <TradeDemandCrisisOverlay />

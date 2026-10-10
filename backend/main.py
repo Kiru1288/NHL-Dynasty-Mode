@@ -139,9 +139,14 @@ class FranchiseStartBody(BaseModel):
 class FranchiseAdvanceBody(BaseModel):
     mode: str = Field(
         default="day",
-        description="day | days | game | games | season | next_game",
+        description="day | days | game | games | season | next_game | to_date",
     )
     count: int = Field(default=1, ge=1, le=320)
+    target_iso: Optional[str] = Field(
+        default=None,
+        pattern=r"^\d{4}-\d{2}-\d{2}$",
+        description="For mode=to_date: sim until this calendar date (YYYY-MM-DD) becomes today.",
+    )
     auto_resolve: bool = Field(
         default=True,
         description="If true, pending GM prompts pick the first option during bulk sims.",
@@ -909,12 +914,14 @@ def post_franchise_advance(
     s = _session_or_404(x_franchise_session)
     b = body or FranchiseAdvanceBody()
     mode = (b.mode or "day").strip().lower()
-    allowed = {"day", "days", "game", "games", "season", "next_game"}
+    allowed = {"day", "days", "game", "games", "season", "next_game", "to_date"}
     if mode not in allowed:
         raise HTTPException(
             status_code=400,
             detail=f"Invalid mode {b.mode!r}; use one of: {', '.join(sorted(allowed))}",
         )
+    if mode == "to_date" and not b.target_iso:
+        raise HTTPException(status_code=400, detail="mode 'to_date' requires target_iso (YYYY-MM-DD).")
 
     simple_one_day = mode == "day" and int(b.count) == 1
 
@@ -934,6 +941,12 @@ def post_franchise_advance(
         if mode == "next_game":
             step = advance_franchise_to_next_user_game(
                 s,
+                auto_resolve_decisions=bool(b.auto_resolve),
+            )
+        elif mode == "to_date":
+            step = franchise_sim.advance_franchise_to_date(
+                s,
+                target_iso=str(b.target_iso),
                 auto_resolve_decisions=bool(b.auto_resolve),
             )
         elif simple_one_day and b.auto_resolve:
@@ -979,6 +992,25 @@ def post_franchise_advance(
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
     return {"step": step, "state": state}
+
+
+@app.post("/api/franchise/advance/stop")
+def post_franchise_advance_stop(
+    x_franchise_session: Optional[str] = Header(default=None),
+) -> dict[str, Any]:
+    """Ask the running bulk sim to stop at the next day boundary (no-op when nothing is running)."""
+    s = _session_or_404(x_franchise_session)
+    requested = franchise_sim.request_sim_stop(s)
+    return {"ok": True, "stop_requested": bool(requested), "progress": franchise_sim.get_sim_progress(s)}
+
+
+@app.get("/api/franchise/advance/progress")
+def get_franchise_advance_progress(
+    x_franchise_session: Optional[str] = Header(default=None),
+) -> dict[str, Any]:
+    """Cheap progress snapshot (day X of Y, current date) for the sim overlay."""
+    s = _session_or_404(x_franchise_session)
+    return franchise_sim.get_sim_progress(s)
 
 
 @app.post("/api/franchise/playoffs/enter")

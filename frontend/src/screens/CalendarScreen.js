@@ -1363,6 +1363,7 @@ function CalendarScreen(props = {}) {
   const [choiceError, setChoiceError] = useState("");
   const [advanceBlockedMessage, setAdvanceBlockedMessage] = useState("");
   const [advanceErrorMessage, setAdvanceErrorMessage] = useState("");
+  const [simStopNotice, setSimStopNotice] = useState("");
   const [legendFilter, setLegendFilter] = useState(null);
   const [worldJuniorsMenuOpen, setWorldJuniorsMenuOpen] = useState(false);
   const [wjcMenuSnapshot, setWjcMenuSnapshot] = useState(null);
@@ -1839,17 +1840,19 @@ function CalendarScreen(props = {}) {
   );
 
   const handleAdvanceCalendar = useCallback(
-    async ({ mode = "day", count = 1 } = {}) => {
+    async ({ mode = "day", count = 1, targetIso = "" } = {}) => {
       if (isAdvancing || typeof gameUI?.onAdvanceFranchise !== "function") return;
 
       setAdvanceBlockedMessage("");
       setAdvanceErrorMessage("");
+      setSimStopNotice("");
 
       try {
         const result = await gameUI.onAdvanceFranchise({
           mode,
           count: Math.max(1, Number(count) || 1),
           auto_resolve: true,
+          ...(mode === "to_date" ? { target_iso: targetIso } : {}),
         });
         if (!result) return;
 
@@ -1857,6 +1860,16 @@ function CalendarScreen(props = {}) {
         const lastStep = step?.bulk ? step.last_step || step : step;
         const status = String(lastStep?.status || step?.status || "").toLowerCase();
         const nextState = result?.state || gameUI?.franchiseState || rootState;
+
+        if (step?.stopped_by_user) {
+          const days = Number(step?.steps_completed || 0);
+          const stoppedIso = toISODate(nextState?.nhl_today?.iso || nextState?.nhlToday?.iso || step?.iso || "");
+          setSimStopNotice(
+            days > 0
+              ? `Sim stopped${stoppedIso ? ` on ${formatLongDate(stoppedIso)}` : ""} after ${days} day${days === 1 ? "" : "s"}.`
+              : "Sim stopped before any day was simulated."
+          );
+        }
 
         if (status === "blocked") {
           const reason = String(lastStep?.reason || step?.reason || "").toLowerCase();
@@ -1946,6 +1959,27 @@ function CalendarScreen(props = {}) {
   const handleAdvance15Days = useCallback(() => {
     return handleAdvanceCalendar({ mode: "days", count: 15 });
   }, [handleAdvanceCalendar]);
+
+  // Sim to the day picked on the calendar grid. The picked date becomes "today"
+  // with its games unplayed. Only offered in preseason / regular season, where
+  // the calendar days are the simmed unit.
+  const todayISO = useMemo(() => toISODate(currentDate), [currentDate]);
+  const simPhaseKey = String(rootState?.phase || rootState?.season_phase || "").toLowerCase();
+  const canSimToSelectedDate =
+    (simPhaseKey === "regular" || simPhaseKey === "preseason") &&
+    Boolean(selectedDateISO) &&
+    Boolean(todayISO) &&
+    selectedDateISO > todayISO;
+  const simToDateLabel = useMemo(() => {
+    const d = toDateObject(selectedDateISO);
+    if (!d) return "Sim to Date";
+    return `Sim to ${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
+  }, [selectedDateISO]);
+
+  const handleSimToSelectedDate = useCallback(() => {
+    if (!canSimToSelectedDate) return undefined;
+    return handleAdvanceCalendar({ mode: "to_date", targetIso: selectedDateISO });
+  }, [canSimToSelectedDate, handleAdvanceCalendar, selectedDateISO]);
 
   const handleStorylineChoice = useCallback(
     async (storylineId, choiceId) => {
@@ -2398,6 +2432,20 @@ function CalendarScreen(props = {}) {
               >
                 +15 Days
               </button>
+
+              <button
+                className={`nhlcal-advance-button nhlcal-advance-button-secondary ${isAdvancing ? "is-busy" : ""}`}
+                type="button"
+                onClick={handleSimToSelectedDate}
+                disabled={isAdvancing || !canSimToSelectedDate}
+                title={
+                  canSimToSelectedDate
+                    ? "Sim every day up to the date selected on the calendar"
+                    : "Select a future date on the calendar to sim to it"
+                }
+              >
+                {simToDateLabel}
+              </button>
             </div>
 
           </div>
@@ -2406,6 +2454,12 @@ function CalendarScreen(props = {}) {
         {scheduleDataMissing ? (
           <div className="nhlcal-schedule-alert" role="status">
             Schedule data is missing or not loaded from the backend yet.
+          </div>
+        ) : null}
+
+        {simStopNotice ? (
+          <div className="nhlcal-schedule-alert" role="status">
+            {simStopNotice}
           </div>
         ) : null}
 

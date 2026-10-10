@@ -5840,6 +5840,48 @@ button.ui-interactive:disabled {
   letter-spacing: 0.04em;
 }
 
+.franchise-advancing-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.franchise-advancing-bar {
+  height: 4px;
+  margin-top: 4px;
+  border-radius: 2px;
+  background: rgba(19, 216, 231, 0.16);
+  overflow: hidden;
+}
+
+.franchise-advancing-bar__fill {
+  height: 100%;
+  background: #13d8e7;
+  transition: width 0.4s ease;
+}
+
+.franchise-advancing-stop {
+  flex: 0 0 auto;
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 120, 110, 0.55);
+  background: rgba(255, 90, 80, 0.12);
+  color: #ffd9d4;
+  font-size: 0.7rem;
+  font-weight: 1000;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.franchise-advancing-stop:hover:not(:disabled) {
+  background: rgba(255, 90, 80, 0.24);
+}
+
+.franchise-advancing-stop:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 @keyframes franchise-advance-spin {
   to {
     transform: rotate(360deg);

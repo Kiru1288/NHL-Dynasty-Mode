@@ -18363,18 +18363,90 @@ def advance_franchise_one_game(session: FranchiseSession) -> Dict[str, Any]:
     return advance_franchise_day(session)
 
 
+def _calendar_index_for_iso(session: FranchiseSession, iso: str) -> Optional[int]:
+    """Calendar index of an ISO date (YYYY-MM-DD), or None when the date is not on the calendar."""
+    want = str(iso or "").strip()[:10]
+    if not want:
+        return None
+    cal = getattr(session, "nhl_calendar", None) or []
+    for i, row in enumerate(cal):
+        if not isinstance(row, dict):
+            continue
+        row_iso = str(row.get("iso") or row.get("date") or row.get("calendar_iso") or "")[:10]
+        if row_iso == want:
+            return i
+    return None
+
+
+def request_sim_stop(session: FranchiseSession) -> bool:
+    """Ask a running bulk sim to stop at the next day boundary. False when no sim is running."""
+    prog = getattr(session, "_sim_progress", None)
+    if not isinstance(prog, dict) or not prog.get("active"):
+        return False
+    session._sim_stop_requested = True
+    prog["stop_requested"] = True
+    return True
+
+
+def get_sim_progress(session: FranchiseSession) -> Dict[str, Any]:
+    """Plain-dict snapshot of the running (or last) bulk sim for the progress overlay."""
+    prog = getattr(session, "_sim_progress", None)
+    if not isinstance(prog, dict):
+        return {"active": False}
+    return dict(prog)
+
+
+def advance_franchise_to_date(
+    session: FranchiseSession,
+    *,
+    target_iso: str,
+    auto_resolve_decisions: bool = False,
+) -> Dict[str, Any]:
+    """
+    Sim until the calendar reaches ``target_iso``.
+
+    The target date becomes "today" with its games still unplayed, so every day
+    before it is simulated. The sim still stops early at the same places a day
+    sim does (pending decisions, desk interrupts, phase changes, user Stop).
+    """
+    target_idx = _calendar_index_for_iso(session, target_iso)
+    cur = int(getattr(session, "calendar_cursor", 0) or 0)
+    if target_idx is None:
+        raise ValueError(f"{target_iso!r} is not on the franchise calendar.")
+    if target_idx <= cur:
+        raise ValueError("Pick a date after today to sim to.")
+    days = int(target_idx - cur)
+    result = advance_franchise_bulk(
+        session,
+        mode="days",
+        count=days,
+        auto_resolve_decisions=bool(auto_resolve_decisions),
+        target_iso=str(target_iso or "")[:10],
+    )
+    if isinstance(result, dict):
+        result["mode"] = "to_date"
+        result["target_iso"] = str(target_iso or "")[:10]
+        result["target_days"] = days
+        result["reached_target"] = int(getattr(session, "calendar_cursor", 0) or 0) >= int(target_idx)
+    return result
+
+
 def advance_franchise_bulk(
     session: FranchiseSession,
     *,
     mode: str = "day",
     count: int = 1,
     auto_resolve_decisions: bool = False,
+    target_iso: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Run multiple advance steps server-side.
 
     Manual/day advancement must not auto-resolve decisions.
     Full season/bulk sim may opt into auto-resolve by explicitly passing true.
+
+    A running sim can be stopped between days with ``request_sim_stop`` (stopped
+    reason ``user_stop``); progress is published on ``session._sim_progress``.
     """
     raw = (mode or "day").strip().lower()
 
@@ -18387,6 +18459,29 @@ def advance_franchise_bulk(
     guard = 0
     max_iter = 6000
     stopped: Optional[str] = None
+
+    # Progress + stop flag (plain values only: sessions are pickled).
+    start_cursor = int(getattr(session, "calendar_cursor", 0) or 0)
+    if eff_mode == "season":
+        try:
+            progress_total = max(
+                1, int(getattr(session, "nhl_regular_season_last_index", start_cursor) or start_cursor) - start_cursor + 1
+            )
+        except Exception:
+            progress_total = 0
+    else:
+        progress_total = int(eff_count)
+    session._sim_stop_requested = False
+    session._sim_progress = {
+        "active": True,
+        "mode": eff_mode,
+        "total": int(progress_total),
+        "done": 0,
+        "iso": _calendar_iso_for_day(session, start_cursor),
+        "start_iso": _calendar_iso_for_day(session, start_cursor),
+        "target_iso": str(target_iso or ""),
+        "stop_requested": False,
+    }
 
     prior_defer = bool(getattr(session, "_defer_prospect_sync", False))
     prior_light = bool(getattr(session, "_light_game_stat_accumulation", False))
@@ -18417,6 +18512,11 @@ def advance_franchise_bulk(
         while guard < max_iter:
             guard += 1
 
+            # User pressed Stop: finish cleanly at the day boundary (never mid-day).
+            if bool(getattr(session, "_sim_stop_requested", False)):
+                stopped = "user_stop"
+                break
+
             if auto_resolve_decisions and getattr(session, "pending_decisions", None):
                 _auto_resolve_pending_decisions(session)
 
@@ -18436,6 +18536,13 @@ def advance_franchise_bulk(
                 step = advance_franchise_day(session)
 
             steps.append(step)
+
+            try:
+                prog = session._sim_progress
+                prog["done"] = len(steps)
+                prog["iso"] = _calendar_iso_for_day(session, int(getattr(session, "calendar_cursor", 0) or 0))
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
 
             if bool(getattr(session, "_audit_schedule_invariants", False)) and (len(steps) % 25 == 0):
                 print(
@@ -18509,6 +18616,12 @@ def advance_franchise_bulk(
             except Exception:
                 _swallowed_log.debug("suppressed exception", exc_info=True)
     finally:
+        session._sim_stop_requested = False
+        try:
+            session._sim_progress["active"] = False
+            session._sim_progress["stopped_reason"] = str(stopped or "")
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         try:
             from services.team_identity_service import refresh_team_identities as _rti
 
@@ -18559,6 +18672,7 @@ def advance_franchise_bulk(
         "bulk": True,
         "steps_completed": len(steps),
         "stopped_reason": stopped,
+        "stopped_by_user": stopped == "user_stop",
         "last_step": last,
         "recent_steps": tail,
         "pending_decisions": _pending_decision_snapshot(session),
