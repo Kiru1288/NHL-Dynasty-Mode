@@ -543,6 +543,25 @@ def post_franchise_governance_lobby(
     return json_safe({"governance": payload})
 
 
+@app.post("/api/franchise/governance/expansion-protection")
+def post_franchise_expansion_protection(
+    body: dict[str, Any] = Body(default=None),
+    x_franchise_session: Optional[str] = Header(default=None),
+) -> dict[str, Any]:
+    """Save the user's expansion-draft protection list (7F / 3D / 1G)."""
+    from services.json_safe import json_safe
+    from services.league_governance import build_governance_payload, set_expansion_protection
+
+    s = _session_or_404(x_franchise_session)
+    b = body or {}
+    try:
+        set_expansion_protection(s, [str(x) for x in (b.get("player_ids") or [])])
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    save_session(s)
+    return json_safe({"governance": build_governance_payload(s)})
+
+
 @app.get("/api/franchise/team-identity")
 def get_franchise_team_identity(x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
     """Every club's playing identity (style, traits, what it hunts for)."""

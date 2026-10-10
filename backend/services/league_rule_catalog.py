@@ -1,5 +1,6 @@
 """
-Board of Governors rule catalog — 200 proposals a franchise GM can vote on.
+Board of Governors rule catalog — 700 proposals a franchise GM can vote on
+(200 here + 500 in league_rule_catalog_ext).
 
 Every effect key is consumed by a live system (see league_governance.EFFECT_SPECS for
 the consumer of each key). Nothing here is decorative: a passed rule changes revenue,
@@ -187,8 +188,8 @@ RULES: List[Dict[str, Any]] = [
     # --------------------------------------------------------------- PLAYER (25)
     R("PLY01", "player", "Mandatory Visors", "All players must wear visors.", {"injury_rate": -3.0, "fan": -0.2}, {}, 0.15),
     R("PLY02", "player", "Neck Laceration Protection", "Cut-resistant neck guards required.", {"injury_rate": -2.0}, {}, 0.2),
-    R("PLY03", "player", "Blindside Hit Ban Expanded", "Larger suspensions for blindside hits.", {"injury_rate": -4.0, "fan": 0.1}, {}, 0.12),
-    R("PLY04", "player", "Fighting Major Becomes Ejection", "Fighting earns a game misconduct.", {"injury_rate": -3.0, "fan": -0.8}, {"all": -0.05}, 0.0),
+    R("PLY03", "player", "Blindside Hit Ban Expanded", "Larger suspensions for blindside hits.", {"injury_rate": -4.0, "penalty_rate": 3.0, "fan": 0.1}, {}, 0.12),
+    R("PLY04", "player", "Fighting Major Becomes Ejection", "Fighting earns a game misconduct.", {"injury_rate": -3.0, "penalty_rate": 2.0, "fan": -0.8}, {"all": -0.05}, 0.0),
     R("PLY05", "player", "Hybrid Icing Upgrade", "Faster hybrid icing calls.", {"injury_rate": -1.5}, {}, 0.18),
     R("PLY06", "player", "Mandatory Rest Days", "Players get one guaranteed rest day per week.", {"injury_rate": -2.5, "opex": 0.3}, {"contender": 0.05}, 0.0),
     R("PLY07", "player", "Load Management Allowed", "Clubs may rest healthy stars; fewer injuries, fan backlash.", {"injury_rate": -3.0, "fan": -0.8, "star_rev": -3.0}, {"contender": 0.15, "rebuilder": -0.1}, -0.05),
@@ -200,43 +201,43 @@ RULES: List[Dict[str, Any]] = [
     R("PLY13", "player", "World Cup of Hockey Every 4 Years", "Regular best-on-best tournament.", {"star_rev": 5.0, "rev_all": 0.6}, {}, 0.1),
     R("PLY14", "player", "Player Equipment Weight Limits", "Lighter equipment standards.", {"injury_rate": 1.5, "fan": 0.2}, {}, 0.0),
     R("PLY15", "player", "Stick Flex Regulation", "Limits on ultra-flex sticks.", {"fan": -0.1}, {}, 0.05),
-    R("PLY16", "player", "Goalie Pad Reduction", "Smaller goalie pads.", {"fan": 0.6, "injury_rate": 0.5}, {}, 0.08),
+    R("PLY16", "player", "Goalie Pad Reduction", "Smaller goalie pads: more goals.", {"scoring_pace": 5.0, "fan": 0.6, "injury_rate": 0.5}, {}, 0.08),
     R("PLY17", "player", "Player Agent Fee Cap", "Agent fees capped; fewer agent-driven demands.", {"trade_demand_rate": -8.0, "fa_bonus_demand": -2.0}, {"all": 0.05}, 0.0),
     R("PLY18", "player", "Pre-Season Fitness Testing Returns", "Mandatory fitness testing comes back.", {"injury_rate": -1.0, "trade_demand_rate": 3.0}, {"all": -0.05}, 0.0),
     R("PLY19", "player", "Travel Fatigue Rule", "No back-to-backs involving cross-country flights.", {"injury_rate": -2.0, "opex": 0.2}, {"medium": 0.05}, 0.05),
     R("PLY20", "player", "Star Player Fan Vote", "Fans vote stars onto league marketing campaigns.", {"star_rev": 4.0, "fan": 0.4}, {}, 0.1),
-    R("PLY21", "player", "Diving Fines Doubled", "Embellishment fines doubled.", {"fan": 0.3}, {}, 0.18),
+    R("PLY21", "player", "Diving Fines Doubled", "Embellishment fines doubled: fewer drawn penalties.", {"penalty_rate": -3.0, "fan": 0.3}, {}, 0.18),
     R("PLY22", "player", "Player Tracking Data Shared", "Chip data shared with players' agents.", {"fa_bonus_demand": 2.0, "star_rev": 2.0}, {}, 0.0),
     R("PLY23", "player", "Off-Ice Conduct Policy Tightened", "Harsher suspensions for off-ice conduct.", {"fan": 0.4, "trade_demand_rate": 2.0}, {}, 0.1),
     R("PLY24", "player", "Veteran Leadership Bonus", "League funds veteran mentorship stipends.", {"opex": 0.2, "trade_demand_rate": -4.0}, {"rebuilder": 0.05}, 0.05),
     R("PLY25", "player", "Injury Reserve Roster Spot", "Extra IR roster spot league-wide.", {"injury_rate": -1.0, "opex": 0.2}, {"contender": 0.08}, 0.08),
 
     # ----------------------------------------------------------------- GAME (25)
-    R("GAM01", "game", "10-Minute 3-on-3 Overtime", "Overtime doubles to 10 minutes; fewer shootouts.", {"fan": 0.8, "injury_rate": 0.5}, {}, 0.12),
-    R("GAM02", "game", "Abolish the Shootout", "Ties after overtime stand.", {"fan": -0.4}, {"all": -0.05}, -0.02),
-    R("GAM03", "game", "Three-Point Regulation Win", "3 points for a regulation win, 2 for OT/SO, 1 for an OT loss.", {"fan": 0.6, "rev_all": 0.2}, {"contender": 0.05}, 0.05),
-    R("GAM04", "game", "Coach's Challenge for Any Penalty", "Coaches can challenge any penalty once a game.", {"fan": -0.2}, {}, 0.0),
-    R("GAM05", "game", "Major Penalty Served in Full", "Power plays don't end on a goal for majors.", {"fan": 0.4}, {}, 0.08),
-    R("GAM06", "game", "Bigger Ice Surface Trial", "Two arenas trial a wider sheet.", {"opex": 0.3, "fan": 0.2}, {"poor": -0.1}, -0.05),
+    R("GAM01", "game", "10-Minute 3-on-3 Overtime", "Overtime doubles to 10 minutes; fewer shootouts.", {"ot_minutes": 10, "fan": 0.8, "injury_rate": 0.5}, {}, 0.12),
+    R("GAM02", "game", "Abolish the Shootout", "Ties after overtime stand: both clubs take a point.", {"ties_allowed": 1, "fan": -0.4}, {"all": -0.05}, -0.02),
+    R("GAM03", "game", "Three-Point Regulation Win", "3 points for a regulation win, 2 for OT/SO, 1 for an OT loss.", {"pts_reg_win": 3, "pts_ot_win": 2, "pts_otl": 1, "fan": 0.6, "rev_all": 0.2}, {"contender": 0.05}, 0.05),
+    R("GAM04", "game", "Coach's Challenge for Any Penalty", "Coaches can challenge any penalty once a game: fewer calls stand.", {"penalty_rate": -6.0, "fan": -0.2}, {}, 0.0),
+    R("GAM05", "game", "Major Penalty Served in Full", "Power plays don't end on a goal for majors.", {"pp_efficiency": 6.0, "fan": 0.4}, {}, 0.08),
+    R("GAM06", "game", "Bigger Ice Surface Trial", "Two arenas trial a wider sheet: a little more open play.", {"scoring_pace": 1.0, "opex": 0.3, "fan": 0.2}, {"poor": -0.1}, -0.05),
     R("GAM07", "game", "Play-In Round", "Seeds 7-10 in each conference play in.", {"playoff_rev": 10.0, "fan": 0.6, "rev_all": 0.4}, {"rebuilder": 0.08}, 0.05),
     R("GAM08", "game", "Shorten Preseason to Three Games", "Preseason cut to three games.", {"rev_all": -0.2, "injury_rate": -0.5}, {}, 0.05),
     R("GAM09", "game", "Outdoor Game Expansion", "Four outdoor games every season.", {"rev_all": 0.8, "fan": 0.6}, {"large": 0.05}, 0.1),
     R("GAM10", "game", "International Regular-Season Series", "Six regular-season games in Europe.", {"star_rev": 4.0, "rev_all": 0.4, "injury_rate": 0.5}, {}, 0.05),
     R("GAM11", "game", "Video Review in Booth Only", "All reviews handled centrally in Toronto.", {"fan": 0.3}, {}, 0.12),
-    R("GAM12", "game", "Delay-of-Game Puck-Over-Glass Relaxed", "Puck-over-glass becomes a faceoff, not a penalty.", {"fan": 0.2}, {}, 0.08),
-    R("GAM13", "game", "Faceoff Violation Penalty", "Second faceoff violation is a minor.", {"fan": -0.1}, {}, 0.0),
-    R("GAM14", "game", "Goalie Interference Standard", "Clearer goalie interference rule.", {"fan": 0.4}, {}, 0.15),
+    R("GAM12", "game", "Delay-of-Game Puck-Over-Glass Relaxed", "Puck-over-glass becomes a faceoff, not a penalty.", {"penalty_rate": -4.0, "fan": 0.2}, {}, 0.08),
+    R("GAM13", "game", "Faceoff Violation Penalty", "Second faceoff violation is a minor.", {"penalty_rate": 5.0, "fan": -0.1}, {}, 0.0),
+    R("GAM14", "game", "Goalie Interference Standard", "Clearer goalie interference rule: fewer goals wiped out.", {"scoring_pace": 1.5, "fan": 0.4}, {}, 0.15),
     R("GAM15", "game", "Matinee Game Push", "More afternoon games for families.", {"rev_all": 0.3, "fan": 0.3}, {}, 0.1),
     R("GAM16", "game", "Back-to-Back Limit", "No team plays more than 12 back-to-backs.", {"injury_rate": -1.5, "opex": 0.2}, {}, 0.05),
     R("GAM17", "game", "Rivalry Week", "Division rivals meet in a marketed week.", {"rev_all": 0.4, "fan": 0.5}, {}, 0.12),
-    R("GAM18", "game", "Two Referees + Video Ref", "A third official watches video live.", {"opex": 0.2, "fan": 0.3}, {}, 0.05),
+    R("GAM18", "game", "Two Referees + Video Ref", "A third official watches video live: more infractions caught.", {"penalty_rate": 4.0, "opex": 0.2, "fan": 0.3}, {}, 0.05),
     R("GAM19", "game", "Bye Week Doubled", "Two bye weeks per team.", {"injury_rate": -1.5, "rev_all": -0.3}, {"contender": 0.05}, 0.0),
     R("GAM20", "game", "Conference-Based Playoffs", "Playoffs reseed by conference standings.", {"playoff_rev": 5.0, "fan": 0.3}, {}, 0.05),
-    R("GAM21", "game", "Overtime Power Play Cap", "OT minors become 4-on-3 for 60 seconds.", {"fan": 0.2}, {}, 0.05),
+    R("GAM21", "game", "Overtime Power Play Cap", "OT minors become 4-on-3 for 60 seconds.", {"pp_efficiency": 1.0, "fan": 0.2}, {}, 0.05),
     R("GAM22", "game", "Shootout Shooter Order Free", "Coaches can reuse shooters in the shootout.", {"fan": 0.2, "star_rev": 1.0}, {}, 0.05),
     R("GAM23", "game", "Neutral-Site Showcase Games", "Two neutral-site games in non-NHL cities.", {"rev_all": 0.3, "expansion_pressure": 5.0}, {}, 0.05),
-    R("GAM24", "game", "Shot Clock Trial", "30-second offensive-zone shot clock trial.", {"fan": -0.3}, {"all": -0.05}, -0.05),
-    R("GAM25", "game", "Empty-Net Delay Rule", "Pulled goalie can't return until a stoppage.", {"fan": 0.1}, {}, 0.0),
+    R("GAM24", "game", "Shot Clock Trial", "30-second offensive-zone shot clock: more shots, more goals.", {"scoring_pace": 6.0, "fan": -0.3}, {"all": -0.05}, -0.05),
+    R("GAM25", "game", "Empty-Net Delay Rule", "Pulled goalie can't return until a stoppage.", {"scoring_pace": -1.0, "fan": 0.1}, {}, 0.0),
 
     # -------------------------------------------------------------- UNIFORM (15)
     R("UNI01", "uniform", "Jersey Length Standard", "Jerseys must hang below the pants line; no more tucks.", {"fan": 0.2}, {}, 0.08),
@@ -275,11 +276,25 @@ RULES: List[Dict[str, Any]] = [
 
 RULE_BY_ID: Dict[str, Dict[str, Any]] = {r["id"]: r for r in RULES}
 
-assert len(RULES) == 200, f"rule catalog must hold 200 rules, has {len(RULES)}"
+assert len(RULES) == 200, f"base rule catalog must hold 200 rules, has {len(RULES)}"
+
+# 500 more proposals (league_rule_catalog_ext) so long saves keep seeing new ballots.
+from services.league_rule_catalog_ext import EXTRA_CATEGORIES, extra_rules  # noqa: E402
+
+CATEGORIES.update(EXTRA_CATEGORIES)
+RULES.extend(extra_rules(R))
+RULE_BY_ID = {r["id"]: r for r in RULES}
+
+assert len(RULES) == 700, f"rule catalog must hold 700 rules, has {len(RULES)}"
 assert len(RULE_BY_ID) == len(RULES), "duplicate rule id in catalog"
+assert all(r["cat"] in CATEGORIES for r in RULES), "rule with unknown category"
 
 #: Effects that SET a value (latest passed rule wins) rather than add.
-ABSOLUTE_EFFECTS = frozenset({"max_term_own", "max_term_ufa"})
+ABSOLUTE_EFFECTS = frozenset({
+    "max_term_own", "max_term_ufa",
+    # On-ice format rules (app.sim_engine.league.game_rules)
+    "ot_minutes", "ties_allowed", "pts_reg_win", "pts_ot_win", "pts_otl",
+})
 
 #: Candidate cities for relocation / expansion: (city, abbr, conference, division hint, value_b, tier)
 CANDIDATE_MARKETS: List[Dict[str, Any]] = [

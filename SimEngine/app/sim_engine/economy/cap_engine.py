@@ -105,8 +105,23 @@ def nhl_minimum_salary_millions(season_start_year: Optional[int] = None) -> floa
     return 0.775
 
 
+#: League-minimum change voted by the Board of Governors (set by
+#: league_governance.sync_governance_to_league). Callers of the bury threshold do not
+#: carry the league, so the live value is mirrored here.
+_BOARD_MIN_SALARY_DELTA_M = 0.0
+
+
+def set_board_min_salary_delta(delta_m: float) -> None:
+    global _BOARD_MIN_SALARY_DELTA_M
+    try:
+        _BOARD_MIN_SALARY_DELTA_M = float(delta_m or 0.0)
+    except (TypeError, ValueError):
+        _BOARD_MIN_SALARY_DELTA_M = 0.0
+
+
 def nhl_bury_threshold_millions(season_start_year: Optional[int] = None) -> float:
-    return nhl_minimum_salary_millions(season_start_year) + NHL_BURY_BONUS_M
+    """Bury relief = league minimum + $375K, so a Board minimum-salary rule moves it too."""
+    return nhl_minimum_salary_millions(season_start_year) + _BOARD_MIN_SALARY_DELTA_M + NHL_BURY_BONUS_M
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:

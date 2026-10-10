@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getGovernance, lobbyGovernance, voteGovernance } from "../../services/franchiseService";
+import { getGovernance, lobbyGovernance, setExpansionProtection, voteGovernance } from "../../services/franchiseService";
 import { getTeamLogoSrc, toLogoUrl } from "../../utils/teamLogos";
 import { pickFranchiseData } from "../shared/eventHelpers";
 import "../../styles/nhlcalShell.css";
@@ -282,6 +282,7 @@ function ProposalCard({ proposal, tokens, busy, onVote, onLobby, reveal, onNext,
               {forecast.label || "—"} · ≈{expected.toFixed(0)} of {needed}
             </strong>
           </div>
+          {proposal.room_mood ? <p className={`${PREFIX}-note`}>Room read: {proposal.room_mood}.</p> : null}
           <div className={`${PREFIX}-dock`}>
             <button type="button" className="nhlcal-advance-button" disabled={busy} onClick={() => onVote("yes")}>
               Agree
@@ -441,6 +442,83 @@ function SidePanel({ gov }) {
   );
 }
 
+const PROTECT_LABEL = { F: "Forwards", D: "Defense", G: "Goalies" };
+
+function ExpansionProtectionPanel({ draft, onSaved }) {
+  const players = asArray(draft?.players);
+  const limits = draft?.limits || { F: 7, D: 3, G: 1 };
+  const [picked, setPicked] = useState(() =>
+    new Set(players.filter((p) => p.protected && !p.exempt).map((p) => p.player_id))
+  );
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState("");
+  const counts = { F: 0, D: 0, G: 0 };
+  players.forEach((p) => {
+    if (picked.has(p.player_id) && !p.exempt) counts[p.pos] += 1;
+  });
+  const toggle = (p) => {
+    if (p.exempt) return;
+    setMsg("");
+    if (picked.has(p.player_id)) {
+      setPicked((prev) => {
+        const next = new Set(prev);
+        next.delete(p.player_id);
+        return next;
+      });
+    } else if (counts[p.pos] < Number(limits[p.pos] || 0)) {
+      setPicked((prev) => new Set(prev).add(p.player_id));
+    } else {
+      setMsg(`You can protect ${limits[p.pos]} ${PROTECT_LABEL[p.pos].toLowerCase()}.`);
+    }
+  };
+  const save = async () => {
+    setSaving(true);
+    setMsg("");
+    try {
+      const data = await setExpansionProtection([...picked]);
+      if (data?.governance) onSaved?.(data.governance);
+      setMsg("Protection list saved.");
+    } catch (e) {
+      setMsg(e?.response?.data?.detail || e?.message || "Could not save the list");
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <section className={`${PREFIX}-panel`} style={{ padding: 14, display: "flex", flexDirection: "column", gap: 8 }}>
+      <h3 style={{ margin: 0 }}>Expansion draft: {asArray(draft?.cities).join(" & ")}</h3>
+      <p className={`${PREFIX}-note`} style={{ margin: 0 }}>
+        {draft?.when}. Protect {limits.F} forwards, {limits.D} defensemen and {limits.G} goalie. You lose{" "}
+        {Number(draft?.n_new || 1) === 1 ? "one unprotected player" : `${draft.n_new} unprotected players`}. First- and
+        second-year pros are exempt; no-move clauses must be protected.
+        {draft?.user_set ? "" : " Until you save, your highest-rated players are protected automatically."}
+      </p>
+      <p className={`${PREFIX}-muted`} style={{ margin: 0 }}>
+        {["F", "D", "G"].map((k) => `${PROTECT_LABEL[k]} ${counts[k]}/${limits[k]}`).join(" · ")}
+      </p>
+      <div style={{ maxHeight: 280, overflow: "auto", display: "grid", gap: 2 }}>
+        {players.map((p) => (
+          <label key={p.player_id} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12, opacity: p.contract || p.exempt ? 1 : 0.6 }}>
+            <input type="checkbox" checked={p.exempt || picked.has(p.player_id)} disabled={p.exempt} onChange={() => toggle(p)} />
+            <span style={{ width: 18 }}>{p.pos}</span>
+            <span style={{ flex: 1 }}>{p.name}</span>
+            <span>{Math.round(p.ovr)} OVR · {p.age}</span>
+            <span className={`${PREFIX}-muted`} style={{ width: 70, textAlign: "right" }}>
+              {p.exempt ? "Exempt" : p.nmc ? "NMC" : !p.contract ? "Unsigned" : ""}
+            </span>
+          </label>
+        ))}
+      </div>
+      <div className={`${PREFIX}-dock`}>
+        <button type="button" className="nhlcal-advance-button" disabled={saving} onClick={save}>
+          {saving ? "Saving…" : "Save protection list"}
+        </button>
+        {msg ? <span className={`${PREFIX}-muted`}>{msg}</span> : null}
+      </div>
+    </section>
+  );
+}
+
 export default function BoardOfGovernorsMenu({ franchiseState = {}, eventData = {}, onContinue, onBack }) {
   const initial = pickFranchiseData(franchiseState, eventData, ["board_of_governors", "offseason.board_of_governors"]);
   const [gov, setGov] = useState(initial && typeof initial === "object" ? initial : null);
@@ -584,7 +662,25 @@ export default function BoardOfGovernorsMenu({ franchiseState = {}, eventData = 
             <span>On-ice and presentation rules need a majority. Bylaws need two-thirds. Relocation and expansion need three-quarters.</span>
             <span>Every governor votes their own club's interest: market size, profit, contender or rebuilder, cap room.</span>
             <span>You get two lobbying calls. Use them on the votes that matter to your club.</span>
-            <span>Passed rules change revenue, the cap, contracts, trades, scouting, injuries and franchise values.</span>
+            <span>Passed rules change on-ice play (scoring, penalties, overtime, the points system), revenue, the cap, contracts, trades, scouting, injuries and franchise values.</span>
+            {gov?.on_ice?.points ? (
+              <span>
+                Current rules: {gov.on_ice.points} points · {gov.on_ice.ot_minutes}-minute OT ·{" "}
+                {gov.on_ice.shootout ? "shootout" : "no shootout (ties stand)"}.
+              </span>
+            ) : null}
+            {gov?.expansion_draft?.due ? (
+              <span>
+                Expansion draft this offseason ({asArray(gov.expansion_draft.cities).join(" & ")}): set your protection
+                list before you leave the meeting.
+              </span>
+            ) : null}
+            {asArray(gov?.expansion_draft?.upcoming).map((u, i) => (
+              <span key={`up-${i}`}>
+                Approved expansion ({asArray(u.cities).join(" & ")}): expansion draft at the {u.draft_offseason} Board
+                meeting; clubs join for {u.start_season}-{String((Number(u.start_season) + 1) % 100).padStart(2, "0")}.
+              </span>
+            ))}
           </div>
           {error ? <p className={`${PREFIX}-error`}>{error}</p> : null}
           <button
@@ -674,9 +770,12 @@ export default function BoardOfGovernorsMenu({ franchiseState = {}, eventData = 
                 {Number(gov.pending_cap_adjust_m).toFixed(2)}M on top of the league projection.
               </p>
             ) : null}
+            {gov?.expansion_draft?.due ? (
+              <ExpansionProtectionPanel draft={gov.expansion_draft} onSaved={setGov} />
+            ) : null}
             <div className={`${PREFIX}-dock`}>
               <button type="button" className="nhlcal-advance-button" onClick={onContinue}>
-                Continue to Cap Report
+                {gov?.expansion_draft?.due ? "Hold the expansion draft & continue" : "Continue to Cap Report"}
               </button>
               <button type="button" className={`${PREFIX}-link`} onClick={() => setStage("floor")}>
                 Back to the floor

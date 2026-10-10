@@ -201,6 +201,12 @@ export async function lobbyGovernance(body) {
   return data;
 }
 
+/** Expansion draft protection list (7F / 3D / 1G). @param {string[]} playerIds */
+export async function setExpansionProtection(playerIds) {
+  const { data } = await api.post("/api/franchise/governance/expansion-protection", { player_ids: playerIds || [] });
+  return data;
+}
+
 export async function getProspectRightsDesk() {
   const { data } = await api.get("/api/franchise/prospect-rights/desk");
   return data;

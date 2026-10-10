@@ -1633,7 +1633,8 @@ function BoardWorkspace({ userTeamId }) {
               <li key={`pending-${i}`}>
                 <span>Approved: {asArray(p.cities).map((c) => c.city).join(" & ")}</span>
                 <span>
-                  Joins {p.start_season}-{String((Number(p.start_season) + 1) % 100).padStart(2, "0")}
+                  Expansion draft: {p.draft_offseason || Number(p.start_season) - 1} Board meeting · joins{" "}
+                  {p.start_season}-{String((Number(p.start_season) + 1) % 100).padStart(2, "0")}
                 </span>
               </li>
             ))}

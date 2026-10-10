@@ -43,9 +43,12 @@ PROPOSALS_PER_MEETING = 5
 LOBBY_TOKENS_PER_MEETING = 2
 LOBBY_SWING = 0.18
 LOBBY_TARGETS = 4
-#: Proposals reach the Board after committee vetting, so governors start out leaning
-#: toward approval; lean and personality decide the close ones. Lower bars get less.
-BOARD_VETTING_BIAS = {"majority": 0.02, "two_thirds": 0.15, "three_quarters": 0.15}
+#: Proposals reach the Board after committee vetting, so a neutral governor sits a
+#: little above whatever bar the proposal needs — the same head start for every
+#: category. Lean, the rule's popularity and personality decide the close ones.
+VETTING_MARGIN = 0.04
+#: Owners lean slightly toward keeping a rule they already operate under.
+REPEAL_STATUS_QUO = -0.03
 #: Chance a meeting includes a repeal vote once the rulebook has this many rules.
 REPEAL_MIN_RULES = 5
 REPEAL_CHANCE = 0.45
@@ -53,13 +56,13 @@ REPEAL_CHANCE = 0.45
 #: Hard bounds on the combined effect of every rule in force (so 30 seasons of
 #: votes can't stack into absurd numbers).
 EFFECT_LIMITS: Dict[str, Tuple[float, float]] = {
-    "rev_all": (-8.0, 10.0),
-    "rev_small": (-6.0, 8.0),
-    "rev_large": (-6.0, 6.0),
+    "rev_all": (-12.0, 15.0),
+    "rev_small": (-9.0, 12.0),
+    "rev_large": (-9.0, 9.0),
     "revenue_share": (-4.0, 6.0),
-    "opex": (-3.0, 4.0),
+    "opex": (-4.5, 6.0),
     "star_rev": (-20.0, 40.0),
-    "fan": (-6.0, 6.0),
+    "fan": (-25.0, 25.0),
     "playoff_rev": (-40.0, 50.0),
     "value_growth": (-2.0, 2.0),
     "cap_growth": (-1.5, 1.5),
@@ -71,13 +74,37 @@ EFFECT_LIMITS: Dict[str, Tuple[float, float]] = {
     "fa_bonus_demand": (-25.0, 25.0),
     "retention_slots": (-2.0, 2.0),
     "retention_max_pct": (-20.0, 20.0),
-    "trade_volume": (-30.0, 40.0),
-    "trade_demand_rate": (-40.0, 40.0),
-    "scouting_budget": (-30.0, 40.0),
-    "injury_rate": (-15.0, 10.0),
+    "trade_volume": (-50.0, 70.0),
+    "trade_demand_rate": (-50.0, 50.0),
+    "scouting_budget": (-35.0, 45.0),
+    "injury_rate": (-35.0, 25.0),
     "relocation_ease": (-0.15, 0.15),
     "expansion_pressure": (-40.0, 50.0),
+    # On-ice rules (read by app.sim_engine.league.game_rules).
+    "scoring_pace": (-18.0, 25.0),
+    "penalty_rate": (-35.0, 45.0),
+    "pp_efficiency": (-25.0, 35.0),
+    "home_ice": (-60.0, 80.0),
 }
+
+#: Catalog values were tuned so small that most rules changed nothing a player could
+#: see (+0.6 fan sentiment on a 0-100 scale ≈ +0.3% revenue). Effects are scaled up
+#: where they are applied and shown, so ballots and live systems agree.
+EFFECT_SCALE: Dict[str, float] = {
+    "fan": 5.0,
+    "injury_rate": 2.5,
+    "trade_volume": 2.0,
+    "trade_demand_rate": 1.5,
+    "rev_all": 1.5,
+    "rev_small": 1.5,
+    "rev_large": 1.5,
+    "opex": 1.5,
+    "scouting_budget": 1.5,
+}
+
+
+def _scaled(key: str, value: float) -> float:
+    return float(value) * EFFECT_SCALE.get(key, 1.0)
 RECENT_PROPOSAL_YEARS = 3
 MAX_LEAGUE_TEAMS = 36
 
@@ -116,6 +143,25 @@ EFFECT_SPECS: Dict[str, Tuple[str, str, str]] = {
     "injury_rate": ("Injury rate", "pct", "world.injuries.maybe_injure_roster_subset"),
     "relocation_ease": ("Relocation pressure", "risk", "league_operations.calculate_relocation_risk"),
     "expansion_pressure": ("Expansion momentum", "pts_raw", "league_governance expansion proposals"),
+    # On-ice (app.sim_engine.league.game_rules → engine + standings)
+    "scoring_pace": ("Goal scoring", "pct", "engine goal rate (event + fast sim)"),
+    "penalty_rate": ("Penalties called", "pct", "engine penalty generation"),
+    "pp_efficiency": ("Power-play scoring", "pct", "engine power-play goals"),
+    "home_ice": ("Home-ice edge", "pct", "engine home goal bonus"),
+    "ot_minutes": ("Overtime length", "minutes", "game_rules.shootout_share + event OT"),
+    "ties_allowed": ("Shootout", "flag_ties", "standings ties"),
+    "pts_reg_win": ("Regulation win", "points", "standings points"),
+    "pts_ot_win": ("OT / shootout win", "points", "standings points"),
+    "pts_otl": ("OT / shootout loss", "points", "standings points"),
+}
+
+#: Defaults the absolute keys fall back to when no rule sets them.
+ABSOLUTE_DEFAULTS: Dict[str, Any] = {
+    "ot_minutes": 5,
+    "ties_allowed": 0,
+    "pts_reg_win": 2,
+    "pts_ot_win": 2,
+    "pts_otl": 1,
 }
 
 CANADA_ABBRS = frozenset({"TOR", "MTL", "OTT", "VAN", "CGY", "EDM", "WPG", "QUE", "HAM", "SAS", "HFX"})
@@ -247,7 +293,7 @@ def compute_modifiers(gov: Dict[str, Any]) -> Dict[str, float]:
                 if prev is None or season >= prev[0]:
                     absolute[k] = (season, float(v))
             else:
-                mods[k] = mods.get(k, 0.0) + float(v)
+                mods[k] = mods.get(k, 0.0) + _scaled(k, float(v))
     for k, v in list(mods.items()):
         lo, hi = EFFECT_LIMITS.get(k, (-1e9, 1e9))
         mods[k] = _clamp(v, lo, hi)
@@ -268,6 +314,12 @@ def sync_governance_to_league(session: Any) -> Dict[str, float]:
             league.governance_floor_delta = float(mods.get("floor_ratio", 0.0))
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
+    try:
+        from app.sim_engine.economy.cap_engine import set_board_min_salary_delta
+
+        set_board_min_salary_delta(float(mods.get("min_salary_m", 0.0)))
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return mods
 
 
@@ -318,7 +370,31 @@ def _team_rows(session: Any) -> Dict[str, Dict[str, Any]]:
             out[str(tid)] = {"market_tier_key": "medium", "profit": 0.0, "revenue": 180.0}
     if out:
         _apply_revenue_sharing(session, list(out.values()))
+        _refresh_relocation_risk(session, out)
     return out
+
+
+def _refresh_relocation_risk(session: Any, rows: Dict[str, Dict[str, Any]]) -> None:
+    """Relocation risk from the post-sharing profit (it was scored before sharing, so a
+    club in the black after sharing could still look like a relocation case)."""
+    try:
+        from services.league_operations import calculate_relocation_risk
+    except Exception:
+        return
+    ease = gov_mod(session, "relocation_ease")
+    teams = getattr(session, "team_by_id", None) or {}
+    for tid, row in rows.items():
+        if "revenue_sharing_m" not in row:
+            continue
+        try:
+            risk = calculate_relocation_risk(
+                teams.get(tid), _sf(row.get("revenue")), _sf(row.get("profit")),
+                _sf(row.get("fan_sentiment"), 55.0), _sf(row.get("win_pct"), 0.5),
+                str(row.get("market_tier_key") or "medium"),
+            )
+            row["relocation_risk"] = round(_clamp(risk + ease, 0.05, 0.95), 3)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _standing_ranks(session: Any) -> Dict[str, float]:
@@ -343,6 +419,10 @@ def _cap_space(session: Any, team: Any) -> float:
         from app.sim_engine.economy.cap_engine import calculate_team_cap_snapshot
 
         sy = _season(session)
+        # The Board meets in the offseason: clubs vote on next season's books.
+        phase = str(getattr(session, "phase", "") or getattr(session, "season_phase", "") or "").lower()
+        if phase in ("offseason", "post_cup", "complete"):
+            sy += 1
         snap = calculate_team_cap_snapshot(team, league=_league(session), season_label=f"{sy}-{(sy + 1) % 100:02d}")
         return _sf(snap.get("usableCapSpace"), 5.0)
     except Exception:
@@ -384,6 +464,8 @@ def team_traits(session: Any, rows: Optional[Dict[str, Dict[str, Any]]] = None) 
             "revenue": round(_sf(row.get("revenue"), 0.0), 1),
             "abbr": abbr,
             "name": _team_name(team),
+            "city": str(getattr(team, "city", "") or ""),
+            "conference": str(getattr(team, "conference", "") or ""),
             "cap_space": round(space, 2),
             "relocation_risk": _sf(row.get("relocation_risk"), 0.2),
             "canadian": abbr in CANADA_ABBRS,
@@ -421,24 +503,80 @@ def _votes_needed(kind: str, n_teams: int) -> int:
     return int(math.ceil(frac * n_teams - 1e-9))
 
 
-def _relocation_candidate(session: Any, traits: Dict[str, Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+#: League-average franchise value the candidate-market values in the catalog are quoted at.
+CATALOG_VALUE_ANCHOR_B = 2.55
+
+
+def market_value_b(session: Any, market: Dict[str, Any]) -> float:
+    """A candidate city's franchise value in today's money. The catalog values are fixed,
+    while league values grow every year, so unscaled they made every relocated or
+    expansion club a "small market" (and a relocation target) within a few seasons."""
+    try:
+        avg = league_average_value(session)
+    except Exception:
+        avg = CATALOG_VALUE_ANCHOR_B
+    return round(_sf(market.get("value_b"), 1.8) * max(0.5, avg / CATALOG_VALUE_ANCHOR_B), 3)
+
+
+def _record_profit_log(session: Any, traits: Dict[str, Dict[str, Any]]) -> None:
+    """Keep each club's offseason profit so relocation needs sustained losses."""
     gov = ensure_governance(session)
-    ease = gov_mod(session, "relocation_ease")
+    log = gov.setdefault("profit_log", {})
+    sy = str(_season(session))
+    for tid, t in traits.items():
+        row = log.setdefault(str(tid), {})
+        row[sy] = round(_sf(t.get("profit")), 1)
+        if len(row) > 12:
+            for k in sorted(row, key=lambda x: int(x))[:-12]:
+                row.pop(k, None)
+
+
+def _prior_profit(session: Any, tid: str) -> Optional[float]:
+    row = (ensure_governance(session).get("profit_log") or {}).get(str(tid)) or {}
+    prev = str(_season(session) - 1)
+    return _sf(row.get(prev)) if prev in row else None
+
+
+RELOCATION_MIN_RISK = 0.55
+
+
+def _relocation_candidate(
+    session: Any,
+    traits: Dict[str, Dict[str, Any]],
+    *,
+    exclude_markets: Optional[set] = None,
+) -> Optional[Dict[str, Any]]:
+    """A club applies to move only when it is actually losing money (after revenue
+    sharing) for a second straight year — or badly this year — its risk is high, and
+    its owner decides to apply. The user's own club is never put up for a move."""
+    gov = ensure_governance(session)
+    uid = str(getattr(session, "user_team_id", "") or "")
     recent = {str(r.get("team_id")) for r in gov.get("relocations") or [] if _season(session) - int(r.get("season") or 0) < 8}
+    joined_recent = {
+        str(j.get("team_id")) for j in (gov.get("expansion") or {}).get("joined") or []
+        if _season(session) - int(j.get("season") or 0) < 6
+    }
     best = None
     for tid, t in traits.items():
-        if tid in recent:
+        if tid == uid or tid in recent or tid in joined_recent:
             continue
-        risk = t["relocation_risk"] + ease
-        if t["tier"] != "small" and t["profit"] >= 0:
+        profit = _sf(t.get("profit"))
+        if profit >= 0.0:
+            continue  # profitable clubs do not move
+        prior = _prior_profit(session, tid)
+        if not ((prior is not None and prior < 0.0) or profit <= -8.0):
+            continue  # one soft year is not a relocation case
+        risk = _sf(t.get("relocation_risk"))  # already includes Board relocation rules
+        if risk < RELOCATION_MIN_RISK:
             continue
-        if risk < 0.5 or t["profit"] > 2.0:
-            continue
+        intent = _clamp((risk - 0.45) * 2.2 + (0.15 if profit <= -15.0 else 0.0), 0.10, 0.90)
+        if _unit(_salt(session), "reloc-intent", _season(session), tid) > intent:
+            continue  # ownership chooses to stay and fight this year
         if best is None or risk > best[1]:
             best = (tid, risk)
     if best is None:
         return None
-    used = set(gov.get("used_markets") or [])
+    used = set(gov.get("used_markets") or []) | set(exclude_markets or ())
     existing = {t["abbr"] for t in traits.values()}
     cur_tier = traits[best[0]]["tier"]
     tier_rank = {"small": 0, "medium": 1, "large": 2}
@@ -446,13 +584,22 @@ def _relocation_candidate(session: Any, traits: Dict[str, Dict[str, Any]]) -> Op
         m for m in CANDIDATE_MARKETS
         if m["abbr"] not in used and m["abbr"] not in existing and tier_rank[m["tier"]] >= tier_rank.get(cur_tier, 0)
     ]
+    # Prefer a city in the club's own conference so the league stays balanced.
+    conf = str(traits[best[0]].get("conference") or "")
+    same = [m for m in options if conf and str(m.get("conference") or "") == conf]
+    options = same or options
     if not options:
         return None
     pick = options[int(_unit(_salt(session), "reloc", _season(session), best[0]) * len(options)) % len(options)]
     return {"team_id": best[0], "risk": round(best[1], 3), "market": pick}
 
 
-def _expansion_candidate(session: Any, traits: Dict[str, Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+def _expansion_candidate(
+    session: Any,
+    traits: Dict[str, Dict[str, Any]],
+    *,
+    exclude_markets: Optional[set] = None,
+) -> Optional[Dict[str, Any]]:
     gov = ensure_governance(session)
     exp = gov.get("expansion") or {}
     if exp.get("pending"):
@@ -469,7 +616,7 @@ def _expansion_candidate(session: Any, traits: Dict[str, Dict[str, Any]]) -> Opt
     chance = _clamp(0.18 + pressure / 100.0 + (0.08 if losing <= 6 else -0.08), 0.02, 0.85)
     if _unit(_salt(session), "expansion", _season(session)) > chance:
         return None
-    used = set(gov.get("used_markets") or [])
+    used = set(gov.get("used_markets") or []) | set(exclude_markets or ())
     existing = {t["abbr"] for t in traits.values()}
     options = [m for m in CANDIDATE_MARKETS if m["abbr"] not in used and m["abbr"] not in existing]
     options.sort(key=lambda m: -m["value_b"])
@@ -478,9 +625,8 @@ def _expansion_candidate(session: Any, traits: Dict[str, Dict[str, Any]]) -> Opt
     count = 2 if (n + 2 <= MAX_LEAGUE_TEAMS and n % 2 == 0 and len(options) >= 2) else 1
     top = options[: max(4, count)]
     rng = random.Random(_salt(session) * 31 + _season(session))
-    cities = rng.sample(top, count)
-    vals = [v.get("value_b") for v in (gov.get("franchise_values") or {}).values() if isinstance(v, dict)]
-    avg_val = (sum(_sf(v) for v in vals) / len(vals)) if vals else 2.55
+    cities = [dict(c, value_b=market_value_b(session, c)) for c in rng.sample(top, count)]
+    avg_val = league_average_value(session)
     fee_b = round(avg_val * 0.8 * count, 2)
     return {"cities": cities, "fee_b": fee_b, "start_season": _season(session) + 2}
 
@@ -501,9 +647,19 @@ def _repeal_candidate(session: Any) -> Optional[str]:
 def _draw_rules(session: Any, k: int) -> List[Dict[str, Any]]:
     gov = ensure_governance(session)
     sy = _season(session)
-    active = set((gov.get("rulebook") or {}).keys())
-    recent = {rid for rid, y in (gov.get("proposed_log") or {}).items() if sy - int(y) < RECENT_PROPOSAL_YEARS}
-    pool = [r for r in RULES if r["id"] not in active and r["id"] not in recent]
+    active = set((gov.get("rulebook") or {}).keys()) | set(gov.get("spent_rules") or [])
+    proposed = gov.get("proposed_log") or {}
+    # A rule is never put to the Board twice until every rule in the catalog has had
+    # its vote (700 rules ≈ 140+ seasons of meetings). Only then do the oldest
+    # proposals come back, longest-ago first.
+    pool = [r for r in RULES if r["id"] not in active and r["id"] not in proposed]
+    if len(pool) < k:
+        stale = sorted(
+            (r for r in RULES if r["id"] not in active and r["id"] in proposed
+             and sy - int(proposed.get(r["id"]) or 0) >= RECENT_PROPOSAL_YEARS),
+            key=lambda r: int(proposed.get(r["id"]) or 0),
+        )
+        pool = pool + stale[: max(k * 4, 20)]
     if len(pool) < k:
         pool = [r for r in RULES if r["id"] not in active]
     rng = random.Random(_salt(session) * 7919 + sy)
@@ -534,26 +690,47 @@ def _taste(session: Any, tid: str, pid: str) -> float:
 def _rule_probability(rule: Dict[str, Any], t: Dict[str, Any], session: Any, tid: str, pid: str, *, repeal: bool = False) -> Tuple[float, Dict[str, str]]:
     """P(yes) and the reason each way. A repeal flips the rule's lean."""
     # A repeal reverses the rule's lean, but owners are less dug in on undoing a rule
-    # they already live with (60% weight), and a few always want it gone.
+    # they already live with (60% weight) and lean slightly toward the status quo.
     sign = -0.6 if repeal else 1.0
     th = _threshold_for(rule["cat"])
-    p = 0.5 + BOARD_VETTING_BIAS.get(th, 0.1) + sign * float(rule.get("base") or 0.0)
+    base = float(rule.get("base") or 0.0)
+    if repeal:
+        p = 0.5 + REPEAL_STATUS_QUO + sign * base
+    else:
+        # Same head start relative to the bar for every category (it used to be
+        # +2% for majority votes but +15% for two-thirds and three-quarters ones).
+        p = THRESHOLDS.get(th, THRESHOLDS["two_thirds"])[0] + VETTING_MARGIN + base
     pos, neg = ("", 0.0), ("", 0.0)
     for trait, w in (rule.get("lean") or {}).items():
         if trait in t["traits"]:
             w = sign * float(w)
             p += w
+            if trait == "all":
+                continue  # league-wide lean moves the vote but is not a club's reason
             if w > pos[1]:
                 pos = (_TRAIT_COPY.get(trait, trait), w)
             if -w > neg[1]:
                 neg = (_TRAIT_COPY.get(trait, trait), -w)
     taste = _taste(session, tid, pid)
     p += taste
-    reasons = {
-        "yes": (f"{pos[0]} — helps them" if pos[0] else ("Owner likes it" if taste > 0.03 else "Backs the committee")),
-        "no": (f"{neg[0]} — hurts them" if neg[0] else ("Owner unconvinced" if taste < -0.03 else "Sees no upside")),
-    }
-    return _clamp(p, 0.04, 0.96), reasons
+    pop = sign * base
+    if pos[0]:
+        yes_r = f"{pos[0]} — helps them"
+    elif pop >= 0.08:
+        yes_r = "Popular around the league"
+    elif taste > 0.03:
+        yes_r = "Owner likes it"
+    else:
+        yes_r = "Backs the committee"
+    if neg[0]:
+        no_r = f"{neg[0]} — hurts them"
+    elif pop <= -0.05:
+        no_r = "Unpopular with owners"
+    elif taste < -0.03:
+        no_r = "Owner unconvinced"
+    else:
+        no_r = "Sees no upside"
+    return _clamp(p, 0.04, 0.96), {"yes": yes_r, "no": no_r}
 
 
 def _relocation_probability(prop: Dict[str, Any], t: Dict[str, Any], session: Any, tid: str) -> Tuple[float, Dict[str, str]]:
@@ -593,42 +770,45 @@ def _expansion_probability(prop: Dict[str, Any], t: Dict[str, Any], session: Any
     return _clamp(p, 0.05, 0.95), {"yes": yes_r, "no": no_r}
 
 
-def _vote_climate(session: Any, prop: Dict[str, Any]) -> Tuple[str, float]:
-    """Room mood for one proposal. Votes are correlated, not 31 coin flips: some items
-    are housekeeping that sails through unanimously, some die on arrival, some split
-    the room along market lines, the rest drift with a shared lean."""
+def _vote_climate(session: Any, prop: Dict[str, Any], mean: float, spread: float) -> Tuple[str, float]:
+    """Room mood for one proposal, driven by how the room actually leans.
+
+    Votes are correlated, not 31 coin flips, but the mood now follows the merits:
+    a rule most clubs already like can snowball into a consensus, one most clubs
+    dislike can die on arrival, and a rule that divides clubs along market lines
+    splits harder. (Moods used to be rolled at random, so a rule that hurt most
+    owners could still pass unanimously.)"""
     m = _unit(_salt(session), "climate", prop["id"])
-    drift = (_unit(_salt(session), "climate-drift", prop["id"]) * 2.0 - 1.0) * 0.2
+    drift = (_unit(_salt(session), "climate-drift", prop["id"]) * 2.0 - 1.0) * 0.06
+    need = int(prop.get("votes_needed") or 0)
+    n = max(1, int(prop.get("_n_voters") or 1))
+    bar = need / float(n + 1)
     if prop.get("kind") in ("relocation", "expansion"):
-        # Big structural votes are rarely unanimous.
-        if m < 0.35:
+        if spread >= 0.10 and m < 0.5:
             return "split", drift
         return "normal", drift
-    if m < 0.16:
+    if mean >= bar + 0.10 and m < 0.45:
         return "consensus", 0.0
-    if m < 0.28:
+    if mean <= bar - 0.12 and m < 0.45:
         return "doa", 0.0
-    if m < 0.55:
+    if spread >= 0.10 and m < 0.55:
         return "split", drift * 0.5
     return "normal", drift
 
 
-def _apply_climate(p: float, climate: str, drift: float) -> float:
+def _apply_climate(p: float, climate: str, drift: float, mean: float = 0.5) -> float:
     if climate == "consensus":
-        return 0.5 + (p - 0.5) * 0.35 + 0.42
+        return p + (1.0 - p) * 0.5
     if climate == "doa":
-        return 0.5 + (p - 0.5) * 0.35 - 0.36
+        return p * 0.5
     if climate == "split":
-        return 0.5 + (p - 0.5) * 2.3 + drift
+        return mean + (p - mean) * 1.8 + drift
     return p + drift
 
 
 def _preroll_ballots(session: Any, prop: Dict[str, Any], traits: Dict[str, Dict[str, Any]]) -> None:
     uid = str(getattr(session, "user_team_id", "") or "")
-    ballots = []
-    expected = 0.0
-    climate, drift = _vote_climate(session, prop)
-    prop["_climate"] = climate
+    raw: List[Tuple[str, Dict[str, Any], float, Dict[str, str]]] = []
     for tid, t in traits.items():
         if tid == uid:
             continue
@@ -638,13 +818,29 @@ def _preroll_ballots(session: Any, prop: Dict[str, Any], traits: Dict[str, Dict[
             p, reason = _expansion_probability(prop, t, session, tid)
         else:
             p, reason = _rule_probability(RULE_BY_ID[prop["rule_id"]], t, session, tid, prop["id"], repeal=prop["kind"] == "repeal")
+        raw.append((tid, t, p, reason))
+    ps = [r[2] for r in raw] or [0.5]
+    mean = sum(ps) / len(ps)
+    spread = (sum((x - mean) ** 2 for x in ps) / len(ps)) ** 0.5
+    prop["_n_voters"] = len(raw)
+    climate, drift = _vote_climate(session, prop, mean, spread)
+    prop["_climate"] = climate
+    ballots = []
+    expected = 0.0
+    for tid, t, p, reason in raw:
         if not (prop["kind"] == "relocation" and tid == str(prop.get("team_id"))):
-            p = _clamp(_apply_climate(p, climate, drift), 0.02, 0.98)
+            p = _clamp(_apply_climate(p, climate, drift, mean), 0.02, 0.98)
         u = _unit(_salt(session), "ballot", prop["id"], tid)
-        ballots.append({"team_id": tid, "abbr": t["abbr"], "name": t["name"], "p": round(p, 4), "u": round(u, 4), "reason": reason, "lobbied": 0.0})
+        ballots.append({"team_id": tid, "abbr": t["abbr"], "name": t["name"], "p": round(p, 4), "u": round(u, 4), "reason": reason, "lobbied": 0.0, "traits": sorted(t["traits"])})
         expected += p
     prop["_ballots"] = ballots
     prop["expected_yes_cpu"] = round(expected, 2)
+    prop["room_mood"] = {
+        "consensus": "The room is lining up behind it",
+        "doa": "Most governors are against it",
+        "split": "Clubs are split along market lines",
+        "normal": "Opinions vary club by club",
+    }.get(climate, "")
 
 
 def _forecast(prop: Dict[str, Any]) -> Dict[str, Any]:
@@ -665,12 +861,21 @@ def _forecast(prop: Dict[str, Any]) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def _effect_rows(effects: Dict[str, float]) -> List[Dict[str, Any]]:
+def _effect_rows(effects: Dict[str, float], *, scaled: bool = False) -> List[Dict[str, Any]]:
+    """Ballot / rulebook rows. ``scaled=True`` when ``effects`` already went through
+    EFFECT_SCALE (the live modifier totals); catalog effects are scaled here so the
+    ballot shows what the live systems will apply."""
     out = []
     for k, v in effects.items():
         label, kind, _consumer = EFFECT_SPECS.get(k, (k, "pts", ""))
-        v = float(v)
-        if kind == "pct":
+        v = float(v) if (scaled or k in ABSOLUTE_EFFECTS) else _scaled(k, float(v))
+        if kind == "minutes":
+            txt = f"{int(v)}-minute OT"
+        elif kind == "flag_ties":
+            txt = "Abolished — ties stand" if v >= 0.5 else "Restored"
+        elif kind == "points":
+            txt = f"{int(v)} pt{'s' if int(v) != 1 else ''}"
+        elif kind == "pct":
             txt = f"{v:+.1f}%" if abs(v) < 10 else f"{v:+.0f}%"
         elif kind == "pts":
             txt = f"{v:+.1f} pts"
@@ -730,6 +935,15 @@ _EFFECT_TONE: Dict[str, Tuple[int, str, str]] = {
     "injury_rate": (-1, "Fewer injuries", "More injuries"),
     "relocation_ease": (-1, "Struggling clubs stay put", "Easier for clubs to relocate"),
     "expansion_pressure": (0, "Expansion momentum builds", "Expansion momentum fades"),
+    "scoring_pace": (0, "More goals league-wide: skill teams gain", "Fewer goals: tight, defensive hockey pays"),
+    "penalty_rate": (0, "More penalties: power plays decide more games", "Fewer penalties: more 5-on-5 hockey"),
+    "pp_efficiency": (0, "Power plays score more: special teams matter more", "Power plays score less"),
+    "home_ice": (0, "Bigger home-ice edge", "Smaller home-ice edge"),
+    "ot_minutes": (0, "Overtime length changes how many games reach a shootout", "Overtime length changes"),
+    "ties_allowed": (0, "Shootout gone: games tied after OT end as ties", "Shootout restored"),
+    "pts_reg_win": (0, "Regulation wins worth more: chasing points late changes", "Regulation win points change"),
+    "pts_ot_win": (0, "OT / shootout wins pay differently", "OT / shootout wins pay differently"),
+    "pts_otl": (0, "Loser point changes the playoff race", "Loser point changes the playoff race"),
 }
 
 
@@ -759,6 +973,24 @@ def _pros_cons(effects: Dict[str, float]) -> Dict[str, List[str]]:
     if keys.get("trade_volume", 0) > 0:
         mixed.append("More trades: more chances to buy, and more rivals buying")
     return {"pros": pros, "cons": cons, "mixed": mixed}
+
+
+def _repeal_effect_rows(effects: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """What striking a rule really does. One-time cap bumps were already paid out and
+    are not reversed; rules that SET a value (term limits, OT format, points) fall
+    back to the default."""
+    rows = _effect_rows({k: -float(v) for k, v in effects.items() if k not in ABSOLUTE_EFFECTS and k != "cap_adjust_m"})
+    for k in [k for k in effects if k in ABSOLUTE_EFFECTS]:
+        label = EFFECT_SPECS.get(k, (k, "", ""))[0]
+        default = ABSOLUTE_DEFAULTS.get(k)
+        if k in ("max_term_own", "max_term_ufa"):
+            txt = "Back to the CBA limit"
+        elif default is not None:
+            txt = f"Back to the NHL default ({_effect_rows({k: default})[0]['text']})"
+        else:
+            txt = "Back to the default"
+        rows.append({"key": k, "label": label, "value": 0, "text": txt, "tone": "mixed", "note": "Reverts to the league default"})
+    return rows
 
 
 def _new_rule_proposal(session: Any, rule: Dict[str, Any], idx: int, n_teams: int) -> Dict[str, Any]:
@@ -793,15 +1025,19 @@ def open_board_meeting(session: Any) -> Dict[str, Any]:
 
     rows = _team_rows(session)
     ensure_franchise_values(session, rows)
-    advance_franchise_values(session, rows)
+    # Star spikes first: franchise values read them (they used to be computed after,
+    # so the "Star spike" value driver never fired).
     compute_star_spikes(session, rows)
+    advance_franchise_values(session, rows)
     apply_revenue_scouting_budget(session, rows)
     traits = team_traits(session, rows)
     n_teams = len(traits)
+    _record_profit_log(session, traits)
 
     proposals: List[Dict[str, Any]] = []
     reloc = _relocation_candidate(session, traits)
-    expn = _expansion_candidate(session, traits)
+    # The two bids must not chase the same city (two Houston clubs).
+    expn = _expansion_candidate(session, traits, exclude_markets={reloc["market"]["abbr"]} if reloc else None)
     repeal = _repeal_candidate(session)
     n_rules = PROPOSALS_PER_MEETING - (1 if reloc else 0) - (1 if expn else 0) - (1 if repeal else 0)
     for i, rule in enumerate(_draw_rules(session, n_rules)):
@@ -819,8 +1055,8 @@ def open_board_meeting(session: Any) -> Dict[str, Any]:
             "category_label": f"Repeal · {CATEGORIES[rule['cat']]['label']}",
             "title": f"Repeal: {rule['title']}",
             "summary": f"Strike the {row.get('season', '')} rule from the books. {rule['summary']}",
-            "effects": _effect_rows({k: -float(v) for k, v in rule["effects"].items() if k not in ABSOLUTE_EFFECTS}),
-            "pros_cons": _pros_cons({k: -float(v) for k, v in rule["effects"].items() if k not in ABSOLUTE_EFFECTS}),
+            "effects": _repeal_effect_rows(row.get("effects") or rule["effects"]),
+            "pros_cons": _pros_cons({k: -float(v) for k, v in (row.get("effects") or rule["effects"]).items() if k not in ABSOLUTE_EFFECTS and k != "cap_adjust_m"}),
             "threshold": th,
             "threshold_label": THRESHOLDS[th][1],
             "votes_needed": _votes_needed(th, n_teams),
@@ -842,9 +1078,14 @@ def open_board_meeting(session: Any) -> Dict[str, Any]:
             "category_label": "Relocation",
             "title": f"Relocate the {mover['name']} to {m['city']}",
             "summary": (
-                f"{mover['name']} ({mover['abbr']}) lost ${abs(mover['profit']):.1f}M"
-                if mover["profit"] < 0 else f"{mover['name']} ({mover['abbr']}) is a small market under pressure"
-            ) + f"; ownership applies to move to {m['city']} as the {m['city']} {nick}.",
+                f"{mover['name']} ({mover['abbr']}) lost ${abs(mover['profit']):.1f}M this year"
+                + (
+                    f" after losing ${abs(_prior_profit(session, reloc['team_id']) or 0):.1f}M the year before"
+                    if (_prior_profit(session, reloc["team_id"]) or 0) < 0 else ""
+                )
+            ) + f"; ownership applies to move to {m['city']} as the {m['city']} {nick}"
+            + (f" (and switch to the {m.get('conference')} Conference)" if m.get("conference") and m.get("conference") != mover.get("conference") else "")
+            + ".",
             "effects": [
                 {"key": "relocation", "label": "Moves to", "value": 0, "text": f"{m['city']} ({m['tier']} market)"},
                 {"key": "demands", "label": "Player reaction", "value": 0, "text": "Some veterans may demand trades"},
@@ -852,7 +1093,7 @@ def open_board_meeting(session: Any) -> Dict[str, Any]:
             ],
             "pros_cons": {
                 "pros": [f"Move from a struggling market to {m['city']} ({m['tier']})", "Relocated club's value and revenue jump", "New-market honeymoon for two seasons"],
-                "cons": [f"{mover['city'] if 'city' in mover else 'The old city'} loses its team: fan backlash league-wide", "Veterans on the moving club may demand trades", "Sets a precedent: other small markets feel the heat"],
+                "cons": [f"{mover.get('city') or 'The old city'} loses its team: fan backlash league-wide", "Veterans on the moving club may demand trades", "Sets a precedent: other small markets feel the heat"],
                 "mixed": [],
             },
             "threshold": "three_quarters",
@@ -866,6 +1107,8 @@ def open_board_meeting(session: Any) -> Dict[str, Any]:
     if expn:
         names = " & ".join(c["city"] for c in expn["cities"])
         share_m = expn["fee_b"] * 1000.0 / max(1, n_teams)
+        n_new = len(expn["cities"])
+        loses = "one unprotected player" if n_new == 1 else f"{n_new} unprotected players (one to each new club)"
         proposals.append({
             "id": f"{sy}-expand-{'-'.join(c['abbr'] for c in expn['cities'])}",
             "kind": "expansion",
@@ -877,16 +1120,18 @@ def open_board_meeting(session: Any) -> Dict[str, Any]:
             "title": f"Expand to {n_teams + len(expn['cities'])} clubs: {names}",
             "summary": (
                 f"{names} join for the {expn['start_season']}-{(expn['start_season'] + 1) % 100:02d} season. "
-                f"Expansion fee ${expn['fee_b']:.2f}B (≈${share_m:.0f}M to every current club); an expansion draft takes one player from each club."
+                f"Expansion fee ${expn['fee_b']:.2f}B (≈${share_m:.0f}M to every current club). "
+                f"The expansion draft is held at the {expn['start_season'] - 1} Board of Governors meeting, before that year's Entry Draft: "
+                f"every club protects 7 forwards, 3 defensemen and 1 goalie and loses {loses}."
             ),
             "effects": [
                 {"key": "fee", "label": "Fee share per club", "value": share_m, "text": f"+${share_m:.0f}M once"},
                 {"key": "teams", "label": "League size", "value": len(expn["cities"]), "text": f"{n_teams} → {n_teams + len(expn['cities'])} clubs"},
-                {"key": "draft", "label": "Expansion draft", "value": 0, "text": "Protect 7F / 3D / 1G; lose one player"},
+                {"key": "draft", "label": "Expansion draft", "value": 0, "text": f"{expn['start_season'] - 1} offseason · protect 7F / 3D / 1G; lose {loses}"},
             ],
             "pros_cons": {
                 "pros": [f"Every club gets ≈${share_m:.0f}M in fee money", "Bigger league: more markets and TV money long term"],
-                "cons": ["Every club loses one unprotected player in the expansion draft", "National TV money split more ways", "Weaker draft positions as new clubs pick high"],
+                "cons": [f"Every club loses {loses} in the expansion draft", "National TV money split more ways", "New clubs join the race for free agents"],
                 "mixed": [],
             },
             "threshold": "three_quarters",
@@ -934,14 +1179,20 @@ def lobby_proposal(session: Any, proposal_id: str, side: str) -> Dict[str, Any]:
         raise ValueError("You already lobbied on this proposal")
     want_yes = str(side).lower() in ("yes", "agree", "for")
     uid = str(getattr(session, "user_team_id", "") or "")
-    traits = team_traits(session)
-    my = traits.get(uid, {}).get("traits", set())
+    try:
+        my = set(_user_traits_cache(session))
+    except Exception:
+        my = set()
+    my.discard("all")  # every club shares it; it said nothing about who to call
     scored = []
     for b in prop["_ballots"]:
-        t = traits.get(b["team_id"], {})
-        overlap = len(my & t.get("traits", set()))
-        persuadable = 1.0 - abs(b["p"] - 0.5) * 2.0
-        scored.append((overlap * 0.4 + persuadable, b))
+        p = float(b["p"])
+        # Skip governors already firmly on your side: a call there changes nothing.
+        if (want_yes and p >= 0.85) or ((not want_yes) and p <= 0.15):
+            continue
+        overlap = len(my & (set(b.get("traits") or ()) - {"all"}))
+        persuadable = 1.0 - abs(p - 0.5) * 2.0
+        scored.append((persuadable + overlap * 0.15, b))
     scored.sort(key=lambda s: -s[0])
     swayed = []
     for _score, b in scored[:LOBBY_TARGETS]:
@@ -951,6 +1202,17 @@ def lobby_proposal(session: Any, proposal_id: str, side: str) -> Dict[str, Any]:
     meeting["lobby_tokens"] = int(meeting.get("lobby_tokens") or 0) - 1
     prop["forecast"] = _forecast(prop)
     return build_governance_payload(session)
+
+
+def _user_traits_cache(session: Any) -> List[str]:
+    meeting = _current_meeting(session) or {}
+    cached = meeting.get("_user_traits")
+    if isinstance(cached, list):
+        return cached
+    uid = str(getattr(session, "user_team_id", "") or "")
+    out = sorted((team_traits(session).get(uid) or {}).get("traits") or ())
+    meeting["_user_traits"] = out
+    return out
 
 
 def cast_vote(session: Any, proposal_id: str, vote: str) -> Dict[str, Any]:
@@ -982,8 +1244,15 @@ def _decide(session: Any, meeting: Dict[str, Any], prop: Dict[str, Any], user_vo
         else:
             no += 1
         why = b["reason"].get(cast) if isinstance(b.get("reason"), dict) else b.get("reason")
+        climate = str(prop.get("_climate") or "")
+        if climate == "consensus" and cast == "yes" and why in ("Backs the committee", "Owner likes it"):
+            why = "Went with the room"
+        elif climate == "doa" and cast == "no" and why in ("Sees no upside", "Owner unconvinced"):
+            why = "Went with the room"
         if b.get("lobbied") and ((b["lobbied"] > 0) == (cast == "yes")):
-            why = "Persuaded by your call"
+            # Only credit the call when it actually flipped the vote.
+            if (b["u"] < _clamp(b["p"], 0.01, 0.99)) != (cast == "yes"):
+                why = "Persuaded by your call"
         ballots_out.append({"team_id": b["team_id"], "abbr": b["abbr"], "name": b["name"], "vote": cast, "reason": why, "lobbied": bool(b.get("lobbied"))})
     abstain = 0
     if user_vote == "yes":
@@ -1053,10 +1322,14 @@ def _apply_passed(session: Any, prop: Dict[str, Any]) -> None:
         if effects.get("cap_adjust_m"):
             gov["pending_cap_adjust_m"] = round(_sf(gov.get("pending_cap_adjust_m")) + float(effects["cap_adjust_m"]), 3)
         sync_governance_to_league(session)
+        if "scouting_budget" in effects:
+            apply_revenue_scouting_budget(session)  # takes effect now, not next summer
         return
     if prop["kind"] == "repeal":
-        gov["rulebook"].pop(str(prop["rule_id"]), None)
+        row = gov["rulebook"].pop(str(prop["rule_id"]), None) or {}
         sync_governance_to_league(session)
+        if "scouting_budget" in (row.get("effects") or {}):
+            apply_revenue_scouting_budget(session)
         return
     if prop["kind"] == "relocation":
         relocate_team(session, str(prop["team_id"]), prop["market"])
@@ -1087,7 +1360,46 @@ def finalize_board_meeting(session: Any) -> Dict[str, Any]:
             _decide(session, meeting, prop, "abstain")
     meeting["status"] = "complete"
     sync_governance_to_league(session)
+    # Clubs approved at an earlier meeting join now: the expansion draft runs at the
+    # end of this meeting, before the lottery, Entry Draft and free agency.
+    try:
+        joined = run_pending_expansion(session, _season(session) + 1)
+        if joined:
+            announce_expansion(session, joined, _season(session) + 1)
+    except Exception:
+        _swallowed_log.exception("expansion draft failed")
     return build_governance_payload(session)
+
+
+def announce_expansion(session: Any, joined: List[Dict[str, Any]], season_year: int) -> None:
+    """Breaking-news popup + timeline line for clubs that just joined."""
+    try:
+        session.expansion_joined_payload = joined
+        from services.franchise_sim import _append_showcase_popup
+
+        names = ", ".join(
+            f"{row.get('city') or ''} {row.get('name') or ''}".strip() or str(row.get("abbr") or "Expansion club")
+            for row in joined if isinstance(row, dict)
+        ) or "New clubs"
+        taken = sum(int(row.get("players") or 0) for row in joined if isinstance(row, dict))
+        uid = str(getattr(session, "user_team_id", "") or "")
+        drafts = (ensure_governance(session).get("expansion") or {}).get("drafts") or []
+        lost = [pk for pk in (drafts[-1].get("picks") if drafts else []) or [] if str(pk.get("from_team_id") or "") == uid]
+        lost_txt = (" You lost " + ", ".join(f"{pk.get('player')} ({pk.get('team')})" for pk in lost) + ".") if lost else ""
+        _append_showcase_popup(session, f"expansion:{int(season_year)}", {
+            "kind": "breaking_news",
+            "source_label": "Board of Governors",
+            "theme": "info",
+            "headline": "Expansion draft is complete",
+            "summary": (
+                f"{names} join the league for {season_year}-{(season_year + 1) % 100:02d}. "
+                f"{taken or 'Several'} players changed teams in the expansion draft.{lost_txt} "
+                "The new clubs take part in free agency this summer and are on next season's schedule."
+            ),
+        })
+        session.timeline.append(f"Expansion: {names} joined the league.")
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def consume_pending_cap_adjust(session: Any) -> float:
@@ -1097,6 +1409,24 @@ def consume_pending_cap_adjust(session: Any) -> float:
     if adj:
         gov["applied_cap_adjust"].append({"season": _season(session) + 1, "adjust_m": adj})
     gov["pending_cap_adjust_m"] = 0.0
+    # One-time cap bumps are spent once applied: drop that effect from the rulebook so
+    # it no longer reads as "in force" (or as reversible by a repeal). Rules with
+    # nothing else left are retired; they still never come back to the ballot
+    # before the rest of the catalog has had its vote.
+    spent = gov.setdefault("spent_rules", [])
+    for rid, row in list((gov.get("rulebook") or {}).items()):
+        eff = row.get("effects") or {}
+        if "cap_adjust_m" not in eff:
+            continue
+        rest = {k: v for k, v in eff.items() if k != "cap_adjust_m"}
+        if rest:
+            row["effects"] = rest
+            row["applied_cap_adjust_m"] = eff["cap_adjust_m"]
+        else:
+            gov["rulebook"].pop(rid, None)
+            if rid not in spent:
+                spent.append(rid)
+    sync_governance_to_league(session)
     return adj
 
 
@@ -1335,11 +1665,26 @@ def relocate_team(session: Any, team_id: str, market: Dict[str, Any]) -> Dict[st
             mp.market_size = market["tier"]
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
+    # A club that moves across the continent changes conference (and division).
+    new_conf = str(market.get("conference") or "")
+    league = _league(session)
+    if new_conf and league is not None and str(getattr(team, "conference", "") or "") != new_conf:
+        divs: Dict[str, int] = {}
+        for t in list(getattr(league, "teams", None) or []):
+            if t is not team and str(getattr(t, "conference", "") or "") == new_conf:
+                d = str(getattr(t, "division", "") or "")
+                divs[d] = divs.get(d, 0) + 1
+        try:
+            team.conference = new_conf
+            if divs:
+                team.division = min(divs, key=lambda d: divs[d])
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     sy = _season(session)
     vals = ensure_franchise_values(session)
     row = vals.get(str(team_id))
     if isinstance(row, dict):
-        new_v = round(max(_sf(row.get("value_b")) * 1.15, _sf(market.get("value_b"), 1.6)), 3)
+        new_v = round(max(_sf(row.get("value_b")) * 1.15, market_value_b(session, market)), 3)
         row["value_b"] = new_v
         row.setdefault("history", []).append({"season": sy, "value_b": new_v, "change_pct": 0.0, "drivers": [f"Relocated to {market['city']}"]})
     gov["honeymoon"][str(team_id)] = {str(sy + 1): 14.0, str(sy + 2): 7.0}
@@ -1441,16 +1786,140 @@ def _has_contract(p: Any) -> bool:
         return getattr(p, "contract", None) is not None
 
 
-def _protected_ids(team: Any) -> set:
-    org = [p for p in list(getattr(team, "roster", None) or []) + list(getattr(team, "ahl_roster", None) or []) if not getattr(p, "retired", False)]
+EXPANSION_PROTECT = {"F": 7, "D": 3, "G": 1}
+
+
+def _has_nmc(p: Any) -> bool:
+    try:
+        from app.sim_engine.trades.trade_rules import _clause_summary
+
+        return bool((_clause_summary(p) or {}).get("nmc"))
+    except Exception:
+        return False
+
+
+def _exempt_young_pro(p: Any) -> bool:
+    """First- and second-year pros are exempt (NHL rule); age only when pro years are unknown."""
+    for attr in ("pro_seasons", "nhl_seasons", "seasons_pro"):
+        v = getattr(p, attr, None)
+        if v is None:
+            v = getattr(getattr(p, "career", None), attr, None)
+        if v is not None:
+            try:
+                return int(v) <= 2
+            except (TypeError, ValueError):
+                break
+    return _age(p) <= 20
+
+
+def _org_players(team: Any) -> List[Any]:
+    return [p for p in list(getattr(team, "roster", None) or []) + list(getattr(team, "ahl_roster", None) or []) if not getattr(p, "retired", False)]
+
+
+def _protected_ids(team: Any, chosen: Optional[List[str]] = None) -> set:
+    """7F / 3D / 1G. No-move-clause players must be protected and use a slot; first- and
+    second-year pros are exempt. ``chosen`` = the user's own list (validated here)."""
+    org = _org_players(team)
     keep: set = set()
-    for grp, n in (("F", 7), ("D", 3), ("G", 1)):
-        ps = sorted([p for p in org if _pos_group(p) == grp], key=_ovr, reverse=True)
-        keep.update(str(getattr(p, "id", "")) for p in ps[:n])
-    for p in org:  # first/second-year pros are exempt
-        if _age(p) <= 21:
+    used = {"F": 0, "D": 0, "G": 0}
+    by_id = {str(getattr(p, "id", "")): p for p in org}
+    for p in org:
+        if _exempt_young_pro(p):
             keep.add(str(getattr(p, "id", "")))
+    for p in sorted([p for p in org if _has_nmc(p)], key=_ovr, reverse=True):
+        g = _pos_group(p)
+        pid = str(getattr(p, "id", ""))
+        if pid not in keep and used[g] < EXPANSION_PROTECT[g]:
+            keep.add(pid)
+            used[g] += 1
+    for pid in [str(x) for x in (chosen or [])]:
+        p = by_id.get(pid)
+        if p is None or pid in keep:
+            continue
+        g = _pos_group(p)
+        if used[g] < EXPANSION_PROTECT[g]:
+            keep.add(pid)
+            used[g] += 1
+    for grp, n in EXPANSION_PROTECT.items():
+        for p in sorted([p for p in org if _pos_group(p) == grp], key=_ovr, reverse=True):
+            if used[grp] >= n:
+                break
+            pid = str(getattr(p, "id", ""))
+            if pid in keep:
+                continue
+            keep.add(pid)
+            used[grp] += 1
     return keep
+
+
+def expansion_protection_payload(session: Any) -> Dict[str, Any]:
+    """The user's protection board for an expansion draft due this offseason."""
+    gov = ensure_governance(session)
+    exp = gov.get("expansion") or {}
+    nxt = _season(session) + 1
+    due = [e for e in exp.get("pending") or [] if int(e.get("start_season") or 0) == nxt]
+    upcoming = [e for e in exp.get("pending") or [] if int(e.get("start_season") or 0) > nxt]
+    out: Dict[str, Any] = {
+        "due": bool(due),
+        "limits": dict(EXPANSION_PROTECT),
+        "upcoming": [
+            {"cities": [c.get("city") for c in e.get("cities") or []], "draft_offseason": int(e.get("start_season") or 0) - 1,
+             "start_season": int(e.get("start_season") or 0)}
+            for e in upcoming
+        ],
+    }
+    if not due:
+        return out
+    uid = str(getattr(session, "user_team_id", "") or "")
+    team = (getattr(session, "team_by_id", None) or {}).get(uid)
+    chosen = list(exp.get("user_protected") or [])
+    protected = _protected_ids(team, chosen) if team is not None else set()
+    rows = []
+    for p in _org_players(team) if team is not None else []:
+        pid = str(getattr(p, "id", ""))
+        rows.append({
+            "player_id": pid,
+            "name": str(getattr(getattr(p, "identity", None), "name", "") or getattr(p, "name", "")),
+            "pos": _pos_group(p),
+            "ovr": round(_ovr(p), 1),
+            "age": _age(p),
+            "exempt": _exempt_young_pro(p),
+            "nmc": _has_nmc(p),
+            "protected": pid in protected,
+            "contract": _has_contract(p),
+        })
+    rows.sort(key=lambda r: ({"F": 0, "D": 1, "G": 2}[r["pos"]], -r["ovr"]))
+    out.update({
+        "cities": [c.get("city") for c in due[0].get("cities") or []],
+        "n_new": len(due[0].get("cities") or []),
+        "when": "At the end of this Board of Governors meeting (before the Entry Draft)",
+        "players": rows,
+        "user_set": bool(chosen),
+    })
+    return out
+
+
+def set_expansion_protection(session: Any, player_ids: List[str]) -> Dict[str, Any]:
+    gov = ensure_governance(session)
+    exp = gov.setdefault("expansion", {"pending": [], "joined": []})
+    uid = str(getattr(session, "user_team_id", "") or "")
+    team = (getattr(session, "team_by_id", None) or {}).get(uid)
+    if team is None:
+        raise ValueError("No club")
+    by_id = {str(getattr(p, "id", "")): p for p in _org_players(team)}
+    counts = {"F": 0, "D": 0, "G": 0}
+    clean: List[str] = []
+    for pid in [str(x) for x in player_ids or []]:
+        p = by_id.get(pid)
+        if p is None or pid in clean or _exempt_young_pro(p):
+            continue
+        g = _pos_group(p)
+        counts[g] += 1
+        if counts[g] > EXPANSION_PROTECT[g]:
+            raise ValueError(f"You can protect at most {EXPANSION_PROTECT[g]} {dict(F='forwards', D='defensemen', G='goalie')[g]}")
+        clean.append(pid)
+    exp["user_protected"] = clean
+    return expansion_protection_payload(session)
 
 
 def run_pending_expansion(session: Any, next_season_year: int) -> List[Dict[str, Any]]:
@@ -1484,7 +1953,8 @@ def run_pending_expansion(session: Any, next_season_year: int) -> List[Dict[str,
                     d = str(getattr(t, "division", "") or "")
                     divs[d] = divs.get(d, 0) + 1
             division = min(divs, key=lambda d: divs[d]) if divs else conf
-            nick_pool = [n for n in EXPANSION_NICKNAMES if n not in {str(getattr(t, 'name', '')) for t in league.teams}]
+            taken_names = {str(getattr(t, "name", "")) for t in list(league.teams) + new_teams}
+            nick_pool = [n for n in EXPANSION_NICKNAMES if n not in taken_names]
             nickname = nick_pool[int(rng.random() * len(nick_pool)) % len(nick_pool)] if nick_pool else "Expansion"
             team = Team(team_id=new_id, city=c["city"], name=nickname, division=division, conference=conf, archetype="balanced", rng=random.Random(rng.random()))
             team.abbr = c["abbr"]
@@ -1497,15 +1967,57 @@ def run_pending_expansion(session: Any, next_season_year: int) -> List[Dict[str,
         # Expansion draft: each new club takes one unprotected contracted player per club.
         picks_log: List[Dict[str, Any]] = []
         needs = {t: {"F": 14, "D": 9, "G": 3} for t in new_teams}
+        uid = str(getattr(session, "user_team_id", "") or "")
+        user_chosen = list(exp.get("user_protected") or [])
+        pools: Dict[str, List[Any]] = {}
         for src in existing:
-            protected = _protected_ids(src)
-            pool = [
-                p for p in list(getattr(src, "roster", None) or []) + list(getattr(src, "ahl_roster", None) or [])
-                if str(getattr(p, "id", "")) not in protected and _has_contract(p) and not getattr(p, "retired", False)
+            protected = _protected_ids(src, user_chosen if str(getattr(src, "team_id", "")) == uid else None)
+            pools[str(getattr(src, "team_id", ""))] = [
+                p for p in _org_players(src)
+                if str(getattr(p, "id", "")) not in protected and _has_contract(p)
             ]
+        claimed: set = set()  # (source club, new club) pairs already used
+
+        def _take(src: Any, nt: Any, p: Any) -> None:
+            sid = str(getattr(src, "team_id", ""))
+            pools[sid].remove(p)
+            claimed.add((sid, str(nt.team_id)))
+            pid = str(getattr(p, "id", ""))
+            _purge_player_id_from_team_lists(src, pid)
+            nt.roster.append(p)
+            for field in ("team_id", "current_team_id"):
+                try:
+                    setattr(p, field, nt.team_id)
+                except Exception:
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
+            needs[nt][_pos_group(p)] = needs[nt].get(_pos_group(p), 0) - 1
+            picks_log.append({
+                "team": c_abbr(nt), "player": str(getattr(getattr(p, "identity", None), "name", "") or ""),
+                "player_id": pid, "from": _team_abbr(src), "from_team_id": sid, "ovr": round(_ovr(p), 1),
+                "pos": _pos_group(p),
+            })
+
+        # Goalies first: every new club leaves with two (unprotected goalies are usually
+        # backups, so a best-available pass could leave a club without a starter).
+        for nt in new_teams:
+            for _ in range(2):
+                best = None
+                for src in existing:
+                    sid = str(getattr(src, "team_id", ""))
+                    if (sid, str(nt.team_id)) in claimed:
+                        continue
+                    for p in pools.get(sid) or []:
+                        if _pos_group(p) == "G" and (best is None or _ovr(p) > _ovr(best[1])):
+                            best = (src, p)
+                if best is not None:
+                    _take(best[0], nt, best[1])
+
+        for src in existing:
+            sid = str(getattr(src, "team_id", ""))
             for nt in new_teams:
-                if not pool:
-                    break
+                pool = pools.get(sid) or []
+                if (sid, str(nt.team_id)) in claimed or not pool:
+                    continue
                 need = needs[nt]
 
                 def _score(p: Any) -> float:
@@ -1513,17 +2025,7 @@ def run_pending_expansion(session: Any, next_season_year: int) -> List[Dict[str,
                     return _ovr(p) + (6.0 if need.get(g, 0) > 0 else -4.0) - max(0, _age(p) - 31) * 1.5
 
                 pool.sort(key=_score, reverse=True)
-                p = pool.pop(0)
-                pid = str(getattr(p, "id", ""))
-                _purge_player_id_from_team_lists(src, pid)
-                nt.roster.append(p)
-                for field in ("team_id", "current_team_id"):
-                    try:
-                        setattr(p, field, nt.team_id)
-                    except Exception:
-                        _swallowed_log.debug("suppressed exception", exc_info=True)
-                need[_pos_group(p)] = need.get(_pos_group(p), 0) - 1
-                picks_log.append({"team": c_abbr(nt), "player": str(getattr(getattr(p, "identity", None), "name", "") or ""), "from": _team_abbr(src), "ovr": round(_ovr(p), 1)})
+                _take(src, nt, pool[0])
         for nt in new_teams:
             org = sorted(nt.roster, key=_ovr, reverse=True)
             nhl: List[Any] = []
@@ -1545,9 +2047,11 @@ def run_pending_expansion(session: Any, next_season_year: int) -> List[Dict[str,
             tid = str(nt.team_id)
             session.team_by_id[tid] = nt
             ensure_franchise_values(session)
+            _city = next((c for c in entry["cities"] if c["abbr"] == c_abbr(nt)), {"value_b": 1.8})
+            _val = market_value_b(session, _city)
             gov["franchise_values"][tid] = {
-                "value_b": float(next((c["value_b"] for c in entry["cities"] if c["abbr"] == c_abbr(nt)), 1.8)),
-                "history": [{"season": int(next_season_year), "value_b": float(next((c["value_b"] for c in entry["cities"] if c["abbr"] == c_abbr(nt)), 1.8)), "change_pct": 0.0, "drivers": ["Expansion entry"]}],
+                "value_b": float(_val),
+                "history": [{"season": int(next_season_year), "value_b": float(_val), "change_pct": 0.0, "drivers": ["Expansion entry"]}],
             }
             gov["honeymoon"][tid] = {str(next_season_year): 18.0, str(next_season_year + 1): 9.0}
             joined.append({"team_id": tid, "city": nt.city, "name": nt.name, "abbr": c_abbr(nt), "season": int(next_season_year), "players": len(nhl) + len(ahl)})
@@ -1555,6 +2059,7 @@ def run_pending_expansion(session: Any, next_season_year: int) -> List[Dict[str,
         exp.setdefault("drafts", []).append({"season": int(next_season_year), "picks": picks_log})
     exp["pending"] = [e for e in exp.get("pending") or [] if e not in due]
     exp["joined"] = list(exp.get("joined") or []) + joined
+    exp["user_protected"] = []
     try:
         from app.sim_engine.trades.trade_pick_registry import ensure_franchise_pick_registry
 
@@ -1650,17 +2155,49 @@ def build_governance_payload(session: Any) -> Dict[str, Any]:
             "lobby_tokens": meeting.get("lobby_tokens", 0),
             "proposals": [public_proposal(p, reveal=True) for p in meeting.get("proposals") or []],
         },
-        "modifiers": _effect_rows({k: v for k, v in mods.items() if k in EFFECT_SPECS}),
+        "modifiers": _effect_rows({k: v for k, v in mods.items() if k in EFFECT_SPECS}, scaled=True),
         "rulebook": rulebook,
         "history": list(reversed(gov.get("history") or []))[:40],
         "franchise_values": values,
         "relocations": list(gov.get("relocations") or [])[-6:],
         "expansion": {
-            "pending": gov.get("expansion", {}).get("pending") or [],
+            "pending": [
+                {**e, "draft_offseason": int(e.get("start_season") or 0) - 1}
+                for e in (gov.get("expansion", {}).get("pending") or [])
+            ],
             "joined": gov.get("expansion", {}).get("joined") or [],
             "drafts": (gov.get("expansion", {}).get("drafts") or [])[-2:],
         },
         "pending_cap_adjust_m": round(_sf(gov.get("pending_cap_adjust_m")), 2),
         "user_impact": _user_impact(session),
         "catalog_size": len(RULES),
+        "rules_never_proposed": sum(1 for r in RULES if r["id"] not in (gov.get("proposed_log") or {})),
+        "expansion_draft": _safe_protection_payload(session),
+        "on_ice": _on_ice_summary(session),
     }
+
+
+def _safe_protection_payload(session: Any) -> Dict[str, Any]:
+    try:
+        return expansion_protection_payload(session)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+        return {"due": False}
+
+
+def _on_ice_summary(session: Any) -> Dict[str, Any]:
+    """Current on-ice rulebook (points system, OT, shootout) for the UI."""
+    try:
+        from app.sim_engine.league.game_rules import points_label, rules_for
+
+        r = rules_for(_league(session))
+        return {
+            "points": points_label(r),
+            "ot_minutes": int(r["ot_minutes"]),
+            "shootout": not r["ties_allowed"],
+            "scoring_pct": round((r["scoring_mult"] - 1.0) * 100.0, 1),
+            "penalty_pct": round((r["penalty_mult"] - 1.0) * 100.0, 1),
+            "pp_pct": round((r["pp_mult"] - 1.0) * 100.0, 1),
+        }
+    except Exception:
+        return {}

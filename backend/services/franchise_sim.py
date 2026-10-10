@@ -12581,6 +12581,22 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
         calendar_day=d,
     )
 
+    # Board of Governors on-ice rules: the fast sim has no shootout of its own, so
+    # decide here how many overtime games reach one (longer OT → fewer), and whether
+    # a shootout is replaced by a tie. The event sim reports its own shootouts.
+    _board_rules: Dict[str, Any] = {}
+    _fast_game = getattr(sim, "_pending_event_game", None) is None
+    try:
+        from app.sim_engine.league.game_rules import rules_for as _rules_for, shootout_share as _so_share
+
+        _board_rules = _rules_for(getattr(sim, "league", None))
+        session.standings.points_rules = {
+            k: _board_rules[k] for k in ("pts_reg_win", "pts_ot_win", "pts_otl", "pts_tie")
+        }
+        _fast_shootout = bool(ot) and _fast_game and not is_playoff_slot and r.random() < _so_share(_board_rules)
+    except Exception:
+        _fast_shootout = False
+
     # Saved lines were attached for score sim; re-attach before stat allocation so
     # TOI/G/A follow Edit Lines (they were previously cleared too early).
     _attach_franchise_saved_lineups(
@@ -12606,15 +12622,26 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
     if not isinstance(box, dict):
         box = {}
 
+    _shootout = bool(box.get("shootout", False)) or _fast_shootout
+    _tie = bool(_shootout and _board_rules.get("ties_allowed") and not is_playoff_slot)
+    _stats_hg = int(box.get("player_home_goals", box.get("home_goals", hg)) or 0)
+    _stats_ag = int(box.get("player_away_goals", box.get("away_goals", ag)) or 0)
+    if _tie and _fast_game and _stats_hg != _stats_ag:
+        # The fast sim's deciding goal is not a real goal in a tie.
+        if _stats_hg > _stats_ag:
+            _stats_hg -= 1
+        else:
+            _stats_ag -= 1
     session.standings.record_game(
         slot.home_id,
         slot.away_id,
         hg,
         ag,
         overtime=ot,
-        shootout=bool(box.get("shootout", False)),
-        stats_home_goals=int(box.get("player_home_goals", box.get("home_goals", hg)) or 0),
-        stats_away_goals=int(box.get("player_away_goals", box.get("away_goals", ag)) or 0),
+        shootout=_shootout,
+        stats_home_goals=_stats_hg,
+        stats_away_goals=_stats_ag,
+        tie=_tie,
     )
     
 
@@ -12631,15 +12658,19 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
 
     hn = (_display_team(home) or "?")[:24]
     an = (_display_team(away) or "?")[:24]
-    league_line = f"{hn} {int(hg)}-{int(ag)} {an}{' OT' if ot else ''}"
+    league_line = f"{hn} {int(hg)}-{int(ag)} {an}{' T' if _tie else ' SO' if _shootout else ' OT' if ot else ''}"
 
     user_line: Optional[str] = None
     if hid == user_tid or aid == user_tid:
         opp = away if hid == user_tid else home
         won = (hg > ag) if hid == user_tid else (ag > hg)
-        wl = "W" if won else "L"
+        wl = "T" if _tie else ("W" if won else "L")
         gs = f"{hg}-{ag}"
-        if ot:
+        if _tie:
+            gs += " T (no shootout)"
+        elif _shootout:
+            gs += " SO"
+        elif ot:
             gs += " OT"
         user_line = f"{wl} vs {_display_team(opp)} ({gs}) — calendar day {d}"
 

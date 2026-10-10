@@ -96,6 +96,12 @@ _SKATER_LEDGER_ANALYTICS_KEYS = (
 
 # League-wide goals/points lift (game scores + finish rate). Does not touch TOI allocation.
 _GM_LEAGUE_SCORING_PACE_MULT = 1.08
+
+from app.sim_engine.league.game_rules import (  # noqa: E402  (Board of Governors on-ice rules)
+    light_goal_rate_mult as _board_light_goal_rate_mult,
+    ot_attempt_scale as _board_ot_attempt_scale,
+    rules_for as _board_rules_for,
+)
 # Bulk/light game scores: talent gap should move standings, not single-game dice.
 _GM_STRENGTH_MATCHUP_GOAL_K = 1.85
 _GM_STRENGTH_GAME_GOAL_SIGMA = 1.26
@@ -13461,7 +13467,8 @@ class SimEngine:
         if not dressed_sk:
             return 0, 0, 0.0, []
         team_risk = sum(self._gm_penalty_risk_weight(p) for p in dressed_sk) / max(1, len(dressed_sk))
-        target_events = max(0, int(round(rng.gauss(3.15, 1.05) * (0.92 + 0.16 * team_risk * intensity))))
+        _pen_mult = float(self._board_game_rules().get("penalty_mult", 1.0))
+        target_events = max(0, int(round(rng.gauss(3.15, 1.05) * (0.92 + 0.16 * team_risk * intensity) * _pen_mult)))
         n_events = min(6, max(0, target_events))
         pim_total = 0
         ppo = 0
@@ -14046,7 +14053,7 @@ class SimEngine:
                             raw_xg, fin, g_adj,
                             situational_adj=float(ctx.get("situational_adj", 1.0)),
                         )
-                        prob = min(0.94, float(prob) * _GM_LEAGUE_SCORING_PACE_MULT)
+                        prob = min(0.94, float(prob) * _GM_LEAGUE_SCORING_PACE_MULT * float(self._board_game_rules().get("scoring_mult", 1.0)))
                         outcome = "GOAL" if rng.random() < prob else "SAVED"
                     else:
                         outcome = "MISSED"
@@ -14328,8 +14335,9 @@ class SimEngine:
                     if ot_period > 12:
                         break
             else:
-                ot_attempts_h = rng.randint(4, 8)
-                ot_attempts_a = rng.randint(4, 8)
+                _ot_scale = _board_ot_attempt_scale(self._board_game_rules())
+                ot_attempts_h = max(2, int(round(rng.randint(4, 8) * _ot_scale)))
+                ot_attempts_a = max(2, int(round(rng.randint(4, 8) * _ot_scale)))
                 before_h, before_a = reg_home, reg_away
                 _simulate_segment(ot_attempts_h, ot_attempts_a, track_goals=True, sudden_death=True)
                 ot_home = reg_home - before_h
@@ -14871,7 +14879,8 @@ class SimEngine:
                 _pp_d = float(self._team_pp_danger(team))
             except Exception:
                 _pp_d = 0.55
-            pp_goal_p = max(0.14, min(0.30, 0.21 * (0.60 + 0.75 * _pp_d)))
+            _br = self._board_game_rules()
+            pp_goal_p = max(0.10, min(0.40, 0.21 * (0.60 + 0.75 * _pp_d) * float(_br.get("pp_mult", 1.0)) * (0.7 + 0.3 * float(_br.get("penalty_mult", 1.0)))))
             for _ in range(goals):
                 scorer = _pick_scorer()
                 gkw: Dict[str, Any] = {"g": 1}
@@ -16002,6 +16011,13 @@ class SimEngine:
                 dst["gp"] = 82
             if str(dst.get("position") or "").upper() != "G":
                 dst["pts"] = int(dst.get("g", 0) or 0) + int(dst.get("a", 0) or 0)
+    def _board_game_rules(self) -> Dict[str, Any]:
+        """On-ice Board of Governors rules (scoring pace, penalties, OT length...)."""
+        try:
+            return _board_rules_for(getattr(self, "league", None))
+        except Exception:
+            return {}
+
     def _simulate_game_strength(
         self,
         rng: random.Random,
@@ -16022,10 +16038,11 @@ class SimEngine:
             s_home = max(0.12, min(0.94, s_home + win_delta * 1.15))
             s_away = max(0.12, min(0.94, s_away - win_delta * 1.15))
 
-        base = 3.08 * _GM_LEAGUE_SCORING_PACE_MULT
+        _rules = self._board_game_rules()
+        base = 3.08 * _GM_LEAGUE_SCORING_PACE_MULT * _board_light_goal_rate_mult(_rules)
         diff = s_home - s_away
         mk = float(_GM_STRENGTH_MATCHUP_GOAL_K)
-        home_mu = base + mk * diff + 0.16
+        home_mu = base + mk * diff + 0.16 * float(_rules.get("home_ice_mult", 1.0))
         away_mu = base - mk * diff
         try:
             home_mu += float(team_scoring_pace_bias(home))

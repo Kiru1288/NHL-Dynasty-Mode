@@ -2051,12 +2051,11 @@ def _advance_salary_cap(session: FranchiseSession) -> Dict[str, Any]:
         invalidate_league_ops_cache(session)
         _ops = build_league_operations_payload(session)
         target_cap = float(_ops.get("projected_salary_cap") or 0) or None
+        _board_adj = 0.0
         try:
             from services.league_governance import consume_pending_cap_adjust
 
             _board_adj = consume_pending_cap_adjust(session)  # already inside the projection
-            if _board_adj:
-                target_reason = f"Board of Governors adjustment {_board_adj:+.2f}M on top of the league projection."
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
         _growth = (_ops.get("cap") or {}).get("model_growth_pct")
@@ -2065,6 +2064,12 @@ def _advance_salary_cap(session: FranchiseSession) -> Dict[str, Any]:
             f"({_growth:+.1f}% trend, {_ops.get('losing_teams_count', 0)} clubs losing money)."
             if _growth is not None else None
         )
+        if _board_adj:
+            # This note used to be overwritten by the revenue-model line right after it.
+            target_reason = (
+                (target_reason + " " if target_reason else "")
+                + f"Board of Governors adjustment {_board_adj:+.2f}M on top of the league projection."
+            )
     except Exception:
         target_cap = None
     try:
@@ -7468,31 +7473,11 @@ def generate_next_season(session: FranchiseSession) -> Dict[str, Any]:
 
         _joined = run_pending_expansion(session, int(session.season_calendar_year) + 1)
         if _joined:
-            session.expansion_joined_payload = _joined
-            try:
-                from services.franchise_sim import _append_showcase_popup
+            # Normally already run at the Board of Governors meeting; this is the
+            # fallback for saves that passed that stage before the fix.
+            from services.league_governance import announce_expansion
 
-                names = ", ".join(
-                    f"{row.get('city') or ''} {row.get('name') or ''}".strip() or str(row.get("abbr") or "Expansion club")
-                    for row in _joined
-                    if isinstance(row, dict)
-                ) or "New clubs"
-                taken = sum(int(row.get("players") or 0) for row in _joined if isinstance(row, dict))
-                _append_showcase_popup(session, f"expansion:{int(session.season_calendar_year) + 1}", {
-                    "kind": "breaking_news",
-                    "source_label": "Board of Governors",
-                    "theme": "info",
-                    "headline": "Expansion draft is complete",
-                    "summary": (
-                        f"{names} join the league. Existing clubs protected their cores and "
-                        f"{taken or 'several'} players changed teams in the expansion draft. "
-                        "The new clubs are on next year's schedule and in the standings. "
-                        "Passed board rules (cap, injury rate, trade volume) stay in force."
-                    ),
-                })
-                session.timeline.append(f"Expansion: {names} joined the league.")
-            except Exception:
-                _swallowed_log.debug("suppressed exception", exc_info=True)
+            announce_expansion(session, _joined, int(session.season_calendar_year) + 1)
     except Exception as _exp_err:  # expansion must never block the season
         import logging
 

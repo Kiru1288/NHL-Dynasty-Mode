@@ -258,7 +258,8 @@ class TeamStandingRecord:
     def point_pct(self) -> float:
         if self.gp <= 0:
             return 0.0
-        return self.points / float(self.gp * POINTS_FOR_WIN)
+        per = _safe_int(getattr(self, "max_pts_per_game", POINTS_FOR_WIN), POINTS_FOR_WIN) or POINTS_FOR_WIN
+        return self.points / float(self.gp * per)
 
     def points_per_game(self) -> float:
         if self.gp <= 0:
@@ -293,7 +294,8 @@ class TeamStandingRecord:
         return max(0, season_games - self.gp)
 
     def max_possible_points(self, season_games: int = DEFAULT_SEASON_GAMES) -> int:
-        return self.points + self.games_remaining(season_games) * POINTS_FOR_WIN
+        per = _safe_int(getattr(self, "max_pts_per_game", POINTS_FOR_WIN), POINTS_FOR_WIN) or POINTS_FOR_WIN
+        return self.points + self.games_remaining(season_games) * per
 
     def to_base_row(self, season_games: int = DEFAULT_SEASON_GAMES) -> Dict[str, Any]:
         self.normalize()
@@ -309,7 +311,8 @@ class TeamStandingRecord:
             "wins": self.wins,
             "losses": self.losses,
             "otl": self.otl,
-            "record": self.record(),
+            "ties": _safe_int(getattr(self, "ties", 0)),
+            "record": self.record() + (f"-{_safe_int(getattr(self, 'ties', 0))}T" if _safe_int(getattr(self, "ties", 0)) else ""),
             "points": self.points,
 
             "gf": self.gf,
@@ -403,6 +406,7 @@ class StandingsTable:
         shootout: bool = False,
         stats_home_goals: Optional[int] = None,
         stats_away_goals: Optional[int] = None,
+        tie: bool = False,
     ) -> None:
         """
         Update standings for a single completed game.
@@ -442,6 +446,29 @@ class StandingsTable:
         a.gf += stat_ag
         a.ga += stat_hg
 
+        pr = self._points_rules()
+        for rec in (h, a):
+            rec.max_pts_per_game = int(pr["pts_reg_win"])
+
+        # Board of Governors "no shootout" rule: the game stands as a tie.
+        if tie:
+            # The fast sim adds a deciding goal; it is not a real goal in a tie.
+            if stats_home_goals is None and stats_away_goals is None and home_goals != away_goals:
+                if home_goals > away_goals:
+                    h.gf -= 1
+                    a.ga -= 1
+                else:
+                    a.gf -= 1
+                    h.ga -= 1
+            for rec, is_home in ((h, True), (a, False)):
+                rec.ties = _safe_int(getattr(rec, "ties", 0)) + 1
+                rec.points += int(pr["pts_tie"])
+                rec.last_10.append("T")
+                rec.last_10 = rec.last_10[-10:]
+            h.normalize()
+            a.normalize()
+            return
+
         # Caller should avoid unresolved ties.
         # If tie somehow arrives, force deterministic OT-style result.
         if home_goals == away_goals:
@@ -472,6 +499,16 @@ class StandingsTable:
         h.normalize()
         a.normalize()
 
+    def _points_rules(self) -> Dict[str, int]:
+        """Points system (Board of Governors rules can change it; default NHL 2-2-1-0)."""
+        pr = getattr(self, "points_rules", None)
+        out = {"pts_reg_win": POINTS_FOR_WIN, "pts_ot_win": POINTS_FOR_WIN, "pts_otl": POINTS_FOR_OTL, "pts_tie": 1}
+        if isinstance(pr, dict):
+            for k in out:
+                if k in pr:
+                    out[k] = _safe_int(pr.get(k), out[k])
+        return out
+
     def _apply_win_loss(
         self,
         winner: TeamStandingRecord,
@@ -480,8 +517,9 @@ class StandingsTable:
         overtime: bool,
         shootout: bool,
     ) -> None:
+        pr = self._points_rules()
         winner.wins += 1
-        winner.points += POINTS_FOR_WIN
+        winner.points += int(pr["pts_ot_win"] if (overtime or shootout) else pr["pts_reg_win"])
 
         if winner_is_home:
             winner.home_wins += 1
@@ -490,7 +528,7 @@ class StandingsTable:
 
         if overtime or shootout:
             loser.otl += 1
-            loser.points += POINTS_FOR_OTL
+            loser.points += int(pr["pts_otl"])
 
             if winner_is_home:
                 loser.away_otl += 1

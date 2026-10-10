@@ -1360,10 +1360,19 @@ def calculate_salary_cap_projection(
         projected = round(known, 2)
         from app.sim_engine.economy.cap_engine import NHL_UPPER_LIMIT_BY_SEASON_START  # noqa: WPS433
 
+        league_obj = getattr(getattr(session, "sim", None), "league", None)
+        sched = getattr(league_obj, "cap_schedule_m", None) if league_obj is not None else None
+        already_set = isinstance(sched, dict) and any(str(k) == str(sy + 1) for k in sched)
         if (sy + 1) in NHL_UPPER_LIMIT_BY_SEASON_START:
             source = "announced" if (sy + 1) <= 2027 else "league_estimate"
         else:
             source = "set"
+        # Board cap-growth rules move an announced / estimated figure too (they were
+        # ignored for every season that had a published number). A cap already set
+        # at rollover stays fixed.
+        gov_growth = _gov(session, "cap_growth") / 100.0
+        if gov_growth and not already_set:
+            projected = round(round(projected * (1.0 + gov_growth) * 2.0) / 2.0, 2)
     else:
         projected = round(round(current_cap * (1.0 + growth) * 2.0) / 2.0, 2)
         source = "model"
