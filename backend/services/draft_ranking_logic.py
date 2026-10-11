@@ -365,11 +365,11 @@ def _rating_key_buckets(ratings: Mapping[str, Any]) -> Dict[str, List[str]]:
         kl = str(k).lower()
         if any(x in kl for x in ("def", "stick", "gap", "block", "poke")):
             buckets["def"].append(k)
-        if "skat" in kl:
+        if "skat" in kl or kl.startswith("skg_"):
             buckets["skate"].append(k)
         if any(x in kl for x in ("iq", "sense", "awareness")):
             buckets["iq"].append(k)
-        if any(x in kl for x in ("strength", "physical", "reach", "body")):
+        if kl.startswith("phy_") or any(x in kl for x in ("strength", "physical", "reach", "body")):
             buckets["phys"].append(k)
         if any(x in kl for x in ("shoot", "shot", "finish", "release", "wrist", "one_timer", "snap")):
             buckets["shoot"].append(k)
@@ -577,6 +577,22 @@ def enrich_prospect_row_from_player(player: Any, row: Dict[str, Any]) -> None:
     _emit("defense", def_keys)
     _emit("physical", phys_keys)
     _emit("hockey_iq", iq_keys)
+    try:
+        _ovr_ui = float(row.get("true_ovr") or row.get("overall") or row.get("effective_ovr")
+                        or getattr(player, "overall", 0) or 0)
+    except (TypeError, ValueError):
+        _ovr_ui = 0.0
+    _ui_keys = [k for k in ("skating", "shooting", "passing", "defense", "physical", "hockey_iq")
+                if isinstance(row.get(k), (int, float))]
+    if _ovr_ui > 0 and len(_ui_keys) >= 3:
+        _bias_map = {"skating": "transition", "shooting": "offence", "passing": "offence",
+                     "defense": "defence", "physical": "physical", "hockey_iq": "mental"}
+        _shaped = _spread_chapters(
+            player, row, int(round(_ovr_ui)), {k: float(row[k]) for k in _ui_keys}, salt="ui",
+        )
+        _b = _profile_biases(row, player, list(set(_bias_map.values())))
+        for k in _ui_keys:
+            row[k] = int(max(25, min(99, round(_shaped[k] + _b.get(_bias_map[k], 0.0) * 0.8))))
 
     def _trait_100(val: Any) -> Optional[int]:
         if val is None:
@@ -880,6 +896,103 @@ def _rating_avg_matching(ratings: Mapping[str, Any], *needles: str) -> Optional[
     return int(round(sum(vals) / len(vals)))
 
 
+_CHAPTER_SPREAD_STRETCH = 2.6
+_CHAPTER_NOISE = 4
+
+
+def _player_seed_key(player: Any, row: Mapping[str, Any]) -> str:
+    for src in (row.get("key"), row.get("player_id"), row.get("id"), getattr(player, "id", None),
+                getattr(player, "player_id", None)):
+        if src not in (None, ""):
+            return str(src)
+    ident = getattr(player, "identity", None)
+    return str(getattr(ident, "name", None) or row.get("name") or "prospect")
+
+
+def _profile_biases(row: Mapping[str, Any], player: Any, keys: List[str]) -> Dict[str, float]:
+    """Position / archetype shape so a sniper, a shutdown D and a grinder read differently."""
+    pos = str(row.get("position") or getattr(player, "position", "") or "").upper()
+    pos = str(getattr(pos, "value", pos))
+    arch = getattr(player, "archetype", None)
+    blob = " ".join(
+        str(x or "")
+        for x in (
+            row.get("archetype"), row.get("playstyle"), row.get("dossier_archetype"),
+            row.get("dossier_play_style"), getattr(arch, "value", arch), getattr(player, "playstyle", None),
+        )
+    ).lower().replace("_", " ")
+    b: Dict[str, float] = {k: 0.0 for k in keys}
+
+    def add(k: str, v: float) -> None:
+        if k in b:
+            b[k] += v
+
+    if "G" == pos:
+        if "athlet" in blob or "hybrid" in blob:
+            add("glove", 3); add("stick", -1)
+        if "position" in blob or "butterfly" in blob or "technical" in blob:
+            add("blocker", 3); add("stick", 1)
+        return b
+    if pos in ("D", "LD", "RD"):
+        add("defence", 3); add("offence", -2); add("physical", 1)
+    elif pos == "C":
+        add("offence", 1); add("mental", 2); add("defence", 1)
+    else:
+        add("offence", 3); add("defence", -3); add("transition", 1)
+    for needles, shifts in (
+        (("sniper", "shooter", "scor"), {"offence": 5, "defence": -3}),
+        (("playmak", "puck mov", "quarterback", "offensive"), {"offence": 4, "mental": 2, "defence": -2}),
+        (("power forward", "power-forward"), {"physical": 5, "offence": 2, "transition": -2}),
+        (("enforcer", "grinder", "agitator", "physical", "crash"), {"physical": 6, "offence": -4}),
+        (("two way", "two-way", "200"), {"defence": 3, "mental": 2}),
+        (("shutdown", "stay at home", "defensive", "checking"), {"defence": 6, "offence": -5}),
+        (("speed", "dangler", "transition", "rush", "skating"), {"transition": 6, "physical": -2}),
+        (("cerebral", "smart", "iq", "heady"), {"mental": 5}),
+    ):
+        if any(n in blob for n in needles):
+            for k, v in shifts.items():
+                add(k, v)
+    return b
+
+
+def _spread_chapters(
+    player: Any,
+    row: Mapping[str, Any],
+    ovr: int,
+    raw: Dict[str, Optional[float]],
+    *,
+    salt: str = "ch",
+) -> Dict[str, int]:
+    """Turn compressed bucket averages into a readable profile around OVR.
+
+    Each chapter averages 10-15 sim attributes, so every bucket regresses to the
+    player's mean and the board shows the overall in every column. Stretch the
+    deviations, add position / archetype shape and a stable per-player wobble.
+    """
+    keys = list(raw.keys())
+    known = [float(v) for v in raw.values() if v is not None]
+    mean = sum(known) / len(known) if known else float(ovr)
+    biases = _profile_biases(row, player, keys)
+    seed = _player_seed_key(player, row)
+    out: Dict[str, float] = {}
+    for k in keys:
+        v = raw.get(k)
+        dev = (float(v) - mean) * _CHAPTER_SPREAD_STRETCH if v is not None else 0.0
+        noise = (_stable_int(2 * _CHAPTER_NOISE + 1, seed, salt, k) - _CHAPTER_NOISE)
+        out[k] = ovr + dev + biases.get(k, 0.0) + noise
+    # Keep the profile centred on the overall so it still "adds up".
+    if out:
+        shift = (sum(out.values()) / len(out)) - ovr
+        for k in out:
+            out[k] -= shift
+    if out and max(out.values()) - min(out.values()) < 6:
+        # Still flat (no ratings, no archetype): force a visible strongest / weakest tool.
+        ordered = sorted(keys, key=lambda kk: _stable_int(1000, seed, salt, "rank", kk))
+        out[ordered[0]] += 4
+        out[ordered[-1]] -= 4
+    return {k: int(max(25, min(99, round(v)))) for k, v in out.items()}
+
+
 def _infer_chapter_payload(player: Any, row: Dict[str, Any], ratings: Mapping[str, Any]) -> Dict[str, Any]:
     pos = str(row.get("position") or getattr(player, "position", "F") or "F")
     ptype = _player_type_for_position(pos)
@@ -923,22 +1036,32 @@ def _infer_chapter_payload(player: Any, row: Dict[str, Any], ratings: Mapping[st
             or ovr
         )
         stick = _rating_avg_matching(ratings, "stick", "rebound", "puck") or max(0, ovr - 2)
-        chapters = {
-            "overall": ovr,
-            "glove": int(glove),
-            "blocker": int(blocker),
-            "stick": int(stick),
-            "potential": pot,
-        }
+        spread = _spread_chapters(
+            player, row, ovr,
+            {"glove": float(glove), "blocker": float(blocker), "stick": float(stick)},
+            salt="g",
+        )
+        chapters = {"overall": ovr, **spread, "potential": pot}
     else:
         shoot = _bucket_avg("shoot")
         passing = _bucket_avg("pass")
         offence_parts = [v for v in (shoot, passing) if v is not None]
-        offence = int(round(sum(offence_parts) / len(offence_parts))) if offence_parts else ovr
-        defence = _bucket_avg("def") or max(0, ovr - 2)
-        transition = _bucket_avg("skate") or ovr
-        mental = _bucket_avg("iq") or ovr
-        physical = _bucket_avg("phys") or max(0, ovr - 1)
+        offence_raw = (sum(offence_parts) / len(offence_parts)) if offence_parts else None
+        spread = _spread_chapters(
+            player, row, ovr,
+            {
+                "offence": offence_raw,
+                "defence": _bucket_avg("def"),
+                "transition": _bucket_avg("skate"),
+                "mental": _bucket_avg("iq"),
+                "physical": _bucket_avg("phys"),
+            },
+        )
+        offence = spread["offence"]
+        defence = spread["defence"]
+        transition = spread["transition"]
+        mental = spread["mental"]
+        physical = spread["physical"]
         character = _resolve_character_chapter_score(row, player, mental=mental, ovr=ovr)
         chapters = {
             "overall": ovr,
@@ -983,6 +1106,19 @@ def _attach_chapter_profile_to_row(player: Any, row: Dict[str, Any], ratings: Ma
     except Exception:
         payload = None
 
+    if isinstance(payload, dict):
+        _skill_keys = [k for k in (payload.get("chapters") or {}) if k not in ("overall", "potential", "character")]
+        _vals = []
+        for _k in _skill_keys:
+            try:
+                _vals.append(int((payload.get("chapters") or {})[_k]))
+            except (TypeError, ValueError):
+                pass
+        if len(_vals) >= 3 and max(_vals) - min(_vals) <= 2:
+            # Collapsed profile (every chapter == overall): use the shaped inference instead.
+            payload = {**payload, "chapters": {
+                k: v for k, v in (payload.get("chapters") or {}).items() if k not in _skill_keys
+            }}
     payload = _merge_chapter_payloads(payload, inferred)
     chapters = dict(payload.get("chapters") or {})
     ptype = str(payload.get("player_type") or inferred.get("player_type") or "skater")
