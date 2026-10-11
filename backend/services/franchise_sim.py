@@ -13390,12 +13390,8 @@ def _run_bulk_finalize_season_extras(session: FranchiseSession, *, narrative_day
         _franchise_bulk_narrative_catchup(session, days_advanced=max(1, int(narrative_days)), incremental=False)
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
-    try:
-        from services.franchise_scouting import apply_passive_scouting_progress
-
-        apply_passive_scouting_progress(session, days=max(1, int(narrative_days)))
-    except Exception:
-        _swallowed_log.debug("suppressed exception", exc_info=True)
+    # Passive scouting is NOT applied here: the incremental catch-up already covered
+    # every simulated day, so this pass used to double a season sim's scouting.
     session._bulk_finalize_deferred_days = 0
 
 

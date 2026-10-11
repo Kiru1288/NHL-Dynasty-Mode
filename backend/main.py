@@ -1720,6 +1720,27 @@ def post_franchise_scouting_focus(
     return _scouting_post("focus", body, x_franchise_session)
 
 
+@app.post("/api/franchise/scouting/auto")
+def post_franchise_scouting_auto(
+    body: dict[str, Any] = Body(default=None),
+    x_franchise_session: Optional[str] = Header(default=None),
+) -> dict[str, Any]:
+    """One-click scouting: {"action": "fill"} assigns scouts to every open slot;
+    {"action": "toggle", "enabled": bool} lets the staff manage assignments weekly."""
+    from services.franchise_scouting import auto_assign_scouts, set_auto_manage
+
+    s = _session_or_404(x_franchise_session)
+    b = body or {}
+    if str(b.get("action") or "fill") == "toggle":
+        result = set_auto_manage(s, bool(b.get("enabled")))
+    else:
+        result = auto_assign_scouts(s)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("message") or "Auto-scouting failed")
+    save_session(s)
+    return result
+
+
 @app.post("/api/franchise/scouting/film-study")
 def post_franchise_scouting_film_study(
     body: ScoutingCommandBody,

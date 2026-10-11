@@ -27,7 +27,9 @@ DEFAULT_SCOUTING_BUDGET = 2_500_000
 
 # Passive dedicated-file growth (per calendar day) — caps below locked-read threshold
 # unless the GM runs explicit scouting actions.
-PASSIVE_ASSIGNED_DAILY = 0.42
+# Was 0.42 (~170 days to the 72% reveal: longer than the scouting season). An
+# average scout now reveals OVR in ~2 months; elite / region specialists faster.
+PASSIVE_ASSIGNED_DAILY = 0.95
 PASSIVE_WATCHLIST_DAILY = 0.16
 PASSIVE_TARGET_BONUS = 0.20
 PASSIVE_REGION_DAILY = 0.10
@@ -52,6 +54,23 @@ FILM_STUDY_HOURS = 4
 DEPLOYMENT_SALARY_PER_WEEK = 48_000
 DISCOVERY_REP_LATE_BLOOMER = 8
 DISCOVERY_REP_EARLY_FLAMER = 5
+DEPLOYMENT_DAYS = 28  # a coverage deployment runs four weeks, then ends
+REGION_SPECIALIST_BONUS = 1.25
+#: One-time deep dives (a second interview / medical adds nothing).
+ONE_TIME_ACTIONS = {
+    "interview": "interview_status",
+    "dinner": "dinner_status",
+    "combine": "combine_status",
+    "private_workout": "workout_status",
+    "medical_review": "medical_status",
+    "film_study": "film_study_complete",
+}
+ACTION_ALIASES = {
+    "analytics": "analytics_deep_dive",
+    "medical": "medical_review",
+    "workout": "private_workout",
+    "focus": "player_focus",
+}
 
 
 def _stable_hash(value):
@@ -98,11 +117,11 @@ def _draft_period_label(month: Optional[int]) -> str:
         return "Early season scouting"
     if month in (11, 12, 1):
         return "Mid-season scouting"
-    if month in (2, 3):
+    if month in (2, 3, 4):
         return "Late-season scouting"
-    if month == 4:
+    if month == 5:
         return "Combine week"
-    if month in (5, 6):
+    if month == 6:
         return "Draft week"
     if month == 7:
         return "Offseason"
@@ -215,6 +234,81 @@ def _ensure_scouting_state(session: FranchiseSession) -> Dict[str, Any]:
     return raw
 
 
+def _class_signature(entries: List[Mapping[str, Any]]) -> str:
+    """Stable id for the current draft class (top of the board), so scouting can tell
+    when the class turns over at the draft."""
+    keys = sorted(str(e.get("key") or e.get("id") or "") for e in (entries or [])[:60])
+    if not keys:
+        return ""
+    return hashlib.md5("|".join(keys).encode("utf-8")).hexdigest()[:12]
+
+
+def _sync_scouting_class(session: FranchiseSession, state: Dict[str, Any], entries: List[Mapping[str, Any]]) -> bool:
+    """New draft class → new scouting year.
+
+    Drops files on players who are no longer in the class (drafted / aged out) so
+    their assigned scouts, Spotlight and watchlist slots free up, clears coverage
+    deployments, and resets the season's spend. (None of this ever reset before:
+    after the first draft the budget stayed spent and slots stayed full.)"""
+    sig = _class_signature(entries)
+    if not sig:
+        return False
+    prev = str(state.get("class_signature") or "")
+    if prev == sig:
+        return False
+    live = {str(e.get("key") or e.get("id") or "") for e in entries}
+    first_sync = not prev
+    prospects = state.get("prospects") if isinstance(state.get("prospects"), dict) else {}
+    state["prospects"] = {k: v for k, v in prospects.items() if k in live}
+    state["watchlist"] = [x for x in list(state.get("watchlist") or []) if str(x) in live]
+    state["scout_spotlight"] = [x for x in _spotlight_ids(state) if x in live]
+    if not first_sync:
+        state["used_budget"] = 0.0
+        state["active_deployments"] = []
+        state["assignments"] = []
+        state["deployment_salary_week"] = -1
+        state["season_spend_reset_at"] = int(getattr(session, "calendar_cursor", 0) or 0)
+    state["class_signature"] = sig
+    session._cached_scouting_prospects_payload = None
+    session._cached_scouting_world_payload = None
+    return True
+
+
+def _scout_lookup(session: FranchiseSession, assigned: str) -> Optional[Dict[str, Any]]:
+    """Assigned scout by id or name (Draft Class stores the name, Scouting the id)."""
+    a = str(assigned or "").strip().lower()
+    if not a:
+        return None
+    for sc in _scout_pool(session):
+        if a in (str(sc.get("id") or "").lower(), str(sc.get("name") or "").lower()):
+            return sc
+    return None
+
+
+def _scout_speed_mult(session: FranchiseSession, assigned: str, entry: Mapping[str, Any]) -> float:
+    """Better scouts build files faster; a scout in his own region (or the goalie
+    scout on a goalie) gets a specialist bonus."""
+    sc = _scout_lookup(session, assigned)
+    if sc is None:
+        return 1.0
+    mult = float(sc.get("speed_mult") or 1.0)
+    pos = str(entry.get("position") or "").upper()
+    region = str(entry.get("region") or "") or _region_for_country(str(entry.get("country") or ""))
+    spec = str(sc.get("region") or "")
+    if (spec == "Goaltending" and pos == "G") or (spec and spec == region and pos != "G"):
+        mult *= REGION_SPECIALIST_BONUS
+    return mult
+
+
+def _expire_deployments(state: Dict[str, Any], cur_cursor: int) -> bool:
+    deployments = list(state.get("active_deployments") or [])
+    keep = [d for d in deployments if cur_cursor - int(d.get("since_cursor") or 0) < DEPLOYMENT_DAYS]
+    if len(keep) != len(deployments):
+        state["active_deployments"] = keep
+        return True
+    return False
+
+
 def _assignment_slot_limit(state: Mapping[str, Any]) -> int:
     slots = int(state.get("assignment_cap_slots") or ASSIGNMENT_CAP_SLOTS_DEFAULT)
     return min(MAX_ASSIGNED_PASSIVE_TARGETS, ASSIGNMENT_FREE_SLOTS + max(0, slots) * 10)
@@ -241,7 +335,8 @@ def get_hidden_ceiling_pool(session: FranchiseSession) -> set:
 def ensure_scouting_markers(session: FranchiseSession, entries: List[Mapping[str, Any]]) -> None:
     """Seed hidden-ceiling sleepers (~20) and public-miss tags for the draft class."""
     state = _ensure_scouting_state(session)
-    sy = int(getattr(session, "season_calendar_year", 2025) or 2025)
+    # Keyed to the draft class itself (it changes at the draft, not at season rollover).
+    sy = _class_signature(entries)
     if state.get("markers_season") == sy and state.get("hidden_ceiling_pool"):
         return
 
@@ -364,7 +459,15 @@ def _charge_deployment_salary(
     if week_bucket <= last_bucket:
         return False
     weekly = len(deployments) * DEPLOYMENT_SALARY_PER_WEEK
-    state["used_budget"] = float(state.get("used_budget") or 0.0) + float(weekly)
+    budget = float(state.get("budget") or DEFAULT_SCOUTING_BUDGET)
+    used = float(state.get("used_budget") or 0.0)
+    if used + weekly > budget:
+        # Out of money: the scouts come home instead of running the budget negative.
+        state["active_deployments"] = []
+        state["deployment_salary_week"] = week_bucket
+        state["deployments_recalled"] = True
+        return True
+    state["used_budget"] = used + float(weekly)
     state["deployment_salary_week"] = week_bucket
     state["deployment_salary_last"] = weekly
     return True
@@ -396,7 +499,7 @@ def _register_coverage_deployment(
 def _weeks_until_draft(month: Optional[int]) -> Optional[float]:
     if month is None:
         return None
-    if month in (6, 7):
+    if month == 6:
         return 0.0
     if month < 6:
         return round((6 - month) * 4.3, 1)
@@ -510,6 +613,10 @@ def _scout_file_timeline(
         in_deployed_region=in_deployed,
         assigned_under_cap=assigned_under_cap,
     )
+    if assigned and assigned_under_cap:
+        daily += PASSIVE_ASSIGNED_DAILY * (
+            _scout_speed_mult(session, str(overlay.get("assigned_scout") or ""), entry) - 1.0
+        )
     if pid_key in spotlight and assigned:
         daily += SPOTLIGHT_PASSIVE_DAILY_BONUS
     if month == 7:
@@ -518,6 +625,10 @@ def _scout_file_timeline(
     cap = _passive_cap_for_overlay(
         overlay, assigned=assigned, is_target=is_target, cur_cursor=cur_cursor
     )
+    # Inside the 14-day window an assigned file is capped now but will reach 100%:
+    # project against the unlocked cap instead of reporting "never".
+    if assigned and cap < 100.0:
+        cap = 100.0
     weeks_draft = _weeks_until_draft(month)
 
     def _days_to(target: float) -> Optional[int]:
@@ -605,7 +716,18 @@ def apply_passive_scouting_progress(session: FranchiseSession, *, days: int = 1)
     entries = _draft_entries(session)
     if not entries:
         return False
+    class_changed = _sync_scouting_class(session, state, entries)
     ensure_scouting_markers(session, entries)
+    cur_cursor = int(getattr(session, "calendar_cursor", 0) or 0)
+    expired = _expire_deployments(state, cur_cursor)
+    if state.get("auto_manage"):
+        week = cur_cursor // 7
+        if int(state.get("auto_manage_week") if state.get("auto_manage_week") is not None else -1) != week:
+            state["auto_manage_week"] = week
+            try:
+                auto_assign_scouts(session, entries=entries)
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
 
     watchlist = {str(x) for x in (state.get("watchlist") or [])}
     spotlight = set(_spotlight_ids(state))
@@ -623,9 +745,8 @@ def apply_passive_scouting_progress(session: FranchiseSession, *, days: int = 1)
 
     assigned_limit = _assignment_slot_limit(state)
     assigned_count = _count_assigned_prospects(state)
-    cur_cursor = int(getattr(session, "calendar_cursor", 0) or 0)
 
-    changed = _charge_deployment_salary(session, state, cur_cursor=cur_cursor)
+    changed = _charge_deployment_salary(session, state, cur_cursor=cur_cursor) or class_changed or expired
     for entry in entries:
         pid = str(entry.get("key") or entry.get("id") or "")
         if not pid:
@@ -644,7 +765,7 @@ def apply_passive_scouting_progress(session: FranchiseSession, *, days: int = 1)
         is_target = bool(overlay.get("target"))
 
         if assigned and assigned_count <= assigned_limit:
-            gain += PASSIVE_ASSIGNED_DAILY
+            gain += PASSIVE_ASSIGNED_DAILY * _scout_speed_mult(session, assigned, entry)
         if pid in spotlight and assigned:
             gain += SPOTLIGHT_PASSIVE_DAILY_BONUS
         if on_watchlist:
@@ -711,11 +832,11 @@ def _scouting_phase(session: FranchiseSession) -> str:
         return "mid"
     if month in (12, 1):
         return "mid"
-    if month in (2, 3):
+    if month in (2, 3, 4):
         return "late"
-    if month == 4:
+    if month == 5:
         return "combine"
-    if month in (5, 6):
+    if month == 6:
         return "draft_week"
     if month == 7:
         return "offseason"
@@ -753,6 +874,7 @@ def _scout_pool(session: FranchiseSession) -> List[Dict[str, Any]]:
         sid = f"scout-{code.lower()}"
         quality = 68 + ((seed + i * 17) % 28)
         speed_mult = 0.82 + (quality - 68) / 35.0
+        speed_mult = round(speed_mult, 3)
         days_to_72 = int(round(DRAFT_OVR_REVEAL_THRESHOLD / max(0.15, PASSIVE_ASSIGNED_DAILY * speed_mult)))
         tier = "Elite" if quality >= 88 else "Strong" if quality >= 78 else "Average"
         scouts.append(
@@ -771,6 +893,7 @@ def _scout_pool(session: FranchiseSession) -> List[Dict[str, Any]]:
                 "specialty": region,
                 "specialization": spec_map.get(region, region),
                 "speed_days_to_72": days_to_72,
+                "speed_mult": speed_mult,
                 "scout_tier": tier,
                 "character_evaluation": min(95, quality + 4 + (seed % 7)),
             }
@@ -926,6 +1049,18 @@ def _normalize_prospect(
         "combine_status": str(overlay.get("combine_status") or "Not started"),
         "interview_status": str(overlay.get("interview_status") or "Not interviewed"),
         "dinner_status": str(overlay.get("dinner_status") or "Not scheduled"),
+        "workout_status": str(overlay.get("workout_status") or "Not scheduled"),
+        "medical_status": str(overlay.get("medical_status") or "Not reviewed"),
+        "completed_actions": sorted(
+            a for a, key in ONE_TIME_ACTIONS.items()
+            if (overlay.get(key) is True) or str(overlay.get(key) or "") in ("Completed", "Cleared", "Concern")
+        ),
+        "file_status": (
+            "Full file" if scouted >= 100.0
+            else "OVR revealed" if scouted >= float(DRAFT_OVR_REVEAL_THRESHOLD)
+            else "Scout assigned" if str(overlay.get("assigned_scout") or "").strip()
+            else "Thin file"
+        ),
         "handedness": str(entry.get("handedness") or ""),
         "height": entry.get("height"),
         "weight": entry.get("weight"),
@@ -1027,6 +1162,7 @@ def get_scouting_prospects(session: FranchiseSession) -> Dict[str, Any]:
     last_iso = str(getattr(session, "_prospect_stats_synced_iso", "") or "")
     if not (iso and last_iso and iso == last_iso):
         ensure_prospect_stats_current_for_scouting(session)
+    _sync_scouting_class(session, _ensure_scouting_state(session), _draft_entries(session))
     cached = getattr(session, "_cached_scouting_prospects_payload", None)
     if isinstance(cached, dict) and cached:
         return cached
@@ -1045,30 +1181,96 @@ def get_scouting_prospects(session: FranchiseSession) -> Dict[str, Any]:
     return payload
 
 
+def _projected_pick(session: FranchiseSession) -> int:
+    """Where the user's first-round pick should land: worst record picks first."""
+    uid = str(getattr(session, "user_team_id", "") or "")
+    st = getattr(session, "standings", None)
+    recs = getattr(st, "records", None) if st is not None else None
+    if not isinstance(recs, dict) or uid not in recs:
+        return 16
+    rows = []
+    for tid, rec in recs.items():
+        try:
+            pct = float(rec.point_pct()) if hasattr(rec, "point_pct") else 0.5
+        except Exception:
+            pct = 0.5
+        rows.append((pct, str(tid)))
+    if not any(int(getattr(r, "gp", 0) or 0) > 0 for r in recs.values()):
+        return max(1, len(rows) // 2)
+    rows.sort()
+    for i, (_pct, tid) in enumerate(rows):
+        if tid == uid:
+            return i + 1
+    return 16
+
+
+def _draft_range_keys(entries: List[Mapping[str, Any]], pick: int, n_teams: int = 32) -> List[str]:
+    """Prospects realistically there at the user's first two picks."""
+    lo1, hi1 = max(1, pick - 6), pick + 12
+    p2 = n_teams + pick
+    lo2, hi2 = max(1, p2 - 8), p2 + 14
+    out: List[str] = []
+    for e in entries:
+        r = int(e.get("rank") or 999)
+        if lo1 <= r <= hi1 or lo2 <= r <= hi2:
+            out.append(str(e.get("key") or e.get("id") or ""))
+    return [k for k in out if k]
+
+
+def action_cost_table(state: Mapping[str, Any]) -> Dict[str, Dict[str, int]]:
+    """Server prices for every action × intensity (the UI shows these; the server charges them)."""
+    out: Dict[str, Dict[str, int]] = {}
+    for action in ACTION_SCOUTED_GAIN:
+        out[action] = {
+            k: int(round(_estimate_cost({"intensity": k}, action, state, n_targets=1)))
+            for k in INTENSITY_MULT
+        }
+    return out
+
+
 def get_scouting_state(session: FranchiseSession) -> Dict[str, Any]:
     state = _ensure_scouting_state(session)
+    entries = _draft_entries(session)
+    _sync_scouting_class(session, state, entries)
     ctx = _draft_franchise_date_context(session)
     scouts = _scout_pool(session)
-    workload = sum(1 for a in state.get("assignments") or [] if str(a.get("status")) == "active")
+    prospects = state.get("prospects") if isinstance(state.get("prospects"), dict) else {}
     for sc in scouts:
-        sc["workload"] = workload // max(1, len(scouts))
+        ids = {str(sc.get("id") or "").lower(), str(sc.get("name") or "").lower()}
+        sc["workload"] = sum(
+            1 for ov in prospects.values()
+            if isinstance(ov, dict) and str(ov.get("assigned_scout") or "").strip().lower() in ids
+        )
+    cur = int(getattr(session, "calendar_cursor", 0) or 0)
+    sy = int(getattr(session, "season_calendar_year", 2025) or 2025)
+    month = ctx.get("month")
+    pick = _projected_pick(session)
+    budget = float(state.get("budget") or DEFAULT_SCOUTING_BUDGET)
+    used = float(state.get("used_budget") or 0.0)
+    revealed = sum(
+        1 for ov in prospects.values()
+        if isinstance(ov, dict) and float(ov.get("scouted_percentage") or 0) >= DRAFT_OVR_REVEAL_THRESHOLD
+    )
+    full = sum(1 for ov in prospects.values() if isinstance(ov, dict) and float(ov.get("scouted_percentage") or 0) >= 100.0)
 
     return {
-        "date": ctx.get("generated_at") or ctx.get("label") or "",
+        "date": _calendar_iso(session, cur),
         "season": _season_label(session),
         "phase": _scouting_phase(session),
         "scouting_phase": _scouting_phase(session),
-        "period_label": _draft_period_label(ctx.get("month")),
-        "draft_year": ctx.get("draft_year"),
-        "weeks_until_draft": _weeks_until_draft(ctx.get("month")),
+        "period_label": _draft_period_label(month),
+        "draft_year": sy + 1 if (month is None or month >= 7) else sy,
+        "weeks_until_draft": _weeks_until_draft(month),
         "intel_rules": _scouting_intel_rules(),
         "scouts": scouts,
         "staff": scouts,
-        "budget": float(state.get("budget") or DEFAULT_SCOUTING_BUDGET),
-        "used_budget": float(state.get("used_budget") or 0.0),
-        "budget_remaining": float(state.get("budget") or DEFAULT_SCOUTING_BUDGET)
-        - float(state.get("used_budget") or 0.0),
+        "budget": budget,
+        "used_budget": used,
+        "budget_remaining": max(0.0, budget - used),
+        "action_costs": action_cost_table(state),
         "active_deployments": list(state.get("active_deployments") or []),
+        "deployment_days": DEPLOYMENT_DAYS,
+        "deployments_recalled": bool(state.pop("deployments_recalled", False)),
         "scout_spotlight": _spotlight_ids(state),
         "scout_reputation": round(float(state.get("scout_reputation") or 50.0), 1),
         "assignment_slot_limit": _assignment_slot_limit(state),
@@ -1077,8 +1279,27 @@ def get_scouting_state(session: FranchiseSession) -> Dict[str, Any]:
         "hidden_ceiling_pool_size": len(list(state.get("hidden_ceiling_pool") or [])),
         "discoveries": list(state.get("discoveries") or [])[-8:],
         "deployment_salary_per_week": DEPLOYMENT_SALARY_PER_WEEK,
+        "auto_manage": bool(state.get("auto_manage")),
+        "desk": {
+            "projected_pick": pick,
+            "draft_range": _draft_range_keys(entries, pick, max(1, len(getattr(session, "team_by_id", {}) or {}) or 32)),
+            "files_revealed": revealed,
+            "files_full": full,
+            "steps": [
+                "Assign a scout to a prospect — his file grows every day.",
+                f"At {int(DRAFT_OVR_REVEAL_THRESHOLD)}% you see the real OVR; at 100% the full file.",
+                "Deep dives (interview, medical, film) add a one-time boost and extra intel.",
+            ],
+        },
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+def _calendar_iso(session: FranchiseSession, cursor: int) -> str:
+    cal = list(getattr(session, "nhl_calendar", None) or [])
+    if 0 <= cursor < len(cal) and isinstance(cal[cursor], dict):
+        return str(cal[cursor].get("iso") or cal[cursor].get("date") or "")
+    return ""
 
 
 def _aggregate_world(prospects: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -1183,19 +1404,45 @@ def get_scouting_world(session: FranchiseSession) -> Dict[str, Any]:
 
 
 def get_scouting_assignments(session: FranchiseSession) -> Dict[str, Any]:
+    """Active = prospects a scout is assigned to right now; completed = the action log.
+
+    (Every action used to be logged as "completed", so nothing was ever active and
+    Cancel had nothing to cancel.)"""
     state = _ensure_scouting_state(session)
-    assignments = list(state.get("assignments") or [])
-    active = [a for a in assignments if str(a.get("status")) == "active"]
-    completed = [a for a in assignments if str(a.get("status")) != "active"]
-    return {
-        "assignments": assignments,
-        "active": active,
-        "completed": completed,
-    }
+    entries = {str(e.get("key") or ""): e for e in _draft_entries(session)}
+    prospects = state.get("prospects") if isinstance(state.get("prospects"), dict) else {}
+    active: List[Dict[str, Any]] = []
+    for pid, ov in prospects.items():
+        if not isinstance(ov, dict):
+            continue
+        scout = str(ov.get("assigned_scout") or "").strip()
+        if not scout or pid not in entries:
+            continue
+        sc = _scout_lookup(session, scout)
+        e = entries[pid]
+        pct = float(ov.get("scouted_percentage") or 0.0)
+        active.append({
+            "id": f"assign:{pid}",
+            "assignment_id": f"assign:{pid}",
+            "scout_id": (sc or {}).get("id") or scout,
+            "scout_name": (sc or {}).get("name") or scout,
+            "target_type": "player",
+            "target_id": pid,
+            "prospect_name": str(e.get("name") or ""),
+            "rank": int(e.get("rank") or 0),
+            "action": "assigned_scout",
+            "status": "active",
+            "progress": round(pct, 1),
+            "cost": 0.0,
+        })
+    active.sort(key=lambda a: a["rank"] or 999)
+    completed = [a for a in list(state.get("assignments") or []) if str(a.get("status")) != "active"]
+    return {"assignments": active + completed, "active": active, "completed": completed}
 
 
 def _resolve_action(body: Mapping[str, Any], route_action: str) -> str:
     action = str(body.get("action") or route_action or "player_focus").lower().replace("-", "_")
+    action = ACTION_ALIASES.get(action, action)
     if action in ACTION_SCOUTED_GAIN:
         return action
     if route_action in ACTION_SCOUTED_GAIN:
@@ -1203,14 +1450,19 @@ def _resolve_action(body: Mapping[str, Any], route_action: str) -> str:
     return "player_focus"
 
 
-def _estimate_cost(body: Mapping[str, Any], action: str, state: Optional[Mapping[str, Any]] = None) -> float:
-    explicit = body.get("estimated_cost")
-    if explicit is not None:
-        try:
-            return max(0.0, float(explicit))
-        except (TypeError, ValueError):
-            pass
+def _estimate_cost(
+    body: Mapping[str, Any],
+    action: str,
+    state: Optional[Mapping[str, Any]] = None,
+    *,
+    n_targets: int = 1,
+) -> float:
+    """Server-side price. The client's ``estimated_cost`` is ignored (it used to be
+    charged as sent, so a client could scout for $0). Bulk sweeps add a small
+    per-prospect cost on top of the trip."""
     base = 18_000.0 + ACTION_SCOUTED_GAIN.get(action, 8.0) * 2_200.0
+    if n_targets > 1:
+        base += (int(n_targets) - 1) * 1_500.0
     cost = base * _intensity_mult(str(body.get("intensity") or "normal"))
     if state is not None:
         cost *= _deployment_cost_multiplier(state)
@@ -1224,8 +1476,10 @@ def _apply_to_targets(
     action: str,
     *,
     cancel: bool = False,
+    dry_run: bool = False,
 ) -> Tuple[List[str], float]:
-    """Returns (affected_prospect_ids, cost)."""
+    """Returns (affected_prospect_ids, cost). ``dry_run`` resolves targets and price
+    without touching any file (the budget is checked before anything is applied)."""
     ctx = _draft_franchise_date_context(session)
     month = ctx.get("month")
     entries = _draft_entries(session)
@@ -1253,8 +1507,10 @@ def _apply_to_targets(
             if _slug(str(e.get("country") or "")) == country_id:
                 affected.append(str(e.get("key")))
     elif target_type == "region" and target_id:
+        want = _slug(target_id)
         for e in entries:
-            if _slug(str(e.get("region") or "")) == target_id:
+            reg = str(e.get("region") or "") or _region_for_country(str(e.get("country") or ""))
+            if _slug(reg) == want:
                 affected.append(str(e.get("key")))
     elif action == "region_sweep" and country_id:
         for e in entries:
@@ -1264,7 +1520,15 @@ def _apply_to_targets(
     if not affected and target_id and target_id in entry_by_key:
         affected = [target_id]
 
-    cost = 0.0 if cancel else _estimate_cost(body, action, state)
+    # One-time deep dives: a second interview / medical / workout adds nothing.
+    status_key = ONE_TIME_ACTIONS.get(action)
+    if status_key and not cancel:
+        def _done(pid: str) -> bool:
+            v = _prospect_overlay(state, pid).get(status_key)
+            return v is True or str(v or "") in ("Completed", "Cleared", "Concern")
+        affected = [pid for pid in affected if not _done(pid)]
+
+    cost = 0.0 if cancel else _estimate_cost(body, action, state, n_targets=max(1, len(affected)))
     gain = 0.0 if cancel else ACTION_SCOUTED_GAIN.get(action, 8.0) * _intensity_mult(str(body.get("intensity") or "normal"))
 
     if action == "film_study" and not cancel:
@@ -1273,6 +1537,9 @@ def _apply_to_targets(
                 return [], 0.0
         else:
             return [], 0.0
+
+    if dry_run:
+        return affected, cost
 
     for pid in affected:
         entry = entry_by_key.get(pid) or {}
@@ -1296,10 +1563,19 @@ def _apply_to_targets(
             patch["dinner_status"] = "Completed"
         elif action == "combine":
             patch["combine_status"] = "Completed"
+        elif action == "private_workout":
+            patch["workout_status"] = "Completed"
         elif action == "medical_review":
-            flags = list(overlay.get("red_flags") or [])
-            if new_pct >= 75 and "Medical — cleared pending final review" not in flags:
-                flags.append("Medical — cleared pending final review")
+            # The medical actually reports something now (it only ever said "cleared").
+            flags = [f for f in list(overlay.get("red_flags") or []) if not str(f).startswith("Medical")]
+            durability = entry.get("durability") or entry.get("injury_resistance")
+            injury_prone = bool(entry.get("injury_prone") or entry.get("injury_history"))
+            concern = injury_prone or (durability is not None and float(durability) < 58)
+            if concern:
+                flags.append("Medical concern: durability / injury history")
+                patch["medical_status"] = "Concern"
+            else:
+                patch["medical_status"] = "Cleared"
             patch["red_flags"] = flags
         elif action == "character_check":
             traits = list(overlay.get("traits") or [])
@@ -1429,6 +1705,16 @@ def _apply_scouting_meta_patch(
         state["scout_spotlight"] = [x for x in _spotlight_ids(state) if x != pid]
         patch["spotlight"] = False
 
+    if str(patch.get("assigned_scout") or "").strip().lower() == "auto":
+        # "Assign a scout" from the UI: pick the right specialist automatically.
+        entry = next((e for e in _draft_entries(session) if str(e.get("key") or "") == pid), {})
+        load: Dict[str, int] = {}
+        for ov in (state.get("prospects") or {}).values():
+            if isinstance(ov, dict) and str(ov.get("assigned_scout") or "").strip():
+                k = str(ov.get("assigned_scout")).strip()
+                load[k] = load.get(k, 0) + 1
+        patch["assigned_scout"] = str(_best_scout_for(session, entry, load).get("id") or "scout-na")
+
     if patch.get("assigned_scout") and str(patch.get("assigned_scout") or "").strip():
         if not str(overlay_before.get("assigned_scout") or "").strip():
             if _count_assigned_prospects(state) >= _assignment_slot_limit(state):
@@ -1447,7 +1733,10 @@ def _apply_scouting_meta_patch(
                 min(100.0, max(current, current + PASSIVE_ASSIGN_KICKSTART)),
                 1,
             )
-        patch["assigned_at_cursor"] = int(getattr(session, "calendar_cursor", 0) or 0)
+            patch["assigned_at_cursor"] = int(getattr(session, "calendar_cursor", 0) or 0)
+        elif overlay_before.get("assigned_at_cursor") is None:
+            patch["assigned_at_cursor"] = int(getattr(session, "calendar_cursor", 0) or 0)
+        # Switching scouts keeps the existing 14-day full-file clock.
     elif "assigned_scout" in patch and not str(patch.get("assigned_scout") or "").strip():
         patch["assigned_at_cursor"] = None
 
@@ -1499,6 +1788,10 @@ def apply_scouting_command(
 
     if route_action == "cancel":
         aid = str(body.get("assignment_id") or "")
+        if aid.startswith("assign:"):
+            pid = aid.split(":", 1)[1]
+            _set_prospect_overlay(state, pid, {"assigned_scout": "", "assigned_at_cursor": None})
+            invalidate_session_payload_caches(session, "scouting_meta")
         for a in state.get("assignments") or []:
             if str(a.get("id")) == aid:
                 a["status"] = "cancelled"
@@ -1508,20 +1801,35 @@ def apply_scouting_command(
             "assignments": state.get("assignments"),
         }
 
-    affected, cost = _apply_to_targets(session, state, body, action)
+    _sync_scouting_class(session, state, _draft_entries(session))
+    # Resolve targets and price first; nothing is applied until the budget clears.
+    affected, cost = _apply_to_targets(session, state, body, action, dry_run=True)
     if action == "film_study" and not affected:
         return {
             "ok": False,
             "message": "Film study requires an assigned scout or watchlist slot (4 hours).",
+        }
+    if not affected:
+        status_key = ONE_TIME_ACTIONS.get(action)
+        return {
+            "ok": False,
+            "message": (
+                f"{action.replace('_', ' ').title()} is already done for this prospect."
+                if status_key else "No prospects matched that target — nothing was charged."
+            ),
         }
     budget = float(state.get("budget") or DEFAULT_SCOUTING_BUDGET)
     used = float(state.get("used_budget") or 0.0)
     if used + cost > budget and cost > 0:
         return {
             "ok": False,
-            "message": "Scouting budget exceeded. Reallocate funds or reduce intensity.",
+            "message": (
+                f"Not enough scouting budget: this costs ${cost:,.0f} and ${max(0.0, budget - used):,.0f} is left. "
+                "Try a lighter intensity."
+            ),
         }
 
+    affected, cost = _apply_to_targets(session, state, body, action)
     state["used_budget"] = used + cost
     assignment = _upsert_assignment(state, body, action, cost, affected, status="completed")
     invalidate_session_payload_caches(session, "scouting_action")
@@ -1534,6 +1842,113 @@ def apply_scouting_command(
         "prospects": get_scouting_prospects(session).get("prospects"),
         "used_budget": state["used_budget"],
     }
+
+
+def _best_scout_for(session: FranchiseSession, entry: Mapping[str, Any], load: Dict[str, int]) -> Dict[str, Any]:
+    """Region / goalie specialist first, then the better scout, then the lighter load."""
+    best = None
+    for sc in _scout_pool(session):
+        base = float(sc.get("speed_mult") or 1.0)
+        mult = _scout_speed_mult(session, str(sc.get("id")), entry)
+        specialist = mult > base + 1e-9
+        # Specialists first; spread files so one scout doesn't carry the whole list.
+        score = (1 if specialist else 0, mult - 0.03 * load.get(str(sc.get("id")), 0))
+        if best is None or score > best[0]:
+            best = (score, sc)
+    return best[1] if best else {"id": "", "name": ""}
+
+
+def auto_assign_scouts(
+    session: FranchiseSession,
+    *,
+    entries: Optional[List[Mapping[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """One-click scouting: free scouts from finished files, then fill every open slot.
+
+    Priority: your targets and watchlist, then the prospects around your projected
+    picks, then the top of the board. Each prospect gets the scout who covers his
+    region (the goalie scout takes goalies)."""
+    state = _ensure_scouting_state(session)
+    entries = list(entries if entries is not None else _draft_entries(session))
+    if not entries:
+        return {"ok": False, "message": "No draft class to scout yet.", "assigned": 0, "freed": 0}
+    _sync_scouting_class(session, state, entries)
+    cur = int(getattr(session, "calendar_cursor", 0) or 0)
+    by_key = {str(e.get("key") or ""): e for e in entries if e.get("key")}
+
+    freed = 0
+    load: Dict[str, int] = {}
+    for pid, ov in list((state.get("prospects") or {}).items()):
+        if not isinstance(ov, dict):
+            continue
+        scout = str(ov.get("assigned_scout") or "").strip()
+        if not scout:
+            continue
+        if float(ov.get("scouted_percentage") or 0.0) >= 100.0 or pid not in by_key:
+            _set_prospect_overlay(state, pid, {"assigned_scout": "", "assigned_at_cursor": None})
+            freed += 1
+            continue
+        sc = _scout_lookup(session, scout)
+        sid = str((sc or {}).get("id") or scout)
+        load[sid] = load.get(sid, 0) + 1
+
+    limit = _assignment_slot_limit(state)
+    used = _count_assigned_prospects(state)
+    watch = {str(x) for x in (state.get("watchlist") or [])}
+    pick = _projected_pick(session)
+    in_range = set(_draft_range_keys(entries, pick, max(1, len(getattr(session, "team_by_id", {}) or {}) or 32)))
+
+    def _prio(e: Mapping[str, Any]) -> Tuple[int, int]:
+        k = str(e.get("key") or "")
+        ov = _prospect_overlay(state, k)
+        tier = 0 if (ov.get("target") or ov.get("watchlist") or k in watch) else 1 if k in in_range else 2
+        return (tier, int(e.get("rank") or 999))
+
+    assigned = 0
+    for e in sorted(entries, key=_prio):
+        if used >= limit:
+            break
+        k = str(e.get("key") or "")
+        ov = _prospect_overlay(state, k)
+        if str(ov.get("assigned_scout") or "").strip():
+            continue
+        if float(ov.get("scouted_percentage") or 0.0) >= 100.0:
+            continue
+        if _prio(e)[0] == 2 and int(e.get("rank") or 999) > 160:
+            continue
+        sc = _best_scout_for(session, e, load)
+        sid = str(sc.get("id") or "")
+        current = float(ov.get("scouted_percentage") or 0.0)
+        _set_prospect_overlay(state, k, {
+            "assigned_scout": sid,
+            "assigned_at_cursor": cur,
+            "scouted_percentage": round(min(100.0, current + PASSIVE_ASSIGN_KICKSTART), 1),
+        })
+        load[sid] = load.get(sid, 0) + 1
+        used += 1
+        assigned += 1
+
+    session._cached_scouting_prospects_payload = None
+    session._cached_scouting_world_payload = None
+    invalidate_session_payload_caches(session, "scouting_meta")
+    msg = f"Staff assigned to {assigned} new file(s)"
+    if freed:
+        msg += f"; {freed} scout(s) moved off finished files"
+    return {"ok": True, "message": msg + ".", "assigned": assigned, "freed": freed}
+
+
+def set_auto_manage(session: FranchiseSession, enabled: bool) -> Dict[str, Any]:
+    state = _ensure_scouting_state(session)
+    state["auto_manage"] = bool(enabled)
+    state["auto_manage_week"] = None
+    out: Dict[str, Any] = {"ok": True, "auto_manage": bool(enabled)}
+    if enabled:
+        res = auto_assign_scouts(session)
+        out.update({k: v for k, v in res.items() if k != "ok"})
+        out["message"] = "Your staff will manage scout assignments every week. " + str(res.get("message") or "")
+    else:
+        out["message"] = "You're managing scout assignments yourself."
+    return out
 
 
 def _scouting_rng(session: FranchiseSession, *parts: Any) -> float:

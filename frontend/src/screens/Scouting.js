@@ -57,6 +57,7 @@ import React, {
   const STORAGE_PREFIX = "nhlfm:scouting";
   
   const VIEW_MODES = Object.freeze({
+    DESK: "desk",
     OVERVIEW: "overview",
     GLOBE: "globe",
     BOARD: "board",
@@ -83,12 +84,12 @@ import React, {
     LIVE_VIEWING: "live_viewing",
     VIDEO_REVIEW: "video_review",
     CHARACTER_CHECK: "character_check",
-    ANALYTICS: "analytics",
+    ANALYTICS: "analytics_deep_dive",
     INTERVIEW: "interview",
     DINNER: "dinner",
     COMBINE: "combine",
     PRIVATE_WORKOUT: "private_workout",
-    MEDICAL: "medical",
+    MEDICAL: "medical_review",
     FILM_STUDY: "film_study",
   });
   
@@ -137,9 +138,24 @@ import React, {
     medical: "/api/franchise/scouting/request-medical",
     focus: "/api/franchise/scouting/focus",
     filmStudy: "/api/franchise/scouting/film-study",
+    auto: "/api/franchise/scouting/auto",
   });
+
+  /** Bulk coverage actions target a country; everything else targets one prospect. */
+  const BULK_ACTIONS = new Set(["region_sweep", "live_viewing", "video_review"]);
+
+  /** Server price for an action (the backend charges this, not a client estimate). */
+  function serverActionCost(state, action, intensity, nTargets = 1) {
+    const table = safeObject(safeObject(state).action_costs);
+    const row = safeObject(table[action]);
+    const one = numberOr(row[intensity], numberOr(row.normal, 0));
+    if (!one) return 0;
+    const extra = Math.max(0, numberOr(nTargets, 1) - 1) * 1500 * intensityMultiplier(intensity);
+    return Math.round(one + extra);
+  }
   
   const VIEW_TABS = [
+    { mode: VIEW_MODES.DESK, label: "Desk" },
     { mode: VIEW_MODES.OVERVIEW, label: "Overview" },
     { mode: VIEW_MODES.GLOBE, label: "Map" },
     { mode: VIEW_MODES.BOARD, label: "Board" },
@@ -511,47 +527,21 @@ import React, {
     }
   }
   
+  // Same multipliers as the backend (franchise_scouting.INTENSITY_MULT).
   function intensityMultiplier(value) {
     switch (value) {
       case SCOUTING_INTENSITY.LIGHT:
-        return 0.7;
+        return 0.72;
       case SCOUTING_INTENSITY.HEAVY:
-        return 1.45;
+        return 1.32;
       case SCOUTING_INTENSITY.ALL_IN:
-        return 2;
+        return 1.65;
       case SCOUTING_INTENSITY.NORMAL:
       default:
         return 1;
     }
   }
   
-  function actionBaseCost(action) {
-    switch (action) {
-      case SCOUTING_ACTIONS.REGION_SWEEP:
-        return 8000;
-      case SCOUTING_ACTIONS.LIVE_VIEWING:
-        return 4500;
-      case SCOUTING_ACTIONS.VIDEO_REVIEW:
-        return 1200;
-      case SCOUTING_ACTIONS.CHARACTER_CHECK:
-        return 2500;
-      case SCOUTING_ACTIONS.ANALYTICS:
-        return 1800;
-      case SCOUTING_ACTIONS.INTERVIEW:
-        return 3000;
-      case SCOUTING_ACTIONS.DINNER:
-        return 7000;
-      case SCOUTING_ACTIONS.COMBINE:
-        return 5000;
-      case SCOUTING_ACTIONS.PRIVATE_WORKOUT:
-        return 9500;
-      case SCOUTING_ACTIONS.MEDICAL:
-        return 4000;
-      case SCOUTING_ACTIONS.PLAYER_FOCUS:
-      default:
-        return 3500;
-    }
-  }
   
   function riskTone(value) {
     const numeric = Number(value);
@@ -604,23 +594,6 @@ import React, {
     return "Track";
   }
   
-  function estimateAssignmentCost({ action, intensity, country, prospect }) {
-    const base = actionBaseCost(action);
-    const countryCost = numberOr(country?.cost, 0);
-    const playerCost = numberOr(prospect?.costEstimate, 0);
-  
-    const difficulty =
-      1 +
-      percentage(country?.difficulty) / 220 +
-      percentage(country?.safetyRisk) / 260 +
-      percentage(country?.politicalRisk) / 300;
-  
-    return Math.round(
-      (base + countryCost * 0.35 + playerCost * 0.45) *
-        intensityMultiplier(intensity) *
-        clamp(difficulty, 0.85, 2.5)
-    );
-  }
   
   /* -------------------------------------------------------------------------- */
   /* ID helpers                                                                 */
@@ -1038,6 +1011,13 @@ import React, {
       dedicatedScouted,
       scoutTimeline,
       spotlight: Boolean(getNested(player, ["spotlight", "scout_spotlight"])),
+      assignedScout: stringOr(getNested(player, ["assigned_scout", "assignedScout"]), ""),
+      fileStatus: stringOr(getNested(player, ["file_status", "fileStatus"]), ""),
+      completedActions: safeArray(getNested(player, ["completed_actions", "completedActions"])),
+      workoutStatus: stringOr(getNested(player, ["workout_status", "workoutStatus"]), ""),
+      medicalStatus: stringOr(getNested(player, ["medical_status", "medicalStatus"]), ""),
+      ovrRevealed: Boolean(getNested(player, ["ovr_revealed", "ovrRevealed"])),
+      trueOvr: numberOr(getNested(player, ["true_ovr", "trueOvr"]), null),
       publicMissType: stringOr(getNested(player, ["public_miss_type", "publicMissType"]), ""),
       filmStudyComplete: Boolean(getNested(player, ["film_study_complete", "filmStudyComplete"])),
       publicOvrLow: numberOr(getNested(player, ["public_ovr_low", "publicOvrLow"]), null),
@@ -1967,8 +1947,8 @@ import React, {
     const [refreshToken, setRefreshToken] = useState(0);
   
     const [viewMode, setViewMode] = useLocalStorageState(
-      `${STORAGE_PREFIX}:view`,
-      VIEW_MODES.OVERVIEW
+      `${STORAGE_PREFIX}:view2`,
+      VIEW_MODES.DESK
     );
   
     const [filters, setFilters] = useLocalStorageState(
@@ -2209,6 +2189,7 @@ import React, {
         ]),
         0
       );
+      const budgetRemaining = numberOr(state.budget_remaining, budget - numberOr(state.used_budget, 0));
   
       return {
         total,
@@ -2219,6 +2200,7 @@ import React, {
         activeAssignments,
         finalReady,
         budget,
+        budgetRemaining,
         countries: countries.length,
         regions: regions.length,
         scouts: scouts.length,
@@ -2266,16 +2248,14 @@ import React, {
       });
     }, [assignments, scoutById, prospectById, countryById, countries]);
   
-    const selectedCountryForCost = selectedProspectCountry || selectedCountry;
-  
+    const selectedCountryForCost = selectedCountry || selectedProspectCountry;
+    const isBulkAction = BULK_ACTIONS.has(selectedAction);
+
+    // Server price (the backend ignores client estimates and charges this).
     const estimatedCost = useMemo(() => {
-      return estimateAssignmentCost({
-        action: selectedAction,
-        intensity: selectedIntensity,
-        country: selectedCountryForCost,
-        prospect: selectedProspect,
-      });
-    }, [selectedAction, selectedIntensity, selectedCountryForCost, selectedProspect]);
+      const n = isBulkAction ? numberOr(selectedCountryForCost?.prospectCount, 1) : 1;
+      return serverActionCost(state, selectedAction, selectedIntensity, n);
+    }, [state, selectedAction, selectedIntensity, selectedCountryForCost, isBulkAction]);
   
     const updateFilter = useCallback(
       (key, value) => {
@@ -2367,25 +2347,31 @@ import React, {
     );
   
     const assignScouting = useCallback(() => {
-      const targetType = selectedProspect ? "player" : selectedCountry ? "country" : "";
-      const targetId = selectedProspect?.id || selectedCountry?.id || "";
-  
+      // Coverage deployments go to a country; deep dives go to one prospect. (Picking a
+      // country auto-selects its top prospect, which used to turn every deployment into
+      // a single-player action.)
+      const country = selectedCountry || selectedProspectCountry;
+      const bulk = BULK_ACTIONS.has(selectedAction);
+      const targetType = bulk ? (country ? "country" : "") : selectedProspect ? "player" : "";
+      const targetId = bulk ? country?.id || "" : selectedProspect?.id || "";
+
       if (!targetId) {
-        showToast("danger", "Pick a player or country.");
+        showToast("danger", bulk ? "Pick a country on the map or board." : "Pick a prospect.");
         return;
       }
-  
-      runCommand("assign scouting", ENDPOINTS.assign, {
+
+      runCommand("scouting action", ENDPOINTS.assign, {
         scout_id: selectedScoutId || null,
         target_type: targetType,
         target_id: targetId,
+        country_id: bulk ? targetId : undefined,
+        prospect_id: bulk ? undefined : targetId,
         action: selectedAction,
         intensity: selectedIntensity,
-        estimated_cost: estimatedCost,
         context: {
           phase,
-          prospect_id: selectedProspect?.id || null,
-          country_id: selectedCountry?.id || selectedProspectCountry?.id || null,
+          prospect_id: bulk ? null : targetId,
+          country_id: bulk ? targetId : null,
         },
       });
     }, [
@@ -2394,12 +2380,49 @@ import React, {
       selectedScoutId,
       selectedAction,
       selectedIntensity,
-      estimatedCost,
       selectedProspectCountry,
       phase,
       runCommand,
       showToast,
     ]);
+
+    const patchMeta = useCallback(
+      (name, prospect, metaPatch) => {
+        if (!prospect?.id) return null;
+        return runCommand(name, ENDPOINTS.assign, {
+          meta_only: true,
+          prospect_id: prospect.id,
+          player_id: prospect.id,
+          meta_patch: metaPatch,
+        });
+      },
+      [runCommand]
+    );
+
+    const toggleScout = useCallback(
+      (prospect) =>
+        patchMeta(
+          prospect?.assignedScout ? "remove scout" : "assign scout",
+          prospect,
+          { assigned_scout: prospect?.assignedScout ? "" : "auto" }
+        ),
+      [patchMeta]
+    );
+
+    const toggleWatch = useCallback(
+      (prospect) => patchMeta("watchlist", prospect, { watchlist: !prospect?.watchlist }),
+      [patchMeta]
+    );
+
+    const autoFillScouts = useCallback(
+      () => runCommand("auto-assign", ENDPOINTS.auto, { action: "fill" }),
+      [runCommand]
+    );
+
+    const setAutoManage = useCallback(
+      (enabled) => runCommand("staff management", ENDPOINTS.auto, { action: "toggle", enabled }),
+      [runCommand]
+    );
   
     const runProspectAction = useCallback(
       (action) => {
@@ -2424,12 +2447,6 @@ import React, {
           action,
           intensity: selectedIntensity,
           scout_id: selectedScoutId || null,
-          estimated_cost: estimateAssignmentCost({
-            action,
-            intensity: selectedIntensity,
-            country: selectedProspectCountry,
-            prospect: selectedProspect,
-          }),
           phase,
         });
       },
@@ -2467,55 +2484,44 @@ import React, {
     return (
       <div className="scout-root register-ops" data-register="ops">
         <ScoutingStyles />
-  
-        <aside className="scout-sidebar">
-          <button className="scout-home-button" type="button" onClick={goBack}>
-            <span>⌂</span>
-          </button>
-  
-          <nav className="scout-side-nav" aria-label="Scouting navigation">
-            <SideButton label="Office" icon="▦" onClick={() => setScreen(SCREENS.HUB)} />
-            <SideButton label="Calendar" icon="◫" onClick={() => setScreen(SCREENS.CALENDAR)} />
-            <SideButton label="Scouting" icon="◎" active onClick={() => setViewMode(VIEW_MODES.OVERVIEW)} />
-            <SideButton label="Draft" icon="▣" onClick={() => setScreen(SCREENS.DRAFT_CLASS)} />
-            <SideButton label="Needs" icon="◈" onClick={() => setScreen(SCREENS.TEAM_NEEDS)} />
-          </nav>
-  
-          <button
-            className="scout-settings"
-            type="button"
-            onClick={() => setScreen(SCREENS.SETTINGS)}
-          >
-            <span>⚙</span>
-          </button>
-        </aside>
-  
+
+        {/* Command bar — same shell as the Entry Draft floor. */}
+        <header className="scout-command">
+          <div className="scout-command-left">
+            <button type="button" className="nhlcal-quick-link" onClick={goBack}>
+              ← Hub
+            </button>
+            <TeamLogo team={team} />
+            <div className="scout-titles">
+              <h1>Amateur Scouting</h1>
+              <p>
+                {[teamCity, teamName].filter(Boolean).join(" ") || "Franchise"}
+                {state.draft_year ? ` · ${state.draft_year} draft class` : ""}
+              </p>
+            </div>
+          </div>
+          <p className="scout-phase">
+            {state.period_label || phaseLabel(phase)}
+            {weeksUntilDraft != null && Number(weeksUntilDraft) > 0 ? ` · draft in ~${Math.round(weeksUntilDraft)} wk` : ""}
+          </p>
+          <div className="scout-command-right">
+            <span className="scout-pill is-on">
+              {numberOr(state.assignment_slots_used, 0)}/{numberOr(state.assignment_slot_limit, 0)} files
+            </span>
+            <span className="scout-pill">{formatMoney(dashboardStats.budgetRemaining)} left</span>
+            <button type="button" className="nhlcal-quick-link" onClick={() => setScreen(SCREENS.DRAFT_CLASS)}>
+              Draft Class
+            </button>
+            <button type="button" className="nhlcal-quick-link" onClick={() => setRefreshToken((t) => t + 1)}>
+              {scoutingLoad.loading ? "Loading" : "Refresh"}
+            </button>
+            <button type="button" className="nhlcal-quick-link" onClick={() => setPanelOpen((value) => !value)}>
+              {panelOpen ? "Hide panel" : "Panel"}
+            </button>
+          </div>
+        </header>
+
         <main className="scout-main">
-          <section className="scout-screen-head">
-            <div className="scout-title-block">
-              <TeamLogo team={team} />
-              <div>
-                <p>{teamCity || "Franchise"}</p>
-                <h1>{teamName}</h1>
-                <span>
-                  Scouting · {phaseLabel(phase)}
-                </span>
-              </div>
-            </div>
-  
-            <div className="scout-head-actions">
-              <button type="button" onClick={() => setRefreshToken((t) => t + 1)}>
-                {scoutingLoad.loading ? "Loading" : "Refresh"}
-              </button>
-              <button type="button" onClick={() => setPanelOpen((value) => !value)}>
-                {panelOpen ? "Hide Panel" : "Panel"}
-              </button>
-              <button type="button" onClick={() => setScreen(SCREENS.DRAFT_CLASS)}>
-                Draft Class
-              </button>
-            </div>
-          </section>
-  
           <section className="scout-top-strip" aria-label="Scouting operations summary">
             {intelRules.public_ceiling_label ? (
               <div className="scout-intel-banner" title={intelRules.passive_cap_tooltip || ""}>
@@ -2548,9 +2554,9 @@ import React, {
               tone={scoutReputation >= 65 ? "green" : "cyan"}
             />
             <StatTile
-              label="Budget"
-              value={dashboardStats.budget ? formatMoney(dashboardStats.budget) : "—"}
-              sub={dashboardStats.countries ? `${dashboardStats.countries} regions tracked` : "Budget not returned"}
+              label="Budget left"
+              value={dashboardStats.budget ? formatMoney(dashboardStats.budgetRemaining) : "—"}
+              sub={dashboardStats.budget ? `of ${formatMoney(dashboardStats.budget)} this draft year` : "Budget not returned"}
               tone="gold"
             />
           </section>
@@ -2600,6 +2606,20 @@ import React, {
                 <LoadingState />
               ) : (
                 <Fragment>
+                  {viewMode === VIEW_MODES.DESK && (
+                    <DeskView
+                      state={state}
+                      prospects={prospects}
+                      scouts={scouts}
+                      busyAction={busyAction}
+                      onSelectProspect={selectProspect}
+                      onToggleScout={toggleScout}
+                      onToggleWatch={toggleWatch}
+                      onAutoFill={autoFillScouts}
+                      onSetAutoManage={setAutoManage}
+                    />
+                  )}
+
                   {viewMode === VIEW_MODES.OVERVIEW && (
                     <OverviewView
                       phase={phase}
@@ -2695,6 +2715,9 @@ import React, {
                       onSelectProspect={selectProspect}
                       runProspectAction={runProspectAction}
                       onToggleSpotlight={toggleSpotlight}
+                      onToggleScout={toggleScout}
+                      onToggleWatch={toggleWatch}
+                      actionCost={(action) => serverActionCost(state, action, selectedIntensity, 1)}
                       busyAction={busyAction}
                     />
                   )}
@@ -2734,19 +2757,189 @@ import React, {
   /* Sidebar                                                                    */
   /* -------------------------------------------------------------------------- */
   
-  function SideButton({ active, icon, label, onClick }) {
+  /* -------------------------------------------------------------------------- */
+  /* Desk — the simple way to scout                                             */
+  /* -------------------------------------------------------------------------- */
+
+  function DeskProspectRow({ prospect, scoutName, busyAction, onSelectProspect, onToggleScout, onToggleWatch, timeline }) {
+    const pct = Math.round(numberOr(prospect.scouted, 0));
     return (
-      <button
-        type="button"
-        className={cx("scout-side-button", active && "is-active")}
-        onClick={onClick}
-        title={label}
-      >
-        <span>{icon}</span>
-        <small>{label}</small>
-      </button>
+      <div className={cx("desk-row", prospect.assignedScout && "is-assigned")}>
+        <span className="desk-rank">#{prospect.rank}</span>
+        <button type="button" className="desk-name" onClick={() => onSelectProspect(prospect.id)}>
+          <strong>{prospect.name}</strong>
+          <small>
+            {[prospect.position, prospect.league || prospect.country].filter(Boolean).join(" · ")}
+            {scoutName ? ` · ${scoutName}` : ""}
+          </small>
+        </button>
+        <div className="desk-file">
+          <div className="desk-bar" aria-hidden="true">
+            <i style={{ width: `${clamp(pct, 0, 100)}%` }} />
+            <b style={{ left: "72%" }} />
+          </div>
+          <small>
+            {pct}% · {prospect.fileStatus || "Thin file"}
+            {timeline ? ` · ${timeline}` : ""}
+          </small>
+        </div>
+        <div className="desk-actions">
+          <button
+            type="button"
+            className={prospect.assignedScout ? "nhlcal-advance-button-secondary" : "nhlcal-advance-button"}
+            disabled={Boolean(busyAction) || pct >= 100}
+            onClick={() => onToggleScout(prospect)}
+          >
+            {pct >= 100 ? "Done" : prospect.assignedScout ? "Remove" : "Assign"}
+          </button>
+          <button
+            type="button"
+            className={cx("nhlcal-advance-button-secondary", prospect.watchlist && "is-on")}
+            disabled={Boolean(busyAction)}
+            onClick={() => onToggleWatch(prospect)}
+            title={prospect.watchlist ? "On your watchlist" : "Add to watchlist"}
+          >
+            {prospect.watchlist ? "★" : "☆"}
+          </button>
+        </div>
+      </div>
     );
   }
+
+  function DeskView({
+    state,
+    prospects,
+    scouts,
+    busyAction,
+    onSelectProspect,
+    onToggleScout,
+    onToggleWatch,
+    onAutoFill,
+    onSetAutoManage,
+  }) {
+    const desk = safeObject(state.desk);
+    const pick = numberOr(desk.projected_pick, 16);
+    const rangeIds = new Set(safeArray(desk.draft_range).map(String));
+    const scoutName = useMemo(() => {
+      const map = new Map();
+      safeArray(scouts).forEach((sc) => {
+        map.set(String(sc.id).toLowerCase(), sc.name);
+        map.set(String(sc.name).toLowerCase(), sc.name);
+      });
+      return (key) => map.get(String(key || "").toLowerCase()) || key || "";
+    }, [scouts]);
+
+    const range = prospects
+      .filter((p) => rangeIds.has(String(p.id)))
+      .sort((a, b) => numberOr(a.rank, 999) - numberOr(b.rank, 999));
+    const working = prospects
+      .filter((p) => p.assignedScout && !rangeIds.has(String(p.id)))
+      .sort((a, b) => numberOr(b.scouted, 0) - numberOr(a.scouted, 0));
+    const watch = prospects
+      .filter((p) => p.watchlist && !rangeIds.has(String(p.id)) && !p.assignedScout)
+      .sort((a, b) => numberOr(a.rank, 999) - numberOr(b.rank, 999));
+    const used = numberOr(state.assignment_slots_used, 0);
+    const limit = numberOr(state.assignment_slot_limit, 0);
+    const autoOn = Boolean(state.auto_manage);
+
+    const timelineFor = (p) => {
+      const tl = safeObject(p.scoutTimeline);
+      if (!p.assignedScout || numberOr(p.scouted, 0) >= 100) return "";
+      if (numberOr(p.scouted, 0) < 72 && tl.days_to_ovr_reveal != null) {
+        return `OVR in ~${Math.max(1, Math.ceil(tl.days_to_ovr_reveal / 7))} wk`;
+      }
+      if (tl.days_to_full_file != null) return `full in ~${Math.max(1, Math.ceil(tl.days_to_full_file / 7))} wk`;
+      return "";
+    };
+
+    const rowProps = { busyAction, onSelectProspect, onToggleScout, onToggleWatch };
+
+    return (
+      <div className="desk-view">
+        <section className="scout-card desk-hero">
+          <div className="desk-hero-copy">
+            <span className="desk-kicker">Scouting desk</span>
+            <h2>Assign scouts, let the files build</h2>
+            <ol>
+              {safeArray(desk.steps).map((step, i) => (
+                <li key={i}>{step}</li>
+              ))}
+            </ol>
+          </div>
+          <div className="desk-hero-actions">
+            <button type="button" className="nhlcal-advance-button" disabled={Boolean(busyAction)} onClick={onAutoFill}>
+              Auto-assign scouts
+            </button>
+            <button
+              type="button"
+              className={cx("nhlcal-advance-button-secondary", autoOn && "is-on")}
+              disabled={Boolean(busyAction)}
+              onClick={() => onSetAutoManage(!autoOn)}
+            >
+              {autoOn ? "Staff manages assignments: ON" : "Let staff manage assignments"}
+            </button>
+            <small>
+              {autoOn
+                ? "Every week your staff moves scouts off finished files onto the next priority prospect."
+                : "Auto-assign fills every open slot: your watchlist first, then your draft range, then the top of the board."}
+            </small>
+          </div>
+        </section>
+
+        <section className="desk-metrics">
+          <StatTile label="Projected pick" value={`#${pick}`} sub="From the standings today" tone="gold" />
+          <StatTile label="Files assigned" value={`${used}/${limit}`} sub={limit - used > 0 ? `${limit - used} open` : "All slots in use"} tone="cyan" />
+          <StatTile label="OVR revealed" value={numberOr(desk.files_revealed, 0)} sub="Files at 72%+" tone="green" />
+          <StatTile label="Full files" value={numberOr(desk.files_full, 0)} sub="100% scouted" tone="blue" />
+        </section>
+
+        <section className="scout-card">
+          <div className="scout-card-head">
+            <h3>Your draft range</h3>
+            <span>Around picks #{pick} and #{pick + 32}</span>
+          </div>
+          <div className="desk-list">
+            {range.length ? (
+              range.map((p) => (
+                <DeskProspectRow key={p.id} prospect={p} scoutName={scoutName(p.assignedScout)} timeline={timelineFor(p)} {...rowProps} />
+              ))
+            ) : (
+              <EmptyState title="No class yet" text="The draft class appears once prospects load." icon="◎" />
+            )}
+          </div>
+        </section>
+
+        {working.length ? (
+          <section className="scout-card">
+            <div className="scout-card-head">
+              <h3>Other files in progress</h3>
+              <span>{working.length}</span>
+            </div>
+            <div className="desk-list">
+              {working.map((p) => (
+                <DeskProspectRow key={p.id} prospect={p} scoutName={scoutName(p.assignedScout)} timeline={timelineFor(p)} {...rowProps} />
+              ))}
+            </div>
+          </section>
+        ) : null}
+
+        {watch.length ? (
+          <section className="scout-card">
+            <div className="scout-card-head">
+              <h3>Watchlist without a scout</h3>
+              <span>{watch.length}</span>
+            </div>
+            <div className="desk-list">
+              {watch.map((p) => (
+                <DeskProspectRow key={p.id} prospect={p} scoutName="" timeline="" {...rowProps} />
+              ))}
+            </div>
+          </section>
+        ) : null}
+      </div>
+    );
+  }
+
   /* -------------------------------------------------------------------------- */
   /* Budget & Assignments                                                       */
   /* -------------------------------------------------------------------------- */
@@ -4054,6 +4247,9 @@ function OverviewView({
     onSelectProspect,
     runProspectAction,
     onToggleSpotlight,
+    onToggleScout,
+    onToggleWatch,
+    actionCost,
     busyAction,
   }) {
     if (!prospect) {
@@ -4116,6 +4312,25 @@ function OverviewView({
             <span>Rank</span>
             <strong>#{prospect.rank}</strong>
             <small>{Math.round(prospect.scouted)}% scouted</small>
+            <small>{prospect.fileStatus || ""}</small>
+            <div className="player-file-actions">
+              <button
+                type="button"
+                className={prospect.assignedScout ? "nhlcal-advance-button-secondary" : "nhlcal-advance-button"}
+                disabled={Boolean(busyAction)}
+                onClick={() => onToggleScout?.(prospect)}
+              >
+                {prospect.assignedScout ? "Remove scout" : "Assign scout"}
+              </button>
+              <button
+                type="button"
+                className="nhlcal-advance-button-secondary"
+                disabled={Boolean(busyAction)}
+                onClick={() => onToggleWatch?.(prospect)}
+              >
+                {prospect.watchlist ? "Unwatch" : "Watch"}
+              </button>
+            </div>
           </div>
         </section>
   
@@ -4235,48 +4450,30 @@ function OverviewView({
             </div>
   
             <div className="draft-action-grid">
-              <DraftActionButton
-                title="Deep Dive: Focus"
-                label="Priority file bump"
-                disabled={busyAction}
-                onClick={() => runProspectAction(SCOUTING_ACTIONS.PLAYER_FOCUS)}
-              />
-              <DraftActionButton
-                title="Deep Dive: Interview"
-                label="Personality read"
-                disabled={busyAction}
-                onClick={() => runProspectAction(SCOUTING_ACTIONS.INTERVIEW)}
-              />
-              <DraftActionButton
-                title="Deep Dive: Dinner"
-                label="Final fit check"
-                disabled={busyAction}
-                onClick={() => runProspectAction(SCOUTING_ACTIONS.DINNER)}
-              />
-              <DraftActionButton
-                title="Deep Dive: Combine"
-                label="Testing data"
-                disabled={busyAction}
-                onClick={() => runProspectAction(SCOUTING_ACTIONS.COMBINE)}
-              />
-              <DraftActionButton
-                title="Deep Dive: Workout"
-                label="One more look"
-                disabled={busyAction}
-                onClick={() => runProspectAction(SCOUTING_ACTIONS.PRIVATE_WORKOUT)}
-              />
-              <DraftActionButton
-                title="Deep Dive: Medical"
-                label="Risk review"
-                disabled={busyAction}
-                onClick={() => runProspectAction(SCOUTING_ACTIONS.MEDICAL)}
-              />
-              <DraftActionButton
-                title="Film Study (4h)"
-                label="Tape — assigned/watchlist only"
-                disabled={busyAction || prospect.filmStudyComplete}
-                onClick={() => runProspectAction(SCOUTING_ACTIONS.FILM_STUDY)}
-              />
+              {[
+                [SCOUTING_ACTIONS.PLAYER_FOCUS, "Focus", "Priority file bump (repeatable)"],
+                [SCOUTING_ACTIONS.INTERVIEW, "Interview", "Personality read"],
+                [SCOUTING_ACTIONS.DINNER, "Dinner", "Final fit check"],
+                [SCOUTING_ACTIONS.COMBINE, "Combine", "Testing data"],
+                [SCOUTING_ACTIONS.PRIVATE_WORKOUT, "Workout", "One more look"],
+                [SCOUTING_ACTIONS.MEDICAL, "Medical", prospect.medicalStatus && prospect.medicalStatus !== "Not reviewed" ? `Result: ${prospect.medicalStatus}` : "Durability / injury check"],
+                [SCOUTING_ACTIONS.FILM_STUDY, "Film study", prospect.assignedScout || prospect.watchlist ? "Off-ice traits from tape" : "Needs a scout or watchlist"],
+              ].map(([action, title, label]) => {
+                const done =
+                  safeArray(prospect.completedActions).includes(action) ||
+                  (action === SCOUTING_ACTIONS.FILM_STUDY && prospect.filmStudyComplete);
+                const locked = action === SCOUTING_ACTIONS.FILM_STUDY && !prospect.assignedScout && !prospect.watchlist;
+                const cost = actionCost ? actionCost(action) : 0;
+                return (
+                  <DraftActionButton
+                    key={action}
+                    title={done ? `${title} ✓` : title}
+                    label={done ? "Done" : `${label}${cost ? ` · ${formatMoney(cost)}` : ""}`}
+                    disabled={Boolean(busyAction) || done || locked}
+                    onClick={() => runProspectAction(action)}
+                  />
+                );
+              })}
             </div>
             <div className="player-spotlight-row">
               <button
@@ -4340,7 +4537,7 @@ function OverviewView({
     const obj = typeof note === "object" && note !== null ? note : { text: String(note) };
   
     const text = stringOr(obj.text || obj.note || obj.summary || obj.body, "No note.");
-    const author = stringOr(obj.author || obj.scout || obj.scout_name || obj.scoutName, "Scout");
+    const author = stringOr(obj.author || obj.scout || obj.scout_name || obj.scoutName, "Scouting staff");
     const date = obj.date || obj.created_at || obj.createdAt || obj.game_date || obj.gameDate;
   
     return (
@@ -4349,7 +4546,7 @@ function OverviewView({
         <div>
           <header>
             <strong>{author}</strong>
-            <span>{formatDateLike(date)}</span>
+            {date ? <span>{formatDateLike(date)}</span> : null}
           </header>
           <p>{text}</p>
         </div>
@@ -4379,23 +4576,18 @@ function OverviewView({
     busyAction,
     assignScouting,
   }) {
-    const target = selectedProspect
-      ? {
-          type: "Prospect",
-          name: selectedProspect.name,
-          sub: `${selectedProspect.position} · ${Math.round(selectedProspect.scouted)}%`,
-        }
-      : selectedCountry
+    const bulk = BULK_ACTIONS.has(selectedAction);
+    const target = bulk
+      ? selectedCountry
+        ? { type: "Country", name: selectedCountry.name, sub: `${selectedCountry.prospectCount} players` }
+        : { type: "Country", name: "Pick a country", sub: "Map or overview" }
+      : selectedProspect
         ? {
-            type: "Country",
-            name: selectedCountry.name,
-            sub: `${selectedCountry.prospectCount} players`,
+            type: "Prospect",
+            name: selectedProspect.name,
+            sub: `${selectedProspect.position} · ${Math.round(selectedProspect.scouted)}%`,
           }
-        : {
-            type: "Target",
-            name: "Pick one",
-            sub: "Map or board",
-          };
+        : { type: "Prospect", name: "Pick a prospect", sub: "Desk, board or map" };
   
     return (
       <section className="command-panel">
@@ -4528,8 +4720,13 @@ function OverviewView({
           </div>
         </div>
   
+        <p className="scout-timeline-hint">
+          This panel buys one-off trips and deep dives. To build a file over time, assign a scout
+          on the Desk or a prospect's file.
+        </p>
+
         <article className="cost-card">
-          <span>Estimated Cost</span>
+          <span>Cost</span>
           <strong>{formatMoney(estimatedCost)}</strong>
           <small>{phaseCue(phase)}</small>
         </article>
@@ -4540,7 +4737,7 @@ function OverviewView({
           disabled={Boolean(busyAction)}
           onClick={assignScouting}
         >
-          {busyAction ? "Sending..." : "Assign Scout"}
+          {busyAction ? "Sending..." : BULK_ACTIONS.has(selectedAction) ? "Deploy coverage" : "Run deep dive"}
         </button>
       </section>
     );
@@ -4559,23 +4756,48 @@ function OverviewView({
     return (
       <style>{`
         .scout-root {
-          --scout-bg: var(--ops-navy);
-          --scout-bg-2: var(--ops-black);
-          --scout-panel: var(--ops-panel);
-          --scout-panel-2: var(--ops-panel-2);
-          --scout-panel-3: rgba(15, 46, 66, 0.78);
-          --scout-line: var(--ops-grid);
-          --scout-line-2: var(--ops-grid-2);
-          --scout-text: var(--ops-text);
-          --scout-muted: var(--ops-text-secondary);
-          --scout-faint: var(--ops-text-disabled);
-          --scout-blue: var(--ops-info);
-          --scout-cyan: var(--ops-cyan);
-          --scout-green: var(--ops-success);
-          --scout-gold: var(--ops-gold);
-          --scout-purple: #b892ff;
-          --scout-orange: var(--shell-orange);
-          --scout-red: var(--ops-injury);
+          /* Entry Draft floor tokens (events/entryDraft/EntryDraftMenu.js) */
+          --bg: #04101a;
+          --panel: rgba(9, 25, 38, 0.94);
+          --panel-2: rgba(12, 35, 52, 0.94);
+          --panel-3: rgba(15, 46, 66, 0.78);
+          --line: rgba(156, 218, 236, 0.14);
+          --line-soft: rgba(156, 218, 236, 0.08);
+          --line-strong: rgba(73, 231, 240, 0.5);
+          --text: #e9f7fb;
+          --muted: #8096a8;
+          --muted-2: #607789;
+          --cyan: #13d8e7;
+          --cyan-soft: rgba(19, 216, 231, 0.13);
+          --gold: #e9a83c;
+          --gold-soft: rgba(233, 168, 60, 0.14);
+          --green: #52df94;
+          --green-soft: rgba(82, 223, 148, 0.13);
+          --red: #ff606d;
+          --red-soft: rgba(255, 96, 109, 0.13);
+          --blue: #8ab4ff;
+          --depth-registered: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+          --ed-head: "Barlow Condensed", var(--font-broadcast-display), "Archivo Black", "Rajdhani", "Arial Narrow", sans-serif;
+          --ed-mono: var(--font-mono-data, "IBM Plex Mono", Consolas, "Courier New", monospace);
+          --ed-body: var(--font-ops-ui, Inter, ui-sans-serif, system-ui, "Segoe UI", sans-serif);
+
+          --scout-bg: var(--bg);
+          --scout-bg-2: #020a11;
+          --scout-panel: var(--panel);
+          --scout-panel-2: var(--panel-2);
+          --scout-panel-3: var(--panel-3);
+          --scout-line: var(--line);
+          --scout-line-2: rgba(115, 229, 241, 0.25);
+          --scout-text: var(--text);
+          --scout-muted: var(--muted);
+          --scout-faint: var(--muted-2);
+          --scout-blue: var(--blue);
+          --scout-cyan: var(--cyan);
+          --scout-green: var(--green);
+          --scout-gold: var(--gold);
+          --scout-purple: var(--blue);
+          --scout-orange: #ff8a4c;
+          --scout-red: var(--red);
           --scout-radius: var(--radius-card);
           --scout-radius-lg: var(--radius-panel);
           --scout-shadow: var(--depth-overlay);
@@ -7740,6 +7962,191 @@ function OverviewView({
           .scout-compact-progress {
             grid-template-columns: 38px minmax(70px, 1fr);
           }
+        }
+        /* ================================================================== */
+        /* Entry Draft visual language — overrides the older ops styling.     */
+        /* ================================================================== */
+        .scout-root {
+          display: flex;
+          flex-direction: column;
+          grid-template-columns: none;
+          height: 100dvh;
+          min-height: 100dvh;
+          background:
+            radial-gradient(circle at 24% 0%, rgba(19, 216, 231, 0.12), transparent 30%),
+            radial-gradient(circle at 92% 18%, rgba(233, 168, 60, 0.08), transparent 26%),
+            linear-gradient(180deg, #06131f 0%, #020a11 100%);
+          color: var(--text);
+          font-family: var(--ed-body);
+          font-size: 14px;
+          letter-spacing: 0.01em;
+        }
+        .scout-root h1, .scout-root h2, .scout-root h3, .scout-root h4 {
+          font-family: var(--ed-head);
+          letter-spacing: 0.04em;
+        }
+        .scout-sidebar { display: none; }
+        .scout-root *, .scout-root *::before, .scout-root *::after {
+          scrollbar-width: thin;
+          scrollbar-color: rgba(110, 173, 191, 0.35) rgba(4, 16, 26, 0.72);
+        }
+
+        .scout-command {
+          position: relative; z-index: 3;
+          display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 14px;
+          padding: 12px;
+          background: radial-gradient(circle at 0% 0%, rgba(19, 216, 231, 0.08), transparent 42%), var(--panel);
+          border-bottom: 1px solid var(--line);
+          box-shadow: var(--depth-registered);
+          flex: none;
+        }
+        .scout-command-left { display: flex; align-items: center; gap: 12px; min-width: 0; }
+        .scout-command-left .scout-team-logo, .scout-command-left img { width: 34px; height: 34px; }
+        .scout-titles h1 {
+          margin: 0; font-weight: 900; font-size: 20px; line-height: 1;
+          letter-spacing: 0.05em; text-transform: uppercase; color: var(--text);
+        }
+        .scout-titles p {
+          margin: 2px 0 0; font-size: 11px; color: var(--muted);
+          letter-spacing: 0.12em; text-transform: uppercase; font-weight: 800;
+        }
+        .scout-phase {
+          margin: 0; text-align: center; font-size: 12px; font-weight: 1000;
+          letter-spacing: 0.14em; text-transform: uppercase; color: var(--gold);
+          text-shadow: 0 0 18px rgba(233, 168, 60, 0.28);
+        }
+        .scout-command-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+        .scout-pill {
+          border: 1px solid var(--line); border-radius: 999px; padding: 5px 10px;
+          font-size: 11px; font-weight: 900; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted);
+          font-family: var(--ed-mono);
+        }
+        .scout-pill.is-on { color: var(--cyan); border-color: rgba(19, 216, 231, 0.4); background: var(--cyan-soft); }
+
+        .scout-root .nhlcal-quick-link {
+          border: 1px solid var(--line); border-radius: 4px; background: rgba(12, 31, 47, 0.72);
+          color: var(--text); padding: 9px 14px; font-size: 11px; font-weight: 900;
+          letter-spacing: 0.06em; text-transform: uppercase;
+          transition: border-color 0.2s ease, background 0.2s ease, transform 0.2s ease;
+        }
+        .scout-root .nhlcal-quick-link:hover {
+          border-color: var(--line-strong); background: rgba(19, 216, 231, 0.12); color: var(--cyan); transform: translateY(-1px);
+        }
+        .scout-root .nhlcal-advance-button,
+        .scout-root .nhlcal-advance-button-secondary,
+        .scout-root .assign-button {
+          height: 40px; min-width: 96px; border-radius: 0; padding: 0 14px;
+          clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 0 100%);
+          text-transform: uppercase; letter-spacing: 0.1em; font-size: 11px; font-weight: 1000;
+          display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+          transition: border-color 0.18s ease, background 0.18s ease, filter 0.18s ease;
+        }
+        .scout-root .nhlcal-advance-button,
+        .scout-root .assign-button { border: 0; background: var(--gold); color: #1b1002; box-shadow: none; }
+        .scout-root .nhlcal-advance-button:hover:not(:disabled),
+        .scout-root .assign-button:hover:not(:disabled) { background: #f0b44a; filter: brightness(1.02); transform: none; }
+        .scout-root .nhlcal-advance-button-secondary {
+          border: 1px solid rgba(19, 216, 231, 0.32); background: rgba(7, 22, 35, 0.92); color: var(--text);
+        }
+        .scout-root .nhlcal-advance-button-secondary:hover:not(:disabled) {
+          border-color: rgba(19, 216, 231, 0.55); background: rgba(19, 216, 231, 0.12); color: var(--cyan);
+        }
+        .scout-root .nhlcal-advance-button-secondary.is-on { color: var(--gold); border-color: rgba(233, 168, 60, 0.5); background: var(--gold-soft); }
+        .scout-root .assign-button { width: 100%; height: 46px; }
+
+        .scout-main { flex: 1; min-height: 0; height: auto; padding: 12px; overflow: auto; }
+        .scout-top-strip { gap: 8px; }
+        .scout-ops-metric {
+          border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
+          box-shadow: var(--depth-registered);
+        }
+        .scout-ops-metric__label { color: var(--muted); font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase; font-weight: 900; }
+        .scout-ops-metric__value { font-family: var(--ed-head); font-size: 26px; letter-spacing: 0.03em; }
+        .scout-ops-metric.tone-gold .scout-ops-metric__value { color: var(--gold); }
+        .scout-ops-metric.tone-cyan .scout-ops-metric__value, .scout-ops-metric.tone-blue .scout-ops-metric__value { color: var(--cyan); }
+        .scout-ops-metric.tone-green .scout-ops-metric__value { color: var(--green); }
+        .scout-intel-banner { border: 1px solid var(--line); border-left: 2px solid var(--gold); border-radius: 0; background: rgba(6, 21, 34, 0.72); }
+
+        .scout-tabs {
+          grid-template-columns: repeat(8, minmax(0, 1fr));
+          border: 1px solid var(--line); border-radius: 8px; background: var(--panel); box-shadow: var(--depth-registered);
+        }
+        .scout-tabs button { font-size: 11px; letter-spacing: 0.1em; font-weight: 900; color: var(--muted); }
+        .scout-tabs button.is-active {
+          color: var(--gold); border-bottom-color: var(--gold);
+          background: radial-gradient(circle at 50% 0%, rgba(233, 168, 60, 0.16), transparent 60%), var(--gold-soft);
+        }
+        .scout-workspace {
+          border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
+          box-shadow: var(--depth-registered); padding: 12px; max-height: calc(100dvh - 250px);
+        }
+        .scout-command-rail { max-height: calc(100dvh - 250px); }
+        .scout-card, .command-panel, .report-panel {
+          border: 1px solid var(--line); border-radius: 8px; background: rgba(6, 21, 34, 0.62);
+          box-shadow: var(--depth-registered);
+        }
+        .scout-card-head h3, .command-panel__head h3 {
+          font-family: var(--ed-head); font-size: 15px; font-weight: 800; text-transform: uppercase;
+          letter-spacing: 0.08em; color: var(--text);
+        }
+        .scout-card-head span, .command-panel__head span { color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; font-size: 10.5px; font-weight: 800; }
+        .draft-action-button {
+          border: 1px solid var(--line); border-radius: 6px; background: var(--panel-2); color: var(--text);
+          text-align: left;
+        }
+        .draft-action-button:hover:not(:disabled) { border-color: var(--line-strong); background: var(--cyan-soft); }
+        .draft-action-button strong { font-family: var(--ed-head); letter-spacing: 0.05em; text-transform: uppercase; }
+        .draft-action-button:disabled strong { color: var(--green); }
+        .intensity-picker button.is-active { color: var(--gold); border-color: rgba(233, 168, 60, 0.5); background: var(--gold-soft); }
+        .cost-card strong { font-family: var(--ed-head); color: var(--gold); }
+        .scout-alert { border-radius: 6px; border: 1px solid var(--line); background: var(--panel-2); }
+        .scout-alert.is-success { border-color: rgba(82, 223, 148, 0.45); background: var(--green-soft); }
+        .scout-alert.is-danger { border-color: rgba(255, 96, 109, 0.45); background: var(--red-soft); }
+
+        /* Player file quick actions */
+        .player-file-actions { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+        .player-file-actions .nhlcal-advance-button,
+        .player-file-actions .nhlcal-advance-button-secondary { height: 34px; min-width: 0; font-size: 10px; }
+
+        /* Desk */
+        .desk-view { display: flex; flex-direction: column; gap: 12px; }
+        .desk-hero { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(240px, 1fr); gap: 18px; align-items: center; }
+        .desk-kicker { font-size: 10.5px; font-weight: 1000; letter-spacing: 0.14em; text-transform: uppercase; color: var(--gold); }
+        .desk-hero h2 { margin: 4px 0 8px; font-size: 32px; font-weight: 600; line-height: 1; text-transform: uppercase; }
+        .desk-hero ol { margin: 0; padding-left: 18px; display: grid; gap: 4px; color: #c9dce6; font-size: 13px; }
+        .desk-hero-actions { display: flex; flex-direction: column; gap: 8px; }
+        .desk-hero-actions .nhlcal-advance-button,
+        .desk-hero-actions .nhlcal-advance-button-secondary { width: 100%; height: 46px; }
+        .desk-hero-actions small { color: var(--muted); font-size: 12px; line-height: 1.35; }
+        .desk-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+        .desk-list { display: flex; flex-direction: column; }
+        .desk-row {
+          display: grid; grid-template-columns: 52px minmax(0, 1.3fr) minmax(0, 1fr) auto; gap: 10px; align-items: center;
+          padding: 8px 6px; border-bottom: 1px solid var(--line-soft);
+        }
+        .desk-row:hover { background: rgba(255, 255, 255, 0.03); }
+        .desk-row.is-assigned { box-shadow: inset 2px 0 0 var(--cyan); }
+        .desk-rank { font-family: var(--ed-head); font-size: 20px; color: var(--muted); text-align: center; }
+        .desk-name { all: unset; cursor: pointer; min-width: 0; }
+        .desk-name strong { display: block; font-size: 13px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .desk-name small { display: block; font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .desk-name:hover strong { color: var(--cyan); }
+        .desk-file small { display: block; margin-top: 4px; font-size: 11px; color: var(--muted); font-family: var(--ed-mono); }
+        .desk-bar { position: relative; height: 7px; border-radius: 4px; background: rgba(148, 185, 205, 0.12); }
+        .desk-bar i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 4px; background: linear-gradient(90deg, var(--cyan), rgba(19, 216, 231, 0.5)); }
+        .desk-bar b { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--gold); box-shadow: 0 0 8px rgba(233, 168, 60, 0.5); }
+        .desk-actions { display: flex; gap: 6px; }
+        .desk-actions .nhlcal-advance-button,
+        .desk-actions .nhlcal-advance-button-secondary { height: 32px; min-width: 0; padding: 0 12px; font-size: 10px; }
+
+        @media (max-width: 900px) {
+          .scout-command { grid-template-columns: 1fr; }
+          .scout-command-right { justify-content: flex-start; }
+          .desk-hero { grid-template-columns: 1fr; }
+          .desk-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+          .desk-row { grid-template-columns: 40px minmax(0, 1fr) auto; }
+          .desk-file { grid-column: 2 / -1; }
+          .scout-tabs { grid-template-columns: repeat(4, minmax(0, 1fr)); }
         }
       `}</style>
     );
