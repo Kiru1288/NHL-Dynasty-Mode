@@ -4264,7 +4264,10 @@ def _lean_section_cache_keys(session: FranchiseSession, *, crisis_tick: bool = F
         "stats": f"s{stats_rev}|c{cur}|pr{prospect_rev}|i{injury_len}",
         "calendar": f"c{cur}|gr{game_results_n}|p{phase}",
         "narrative": f"n{narrative_rev}|i{interaction_rev}|c{cur}|sn{storyline_n}|nn{notification_n}",
-        "extras": f"s{stats_rev}|p{phase}|sy{season_year}|pr{prospect_rev}",
+        "extras": (
+            f"s{stats_rev}|p{phase}|sy{season_year}|pr{prospect_rev}"
+            f"|os{getattr(session, 'offseason_stage', '') or ''}"
+        ),
     }
 
 

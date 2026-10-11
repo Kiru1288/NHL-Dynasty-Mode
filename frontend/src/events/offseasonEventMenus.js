@@ -1884,6 +1884,7 @@ export function FreeAgencyEventMenu({
   eventData = {},
   onContinue,
   onBack,
+  onReopenStage,
   standalone = false,
   ctaLabel: ctaLabelProp,
 }) {
@@ -2538,6 +2539,14 @@ export function FreeAgencyEventMenu({
       hideTicker
       ctaLabel={ctaLabel}
       onContinue={continueHandler}
+      secondaryCtaLabel={
+        inOffseasonWire && typeof onReopenStage === "function" ? "NHL Re-Sign" : ""
+      }
+      onSecondaryCta={
+        inOffseasonWire && typeof onReopenStage === "function"
+          ? () => onReopenStage("re_sign")
+          : undefined
+      }
       onBack={onBack}
       footerAlign="split"
       railTitle={null}

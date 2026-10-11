@@ -115,6 +115,44 @@ def test_continue_offseason_advances_past_retirements_without_from_stage():
     assert "salary_cap" in calls
 
 
+def test_second_continue_from_prospect_rights_replays_resign_desk():
+    """A continue still showing Prospect Rights must not skip the NHL re-sign desk."""
+    from services.franchise_offseason import STAGE_PAYLOAD_VERSION, continue_offseason
+    import services.franchise_offseason as fo
+
+    session = SimpleNamespace(
+        phase="offseason",
+        season_phase="offseason",
+        offseason_stage="re_sign",
+        resign_payload={"version": STAGE_PAYLOAD_VERSION["re_sign"], "contracts": []},
+        next_important_event="free_agency",
+        next_season_generated=False,
+        free_agency_open=False,
+        draft_completed=True,
+        retirements_processed=True,
+        retirements_payload={"ok": True},
+        awards_payload={"ok": True},
+        offseason_completed_stages=["prospect_rights"],
+        sim=SimpleNamespace(league=SimpleNamespace(teams=[])),
+        team_by_id={},
+        pending_decisions=[],
+    )
+    calls = []
+
+    def fake_handler(sess, stage):
+        calls.append(stage)
+        return {stage: True}
+
+    with patch.object(fo, "_stage_handler", fake_handler), patch.object(fo, "_sync_phase_fields", lambda s: None):
+        out = continue_offseason(session, from_stage="prospect_rights")
+
+    assert out.get("replayed") is True
+    assert out.get("offseason_stage") == "re_sign"
+    assert session.offseason_stage == "re_sign"
+    assert session.free_agency_open is False
+    assert "free_agency" not in calls
+
+
 def test_franchise_session_deepcopy_roundtrip():
     from services.franchise_sim import start_franchise
 

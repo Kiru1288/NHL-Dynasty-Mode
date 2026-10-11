@@ -33,6 +33,7 @@ function EventRouterInner({
   onClose,
   onEnterPlayoffs,
   playoffData,
+  onReopenStage,
 }) {
   const entry = typeKey ? getEventRegistration(typeKey) : null;
   if (!entry?.component) return null;
@@ -60,6 +61,7 @@ function EventRouterInner({
       onContinue={onContinue}
       onBack={onBack}
       onClose={onClose}
+      onReopenStage={onReopenStage}
     />
   );
 }

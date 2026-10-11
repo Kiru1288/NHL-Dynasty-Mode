@@ -948,7 +948,7 @@ class CapSpaceLogicTests(unittest.TestCase):
         stamped = self._snap(team, opening=True)
         self.assertAlmostEqual(stamped["performanceBonusReserve"], 12.0, places=2)
 
-    def test_final_year_resign_replaces_the_deal_instead_of_staying_pending(self):
+    def test_one_year_left_extension_keeps_this_seasons_cap_hit(self):
         from services.contract_economy import sign_player_to_team
 
         player = self._skater("zub", years=1, aav=4.5, pending=False, expiry=2027)
@@ -970,10 +970,34 @@ class CapSpaceLogicTests(unittest.TestCase):
         )
         self.assertTrue(result.get("ok"), result)
         self.assertEqual(result.get("status"), "accepted")
+        self.assertTrue(result.get("pending_extension"))
+        self.assertEqual(int(player.contract["years_remaining"]), 1)
+        self.assertAlmostEqual(float(player.contract["aav_m"]), 4.5, places=2)
+        self.assertAlmostEqual(float(player.contract["pending_extension"]["aav_m"]), 6.0, places=2)
+
+    def test_july_expiry_resign_replaces_the_deal(self):
+        from services.contract_economy import sign_player_to_team
+
+        player = self._skater("ufa", years=1, aav=4.5, pending=True, expiry=2027)
+        team = self._club([player])
+        league = SimpleNamespace(
+            salary_cap_m=104.0,
+            cap_floor_m=76.9,
+            season_year=2026,
+            cap_schedule_m={2026: 104.0, 2027: 113.5},
+            teams=[team],
+            free_agents=[],
+        )
+        result = sign_player_to_team(
+            player,
+            team,
+            league,
+            2026,
+            {"aav_m": 6.0, "years": 4, "context": "re_sign", "force": True},
+        )
+        self.assertTrue(result.get("ok"), result)
         self.assertFalse(result.get("pending_extension"))
-        self.assertIsNone(player.contract.get("pending_extension"))
         self.assertEqual(int(player.contract["years_remaining"]), 4)
-        self.assertEqual(int(player.contract["expiry_year"]), 2031)
         self.assertAlmostEqual(float(player.contract["aav_m"]), 6.0, places=2)
 
     def test_multi_year_extension_still_waits_until_the_current_deal_ends(self):

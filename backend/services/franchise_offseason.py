@@ -1472,6 +1472,23 @@ def continue_offseason(
             "replayed": True,
         }
 
+    # A second Continue (double-click, or a retry while the client still shows
+    # the previous desk) must not skip the stage the player has not seen yet.
+    # Prospect Rights → Re-Sign was landing on the Free Agency wire that way.
+    client_idx = OFFSEASON_STAGES.index(client_stage) if client_stage in OFFSEASON_STAGES else -1
+    current_idx = OFFSEASON_STAGES.index(current) if current in OFFSEASON_STAGES else -1
+    if client_idx >= 0 and current_idx >= 0 and client_idx < current_idx:
+        _ensure_offseason_stage_hydrated(session)
+        session.next_important_event = STAGE_NEXT_EVENT.get(current, current)
+        invalidate_session_payload_caches(session, f"offseason_replay_{current}")
+        return {
+            "status": "offseason",
+            "season_phase": "offseason",
+            "offseason_stage": current,
+            "next_important_event": session.next_important_event,
+            "replayed": True,
+        }
+
     idx = OFFSEASON_STAGES.index(current)
     result: Dict[str, Any] = {}
 
@@ -1687,6 +1704,40 @@ def build_free_agency_desk(session: FranchiseSession, *, open_market: bool = Fal
     }
 
 
+def _restore_user_resign_exclusivity(session: FranchiseSession) -> int:
+    """Put the user's still-unsigned former players back on the exclusive re-sign desk.
+
+    Opening Free Agency clears exclusivity. Stepping back from the wire has to
+    restore it, or those NHL players stay on the open market with no home desk.
+    """
+    user_tid = str(getattr(session, "user_team_id", "") or "")
+    league = getattr(getattr(session, "sim", None), "league", None)
+    session.free_agency_open = False
+    session.own_fa_window_active = True
+    if int(getattr(session, "own_fa_window_day", 0) or 0) >= OWN_FA_MORATORIUM_DAYS:
+        session.own_fa_window_day = 0
+    if not user_tid or league is None:
+        return 0
+    restored = 0
+    for pool_attr in ("free_agents", "overseas_free_agents"):
+        for player in list(getattr(league, pool_attr, None) or []):
+            if getattr(player, "retired", False):
+                continue
+            from_tid = str(
+                getattr(player, "ufa_from_team_id", None)
+                or getattr(player, "previous_nhl_team_id", None)
+                or ""
+            )
+            if from_tid != user_tid:
+                continue
+            try:
+                setattr(player, "ufa_exclusive", True)
+                restored += 1
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+    return restored
+
+
 def reopen_offseason_stage(session: FranchiseSession, stage: str) -> Dict[str, Any]:
     """Step back to an earlier offseason desk (e.g. return to Free Agency)."""
     from services.franchise_sim import invalidate_session_payload_caches
@@ -1703,6 +1754,7 @@ def reopen_offseason_stage(session: FranchiseSession, stage: str) -> Dict[str, A
     allowed = {
         ("next_season_reveal", "free_agency"),
         ("next_season_reveal", "re_sign"),
+        ("free_agency", "re_sign"),
     }
     # Also allow reopening free_agency while already there (idempotent refresh).
     if (current, target) not in allowed and not (current == target == "free_agency"):
@@ -1741,6 +1793,8 @@ def reopen_offseason_stage(session: FranchiseSession, stage: str) -> Dict[str, A
         }
 
     if target == "re_sign":
+        if current == "free_agency":
+            _restore_user_resign_exclusivity(session)
         result = _prepare_resign_payload(session, force=True)
         invalidate_session_payload_caches(session, "offseason_reopen_re_sign")
         return {

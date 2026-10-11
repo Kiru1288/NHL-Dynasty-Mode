@@ -4469,7 +4469,7 @@ button.ui-interactive:disabled {
   z-index: 4;
   display: grid;
   place-items: center;
-  pointer-events: none;
+  pointer-events: auto;
 }
 
 .franchise-event-phase-blur__veil {

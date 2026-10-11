@@ -6605,27 +6605,20 @@ def sign_player_to_team(
     _cur_live = _get(player, "contract", None)
     _ctx_ext = str(offer.get("context") or "").lower() in ("extension", "re_sign", "rfa")
     _yrs_live = 0
-    _exp_live = 0
     if isinstance(_cur_live, dict):
         try:
             _yrs_live = int(_cur_live.get("years_remaining") or 0)
         except (TypeError, ValueError):
             _yrs_live = 0
-        try:
-            _exp_live = int(_cur_live.get("expiry_year") or 0)
-        except (TypeError, ValueError):
-            _exp_live = 0
-    # Final-year July talks replace the deal even if the July flag was wiped
-    # off the contract. Nesting an extension left the old AAV and the player
-    # on the pending rail.
-    final_year_now = _ctx_ext and (
-        _yrs_live <= 1 or (0 < _exp_live <= int(season_year) + 1)
-    )
-    july_now = bool(
-        final_year_now
-        or (isinstance(_cur_live, dict) and _cur_live.get("pending_july1_expiry"))
+    # One year still on the books is this season's cap hit. Replacing it with
+    # the extension AAV charged the raise immediately and pushed clubs over the
+    # cap. Only a deal that dies this July (or has no years left) is replaced.
+    july_flag = bool(
+        (isinstance(_cur_live, dict) and _cur_live.get("pending_july1_expiry"))
         or getattr(player, "pending_july1_expiry", False)
     )
+    final_year_now = _ctx_ext and (july_flag or _yrs_live < 1)
+    july_now = bool(final_year_now)
     deal_start = int(season_year) + (1 if july_now and _ctx_ext else 0)
     contract = normalize_contract_dict({
         "type": offer.get("type") or "STANDARD",
@@ -6678,7 +6671,7 @@ def sign_player_to_team(
     if (
         ctx_ext
         and isinstance(cur, dict)
-        and int(cur.get("years_remaining") or 0) > 1
+        and int(cur.get("years_remaining") or 0) >= 1
         and not final_year_now
         and not cur.get("pending_july1_expiry")
         and not getattr(player, "pending_july1_expiry", False)
@@ -6687,7 +6680,9 @@ def sign_player_to_team(
         ext = dict(contract)
         ext["source"] = "signed"
         ext["user_signed"] = True
-        ext["expiry_year"] = int(cur.get("expiry_year") or (int(season_year) + int(cur.get("years_remaining") or 1))) + int(years)
+        ext_start = int(cur.get("expiry_year") or (int(season_year) + int(cur.get("years_remaining") or 1)))
+        ext["effective_season"] = ext_start
+        ext["expiry_year"] = ext_start + int(years)
         cur["pending_extension"] = ext
         cur["extension_aav_m"] = round(aav_m, 3)
         cur["extension_years_remaining"] = int(years)

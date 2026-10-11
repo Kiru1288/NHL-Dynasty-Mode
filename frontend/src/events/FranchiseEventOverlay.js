@@ -67,6 +67,7 @@ export default function FranchiseEventOverlay({
         onBack={onClose}
         onClose={onClose}
         onEnterPlayoffs={onEnterPlayoffs}
+        onReopenStage={onReopenOffseasonStage}
         playoffData={current.eventData}
       />
     </div>

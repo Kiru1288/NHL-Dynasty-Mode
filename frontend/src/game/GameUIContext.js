@@ -1314,10 +1314,13 @@ export function GameUIProvider({ children }) {
     }
   }, [handleFranchiseApiError, beginFranchisePhaseTransition, endFranchisePhaseTransition]);
 
+  const continueOffseasonLock = useRef(false);
   const onContinueOffseason = useCallback(async () => {
-    beginFranchisePhaseTransition("Continuing…");
-    setError(null);
+    if (continueOffseasonLock.current) return null;
+    continueOffseasonLock.current = true;
     try {
+      beginFranchisePhaseTransition("Continuing…");
+      setError(null);
       const phaseForContinue = String(
         franchiseState?.phase || franchiseState?.season_phase || ""
       ).toLowerCase();
@@ -1343,6 +1346,7 @@ export function GameUIProvider({ children }) {
       handleFranchiseApiError(e);
       return null;
     } finally {
+      continueOffseasonLock.current = false;
       endFranchisePhaseTransition();
     }
   }, [

@@ -25,6 +25,8 @@ export default function CinematicEventShell({
   hideTicker = false,
   ctaLabel = "Continue",
   onContinue,
+  secondaryCtaLabel = "",
+  onSecondaryCta,
   onBack,
   revealDelayMs = 0,
   revealKey,
@@ -149,6 +151,11 @@ export default function CinematicEventShell({
           </div>
         ) : null}
         <div className={`${p}-footer-actions ${footerAlign === "split" ? "is-split" : ""}`}>
+          {secondaryCtaLabel && typeof onSecondaryCta === "function" ? (
+            <button type="button" className={`${p}-ghost-btn`} onClick={onSecondaryCta}>
+              {secondaryCtaLabel}
+            </button>
+          ) : null}
           {showSkip && !introDone && !skipCeremony ? (
             <button type="button" className={`${p}-skip-btn`} onClick={skipReveal}>
               Skip cinematic
