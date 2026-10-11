@@ -735,19 +735,24 @@ def _evidence_weaknesses(row: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 def _score_tier(score: float) -> str:
-    if score >= 88:
+    """Dramatic skill tiers (matches frontend ProspectVisuals.SKILL_TIERS)."""
+    if score >= 92:
+        return "Generational"
+    if score >= 86:
         return "Elite"
-    if score >= 78:
-        return "Very High"
-    if score >= 68:
-        return "High"
+    if score >= 80:
+        return "Great"
+    if score >= 74:
+        return "Very Good"
+    if score >= 66:
+        return "Good"
     if score >= 58:
-        return "Above Average"
-    if score >= 50:
         return "Average"
+    if score >= 50:
+        return "Weak"
     if score >= 42:
-        return "Below Average"
-    return "Disastrous"
+        return "Bad"
+    return "Awful"
 
 
 def _attr_val(row: Dict[str, Any], *keys: str) -> Optional[float]:

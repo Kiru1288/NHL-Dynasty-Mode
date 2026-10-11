@@ -24,6 +24,22 @@ import {
 } from "../shared/eventHelpers";
 import "../../styles/nhlcalShell.css";
 import { uiPortalTarget } from "../../utils/fluidUiScale";
+import {
+  CertaintyChip,
+  OutcomeDonut,
+  PercentileBars,
+  ProspectClassContext,
+  ProspectVisualStyles,
+  RatingCertaintyGauge,
+  SkillRadar,
+  SnapshotDials,
+  TierBadge,
+  certaintyTier,
+  parseRange,
+  percentileOf,
+  prospectCertainty,
+  useProspectClass,
+} from "../../components/dossier/ProspectVisuals";
 
 const PREFIX = "edraft";
 const ROUNDS = 7;
@@ -158,9 +174,6 @@ function getPublicRankAtPick(p) {
   return num(p?.public_rank_at_pick ?? p?.final_rank ?? p?.rank ?? p?.public_rank);
 }
 
-function getPreseasonRank(p) {
-  return num(p?.preseason_rank);
-}
 
 function getTeamRank(p) {
   return num(p?.team_board_rank ?? p?.internal_rank ?? p?.team_rank);
@@ -409,10 +422,6 @@ function getConfidenceRange(p) {
   return null;
 }
 
-function isSoftConfidence(p) {
-  const c = getConfidence(p);
-  return c != null && c < 45 && !getConfidenceRange(p);
-}
 
 function getConfidenceTitle(p) {
   const range = getConfidenceRange(p);
@@ -658,10 +667,35 @@ function resolvePotentialOvrLabel(p) {
   );
   const rank = getRank(p);
   const maxSpan = rank != null && rank <= 10 ? 6 : rank != null && rank <= 32 ? 5 : rank != null && rank <= 64 ? 4 : 3;
-  if (hi != null && lo != null && hi - lo > maxSpan) hi = lo + maxSpan;
+  // Only a real scouting file earns a tight ceiling range; a thin file keeps its
+  // full spread (clamping it made every prospect look fully scouted).
+  const filePct = num(p.scouted_percentage) ?? 0;
+  if (filePct >= 72 && hi != null && lo != null && hi - lo > maxSpan) hi = lo + maxSpan;
   const label = formatOvrRange(lo, hi);
   if (label) return label;
   return getScoutedPotentialLabel(p);
+}
+
+/** First `count` sentences of a scouting paragraph (the dossier was a wall of text). */
+function firstSentences(text, count = 2) {
+  const t = String(text || "").trim();
+  if (!t) return "";
+  const parts = t.match(/[^.!?]+[.!?]+/g);
+  if (!parts || parts.length <= count) return t;
+  return parts.slice(0, count).join(" ").trim();
+}
+
+/** Staff certainty on this prospect's OVR and potential (see ProspectVisuals). */
+function getProspectCertainty(p) {
+  if (!p) return { ovr: 0, pot: 0 };
+  return prospectCertainty({
+    scoutPct: num(p.scouted_percentage ?? p.dossier?.scouted_percentage),
+    publicConf: getConfidence(p),
+    revealed: Boolean(p.ovr_revealed),
+    abilityRevealed: Boolean(p.ability_revealed && p.drafted_overall != null),
+    ceilingHidden: Boolean(p.ceiling_hidden || p.dossier?.ceilingHidden || p.dossier?.peak_range?.hidden),
+    rank: getRank(p),
+  });
 }
 
 function resolveProductionStats(prospect, dossierStats = {}) {
@@ -833,7 +867,9 @@ function chapterRatingsHidden(prospect) {
   const cp = prospect.chapter_profile || prospect.dossier?.chapter_profile;
   if (cp?.hidden) return true;
   if (prospect.dossier?.chapterProfileHidden) return true;
-  const scout = num(prospect.scouted_percentage ?? prospect.dossier?.dedicatedScoutFile ? 72 : 0) ?? 0;
+  // Was `a ?? b ? 72 : 0`, which read ANY scouting % on file (even 0%) as 72% and
+  // showed every prospect's chapter ratings as if fully scouted.
+  const scout = num(prospect.scouted_percentage ?? (prospect.dossier?.dedicatedScoutFile ? 72 : 0)) ?? 0;
   const rank = getRank(prospect);
   if (scout >= 72) return false;
   if (rank != null && rank > 64 && scout < 55) return true;
@@ -2504,6 +2540,13 @@ const SHEET = `
   }
   .edraft-alloc-head span:nth-child(n+7),.edraft-alloc-row span:nth-child(n+7){display:none;}
 }
+
+/* Visual dossier additions */
+.edraft-tool-badges{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px;}
+.edraft-tool-badge{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 10px;border:1px solid var(--line);border-radius:6px;background:rgba(6,21,34,.62);}
+.edraft-tool-badge > span:first-child{font-size:11.5px;font-weight:800;color:var(--text);}
+.edraft-dossier .pv-gauge-pair,.edraft-dossier .pv-dials,.edraft-dossier .pv-visual-grid,.edraft-dossier .pv-donut{margin:10px 0;}
+.edraft-board-band.is-soft{color:var(--gold)!important;opacity:.85;}
 `;
 
 /* ------------------------------------------------------------------ */
@@ -3291,13 +3334,13 @@ function BoardPane({
             <span>You</span>
             <span>OVR · Pot</span>
             <span>Stock</span>
-            <span>Conf</span>
+            <span>Sure?</span>
             <span>Risk</span>
             {isUserPick ? <span>Draft</span> : null}
           </>
         ) : (
           <>
-            <span>Brd</span><span>Prospect</span><span>Pos</span><span>OVR–Pot</span><span>Conf</span>
+            <span>Brd</span><span>Prospect</span><span>Pos</span><span>OVR–Pot</span><span>Sure?</span>
             {isUserPick ? <span>Draft</span> : null}
           </>
         )}
@@ -3316,9 +3359,10 @@ function BoardPane({
             const pub = getRank(p);
             const ovr = resolveCurrentOvrLabel(p);
             const pot = resolvePotentialOvrLabel(p);
-            const conf = formatConfidence(p);
-            const confTitle = getConfidenceTitle(p);
-            const softConf = isSoftConfidence(p);
+            const cert = getProspectCertainty(p);
+            const confTitle = `${certaintyTier(cert.ovr).label}: ${cert.ovr}% sure of OVR, ${cert.pot}% sure of potential`
+              + (getConfidenceTitle(p) ? ` · ${getConfidenceTitle(p)}` : "");
+            const softConf = cert.ovr < 55;
             const selected = selectedId === getId(p);
             const teamRank = getTeamRank(p);
             const age = num(p?.age ?? p?.dossier?.age);
@@ -3369,8 +3413,11 @@ function BoardPane({
                       </span>
                     </>
                   ) : null}
-                  <span className={`${PREFIX}-board-band ${PREFIX}-tabular ${PREFIX}-num-pop tone-cyan`}>
-                    {[ovr, pot].filter(Boolean).join(" · ") || "—"}
+                  <span
+                    className={`${PREFIX}-board-band ${PREFIX}-tabular ${PREFIX}-num-pop tone-cyan${softConf ? " is-soft" : ""}`}
+                    title={confTitle}
+                  >
+                    {[ovr ? (softConf ? `~${ovr}` : ovr) : null, pot ? (cert.pot < 45 ? `~${pot}` : pot) : null].filter(Boolean).join(" · ") || "—"}
                   </span>
                   {rich ? (
                     <span className={`${PREFIX}-board-stock ${PREFIX}-tabular${stockClass ? ` ${stockClass}` : ""}`}>
@@ -3381,7 +3428,7 @@ function BoardPane({
                     className={`${PREFIX}-board-stock ${PREFIX}-tabular${softConf ? " is-soft" : ""}`}
                     title={confTitle || undefined}
                   >
-                    {conf || "—"}
+                    <CertaintyChip certainty={cert.ovr} />
                   </span>
                   {rich ? (
                     <span className={`${PREFIX}-board-risk${riskHigh ? " is-high" : ""}`} title="Bust / risk read">
@@ -3705,71 +3752,6 @@ function InfoAllocationReport({ completed, userPicks }) {
 /* Centre stage — scouting dossier (position aware)                    */
 /* ------------------------------------------------------------------ */
 
-function SkillDna({ prospect, confidence, omitKeys = [] }) {
-  const omit = new Set(omitKeys.map((k) => String(k).toLowerCase()));
-  const hidden = chapterRatingsHidden(prospect);
-  const fogged = chapterRatingsFogged(prospect);
-  const rows = chapterAttributeRows(prospect).filter(([label]) => !omit.has(String(label).toLowerCase()));
-  const goalie = isGoalie(prospect);
-  const soft = fogged || (Number.isFinite(Number(confidence)) && Number(confidence) < 45);
-  if (hidden) {
-    return (
-      <section className={`${PREFIX}-sec`}>
-        <SectionHead
-          title={goalie ? "Goalie chapters" : "Chapter ratings"}
-          meta="Scout to reveal"
-          icon="chart"
-          tone="blue"
-        />
-        <p className={`${PREFIX}-muted`}>Chapter grades stay hidden until you build a dedicated scouting file on this prospect.</p>
-      </section>
-    );
-  }
-  if (!rows.length) {
-    return (
-      <section className={`${PREFIX}-sec`}>
-        <SectionHead
-          title={goalie ? "Goalie chapters" : "Chapter ratings"}
-          meta="No file"
-          icon="chart"
-          tone="blue"
-        />
-        <p className={`${PREFIX}-muted`}>Chapter grades are not on file for this prospect.</p>
-      </section>
-    );
-  }
-  return (
-    <section className={`${PREFIX}-sec`}>
-      <SectionHead
-        title={goalie ? "Goalie chapters" : "Chapter ratings"}
-        meta={soft ? (fogged ? "Estimated bands" : "Soft confidence band") : null}
-        icon="chart"
-        tone="blue"
-      />
-      <div className={`${PREFIX}-dna`}>
-        {rows.map(([label, value]) => {
-          const band = typeof value === "object" && value?.band;
-          const v = band
-            ? Math.max(0, Math.min(100, Math.round(Number(value.mid ?? ((value.lo + value.hi) / 2)))))
-            : Math.max(0, Math.min(100, Math.round(Number(value))));
-          const labelText = band ? `${value.lo}–${value.hi}` : String(v);
-          return (
-            <div
-              key={label}
-              className={`${PREFIX}-dna-row${goalie ? " is-goalie" : ""}${soft ? " is-soft" : ""}`}
-            >
-              <span>{label}</span>
-              <div className={`${PREFIX}-dna-track`}><i style={{ width: `${v}%` }} /></div>
-              <strong className={`${PREFIX}-tabular`} title={soft ? getConfidenceTitle(prospect) || "Estimated band" : undefined}>
-                {labelText}
-              </strong>
-            </div>
-          );
-        })}
-      </div>
-    </section>
-  );
-}
 
 function StageDossier({
   prospect,
@@ -3780,6 +3762,7 @@ function StageDossier({
   shortlisted,
   pinned,
 }) {
+  const classPool = useProspectClass();
   if (!prospect) {
     return (
       <div className={`${PREFIX}-dossier-blank`}>
@@ -3822,13 +3805,10 @@ function StageDossier({
   const readiness = formatNhlReadiness(prospect);
   const etaLabel = (d.eta && typeof d.eta === "object" ? d.eta.label : d.eta) || d.estimatedNhlArrival || null;
   const scoutReport = d.scout_report || d.micro_summary || prospect.storyline || null;
-  const strengths = safeArray(d.strengths).slice(0, 4);
-  const concerns = safeArray(d.concerns).slice(0, 4);
+  const strengths = safeArray(d.strengths).slice(0, 3);
+  const concerns = safeArray(d.concerns).slice(0, 3);
   const projectionNotes = safeArray(d.projectionNotes || d.projection_notes).slice(0, 3);
-  const development = d.developmentProfile || d.development_profile || null;
-  const trajectory = d.developmentTrajectory || d.development_trajectory || null;
   const intelLabel = d.intel_label || d.intelLabel || null;
-  const fileDepth = d.file_depth_label || null;
   const scoutPct = num(prospect.scouted_percentage ?? d.scoutingConfidence);
   const ceilingHidden = Boolean(prospect.ceiling_hidden || d.ceilingHidden || d.peak_range?.hidden);
   const character = d.character_read || null;
@@ -3862,6 +3842,64 @@ function StageDossier({
       ].filter(Boolean);
 
   const reachDelta = pub != null && currentPickOverall != null ? currentPickOverall - pub : null;
+
+  // --- Visual file: certainty, class percentiles, outcomes -----------------
+  const cert = getProspectCertainty(prospect);
+  const curRange = parseRange(curLabel);
+  const potRange = parseRange(potLabel);
+  const chapterHidden = chapterRatingsHidden(prospect);
+  const chapterSoft = chapterRatingsFogged(prospect) || cert.ovr < 55;
+  const posGroup = goalie ? "G" : "S";
+  const peers = classPool.filter((x) => (isGoalie(x) ? "G" : "S") === posGroup);
+  const peerChapters = peers.map((x) => {
+    const m = {};
+    chapterAttributeRows(x).forEach(([label, value]) => {
+      m[label] = typeof value === "object" && value?.band ? Number(value.mid) : Number(value);
+    });
+    return m;
+  });
+  const skillRows = chapterHidden
+    ? (goalie ? ["Glove", "Blocker", "Stick"] : ["Offence", "Defence", "Transition", "Mental", "Physicality", "Character"]).map((label) => ({ label, locked: true }))
+    : chapterAttributeRows(prospect)
+        .filter(([label]) => !["Overall", "Potential"].includes(label))
+        .map(([label, value]) => {
+          const band = typeof value === "object" && value?.band;
+          const v = band ? Number(value.mid) : Number(value);
+          return {
+            label,
+            value: v,
+            text: band ? `${value.lo}–${value.hi}` : undefined,
+            soft: chapterSoft || band,
+            percentile: percentileOf(peerChapters.map((m) => m[label]), v),
+          };
+        });
+  const radarAxes = skillRows
+    .filter((r) => !r.locked)
+    .map((r) => {
+      const vals = peerChapters.map((m) => Number(m[r.label])).filter((x) => Number.isFinite(x));
+      return {
+        label: r.label,
+        short: r.label.slice(0, 4),
+        value: r.value,
+        classAvg: vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null,
+      };
+    });
+  const classSize = classPool.length || null;
+  const rankPct = pub != null && classSize ? Math.max(1, Math.round(100 - (pub / Math.max(classSize, pub)) * 100)) : null;
+  const ppgPeers = peers.map((x) => resolveProductionStats(x, x.dossier?.stats).ppg);
+  const prodPct = !goalie && prod.ppg != null ? percentileOf(ppgPeers, prod.ppg) : null;
+  const nhlProb = num(d.potential?.nhl_probability ?? d.nhl_probability ?? prospect.nhl_probability);
+  const outcomeSegs = (() => {
+    const dist = d.outcome_distribution || d.outcomeDistribution || null;
+    const raw = Array.isArray(dist?.segments) ? dist.segments : Array.isArray(dist) ? dist : null;
+    if (raw) return raw.map((seg) => ({ key: seg.key || seg.label, label: seg.label || seg.key, pct: num(seg.pct ?? seg.value ?? seg.probability) }));
+    if (dist && typeof dist === "object") {
+      return Object.entries(dist)
+        .filter(([k, v]) => k !== "label" && Number.isFinite(Number(v)))
+        .map(([k, v]) => ({ key: k, label: k.replace(/_/g, " "), pct: Number(v) }));
+    }
+    return null;
+  })();
   const identityLine = [
     pos,
     ageRaw != null ? `Age ${roundInt(ageRaw) ?? ageRaw}` : null,
@@ -3895,35 +3933,59 @@ function StageDossier({
         <Fact label="League" value={league || "—"} />
       </div>
 
-      {(curLabel || potLabel || ceilingHidden) ? (
-        <div className={`${PREFIX}-arc`}>
-          <div className={`${PREFIX}-arc-node`}>
-            <span>Current OVR</span>
-            <strong className={`${PREFIX}-tabular ${PREFIX}-num-pop tone-cyan`}>{curLabel || "—"}</strong>
-          </div>
-          <div className={`${PREFIX}-arc-mid`}>
-            <i />
-            {growth != null && !ceilingHidden ? <em>+{growth} upside</em> : <em>{intelLabel || fileDepth || "Scouted band"}</em>}
-          </div>
-          <div className={`${PREFIX}-arc-node is-peak is-right`}>
-            <span>Projected ceiling</span>
-            <strong className={`${PREFIX}-tabular ${PREFIX}-num-pop tone-gold`}>{ceilingHidden ? "Ungraded" : (potLabel || "—")}</strong>
-          </div>
-        </div>
-      ) : null}
+      <ProspectVisualStyles />
+      <div className="pv-gauge-pair">
+        <RatingCertaintyGauge
+          title="Current OVR"
+          valueText={curLabel}
+          range={curRange}
+          certainty={cert.ovr}
+          tone="cyan"
+          hidden={!curRange}
+          hiddenText="No read"
+        />
+        <RatingCertaintyGauge
+          title="Potential"
+          valueText={potLabel}
+          range={potRange}
+          certainty={cert.pot}
+          tone="gold"
+          hidden={ceilingHidden || !potRange}
+        />
+      </div>
+
+      <SnapshotDials
+        items={[
+          rankPct != null
+            ? { label: "Class rank", pct: rankPct, center: `#${pub}`, sub: rankPct >= 50 ? `TOP ${Math.max(1, 100 - rankPct)}%` : "", color: "#f6c453", title: `Public board #${pub} of ${classSize}` }
+            : null,
+          { label: "Your file", pct: num(scoutPct) ?? 0, center: `${roundInt(scoutPct) ?? 0}%`, sub: certaintyTier(cert.ovr).label.split(" ")[0], color: certaintyTier(cert.ovr).color, title: "How much of him your scouts have seen" },
+          nhlProb != null ? { label: "NHL odds", pct: nhlProb, color: "#52df94", title: "Chance he becomes an NHL regular" } : null,
+          prodPct != null ? { label: "Production", pct: prodPct, center: `${prodPct}`, sub: "PCTL", color: "#13d8e7", title: "Points per game vs. the class" } : null,
+          growth != null && !ceilingHidden ? { label: "Upside", pct: Math.min(100, growth * 4), center: `+${growth}`, sub: "OVR", color: "#ff5fd2", title: "Projected growth to his ceiling" } : null,
+        ]}
+      />
 
       {archetype || playStyle || scoutReport ? (
         <section className={`${PREFIX}-sec`}>
           <SectionHead title={archetype || "Scouting file"} meta={playStyle ? `Play style · ${playStyle}` : intelLabel} icon="book" tone="blue" />
-          {archetypeBlurb ? <p className={`${PREFIX}-report`}>{archetypeBlurb}</p> : null}
-          {scoutReport && scoutReport !== archetypeBlurb ? <p className={`${PREFIX}-report`}>{scoutReport}</p> : null}
-          {trajectory ? <p className={`${PREFIX}-muted`}>{trajectory}</p> : null}
+          {archetypeBlurb || scoutReport ? (
+            <p className={`${PREFIX}-report`}>{firstSentences(archetypeBlurb || scoutReport, 2)}</p>
+          ) : null}
         </section>
       ) : null}
 
       <div className={`${PREFIX}-dossier-grid`}>
         <div className={`${PREFIX}-dossier-main`}>
-          <SkillDna prospect={prospect} confidence={getConfidence(prospect)} omitKeys={["Overall", "Potential"]} />
+          <div className="pv-visual-grid">
+            <PercentileBars
+              rows={skillRows}
+              title={goalie ? "Goalie tools" : "Skill profile"}
+              note={chapterHidden ? "Scout him to unlock" : chapterSoft ? "Estimated · thin file" : "vs. this draft class"}
+            />
+            {radarAxes.length >= 3 ? <SkillRadar axes={radarAxes} color={goalie ? "#8ab4ff" : "#13d8e7"} /> : null}
+          </div>
+          {outcomeSegs && outcomeSegs.length ? <OutcomeDonut segments={outcomeSegs} /> : null}
 
           {productionRows.length ? (
             <section className={`${PREFIX}-sec`}>
@@ -4002,10 +4064,16 @@ function StageDossier({
           {tools.length ? (
             <section className={`${PREFIX}-sec`}>
               <SectionHead title="Tools" icon="chart" tone="blue" />
-              <div className={`${PREFIX}-facts`}>
-                {tools.map((t) => (
-                  <Fact key={t.label || t.name} label={t.label || t.name} value={t.tier || t.text || t.score} />
-                ))}
+              <div className={`${PREFIX}-tool-badges`}>
+                {tools.map((t) => {
+                  const score = num(t.score ?? t.raw ?? t.grade);
+                  return (
+                    <div key={t.label || t.name} className={`${PREFIX}-tool-badge`}>
+                      <span>{t.label || t.name}</span>
+                      {score != null && !t.locked ? <TierBadge value={score} /> : <span className="pv-tier pv-tier--unknown">SCOUT IT</span>}
+                    </div>
+                  );
+                })}
               </div>
             </section>
           ) : null}
@@ -4124,15 +4192,10 @@ function StageDossier({
             <Fact label={goalie ? "Starter path" : "Projected role"} value={projection.label || d.prospect_role || prospect.prospect_role || archetype} />
             <Fact label="NHL readiness" value={readiness} />
             <Fact label="ETA" value={etaLabel || formatNhlArrivalEta(prospect)} />
-            <Fact label="Development" value={development || prospect.development_path} />
-            <Fact label="Player type" value={prospect.player_type} />
-            <Fact label="Stock" value={prospect.stock_label} />
             <Fact label="Risk" value={prospect.risk_score ?? getRisk(prospect)} />
-            <Fact label="Intel file" value={intelLabel} />
-            <Fact label="Scouted" value={scoutPct != null ? `${roundInt(scoutPct)}%` : formatConfidence(prospect)} />
+            <Fact label="Sure of OVR" value={`${cert.ovr}% · ${certaintyTier(cert.ovr).label}`} />
             <Fact label="Public board" value={pub != null ? `#${pub}` : null} />
             <Fact label="Your board" value={tb != null ? `#${tb}` : null} />
-            <Fact label="Preseason" value={getPreseasonRank(prospect) != null ? `#${getPreseasonRank(prospect)}` : null} />
             <Fact
               label="Value vs slot"
               tone={pickTone === "steal" || pickTone === "value" ? "good" : pickTone === "reach" || pickTone === "early" ? "warn" : (reachDelta == null ? undefined : reachDelta < 0 ? "warn" : reachDelta > 0 ? "good" : undefined)}
@@ -4148,7 +4211,6 @@ function StageDossier({
               }
             />
             <Fact label="NHL club" value={nhlClub} />
-            <Fact label="Junior club" value={club} />
           </div>
         </aside>
       </div>
@@ -5572,9 +5634,13 @@ export default function EntryDraftMenu({ franchiseState = {}, eventData = {}, on
     selectedAvailable,
   ]);
 
+  const classPool = [...available, ...safeArray(completed)];
+
   return (
+    <ProspectClassContext.Provider value={classPool}>
     <section className={`${PREFIX}-root`}>
       <style>{SHEET}</style>
+      <ProspectVisualStyles />
 
       <CommandBar
         franchiseState={franchiseState}
@@ -5862,5 +5928,6 @@ export default function EntryDraftMenu({ franchiseState = {}, eventData = {}, on
         }}
       />
     </section>
+    </ProspectClassContext.Provider>
   );
 }

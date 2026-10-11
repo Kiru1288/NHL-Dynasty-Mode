@@ -19,6 +19,18 @@ import {
   LeagueBadge,
 } from "../components/franchise/commandVisuals";
 import { BOARD_SOURCES, WORKSPACE_TABS, confMeaning, enrichProspectsForWarRoom, groupByPyramid, overageStockNote, rankProspectsForSource, skillDevelopmentNotes, sourceCaption, weeklyStockMovers, weeklyTrajectoryPoints } from "./draftWarRoom";
+import {
+  OutcomeDonut,
+  PercentileBars,
+  ProspectVisualStyles,
+  RatingCertaintyGauge,
+  SkillRadar,
+  SnapshotDials,
+  certaintyTier,
+  parseRange,
+  percentileOf,
+  prospectCertainty,
+} from "../components/dossier/ProspectVisuals";
 import { resolveProjectedRangeLabel, resolveOvrBands, resolveCreaseZoneGrades, resolveGoalieToolRows, resolveBottomStatStrip, buildScoutingDeskEntries, outcomeRibbonSegmentsForPosition, zoneGradeWord, formatDeskGrade, dossierFileNotes, zoneTierMeta, buildStubProspectProfile, resolveWjcDossierBlock } from "./prospectDossierHelpers";
 
 let TRANSCENDENT_BOSS_AUDIO_URL = null;
@@ -1184,7 +1196,9 @@ function mapBackendDraftBoard(entries, dateContext) {
       ? Math.round(Math.min(100, Math.max(0, ambientNum)))
       : null;
     const completion = dedicatedScoutingPct ?? publicScoutingConfidence ?? (Number(base.completion) || 40);
-    const ovrRevealed = completion >= OVR_REVEAL_THRESHOLD || Boolean(row?.ovr_revealed);
+    // Only YOUR dedicated file reveals the real OVR (it fell back to league-wide
+    // coverage, so well-known prospects you never scouted showed an exact OVR).
+    const ovrRevealed = (dedicatedScoutingPct ?? 0) >= OVR_REVEAL_THRESHOLD || Boolean(row?.ovr_revealed);
     const rawRange = row?.ovr_range;
     let ovrRange = rawRange && rawRange.low != null && rawRange.high != null
       ? { low: Number(rawRange.low), high: Number(rawRange.high) }
@@ -3150,8 +3164,9 @@ function formatSignalNum(v, decimals = 0) {
 /** Current ability estimate — always available; ceiling fog does not blank present skill. */
 function resolveCurrentEstimate(player, profile, ceilingHidden, dedicatedFile) {
   const exact = Number(profile?.scoutedOverall ?? profile?.currentOvrEstimate ?? player?.ovrHint);
+  // Your own file reveals the OVR — league-wide coverage (scout_confidence) never does.
   const revealed = Boolean(player?.ovrRevealed) || (
-    Number(profile?.scout_confidence ?? player?.scoutingConfidence ?? player?.completion) >= OVR_REVEAL_THRESHOLD
+    Number(profile?.userScoutPct ?? player?.dedicatedScoutingPct ?? 0) >= OVR_REVEAL_THRESHOLD
   );
   // Exact OVR only when revealed / dedicated file — never as a late-round ceiling leak.
   if (revealed && (!ceilingHidden || dedicatedFile) && Number.isFinite(exact) && exact > 0) {
@@ -3163,17 +3178,11 @@ function resolveCurrentEstimate(player, profile, ceilingHidden, dedicatedFile) {
     return { text: `${Math.round(low)}–${Math.round(high)}`, detail: ceilingHidden ? "Present ability" : "Range", exact: false };
   }
   if (Number.isFinite(exact) && exact > 0 && !ceilingHidden) {
-    return { text: String(Math.round(exact)), detail: "Estimate", exact: false };
+    return { text: `~${Math.round(exact)}`, detail: "Estimate", exact: false };
   }
   return { text: "—", detail: "Not revealed", exact: false };
 }
 
-function truncateScoutLine(text, max = 148) {
-  const s = String(text || "").trim();
-  if (!s) return null;
-  if (s.length <= max) return s;
-  return `${s.slice(0, max - 1).trim()}…`;
-}
 
 function ValueTrajectoryChart({ points, compact = false }) {
   if (!points?.length) {
@@ -3853,6 +3862,25 @@ function ProspectMediaUniverse({ bundle, compact = false }) {
   );
 }
 
+/** Dossier tool label → normalized prospect field (for class percentiles). */
+const TOOL_FIELD = {
+  skating: "skating", skate: "skating", shot: "shooting", shooting: "shooting",
+  vision: "passing", passing: "passing", defense: "defense", defence: "defense",
+  physical: "physical", physicality: "physical", iq: "hockeyIQ", "hockey iq": "hockeyIQ",
+  compete: "compete", glove: "glove", blocker: "blocker", reflexes: "reflexes",
+  rebound: "reboundControl", "rebound control": "reboundControl", positioning: "positioning",
+  "puck-handling": "puckHandling", "puck handling": "puckHandling", athleticism: "athleticism",
+};
+
+/** First `count` sentences of a paragraph — the dossier read like an essay. */
+function firstSentences(text, count = 2) {
+  const t = String(text || "").trim();
+  if (!t) return "";
+  const parts = t.match(/[^.!?]+[.!?]+/g);
+  if (!parts || parts.length <= count) return t;
+  return parts.slice(0, count).join(" ").trim();
+}
+
 function ProspectProfileModal({
   player,
   profile,
@@ -4008,25 +4036,11 @@ function ProspectProfileModal({
     : (profile?.play_style ? { label: profile.play_style, source: "backend" } : null);
   const playStyle = playStyleTag?.label || null;
   const devTrajectory = profile?.development_trajectory || profile?.developmentTrajectory || "";
-  // `archetype.blurb` already carries `scout_report`, so sourcing it here too
-  // rendered the same paragraph twice (once full, once truncated).
-  const reportBlurb = (() => {
-    const extra = truncateScoutLine(profile?.micro_summary || "", 168);
-    if (!extra) return "";
-    const base = String(archetype.blurb || "").trim().toLowerCase();
-    const cand = extra.trim().toLowerCase().replace(/[.…]+$/, "");
-    if (!base || !cand) return extra;
-    return base.startsWith(cand.slice(0, 60)) ? "" : extra;
-  })();
   const projectedRange = resolveProjectedRangeLabel(player, profile, ceilingHidden);
   const scoutingDesk = buildScoutingDeskEntries(player, profile, { gp, analytics });
   const statStrip = resolveBottomStatStrip(player, profile, toolsWithNotes, isGoalie);
   const outcomeDistribution = profile?.outcome_distribution || profile?.outcomeDistribution || null;
   const ribbonSegs = outcomeRibbonSegments(null, isGoalie, outcomeDistribution);
-  const outcomeRibbonLabel = outcomeDistribution?.label
-    || (profile?.potential?.nhl_probability != null
-      ? `Career model · ${profile.potential.band || "Standard"} · ${Math.round(profile.potential.nhl_probability)}% NHL`
-      : "Career outcome bands");
   const headroom = ovrBands.headroom;
   const overageNote = overageStockNote(player);
   // Dashboard metrics (derived from data already on the profile — nothing invented).
@@ -4072,13 +4086,6 @@ function ProspectProfileModal({
   const draftWindow = draftWindowFromRank(rank);
   riskTemperatureFromGem(gem, riskLabel, volatility);
   competitionLens(competition);
-  const confBand = confPct == null
-    ? "—"
-    : confPct >= 72
-      ? "HIGH"
-      : confPct >= 45
-        ? "MODERATE"
-        : "LOW";
 
   const warTone = (() => {
     const w = Number(analytics.war);
@@ -4115,6 +4122,44 @@ function ProspectProfileModal({
       ];
 
   const wjcBlock = resolveWjcDossierBlock(profile, isGoalie);
+
+  // --- Visual file: certainty, class percentiles, outcomes -----------------
+  const userScoutPct = Number(profile?.userScoutPct ?? player?.dedicatedScoutingPct ?? player?.scoutedPercentage ?? 0);
+  const cert = prospectCertainty({
+    scoutPct: Number.isFinite(userScoutPct) ? userScoutPct : 0,
+    publicConf: confPct,
+    revealed: Boolean(player?.ovrRevealed),
+    ceilingHidden,
+    rank,
+  });
+  const nowRange = parseRange(currentEstimate?.text);
+  const peakRange = ceilingHidden ? null : parseRange(ovrBands.peakText);
+  const peers = (allProspects || []).filter((x) => isGoaliePosition(x?.position) === isGoalie);
+  const skillRows = toolsWithNotes.map((t) => {
+    const key = TOOL_FIELD[String(t.label || "").toLowerCase()];
+    const value = Number.isFinite(Number(t.mid)) ? Number(t.mid) : Number(t.raw);
+    const locked = Boolean(t.locked) || !Number.isFinite(value);
+    const band = t.low != null && t.high != null && Number(t.high) > Number(t.low);
+    return {
+      label: t.label,
+      value,
+      locked,
+      text: band ? `${Math.round(t.low)}–${Math.round(t.high)}` : undefined,
+      soft: band || cert.ovr < 55,
+      percentile: !locked && key ? percentileOf(peers.map((x) => x?.[key]), value) : null,
+    };
+  });
+  const radarAxes = skillRows
+    .filter((r) => !r.locked)
+    .map((r) => {
+      const key = TOOL_FIELD[String(r.label || "").toLowerCase()];
+      const vals = key ? peers.map((x) => Number(x?.[key])).filter((v) => Number.isFinite(v) && v > 0) : [];
+      return { label: r.label, short: String(r.label).slice(0, 5), value: r.value, classAvg: vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null };
+    });
+  const classSize = (allProspects || []).length || null;
+  const rankPct = rank && classSize ? Math.max(1, Math.round(100 - (rank / Math.max(classSize, rank)) * 100)) : null;
+  const prodPct = !isGoalie && ppg != null && gp > 0 ? percentileOf(peers.map((x) => (Number(x?.gp) > 0 ? x?.ppg : null)), ppg) : null;
+  const donutSegs = ribbonSegs ? ribbonSegs.map((seg) => ({ key: seg.key, label: seg.label, pct: seg.pct })) : null;
 
   return (
     <div
@@ -4198,8 +4243,7 @@ function ProspectProfileModal({
                     <div className="dc-archetype-head__copy">
                       <span className="dc-profile-tags__label">Archetype</span>
                       <h3 className="wr-num-gold dc-archetype-head__title">{archetype.label}</h3>
-                      <p className="dc-archetype-head__blurb">{archetype.blurb}</p>
-                      {reportBlurb ? <p className="dc-archetype-head__report">{reportBlurb}</p> : null}
+                      <p className="dc-archetype-head__blurb">{firstSentences(archetype.blurb, 2)}</p>
                       <div className="dc-archetype-head__chips">
                         {playStyle ? (
                           <ProfileChip tone="accent">Play style · {String(playStyle).toUpperCase()}</ProfileChip>
@@ -4216,55 +4260,57 @@ function ProspectProfileModal({
                       </div>
                     </div>
                     <div className="dc-archetype-head__metrics">
-                      <div className="wr-now-peak wr-now-peak--wide">
-                        <div className="wr-now-peak__chip">
-                          <span className="wr-now-peak__label">Now</span>
-                          <strong className={currentEstimate.exact ? "wr-num-cyan" : "wr-num-slate"}>{currentEstimate.text}</strong>
-                        </div>
-                        <div className="wr-now-peak__arrow">
-                          <span aria-hidden="true">▸</span>
-                          <em className="wr-num-gold">{headroom == null ? "—" : (headroom >= 0 ? `+${headroom}` : String(headroom))}</em>
-                        </div>
-                        <div className={`wr-now-peak__chip is-peak${ceilingHidden ? " is-hidden" : ""}`}>
-                          <span className="wr-now-peak__label">Peak</span>
-                          <strong className={ceilingHidden ? "" : "wr-num-gold"}>{ceilingHidden ? "—" : (ovrBands.peakText ?? "—")}</strong>
-                        </div>
+                      <ProspectVisualStyles />
+                      <div className="pv-gauge-pair">
+                        <RatingCertaintyGauge
+                          title="Now"
+                          valueText={currentEstimate.text}
+                          range={nowRange}
+                          certainty={cert.ovr}
+                          tone="cyan"
+                          hidden={!nowRange}
+                          hiddenText="No read"
+                        />
+                        <RatingCertaintyGauge
+                          title={headroom != null && headroom > 0 ? `Peak · +${headroom}` : "Peak"}
+                          valueText={ovrBands.peakText}
+                          range={peakRange}
+                          certainty={cert.pot}
+                          tone="gold"
+                          hidden={ceilingHidden || !peakRange}
+                        />
                       </div>
-                      <p className="dc-dev-trajectory">{devTrajectory}</p>
                     </div>
                   </div>
                 </section>
 
             {dossierTab === "file" ? (
               <div className="dc-dossier-pane dc-dossier-pane--file">
+                <SnapshotDials
+                  items={[
+                    rankPct != null
+                      ? { label: "Class rank", pct: rankPct, center: `#${rank}`, sub: rankPct >= 50 ? `TOP ${Math.max(1, 100 - rankPct)}%` : "", color: "#f6c453", title: `Board #${rank} of ${classSize}` }
+                      : null,
+                    { label: "Your file", pct: Number.isFinite(userScoutPct) ? userScoutPct : 0, center: `${Math.round(Number.isFinite(userScoutPct) ? userScoutPct : 0)}%`, sub: certaintyTier(cert.ovr).label.split(" ")[0], color: certaintyTier(cert.ovr).color, title: "How much of him your scouts have seen" },
+                    readinessPct != null ? { label: "NHL odds", pct: readinessPct, color: "#52df94", title: "Chance he becomes an NHL regular" } : null,
+                    prodPct != null ? { label: "Production", pct: prodPct, center: `${prodPct}`, sub: "PCTL", color: "#13d8e7", title: "Points per game vs. the class" } : null,
+                    confPct != null ? { label: "League looks", pct: confPct, color: "#8ab4ff", title: "How much the whole league has seen him" } : null,
+                  ]}
+                />
+                <style>{".dc-dossier-visuals{margin:10px 0;} .dc-dossier-pane--file .pv-dials{margin:4px 0 6px;} .dc-archetype-head__metrics .pv-gauge-pair{min-width:min(520px,100%);}"}</style>
+                <div className="pv-visual-grid dc-dossier-visuals">
+                  <PercentileBars
+                    rows={skillRows}
+                    title={isGoalie ? "Goalie tools" : "Skill profile"}
+                    note={cert.ovr < 55 ? "Estimated · thin file" : "vs. this draft class"}
+                  />
+                  <div className="pv-stack">
+                    {radarAxes.length >= 3 ? <SkillRadar axes={radarAxes} color={isGoalie ? "#8ab4ff" : "#13d8e7"} /> : null}
+                    {donutSegs && donutSegs.length ? <OutcomeDonut segments={donutSegs} title="Career outcomes" /> : null}
+                  </div>
+                </div>
                 <div className="dc-dossier-topgrid">
                   <ProspectZoneMap tools={toolsWithNotes} profile={profile} position={player.position} isGoalie={isGoalie} compact />
-                  <section className="dc-brochure-block dc-brochure-block--compact dc-outcome-block">
-                    <span className="dc-profile-tags__label">Career outcome distribution <span className="wr-muted">//</span> {outcomeRibbonLabel}</span>
-                    {ribbonSegs ? (
-                      <>
-                        <div className="wr-outcome-ribbon" role="img" aria-label="Outcome distribution">
-                          {ribbonSegs.map((seg) => (
-                            <span
-                              key={seg.key}
-                              className={`wr-outcome-ribbon__seg is-${seg.key}`}
-                              style={{ flex: `${Math.max(0.5, seg.pct)} 1 0%` }}
-                              title={`${seg.label} ${Math.round(seg.pct)}%`}
-                            >
-                              {seg.pct >= 8 ? Math.round(seg.pct) : ""}
-                            </span>
-                          ))}
-                        </div>
-                        <div className="wr-outcome-legend">
-                          {ribbonSegs.map((seg) => (
-                            <span key={`leg-${seg.key}`}>{seg.label} {Math.round(seg.pct)}%</span>
-                          ))}
-                        </div>
-                      </>
-                    ) : (
-                      <div className="wr-outcome-ribbon is-unavailable" title="Distribution unavailable — backend model pending" />
-                    )}
-                  </section>
                 </div>
 
                 <div className="dc-dossier-dashboard">
@@ -4288,11 +4334,11 @@ function ProspectProfileModal({
                       </ul>
                     </article>
                     <article className="dc-report-card dc-metric-card">
-                      <h4>Scout confidence</h4>
-                      <div className="dc-meter" aria-label={`${confPct ?? 0}% scouting confidence`}>
-                        <i style={{ width: `${confPct ?? 0}%` }} />
-                      </div>
-                      <p className="dc-metric-card__lead">{confPct != null ? `${confPct}%` : "—"} · {confBand}</p>
+                      <h4>How sure are we?</h4>
+                      <ul className="dc-kv">
+                        <li><span>Current OVR</span><strong style={{ color: certaintyTier(cert.ovr).color }}>{cert.ovr}% · {certaintyTier(cert.ovr).label}</strong></li>
+                        <li><span>Potential</span><strong style={{ color: certaintyTier(cert.pot).color }}>{ceilingHidden ? "Not on file" : `${cert.pot}% · ${certaintyTier(cert.pot).label}`}</strong></li>
+                      </ul>
                       {confNote ? <small className="dc-metric-card__note">{confNote}</small> : null}
                     </article>
                   </div>
@@ -4301,12 +4347,12 @@ function ProspectProfileModal({
                   <div className="dc-dash-col">
                     <article className="dc-report-card">
                       <h4>Strengths</h4>
-                      <ul>{(strengths.filter(Boolean).length ? strengths.filter(Boolean) : strengthLines).map((line) => <li key={line}>{line}</li>)}</ul>
+                      <ul>{(strengths.filter(Boolean).length ? strengths.filter(Boolean) : strengthLines).slice(0, 3).map((line) => <li key={line}>{line}</li>)}</ul>
                     </article>
                     <article className="dc-report-card">
                       <h4>Weaknesses</h4>
                       {weaknessLines.length ? (
-                        <ul>{weaknessLines.map((line) => <li key={line}>{line}</li>)}</ul>
+                        <ul>{weaknessLines.slice(0, 3).map((line) => <li key={line}>{line}</li>)}</ul>
                       ) : (
                         <p className="dc-report-card__empty">
                           {confPct != null && confPct < 45
@@ -5200,7 +5246,7 @@ export default function DraftClass() {
             profileEnriching={profileEnriching}
             meta={getScoutingMeta(scoutingStore, selectedProspect.id)}
             franchiseState={franchiseState}
-            allProspects={filteredProspects}
+            allProspects={rawProspects}
             compareIds={compareIds}
             onClose={() => setSelectedProspect(null)}
             onToggleWatchlist={() => toggleProspectWatchlist(selectedProspect.id)}

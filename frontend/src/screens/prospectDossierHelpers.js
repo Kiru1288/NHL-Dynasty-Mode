@@ -425,11 +425,15 @@ export function resolveCreaseZoneGrades(player, profile, tools) {
 
 export function zoneGradeWord(n) {
   if (n == null || !Number.isFinite(n)) return "Unknown";
-  if (n >= 85) return "Elite";
-  if (n >= 75) return "Solid";
-  if (n >= 62) return "Serviceable";
-  if (n >= 52) return "Shaky";
-  return "Raw";
+  if (n >= 92) return "Generational";
+  if (n >= 86) return "Elite";
+  if (n >= 80) return "Great";
+  if (n >= 74) return "Very Good";
+  if (n >= 66) return "Good";
+  if (n >= 58) return "Average";
+  if (n >= 50) return "Weak";
+  if (n >= 42) return "Bad";
+  return "Awful";
 }
 
 /** Tier key + fill intensity for zone map tiles — drives color differentiation. */
