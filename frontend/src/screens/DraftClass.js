@@ -31,7 +31,7 @@ import {
   percentileOf,
   prospectCertainty,
 } from "../components/dossier/ProspectVisuals";
-import { resolveProjectedRangeLabel, resolveOvrBands, resolveCreaseZoneGrades, resolveGoalieToolRows, resolveBottomStatStrip, buildScoutingDeskEntries, outcomeRibbonSegmentsForPosition, zoneGradeWord, formatDeskGrade, dossierFileNotes, zoneTierMeta, buildStubProspectProfile, resolveWjcDossierBlock } from "./prospectDossierHelpers";
+import { resolveProjectedRangeLabel, resolveOvrBands, resolveGoalieToolRows, buildScoutingDeskEntries, outcomeRibbonSegmentsForPosition, formatDeskGrade, dossierFileNotes, buildStubProspectProfile, resolveWjcDossierBlock } from "./prospectDossierHelpers";
 
 let TRANSCENDENT_BOSS_AUDIO_URL = null;
 try {
@@ -2527,155 +2527,6 @@ function outcomeRibbonSegments(outcomes, isGoalie = false, outcomeDistribution =
   return outcomeRibbonSegmentsForPosition(outcomes, isGoalie, outcomeDistribution);
 }
 
-function ProspectZoneMap({ tools, profile, position, isGoalie, compact = false }) {
-  if (isGoalie || String(position || "").toUpperCase() === "G") {
-    return <ProspectCreaseZoneMap tools={tools} profile={profile} compact={compact} />;
-  }
-  return <ProspectRinkZoneMap tools={tools} profile={profile} position={position} compact={compact} />;
-}
-
-function ProspectCreaseZoneMap({ tools, profile, compact = false }) {
-  const backendZones = profile?.zone_map?.type === "crease" ? profile.zone_map.zones : null;
-  const zones = backendZones
-    ? {
-        rebound: backendZones.rebound?.value != null
-          ? { locked: false, value: Number(backendZones.rebound.value) }
-          : { locked: true, value: null },
-        angles: backendZones.angles?.value != null
-          ? { locked: false, value: Number(backendZones.angles.value) }
-          : { locked: true, value: null },
-        range: backendZones.range?.value != null
-          ? { locked: false, value: Number(backendZones.range.value) }
-          : { locked: true, value: null },
-      }
-    : resolveCreaseZoneGrades({}, profile, tools);
-  return (
-    <div className={`wr-rink wr-rink--crease${compact ? " wr-rink--dossier-compact" : ""}`}>
-      <span className="dc-profile-tags__label">
-        Crease grades <span className="wr-muted">//</span> where the game gets decided
-      </span>
-      <svg className="wr-rink__svg wr-rink__svg--crease" viewBox="0 0 640 270" aria-hidden="true">
-        <defs>
-          <linearGradient id="wrCreaseIn" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0" stopColor="#f4b467" stopOpacity="0.5" />
-            <stop offset="1" stopColor="#f4b467" stopOpacity="0.08" />
-          </linearGradient>
-          <linearGradient id="wrCreaseMid" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0" stopColor="#ffc94d" stopOpacity="0.46" />
-            <stop offset="1" stopColor="#ffc94d" stopOpacity="0.07" />
-          </linearGradient>
-          <linearGradient id="wrCreaseOut" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0" stopColor="#3d6e8c" stopOpacity="0.38" />
-            <stop offset="1" stopColor="#3d6e8c" stopOpacity="0.06" />
-          </linearGradient>
-        </defs>
-        <rect x="2" y="2" width="636" height="266" fill="#081827" />
-        <path d="M 120 62 A 200 200 0 0 1 520 62 L 450 62 A 130 130 0 0 0 190 62 Z" fill="url(#wrCreaseOut)" />
-        <path d="M 190 62 A 130 130 0 0 1 450 62 L 380 62 A 60 60 0 0 0 260 62 Z" fill="url(#wrCreaseMid)" />
-        <path d="M 260 62 A 60 60 0 0 1 380 62 Z" fill="url(#wrCreaseIn)" />
-        <path d="M 120 62 A 200 200 0 0 1 520 62" fill="none" stroke="#5aa8d9" strokeWidth="1.5" opacity="0.5" />
-        <path d="M 190 62 A 130 130 0 0 1 450 62" fill="none" stroke="#5aa8d9" strokeWidth="1.5" opacity="0.6" />
-        <path d="M 260 62 A 60 60 0 0 1 380 62" fill="none" stroke="#5aa8d9" strokeWidth="1.5" opacity="0.7" />
-        <rect x="278" y="8" width="84" height="8" fill="#8fa8bd" />
-        <rect x="278" y="8" width="6" height="56" fill="#8fa8bd" />
-        <rect x="356" y="8" width="6" height="56" fill="#8fa8bd" />
-        <line x1="180" y1="62" x2="460" y2="62" stroke="#e0555f" strokeWidth="2.5" opacity="0.85" />
-        {!zones.rebound.locked ? (
-          <>
-            <text x="320" y="96" fill="#ffe3b0" fontSize="10" letterSpacing="2.6" textAnchor="middle" fontWeight="600">REBOUND CONTROL</text>
-            <text x="320" y="128" fill="#f4b467" fontSize="42" textAnchor="middle" className="wr-svg-num">{Math.round(zones.rebound.value)}</text>
-            <text x="320" y="143" fill="#f4b467" fontSize="12" textAnchor="middle" letterSpacing="1.5">{zoneGradeWord(zones.rebound.value).toUpperCase()}</text>
-          </>
-        ) : null}
-        {!zones.angles.locked ? (
-          <>
-            <text x="320" y="178" fill="#f4c66e" fontSize="11" letterSpacing="3" textAnchor="middle" fontWeight="600">ANGLES &amp; POSITIONING</text>
-            <text x="320" y="205" fill="#ffc94d" fontSize="52" textAnchor="middle" className="wr-svg-num">{Math.round(zones.angles.value)}</text>
-            <text x="320" y="222" fill="#f4c66e" fontSize="13" textAnchor="middle" letterSpacing="1.5">{zoneGradeWord(zones.angles.value).toUpperCase()}</text>
-            <rect x="264" y="232" width="112" height="4" fill="#12293a" />
-            <rect x="264" y="232" width={112 * (zones.angles.value / 100)} height="4" fill="#ffc94d" />
-          </>
-        ) : null}
-        {!zones.range.locked ? (
-          <text x="320" y="252" fill="#8fa3b3" fontSize="10" letterSpacing="2.4" textAnchor="middle" fontWeight="600">
-            {`PUCK-HANDLING RANGE — ${Math.round(zones.range.value)} · ${zoneGradeWord(zones.range.value).toUpperCase()}`}
-          </text>
-        ) : (
-          <text x="320" y="252" fill="#8fa3b3" fontSize="10" textAnchor="middle">PUCK-HANDLING RANGE — WITHHELD</text>
-        )}
-      </svg>
-      {!compact ? (
-        <p className="wr-rink__caption">Brighter paint means more of his value lives there. He plays big close to the net — the range game is still unlearned.</p>
-      ) : null}
-    </div>
-  );
-}
-
-function ProspectRinkZoneMap({ tools, profile, position, compact = false }) {
-  const pos = String(position || "").toUpperCase();
-  const backendZones = profile?.zone_map?.zones;
-  const byLabel = Object.fromEntries((tools || []).map((t) => [t.label, t]));
-  const composite = (labels) => {
-    const rows = labels.map((label) => byLabel[label]).filter(Boolean);
-    if (!rows.length) return { locked: true, value: null };
-    if (rows.some((t) => t.locked)) return { locked: true, value: null };
-    const vals = rows.map((t) => t.mid ?? t.raw).filter((n) => Number.isFinite(n));
-    if (!vals.length) return { locked: true, value: null };
-    return { locked: false, value: vals.reduce((a, b) => a + b, 0) / vals.length };
-  };
-  const resolveZone = (key, fallbackLabels) => {
-    if (backendZones?.[key]?.value != null) {
-      return { locked: false, value: Number(backendZones[key].value) };
-    }
-    return composite(fallbackLabels);
-  };
-  const offensive = resolveZone("offensive", ["Shot", "Vision"]);
-  const transition = resolveZone("transition", ["Skating", "IQ"]);
-  const defensive = resolveZone("defensive", ["Defense"]);
-  const isD = pos === "D" || pos === "LD" || pos === "RD";
-  const zones = [
-    { key: "def", label: "Defensive", data: defensive, large: isD },
-    { key: "trans", label: "Transition", data: transition, large: false },
-    { key: "off", label: "Offensive", data: offensive, large: !isD },
-  ];
-  const numClass = (v) => wrNumClassForTier(v >= 85 ? "elite" : v >= 75 ? "high" : "depth");
-
-  return (
-    <div className={`wr-rink${compact ? " wr-rink--dossier-compact" : ""}`}>
-      <span className="dc-profile-tags__label">
-        Zone grades <span className="wr-muted">//</span> where he wins the ice
-      </span>
-      <div className="wr-rink__board">
-        <svg className="wr-rink__svg" viewBox="0 0 360 160" aria-hidden="true">
-          <rect x="8" y="8" width="344" height="144" rx="72" fill="rgba(4,14,24,0.9)" stroke="rgba(118,200,245,0.4)" />
-          <line x1="180" y1="8" x2="180" y2="152" stroke="rgba(118,200,245,0.28)" />
-          <circle cx="180" cy="80" r="22" fill="none" stroke="rgba(118,200,245,0.22)" />
-        </svg>
-        <div className="wr-rink__zones">
-          {zones.map((z) => {
-            const tier = zoneTierMeta(z.data.locked ? null : z.data.value);
-            return (
-              <div
-                key={z.key}
-                className={`wr-rink__cell is-tier-${tier.tier}${z.data.locked ? " is-fog" : ""}${z.large ? " is-hero" : ""}`}
-                style={z.data.locked ? undefined : { "--wr-zone-fill": tier.fill }}
-                title={z.data.locked ? `${z.label} withheld` : `${z.label} · ${zoneGradeWord(z.data.value)} (${Math.round(z.data.value)})`}
-              >
-                {z.data.locked ? (
-                  <strong className="wr-rink__fog" aria-label={`${z.label} withheld`}>??</strong>
-                ) : (
-                  <strong className={numClass(z.data.value)}>{Math.round(z.data.value)}</strong>
-                )}
-                <span>{z.label}</span>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function OffIceFrameStrip({ player, tools, profile }) {
   const backend = profile?.off_ice_frame || profile?.offIceFrame;
   const frameRows = Array.isArray(backend?.rows) ? backend.rows : [];
@@ -2745,39 +2596,6 @@ function ProspectScoutingDesk({ desk, confPct, compact = false, maxEntries = nul
     </section>
   );
 }
-
-function ProspectStatGradeStrip({ rows }) {
-  const [showRaw, setShowRaw] = useState(false);
-  if (!rows?.length) return null;
-  const hasValues = rows.some((row) => row.value != null);
-  return (
-    <div
-      className={`wr-stat-strip${hasValues ? " is-toggleable" : ""}`}
-      role="group"
-      aria-label="Tool letter grades"
-    >
-      {rows.map((row) => {
-        const tone = row.tone || "gold";
-        const showNumber = showRaw && row.value != null;
-        return (
-          <button
-            key={row.label}
-            type="button"
-            className={`wr-stat-strip__cell is-${tone}`}
-            onClick={() => hasValues && setShowRaw((v) => !v)}
-            disabled={!hasValues}
-            title={row.value != null ? `${row.label} ${row.value} / 99 — click to toggle grade and score` : row.label}
-            aria-label={`${row.label} ${row.grade}${row.value != null ? `, ${row.value} of 99` : ""}`}
-          >
-            <span>{row.label}</span>
-            <strong className={`wr-num-${tone}`}>{showNumber ? row.value : row.grade}</strong>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
 
 function ProspectBoardRow({ player, index, selected, expanded, onSelect, onPrefetch, meta, showConsensus }) {
   const rank = player.boardRank || prospectRank(player, index);
@@ -3862,15 +3680,22 @@ function ProspectMediaUniverse({ bundle, compact = false }) {
   );
 }
 
-/** Dossier tool label → normalized prospect field (for class percentiles). */
-const TOOL_FIELD = {
-  skating: "skating", skate: "skating", shot: "shooting", shooting: "shooting",
-  vision: "passing", passing: "passing", defense: "defense", defence: "defense",
-  physical: "physical", physicality: "physical", iq: "hockeyIQ", "hockey iq": "hockeyIQ",
-  compete: "compete", glove: "glove", blocker: "blocker", reflexes: "reflexes",
-  rebound: "reboundControl", "rebound control": "reboundControl", positioning: "positioning",
-  "puck-handling": "puckHandling", "puck handling": "puckHandling", athleticism: "athleticism",
-};
+/** Dossier skill profile = the chapter columns only (no granular tool stats). */
+const DOSSIER_SKATER_CHAPTERS = [
+  ["Offence", "offence"], ["Defence", "defence"], ["Transition", "transition"],
+  ["Mental", "mental"], ["Physicality", "physical"], ["Character", "character"],
+];
+const DOSSIER_GOALIE_CHAPTERS = [["Glove", "glove"], ["Blocker", "blocker"], ["Stick", "stick"]];
+function dossierChapterNum(raw) {
+  if (raw == null || raw === "") return null;
+  if (typeof raw === "object") {
+    const lo = Number(raw.low ?? raw.lo);
+    const hi = Number(raw.high ?? raw.hi);
+    return Number.isFinite(lo) && Number.isFinite(hi) ? (lo + hi) / 2 : null;
+  }
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
 
 /** First `count` sentences of a paragraph — the dossier read like an essay. */
 function firstSentences(text, count = 2) {
@@ -4038,7 +3863,6 @@ function ProspectProfileModal({
   const devTrajectory = profile?.development_trajectory || profile?.developmentTrajectory || "";
   const projectedRange = resolveProjectedRangeLabel(player, profile, ceilingHidden);
   const scoutingDesk = buildScoutingDeskEntries(player, profile, { gp, analytics });
-  const statStrip = resolveBottomStatStrip(player, profile, toolsWithNotes, isGoalie);
   const outcomeDistribution = profile?.outcome_distribution || profile?.outcomeDistribution || null;
   const ribbonSegs = outcomeRibbonSegments(null, isGoalie, outcomeDistribution);
   const headroom = ovrBands.headroom;
@@ -4135,26 +3959,28 @@ function ProspectProfileModal({
   const nowRange = parseRange(currentEstimate?.text);
   const peakRange = ceilingHidden ? null : parseRange(ovrBands.peakText);
   const peers = (allProspects || []).filter((x) => isGoaliePosition(x?.position) === isGoalie);
-  const skillRows = toolsWithNotes.map((t) => {
-    const key = TOOL_FIELD[String(t.label || "").toLowerCase()];
-    const value = Number.isFinite(Number(t.mid)) ? Number(t.mid) : Number(t.raw);
-    const locked = Boolean(t.locked) || !Number.isFinite(value);
-    const band = t.low != null && t.high != null && Number(t.high) > Number(t.low);
+  const chapterSkillList = isGoalie ? DOSSIER_GOALIE_CHAPTERS : DOSSIER_SKATER_CHAPTERS;
+  const ownChapters = player?.chapterProfile?.chapters || {};
+  const skillRows = chapterSkillList.map(([label, key]) => {
+    const raw = ownChapters[key] ?? (key === "defence" ? ownChapters.defense : undefined);
+    const value = dossierChapterNum(raw);
+    const locked = value == null;
+    const band = Boolean(raw && typeof raw === "object" && raw.band);
     return {
-      label: t.label,
+      label,
       value,
       locked,
-      text: band ? `${Math.round(t.low)}–${Math.round(t.high)}` : undefined,
+      text: band ? `${Math.round(raw.low)}–${Math.round(raw.high)}` : undefined,
       soft: band || cert.ovr < 55,
-      percentile: !locked && key ? percentileOf(peers.map((x) => x?.[key]), value) : null,
+      percentile: locked ? null : percentileOf(peers.map((x) => dossierChapterNum(x?.chapterProfile?.chapters?.[key])), value),
     };
   });
   const radarAxes = skillRows
     .filter((r) => !r.locked)
     .map((r) => {
-      const key = TOOL_FIELD[String(r.label || "").toLowerCase()];
-      const vals = key ? peers.map((x) => Number(x?.[key])).filter((v) => Number.isFinite(v) && v > 0) : [];
-      return { label: r.label, short: String(r.label).slice(0, 5), value: r.value, classAvg: vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null };
+      const key = (chapterSkillList.find(([l]) => l === r.label) || [])[1];
+      const vals = peers.map((x) => dossierChapterNum(x?.chapterProfile?.chapters?.[key])).filter((v) => v != null);
+      return { label: r.label, short: String(r.label).slice(0, 5), value: r.value, classAvg: vals.length ? vals.reduce((x, y) => x + y, 0) / vals.length : null };
     });
   const classSize = (allProspects || []).length || null;
   const rankPct = rank && classSize ? Math.max(1, Math.round(100 - (rank / Math.max(classSize, rank)) * 100)) : null;
@@ -4301,16 +4127,13 @@ function ProspectProfileModal({
                 <div className="pv-visual-grid dc-dossier-visuals">
                   <PercentileBars
                     rows={skillRows}
-                    title={isGoalie ? "Goalie tools" : "Skill profile"}
+                    title={isGoalie ? "Goalie profile" : "Skill profile"}
                     note={cert.ovr < 55 ? "Estimated · thin file" : "vs. this draft class"}
                   />
                   <div className="pv-stack">
                     {radarAxes.length >= 3 ? <SkillRadar axes={radarAxes} color={isGoalie ? "#8ab4ff" : "#13d8e7"} /> : null}
                     {donutSegs && donutSegs.length ? <OutcomeDonut segments={donutSegs} title="Career outcomes" /> : null}
                   </div>
-                </div>
-                <div className="dc-dossier-topgrid">
-                  <ProspectZoneMap tools={toolsWithNotes} profile={profile} position={player.position} isGoalie={isGoalie} compact />
                 </div>
 
                 <div className="dc-dossier-dashboard">
@@ -4412,7 +4235,6 @@ function ProspectProfileModal({
                   </div>
                 </div>
 
-                <ProspectStatGradeStrip rows={statStrip} />
                 {wjcBlock ? (
                   <section className="dc-brochure-block dc-brochure-block--compact dc-wjc-dossier">
                     <span className="dc-profile-tags__label">

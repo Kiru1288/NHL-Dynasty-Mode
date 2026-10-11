@@ -4030,15 +4030,12 @@ function buildDossierSeasonLine(player) {
 }
 
 function PlayerOverviewPanel({ player, franchiseState }) {
-  const [expandedRatings, setExpandedRatings] = useState(false);
-
   if (!player) {
     return <DossierEmpty title="No player selected" body="Choose a player from the roster board." />;
   }
 
   const contract = player.contract || EMPTY_OBJECT;
   const chapterRows = chapterAttributeRows(player);
-  const ratingGroups = (player.rating_groups || EMPTY_ARRAY).filter((group) => group?.rows?.length);
   const { strengths, concerns } = buildStrengthsConcerns(player);
   const tradeConcern = player.tradeStabilityConcern || resolvePlayerTradeStabilityConcern(player, franchiseState);
   const moraleBand = dossierMoraleBand(player.morale);
@@ -4138,18 +4135,6 @@ function PlayerOverviewPanel({ player, franchiseState }) {
       <DossierCard
         eyebrow="Attributes"
         title={chapterRows.length ? `${chapterRows.length} core ratings` : "No ratings loaded"}
-        aside={
-          chapterRows.length && ratingGroups.length ? (
-            <button
-              type="button"
-              className="pdx-link-btn"
-              onClick={() => setExpandedRatings((value) => !value)}
-              aria-expanded={expandedRatings}
-            >
-              {expandedRatings ? "Hide granular ratings ↑" : "View granular ratings ↓"}
-            </button>
-          ) : null
-        }
       >
         {chapterRows.length ? (
           <div className="pdx-attributes">
@@ -4158,45 +4143,8 @@ function PlayerOverviewPanel({ player, franchiseState }) {
         ) : (
           <DossierNote>Chapter ratings are not available for this player.</DossierNote>
         )}
-        {expandedRatings && ratingGroups.length ? <DossierGranularRatings groups={ratingGroups} /> : null}
       </DossierCard>
     </section>
-  );
-}
-
-function DossierGranularRatings({ groups }) {
-  return (
-    <div className="pdx-granular">
-      {groups.map((group) => {
-        const average = averageRows(group.rows);
-        const sortedRows = [...(group.rows || [])].sort(
-          (a, b) => safeNum(b.value, 0) - safeNum(a.value, 0) || safeStr(a.label, "").localeCompare(safeStr(b.label, ""))
-        );
-        return (
-          <section key={group.key || group.title} className="pdx-granular__group">
-            <header>
-              <span>{group.title}</span>
-              <strong>{average ? round0(average) : "—"}</strong>
-            </header>
-            {sortedRows.map((row) => {
-              const value = safeNum(row.value, 0);
-              const tone = value >= 85 ? "good" : value >= 72 ? "neutral" : "warn";
-              return (
-                <div key={row.id || row.label} className={`pdx-bar ${toneClass(tone)}`}>
-                  <div className="pdx-bar__top">
-                    <span>{row.label}</span>
-                    <strong>{value ? round0(value) : "—"}</strong>
-                  </div>
-                  <div className="pdx-bar__track" aria-hidden="true">
-                    <i style={{ width: `${clamp(value, 0, 100)}%` }} />
-                  </div>
-                </div>
-              );
-            })}
-          </section>
-        );
-      })}
-    </div>
   );
 }
 

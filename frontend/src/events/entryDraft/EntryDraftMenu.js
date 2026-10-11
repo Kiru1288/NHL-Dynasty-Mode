@@ -33,7 +33,6 @@ import {
   RatingCertaintyGauge,
   SkillRadar,
   SnapshotDials,
-  TierBadge,
   certaintyTier,
   parseRange,
   percentileOf,
@@ -3812,8 +3811,6 @@ function StageDossier({
   const scoutPct = num(prospect.scouted_percentage ?? d.scoutingConfidence);
   const ceilingHidden = Boolean(prospect.ceiling_hidden || d.ceilingHidden || d.peak_range?.hidden);
   const character = d.character_read || null;
-  const tools = safeArray(d.tools).slice(0, 6);
-  const zoneMap = d.zone_map && typeof d.zone_map === "object" ? d.zone_map : null;
   const offIce = d.off_ice_frame && typeof d.off_ice_frame === "object" ? d.off_ice_frame : null;
   const comparison = d.player_comparison && typeof d.player_comparison === "object" ? d.player_comparison : null;
   const analytics = (d.analytics && typeof d.analytics === "object" ? d.analytics : null)
@@ -3980,7 +3977,7 @@ function StageDossier({
           <div className="pv-visual-grid">
             <PercentileBars
               rows={skillRows}
-              title={goalie ? "Goalie tools" : "Skill profile"}
+              title={goalie ? "Goalie profile" : "Skill profile"}
               note={chapterHidden ? "Scout him to unlock" : chapterSoft ? "Estimated · thin file" : "vs. this draft class"}
             />
             {radarAxes.length >= 3 ? <SkillRadar axes={radarAxes} color={goalie ? "#8ab4ff" : "#13d8e7"} /> : null}
@@ -4061,23 +4058,6 @@ function StageDossier({
             </section>
           ) : null}
 
-          {tools.length ? (
-            <section className={`${PREFIX}-sec`}>
-              <SectionHead title="Tools" icon="chart" tone="blue" />
-              <div className={`${PREFIX}-tool-badges`}>
-                {tools.map((t) => {
-                  const score = num(t.score ?? t.raw ?? t.grade);
-                  return (
-                    <div key={t.label || t.name} className={`${PREFIX}-tool-badge`}>
-                      <span>{t.label || t.name}</span>
-                      {score != null && !t.locked ? <TierBadge value={score} /> : <span className="pv-tier pv-tier--unknown">SCOUT IT</span>}
-                    </div>
-                  );
-                })}
-              </div>
-            </section>
-          ) : null}
-
           {strengths.length || concerns.length ? (
             <section className={`${PREFIX}-sec`}>
               <SectionHead title="Evidence" icon="shield" />
@@ -4132,17 +4112,6 @@ function StageDossier({
                 {comparison.name || comparison.label}
                 {comparison.blurb ? ` — ${comparison.blurb}` : ""}
               </p>
-            </section>
-          ) : null}
-
-          {zoneMap && Object.keys(zoneMap).length ? (
-            <section className={`${PREFIX}-sec`}>
-              <SectionHead title="Zone map" icon="target" />
-              <div className={`${PREFIX}-facts`}>
-                {Object.entries(zoneMap).slice(0, 6).map(([k, v]) => (
-                  <Fact key={k} label={String(k).replace(/_/g, " ")} value={typeof v === "object" ? (v.label || v.tier || v.score) : v} />
-                ))}
-              </div>
             </section>
           ) : null}
 
