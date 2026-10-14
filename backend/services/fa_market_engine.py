@@ -951,11 +951,24 @@ def _try_sign_leaning_players(
                 continue
             entry["player_ref"] = player
 
+        # He weighs money against the fit (city, market, Canada, roster, role):
+        # each fit point is worth about 1% of AAV.
+        from services.contract_economy import player_destination_factors
+
+        def _fit_value(tid: str, aav: float) -> float:
+            tm = team_by_id.get(str(tid))
+            try:
+                pts = float(player_destination_factors(player, tm, league).get("score") or 0.0) if tm is not None else 0.0
+            except Exception:
+                pts = 0.0
+            # Capped: a +40 fan-base pull shouldn't make a 40% pay cut look even.
+            return float(aav or 0) * (1.0 + max(-0.15, min(0.20, pts * 0.01)))
+
         # Prefer best offer from a CPU team (user must sign via UI)
         offers = sorted(
             [o for o in entry.get("offers") or [] if str(o.get("team_id")) != user_tid],
             key=lambda o: (
-                -float(o.get("aav_m") or 0),
+                -_fit_value(str(o.get("team_id")), float(o.get("aav_m") or 0)),
                 -int(o.get("years") or 0),
             ),
         )
@@ -964,7 +977,9 @@ def _try_sign_leaning_players(
         # The user's pending offer is on the table too. If it is the best one, he
         # waits for it to resolve instead of taking a lower CPU bid.
         user_bid = _user_pending_offer_aav(session, str(entry.get("player_id") or ""))
-        if user_bid > 0 and user_bid >= float(offers[0].get("aav_m") or 0) - 1e-6:
+        if user_bid > 0 and _fit_value(user_tid, user_bid) >= _fit_value(
+            str(offers[0].get("team_id")), float(offers[0].get("aav_m") or 0)
+        ) - 1e-6:
             entry["state"] = STATE_EVALUATING
             entry["reason"] = "Leaning toward your offer"
             continue
@@ -1680,6 +1695,19 @@ def annotate_fa_rows_with_decisions(session: Any, rows: List[Dict[str, Any]]) ->
             if user_ctx and pref:
                 need = float((user_ctx.get("need_score") or {}).get(pref, 0) or 0)
                 user_interest += need * 18.0
+            # City, market, Canada, roster and role for YOUR club.
+            if _pl_terms is not None and user_team is not None:
+                try:
+                    from services.contract_economy import player_destination_factors
+
+                    fit = player_destination_factors(
+                        _pl_terms, user_team, getattr(getattr(session, "sim", None), "league", None)
+                    )
+                    user_interest += float(fit.get("score") or 0.0)
+                    r["interest_factors"] = list(fit.get("factors") or [])
+                    r["destination_fit"] = fit
+                except Exception:
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
             user_offer = next((c for c in competing if c.get("is_user")), None)
             if user_offer:
                 ratio = float(user_offer.get("aav_m") or 0) / max(ask, 0.25)

@@ -11,7 +11,7 @@ import { ensurePlayerHeadshotFields } from "../utils/playerHeadshots";
 import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
 import "./shared/edraftSkin.css";
 import "./freeAgency/FreeAgencyBoard.css";
-import NegotiationMeetingPanel from "../components/contracts/NegotiationMeetingPanel";
+import NegotiationMeetingPanel, { InterestFactors } from "../components/contracts/NegotiationMeetingPanel";
 import { getContractOffice, reSignContract, qualifyRfa, releaseRfaRights, evaluateContractOffer, prospectRightsDecision, previewElcOffer, submitElcOffer, fileArbitration, settleArbitration, matchOfferSheet, declineOfferSheet, submitOfferSheet, advanceFreeAgencyDay, advanceContractNegotiationDay, signFreeAgent, getFreeAgentDetail, getFreeAgencyDesk, getSocialFeed } from "../services/franchiseService";
 import { estimateOfferInterestM, maxNegotiationOfferAavM, projectNegotiationCap } from "../utils/contractNegotiation";
 import { formatMoney, formatPick, getPlayerName, getPlayerOverall, getPlayerPosition, pickFranchiseData, safeArray } from "./shared/eventHelpers";
@@ -1282,6 +1282,15 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
                               }`}
                           </p>
                         </div>
+
+                        <InterestFactors
+                          title="Staying here"
+                          factors={response?.evaluation?.interest_factors || selected.interest_factors}
+                          fit={{
+                            ...(response?.evaluation?.destination_fit || selected.destination_fit || {}),
+                            fit_premium_pct: response?.evaluation?.fit_premium_pct,
+                          }}
+                        />
 
                         {(selected.can_qualify ||
                           selected.arbitration_eligible ||
@@ -2868,6 +2877,14 @@ export function FreeAgencyEventMenu({
                     </p>
                   </div>
                   )}
+
+                  <InterestFactors
+                    factors={response?.evaluation?.interest_factors || selected.interest_factors}
+                    fit={{
+                      ...(response?.evaluation?.destination_fit || selected.destination_fit || {}),
+                      fit_premium_pct: response?.evaluation?.fit_premium_pct,
+                    }}
+                  />
 
                   {faDetailLoading ? (
                     <p className={`${prefix}-context`}>Loading Stats Central…</p>

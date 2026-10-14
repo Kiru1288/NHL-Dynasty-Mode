@@ -172,6 +172,39 @@ const SHEET = `
   .bog-card h2{font-size:30px;}
 }
 @media (prefers-reduced-motion: reduce){ .bog-tile{transition:none;} }
+.bog-fanticker{position:relative;z-index:2;display:flex;align-items:center;gap:0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);
+  background:linear-gradient(90deg,rgba(6,22,34,.96),rgba(9,30,46,.92));height:34px;overflow:hidden;}
+.bog-fanticker-label{flex:0 0 auto;height:100%;display:flex;align-items:center;gap:6px;padding:0 12px;background:var(--gold-soft);
+  border-right:1px solid var(--line);font-family:var(--ed-head);font-size:13px;letter-spacing:.08em;color:var(--gold);text-transform:uppercase;white-space:nowrap;}
+.bog-fanticker-viewport{flex:1;min-width:0;overflow:hidden;height:100%;display:flex;align-items:center;}
+.bog-fanticker-track{display:flex;gap:22px;white-space:nowrap;padding-left:16px;animation:bog-fan-scroll 60s linear infinite;}
+.bog-fanticker:hover .bog-fanticker-track{animation-play-state:paused;}
+.bog-fanticker-item{display:inline-flex;align-items:center;gap:6px;font-size:12px;}
+.bog-fanticker-item .ab{font-weight:900;letter-spacing:.04em;}
+.bog-fanticker-item .v{font-family:var(--ed-mono);font-variant-numeric:tabular-nums;font-weight:800;}
+.bog-fanticker-item .d{font-family:var(--ed-mono);font-size:11px;}
+.bog-fanticker-item .d.up{color:var(--green);} .bog-fanticker-item .d.down{color:var(--red);} .bog-fanticker-item .d.flat{color:var(--muted-2);}
+.bog-fanticker-item .t{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);}
+.bog-fanticker-item.is-user{padding:2px 8px;border-radius:3px;background:var(--cyan-soft);outline:1px solid var(--line-strong);}
+.bog-tier-electric{color:var(--gold);} .bog-tier-loyal{color:var(--green);} .bog-tier-steady{color:var(--text);}
+.bog-tier-restless{color:#f0b35a;} .bog-tier-hostile{color:var(--red);}
+@keyframes bog-fan-scroll{from{transform:translateX(0);}to{transform:translateX(-50%);}}
+@media (prefers-reduced-motion: reduce){.bog-fanticker-track{animation:none;}.bog-fanticker-viewport{overflow-x:auto;}}
+.bog-fan{padding:10px 12px;display:flex;flex-direction:column;gap:8px;}
+.bog-fan-head{display:flex;align-items:baseline;gap:10px;}
+.bog-fan-num{font-family:var(--ed-head);font-size:34px;line-height:1;}
+.bog-fan-tier{font-size:11px;font-weight:900;letter-spacing:.1em;text-transform:uppercase;}
+.bog-fan-delta{font-family:var(--ed-mono);font-size:11px;color:var(--muted);}
+.bog-fan-bar{position:relative;height:6px;border-radius:3px;background:rgba(156,218,236,.12);overflow:hidden;}
+.bog-fan-bar i{position:absolute;inset:0 auto 0 0;border-radius:3px;background:linear-gradient(90deg,var(--red),var(--gold),var(--green));}
+.bog-fan-bar b{position:absolute;top:-2px;width:2px;height:10px;background:var(--text);opacity:.7;}
+.bog-fan-sub{font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-top:2px;}
+.bog-fan-list{display:flex;flex-direction:column;gap:4px;font-size:11.5px;}
+.bog-fan-list .row{display:flex;justify-content:space-between;gap:8px;border-bottom:1px solid var(--line-soft);padding:3px 0;}
+.bog-fan-list .row strong{text-align:right;font-weight:800;}
+.bog-fan-list .pro{color:var(--green);} .bog-fan-list .con{color:var(--red);} .bog-fan-list .mixed{color:var(--muted);}
+.bog-fan-why{margin:0;padding-left:16px;display:flex;flex-direction:column;gap:3px;font-size:11.5px;color:var(--text);}
+.bog-fan-why li.pro::marker{color:var(--green);} .bog-fan-why li.con::marker{color:var(--red);}
 `;
 
 function asArray(v) {
@@ -374,6 +407,91 @@ function ProposalCard({ proposal, tokens, busy, onVote, onLobby, reveal, onNext,
   );
 }
 
+function tierClass(tier) {
+  return `${PREFIX}-tier-${String(tier || "steady").toLowerCase()}`;
+}
+
+function FanTicker({ rows }) {
+  const list = asArray(rows);
+  if (!list.length) return null;
+  const items = list.map((r) => {
+    const d = Number(r.delta || 0);
+    return (
+      <span key={r.team_id} className={`${PREFIX}-fanticker-item ${r.is_user ? "is-user" : ""}`}>
+        <span className="ab">{r.abbr}</span>
+        <span className={`v ${tierClass(r.tier)}`}>{Math.round(Number(r.value || 0))}</span>
+        <span className={`d ${d > 0.4 ? "up" : d < -0.4 ? "down" : "flat"}`}>
+          {d > 0.4 ? "▲" : d < -0.4 ? "▼" : "•"}
+          {Math.abs(d) >= 0.4 ? Math.abs(d).toFixed(1) : ""}
+        </span>
+        <span className="t">{r.tier}</span>
+      </span>
+    );
+  });
+  return (
+    <div className={`${PREFIX}-fanticker`} aria-label="Fan confidence around the league">
+      <div className={`${PREFIX}-fanticker-label`}>Fan confidence</div>
+      <div className={`${PREFIX}-fanticker-viewport`}>
+        {/* Two copies so the strip loops without a gap. */}
+        <div className={`${PREFIX}-fanticker-track`}>
+          {items}
+          {items.map((el) => React.cloneElement(el, { key: `${el.key}-b`, "aria-hidden": true }))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FanPanel({ report }) {
+  if (!report || report.value == null) return null;
+  const v = Number(report.value || 0);
+  const d = Number(report.delta || 0);
+  const base = Number(report.baseline || 0);
+  return (
+    <>
+      <div className={`${PREFIX}-panel-head`}>
+        <h3>Your fans</h3>
+      </div>
+      <div className={`${PREFIX}-fan`}>
+        <div className={`${PREFIX}-fan-head`}>
+          <span className={`${PREFIX}-fan-num ${tierClass(report.tier)}`}>{Math.round(v)}</span>
+          <span className={`${PREFIX}-fan-tier ${tierClass(report.tier)}`}>{report.tier}</span>
+          <span className={`${PREFIX}-fan-delta`}>
+            {Math.abs(d) >= 0.4 ? `${d > 0 ? "▲" : "▼"} ${Math.abs(d).toFixed(1)} this week` : "steady this week"}
+          </span>
+        </div>
+        <div className={`${PREFIX}-fan-bar`} title={`Record supports about ${Math.round(base)}`}>
+          <i style={{ width: `${Math.max(2, Math.min(100, v))}%` }} />
+          {base ? <b style={{ left: `${Math.max(0, Math.min(99, base))}%` }} /> : null}
+        </div>
+        <div className={`${PREFIX}-fan-sub`}>What it's worth right now</div>
+        <div className={`${PREFIX}-fan-list`}>
+          {asArray(report.effects).map((e) => (
+            <div key={e.label} className="row">
+              <span>{e.label}</span>
+              <strong className={e.tone}>{e.text}</strong>
+            </div>
+          ))}
+        </div>
+        <div className={`${PREFIX}-fan-sub`}>Why fans feel this way</div>
+        <ul className={`${PREFIX}-fan-why`}>
+          {asArray(report.reasons).map((r, i) => (
+            <li key={i} className={r.tone}>
+              {r.text}
+            </li>
+          ))}
+        </ul>
+        <div className={`${PREFIX}-fan-sub`}>How to raise it</div>
+        <ul className={`${PREFIX}-fan-why`}>
+          {asArray(report.how_to_raise).map((t) => (
+            <li key={t}>{t}</li>
+          ))}
+        </ul>
+      </div>
+    </>
+  );
+}
+
 function SidePanel({ gov }) {
   const impact = gov.user_impact || {};
   const mods = asArray(gov.modifiers);
@@ -381,6 +499,7 @@ function SidePanel({ gov }) {
   const change = Number(impact.value_change_pct || 0);
   return (
     <aside className={`${PREFIX}-panel ${PREFIX}-side`}>
+      <FanPanel report={gov.fan_report} />
       <div className={`${PREFIX}-panel-head`}>
         <h3>Your club</h3>
       </div>
@@ -648,6 +767,7 @@ export default function BoardOfGovernorsMenu({ franchiseState = {}, eventData = 
           <span className={`${PREFIX}-pill`}>{gov?.catalog_size || 200} rules on file</span>
         </div>
       </header>
+      <FanTicker rows={gov?.fan_ticker} />
 
       {stage === "intro" ? (
         <main className={`${PREFIX}-intro`}>

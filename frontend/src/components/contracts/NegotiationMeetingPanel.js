@@ -6,6 +6,61 @@ import { getNegotiationMeetings, runNegotiationMeeting } from "../../services/fr
  * hometown-discount ask (your own expiring players). Every result feeds the real
  * contract engine, so the Deal interest meter moves after each meeting.
  */
+const FIT_STYLES = {
+  box: {
+    margin: "8px 0",
+    padding: "8px 10px",
+    border: "1px solid rgba(255,255,255,0.12)",
+    borderRadius: 6,
+    background: "rgba(0,0,0,0.18)",
+    fontSize: 12,
+  },
+  head: { display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 4, fontWeight: 600 },
+  row: { display: "flex", justifyContent: "space-between", gap: 8, padding: "2px 0" },
+  good: { color: "#5fd38d", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" },
+  bad: { color: "#ff7a6b", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" },
+  muted: { opacity: 0.7 },
+};
+
+/**
+ * Why he does or doesn't want to sign with this club: city, market, Canadian
+ * market, roster and role. Effects are points on the Deal interest meter.
+ */
+export function InterestFactors({ factors, fit, title = "Fit with your club" }) {
+  const list = Array.isArray(factors) ? factors : Array.isArray(fit?.factors) ? fit.factors : [];
+  const score = Number(fit?.score);
+  const premium = Number(fit?.fit_premium_pct);
+  return (
+    <div style={FIT_STYLES.box} aria-label="Signing factors">
+      <div style={FIT_STYLES.head}>
+        <span>{title}</span>
+        <span style={Number.isFinite(score) ? (score >= 0 ? FIT_STYLES.good : FIT_STYLES.bad) : FIT_STYLES.muted}>
+          {fit?.label || "Neutral"}
+          {Number.isFinite(score) && score !== 0 ? ` (${score > 0 ? "+" : ""}${score.toFixed(1)})` : ""}
+        </span>
+      </div>
+      {list.length ? (
+        list.map((f) => (
+          <div key={`${f.key}-${f.label}`} style={FIT_STYLES.row}>
+            <span>{f.label}</span>
+            <span style={Number(f.effect) >= 0 ? FIT_STYLES.good : FIT_STYLES.bad}>
+              {Number(f.effect) > 0 ? "+" : ""}
+              {Number(f.effect).toFixed(1)}
+            </span>
+          </div>
+        ))
+      ) : (
+        <div style={FIT_STYLES.muted}>No strong feelings about the city, market or roster.</div>
+      )}
+      {Number.isFinite(premium) && premium > 0.5 ? (
+        <div style={{ ...FIT_STYLES.bad, marginTop: 4, whiteSpace: "normal" }}>
+          Wants about {Math.round(premium)}% over his ask to sign here.
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export default function NegotiationMeetingPanel({ playerId, onChanged, compact = false }) {
   const [data, setData] = React.useState(null);
   const [busy, setBusy] = React.useState("");

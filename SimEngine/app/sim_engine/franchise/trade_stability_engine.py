@@ -52,24 +52,36 @@ def _to_0_100(raw: Any, default: float = 50.0) -> float:
     return _clamp(v, 0.0, 100.0)
 
 
-def _player_id(player: Any) -> str:
-    try:
-        from app.sim_engine.systems.chemistry import _canonical_player_id  # noqa: WPS433
+# Imported once: these run hundreds of thousands of times per sim month, and a
+# function-level import on every call stalled for ~6ms each (20+ minutes per 30 days).
+try:
+    from app.sim_engine.systems.chemistry import (  # noqa: E402
+        _canonical_player_id as _chem_canonical_player_id,
+        _canonical_player_id_from_string as _chem_canonical_from_string,
+    )
+except Exception:  # pragma: no cover - import-order fallback
+    _chem_canonical_player_id = None
+    _chem_canonical_from_string = None
 
-        return _canonical_player_id(player) or str(_get(player, "id", "") or _get(player, "player_id", "") or "")
-    except Exception:
-        raw = str(_get(player, "id", "") or _get(player, "player_id", "") or "")
-        return f"NHL_{raw}" if raw.isdigit() else raw
+
+def _player_id(player: Any) -> str:
+    if _chem_canonical_player_id is not None:
+        try:
+            return _chem_canonical_player_id(player) or str(_get(player, "id", "") or _get(player, "player_id", "") or "")
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    raw = str(_get(player, "id", "") or _get(player, "player_id", "") or "")
+    return f"NHL_{raw}" if raw.isdigit() else raw
 
 
 def _canonical_slot_player_id(value: Any) -> str:
-    try:
-        from app.sim_engine.systems.chemistry import _canonical_player_id_from_string  # noqa: WPS433
-
-        return _canonical_player_id_from_string(value)
-    except Exception:
-        s = str(value or "").strip()
-        return f"NHL_{s}" if s.isdigit() else s
+    if _chem_canonical_from_string is not None:
+        try:
+            return _chem_canonical_from_string(value)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    s = str(value or "").strip()
+    return f"NHL_{s}" if s.isdigit() else s
 
 
 def _season_stat_row_for_pid(session: Any, pid: str) -> Dict[str, Any]:
@@ -307,6 +319,39 @@ def _team_id(team: Any) -> str:
     return str(_get(team, "team_id", "") or _get(team, "id", "") or "")
 
 
+# Team-level facts (parsed line sheets, roster order, minutes leader) were rebuilt for
+# every player the storyline engine asked about: O(roster^2) per club, ~12s a sim month.
+# Inside one daily interaction pass nothing about rosters, lines or stats changes, so the
+# pass opens this cache and closes it when done. Outside a pass nothing is cached.
+_PASS_CACHE: Optional[Dict[Any, Any]] = None
+_PASS_DEPTH = 0
+
+
+def deployment_pass_begin() -> None:
+    global _PASS_CACHE, _PASS_DEPTH
+    _PASS_DEPTH += 1
+    if _PASS_CACHE is None:
+        _PASS_CACHE = {}
+
+
+def deployment_pass_end() -> None:
+    global _PASS_CACHE, _PASS_DEPTH
+    _PASS_DEPTH = max(0, _PASS_DEPTH - 1)
+    if _PASS_DEPTH == 0:
+        _PASS_CACHE = None
+
+
+def _pass_cached(key: Any, fn: Any) -> Any:
+    cache = _PASS_CACHE
+    if cache is None:
+        return fn()
+    if key in cache:
+        return cache[key]
+    val = fn()
+    cache[key] = val
+    return val
+
+
 def _lines_unit_payload(session: Any, team: Any, unit_type: str) -> Optional[Any]:
     """Saved Edit Lines payload for this team (user team only)."""
     if session is None or team is None:
@@ -495,13 +540,20 @@ def resolve_player_deployment(session: Any, player: Any, team: Any) -> PlayerDep
     pk_min = pk_toi_sec / gp_div / 60.0
     ev_min = ev_toi_sec / gp_div / 60.0 if ev_toi_sec > 0 else (avg_toi or 0.0) - pp_min - pk_min
 
-    ev_payload = _lines_unit_payload(session, team, "even_strength")
-    pp_payload = _lines_unit_payload(session, team, "power_play")
-    pk_payload = _lines_unit_payload(session, team, "penalty_kill")
+    def _sheets() -> Tuple[Any, Dict[str, int], Dict[str, int], Dict[str, int], set]:
+        ev_p = _lines_unit_payload(session, team, "even_strength")
+        pp_p = _lines_unit_payload(session, team, "power_play")
+        pk_p = _lines_unit_payload(session, team, "penalty_kill")
+        ids = {_player_id(p) for p in (getattr(team, "roster", None) or []) if _player_id(p)}
+        return (
+            ev_p,
+            _parse_line_ranks(ev_p) if ev_p else {},
+            _parse_special_team_units(pp_p, "pp", _PP_UNIT_RANK) if pp_p else {},
+            _parse_special_team_units(pk_p, "pk", _PK_UNIT_RANK) if pk_p else {},
+            ids,
+        )
 
-    ev_ranks = _parse_line_ranks(ev_payload) if ev_payload else {}
-    pp_units = _parse_special_team_units(pp_payload, "pp", _PP_UNIT_RANK) if pp_payload else {}
-    pk_units = _parse_special_team_units(pk_payload, "pk", _PK_UNIT_RANK) if pk_payload else {}
+    ev_payload, ev_ranks, pp_units, pk_units, _roster_ids = _pass_cached(("sheets", id(session), id(team)), _sheets)
 
     ev_rank = int(ev_ranks.get(pid) or 0)
     pp_unit = int(pp_units.get(pid) or 0)
@@ -518,7 +570,7 @@ def resolve_player_deployment(session: Any, player: Any, team: Any) -> PlayerDep
 
     pos = _pos_code(player)
     is_goalie = pos in {"G", "GOALIE", "GOALTENDER"}
-    roster_ids = {_player_id(p) for p in (getattr(team, "roster", None) or []) if _player_id(p)}
+    roster_ids = _roster_ids
     scratched = (
         not is_goalie
         and pid in roster_ids
@@ -704,9 +756,12 @@ def deserved_depth_standing(player: Any, team: Any) -> Dict[str, Any]:
     if grp == "G":
         return {"rank": 1, "extra": False, "bubble": False, "group": grp}
     per_line, regulars, max_rank = (2, 6, 3) if grp == "D" else (3, 12, 4)
-    mates = sorted(
-        (p for p in (getattr(team, "roster", None) or []) if _pos_group_of(p) == grp),
-        key=lambda p: -_player_ovr(p),
+    mates = _pass_cached(
+        ("mates", id(team), grp),
+        lambda: sorted(
+            (p for p in (getattr(team, "roster", None) or []) if _pos_group_of(p) == grp),
+            key=lambda p: -_player_ovr(p),
+        ),
     )
     pid = _player_id(player)
     idx = next((i for i, p in enumerate(mates) if _player_id(p) == pid), None)
@@ -725,6 +780,10 @@ _NOMINAL_GROUP_TOP_TOI = {"F": 22.9, "D": 25.4}
 
 
 def _team_group_toi_leader(session: Any, team: Any, grp: str) -> Optional[float]:
+    return _pass_cached(("toi_lead", id(session), id(team), grp), lambda: _team_group_toi_leader_uncached(session, team, grp))
+
+
+def _team_group_toi_leader_uncached(session: Any, team: Any, grp: str) -> Optional[float]:
     samples: List[float] = []
     for mate in getattr(team, "roster", None) or []:
         if _pos_group_of(mate) != grp:

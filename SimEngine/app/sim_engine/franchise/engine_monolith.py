@@ -1532,7 +1532,7 @@ def _franchise_log_injury_and_ui(
         _normalized_notification(
             notification_id=f"notif:{base_id}",
             notification_type="injury",
-            text=f"{player_label} ({team_abbr or tid_cmp}) out {int(games)} games ({injury_type or tier}).",
+            text=f"{player_label} ({team_abbr or tid_cmp}) out {int(games)} game{'s' if int(games) != 1 else ''} ({injury_type or tier}).",
             priority=priority,
             calendar_day=cur_date,
             calendar_iso=str(calendar_iso or ""),
@@ -1550,7 +1550,7 @@ def _franchise_log_injury_and_ui(
             "type": "injury",
             "kind": "injury",
             "headline": f"{player_label} sidelined",
-            "details": f"{team_abbr or tid_cmp} lose {player_label} for {int(games)} games ({injury_type or tier})",
+            "details": f"{team_abbr or tid_cmp} lose {player_label} for {int(games)} game{'s' if int(games) != 1 else ''} ({injury_type or tier})",
             "cause": f"{player_label} suffered a {injury_type or tier} injury.",
             "effects": {
                 "availability_games_delta": -int(games),

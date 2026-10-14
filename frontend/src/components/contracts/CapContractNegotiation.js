@@ -20,7 +20,7 @@ import {
   agentDifficultyTone,
   resolveAgentDealDifficulty,
 } from "../../utils/playerAgentDisplay";
-import NegotiationMeetingPanel from "./NegotiationMeetingPanel";
+import NegotiationMeetingPanel, { InterestFactors } from "./NegotiationMeetingPanel";
 
 function safeNum(v, fallback = 0) {
   const n = Number(v);
@@ -664,6 +664,15 @@ export default function CapContractNegotiation({
                   : `Live estimate · ${resignInterestLabel(row)} stay interest · agent confirms on submit`}
             </p>
           </div>
+
+          <InterestFactors
+            title="Staying here"
+            factors={response?.evaluation?.interest_factors || row?.interest_factors}
+            fit={{
+              ...(response?.evaluation?.destination_fit || row?.destination_fit || {}),
+              fit_premium_pct: response?.evaluation?.fit_premium_pct,
+            }}
+          />
 
           <div className="cap-nego__slider">
             <div className="cap-nego__slider-head">

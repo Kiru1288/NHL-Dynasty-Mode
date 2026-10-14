@@ -43,6 +43,8 @@ PROPOSALS_PER_MEETING = 5
 LOBBY_TOKENS_PER_MEETING = 2
 LOBBY_SWING = 0.18
 LOBBY_TARGETS = 4
+#: Franchise value growth per point of fan confidence above 55 (x/100 per season).
+FAN_VALUE_COEF = 0.15
 #: Proposals reach the Board after committee vetting, so a neutral governor sits a
 #: little above whatever bar the proposal needs — the same head start for every
 #: category. Lean, the rule's popularity and personality decide the close ones.
@@ -948,11 +950,14 @@ _EFFECT_TONE: Dict[str, Tuple[int, str, str]] = {
 
 
 def _effect_tone(key: str, value: float) -> Tuple[str, str]:
-    good, up, down = _EFFECT_TONE.get(key, (0, "Changes the landscape", "Changes the landscape"))
-    note = up if value >= 0 else down
+    good, helps, hurts = _EFFECT_TONE.get(key, (0, "Changes the landscape", "Changes the landscape"))
     if good == 0:
-        return "mixed", note
-    return ("pro" if (value >= 0) == (good > 0) else "con"), note
+        # Neutral keys: the first text describes a rise, the second a drop.
+        return "mixed", (helps if value >= 0 else hurts)
+    # The note follows the tone. Picking it by sign alone told owners a cost increase
+    # made clubs "cheaper to run" and fewer injuries meant "more injuries".
+    pro = (value >= 0) == (good > 0)
+    return ("pro" if pro else "con"), (helps if pro else hurts)
 
 
 def _pros_cons(effects: Dict[str, float]) -> Dict[str, List[str]]:
@@ -1163,6 +1168,21 @@ def _current_meeting(session: Any) -> Optional[Dict[str, Any]]:
     return (gov.get("meetings") or {}).get(str(_season(session)))
 
 
+def user_fan_confidence(session: Any) -> float:
+    try:
+        from services.franchise_sim import _ensure_team_fan_profile
+
+        prof = _ensure_team_fan_profile(session, str(getattr(session, "user_team_id", "") or ""))
+        return _sf(prof.get("fan_confidence"), 55.0)
+    except Exception:
+        return 55.0
+
+
+def fan_lobby_mult(fan: float) -> float:
+    """x0.80 with hostile fans, up to x1.20 when the fan base is electric."""
+    return 0.80 + 0.40 * _clamp((float(fan) - 40.0) / 50.0, 0.0, 1.0)
+
+
 def lobby_proposal(session: Any, proposal_id: str, side: str) -> Dict[str, Any]:
     """Spend a lobby token: sway the most persuadable like-minded governors."""
     meeting = _current_meeting(session)
@@ -1194,11 +1214,16 @@ def lobby_proposal(session: Any, proposal_id: str, side: str) -> Dict[str, Any]:
         persuadable = 1.0 - abs(p - 0.5) * 2.0
         scored.append((persuadable + overlap * 0.15, b))
     scored.sort(key=lambda s: -s[0])
+    # A club whose fans are behind it carries weight in the room: governors take the
+    # call more seriously (bigger swing) and an electric market reaches one more.
+    fan = user_fan_confidence(session)
+    swing = LOBBY_SWING * fan_lobby_mult(fan)
+    targets = LOBBY_TARGETS + (1 if fan >= 80 else 0)
     swayed = []
-    for _score, b in scored[:LOBBY_TARGETS]:
-        b["lobbied"] = LOBBY_SWING if want_yes else -LOBBY_SWING
+    for _score, b in scored[:targets]:
+        b["lobbied"] = round(swing if want_yes else -swing, 3)
         swayed.append(b["abbr"])
-    prop["lobbied"] = {"side": "yes" if want_yes else "no", "teams": swayed}
+    prop["lobbied"] = {"side": "yes" if want_yes else "no", "teams": swayed, "fan_confidence": round(fan, 1)}
     meeting["lobby_tokens"] = int(meeting.get("lobby_tokens") or 0) - 1
     prop["forecast"] = _forecast(prop)
     return build_governance_payload(session)
@@ -1504,7 +1529,11 @@ def advance_franchise_values(session: Any, rows: Optional[Dict[str, Dict[str, An
         if champ and champ == str(tid):
             g += 0.05
             drivers.append("Stanley Cup")
-        g += (fan - 55.0) / 100.0 * 0.10
+        g += (fan - 55.0) / 100.0 * FAN_VALUE_COEF
+        if fan >= 80:
+            drivers.append("Passionate fan base")
+        elif fan < 45:
+            drivers.append("Fan apathy")
         stars = _sf(r.get("star_power"))
         spike = sum(_sf(s.get("m")) for s in spikes.get(str(tid), []))
         if spike:
@@ -2121,6 +2150,175 @@ def _user_impact(session: Any) -> Dict[str, Any]:
     return out
 
 
+FAN_TIERS: Tuple[Tuple[float, str], ...] = (
+    (85.0, "Electric"),
+    (70.0, "Loyal"),
+    (55.0, "Steady"),
+    (40.0, "Restless"),
+    (-1.0, "Hostile"),
+)
+
+
+def fan_tier(value: float) -> str:
+    v = float(value)
+    for floor, label in FAN_TIERS:
+        if v >= floor:
+            return label
+    return "Hostile"
+
+
+def _fan_profile(session: Any, tid: str) -> Dict[str, Any]:
+    try:
+        from services.franchise_sim import _ensure_team_fan_profile
+
+        return _ensure_team_fan_profile(session, str(tid)) or {}
+    except Exception:
+        return {}
+
+
+def fan_ticker(session: Any) -> List[Dict[str, Any]]:
+    """Every club's fan confidence, tier and weekly move, best first (Board screen ticker)."""
+    uid = str(getattr(session, "user_team_id", "") or "")
+    rows: List[Dict[str, Any]] = []
+    for tid, team in (getattr(session, "team_by_id", None) or {}).items():
+        if team is None:
+            continue
+        prof = _fan_profile(session, str(tid))
+        v = _sf(prof.get("fan_confidence"), 55.0)
+        last = _sf(prof.get("fan_confidence_last_week"), v)
+        rows.append({
+            "team_id": str(tid),
+            "abbr": _team_abbr(team),
+            "value": round(v, 1),
+            "delta": round(v - last, 1),
+            "tier": fan_tier(v),
+            "is_user": str(tid) == uid,
+        })
+    rows.sort(key=lambda r: -r["value"])
+    for i, r in enumerate(rows):
+        r["rank"] = i + 1
+    return rows
+
+
+def user_fan_report(session: Any) -> Dict[str, Any]:
+    """Why the user's fans feel the way they do, and what that is worth right now."""
+    uid = str(getattr(session, "user_team_id", "") or "")
+    team = (getattr(session, "team_by_id", None) or {}).get(uid)
+    prof = _fan_profile(session, uid)
+    v = _sf(prof.get("fan_confidence"), 55.0)
+    last = _sf(prof.get("fan_confidence_last_week"), v)
+    baseline = prof.get("fan_baseline")
+    if baseline is None:
+        try:
+            from services.franchise_sim import compute_team_playoff_outlook
+
+            odds = int((compute_team_playoff_outlook(session, team) or {}).get("playoff_odds", 50) or 50)
+            baseline = _clamp(40 + odds * 0.35, 0.0, 100.0)
+        except Exception:
+            baseline = 55.0
+    baseline = float(baseline)
+
+    reasons: List[Dict[str, str]] = [{
+        "tone": "pro" if baseline >= 60 else ("con" if baseline < 50 else "mixed"),
+        "text": f"Your record and playoff odds support about {baseline:.0f}. Results set the baseline.",
+    }]
+    gap = v - baseline
+    if gap >= 5:
+        reasons.append({"tone": "pro", "text": f"Buzz: recent storylines have fans {gap:.0f} points above what the record alone supports."})
+    elif gap <= -5:
+        reasons.append({"tone": "con", "text": f"Frustration: fans are {abs(gap):.0f} points below what the record supports."})
+    heat = _sf(prof.get("recent_trade_heat"))
+    if heat >= 25:
+        reasons.append({"tone": "con", "text": f"Unpopular trades are still stinging (trade heat {heat:.0f}/100)."})
+    backlash = len(prof.get("season_backlash_events") or [])
+    if backlash:
+        reasons.append({"tone": "con", "text": f"{backlash} fan backlash moment{'s' if backlash != 1 else ''} this season."})
+    trust = _sf(prof.get("fan_trust_in_gm"), 58.0)
+    if trust < 50:
+        reasons.append({"tone": "con", "text": f"Fans doubt the front office (trust {trust:.0f}/100)."})
+    elif trust >= 70:
+        reasons.append({"tone": "pro", "text": f"Fans trust the front office (trust {trust:.0f}/100)."})
+
+    effects: List[Dict[str, str]] = []
+    try:
+        from services.league_operations import calculate_team_revenue
+
+        row = calculate_team_revenue(session, team, uid, is_user=True, annual=True) if team is not None else {}
+        rev = _sf(row.get("revenue"))
+        fan_mult = 0.70 + 0.45 * _clamp(v, 0.0, 100.0) / 100.0
+        neutral = 0.70 + 0.45 * 0.55
+        gate = rev * (fan_mult - neutral) / max(0.1, fan_mult)
+        effects.append({
+            "label": "Gate, merch and sponsorship",
+            "text": f"{'+' if gate >= 0 else '-'}${abs(gate):.1f}M a year vs. average fans",
+            "tone": "pro" if gate >= 0 else "con",
+        })
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    try:
+        from app.sim_engine.league.game_rules import fan_home_ice_share
+
+        share = fan_home_ice_share(v) * 100.0
+        effects.append({
+            "label": "Home-ice edge",
+            "text": f"{share:+.0f}% of the normal home advantage",
+            "tone": "pro" if share >= 0 else "con",
+        })
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    try:
+        from services.contract_economy import fan_fa_interest_points
+
+        fa_pts = fan_fa_interest_points(v)
+    except Exception:
+        fa_pts = 0.0
+    effects.append({
+        "label": "Free-agent appeal",
+        "text": f"{fa_pts:+.0f} interest with every free agent ({fa_pts / 2:+.0f} with your own players)",
+        "tone": "pro" if fa_pts >= 0 else "con",
+    })
+    try:
+        from app.sim_engine.franchise.storyline_engine import fan_mood_weekly_deltas
+
+        dm, db = fan_mood_weekly_deltas(v)
+        if dm or db:
+            effects.append({
+                "label": "Locker room",
+                "text": f"Morale {dm:+.1f} and belonging {db:+.1f} a week for your players",
+                "tone": "pro" if dm > 0 else "con",
+            })
+        else:
+            effects.append({"label": "Locker room", "text": "No crowd effect on the room (fans are steady)", "tone": "mixed"})
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    mult = fan_lobby_mult(v)
+    effects.append({
+        "label": "Board lobbying",
+        "text": f"x{mult:.2f} sway per call" + (", reaches one more governor" if v >= 80 else ""),
+        "tone": "pro" if mult >= 1.0 else "con",
+    })
+    vg = FAN_VALUE_COEF * (v - 55.0)
+    effects.append({
+        "label": "Franchise value growth",
+        "text": f"{vg:+.1f} pts a season",
+        "tone": "pro" if vg >= 0 else "con",
+    })
+    return {
+        "value": round(v, 1),
+        "tier": fan_tier(v),
+        "delta": round(v - last, 1),
+        "baseline": round(baseline, 1),
+        "reasons": reasons,
+        "effects": effects,
+        "how_to_raise": [
+            "Win: the standings set what fans settle at.",
+            "Keep popular stars; trading a fan favourite costs trust.",
+            "Back players publicly at press conferences.",
+            "Hot streaks and breakout seasons add short-term buzz.",
+        ],
+    }
+
+
 def build_governance_payload(session: Any) -> Dict[str, Any]:
     gov = ensure_governance(session)
     sy = _season(session)
@@ -2174,7 +2372,17 @@ def build_governance_payload(session: Any) -> Dict[str, Any]:
         "rules_never_proposed": sum(1 for r in RULES if r["id"] not in (gov.get("proposed_log") or {})),
         "expansion_draft": _safe_protection_payload(session),
         "on_ice": _on_ice_summary(session),
+        "fan_ticker": _safe(lambda: fan_ticker(session), []),
+        "fan_report": _safe(lambda: user_fan_report(session), {}),
     }
+
+
+def _safe(fn: Any, default: Any) -> Any:
+    try:
+        return fn()
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+        return default
 
 
 def _safe_protection_payload(session: Any) -> Dict[str, Any]:

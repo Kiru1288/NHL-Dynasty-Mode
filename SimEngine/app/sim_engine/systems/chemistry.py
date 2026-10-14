@@ -384,18 +384,34 @@ def _infer_playstyle(player: Any, rng: random.Random) -> str:
 def get_player_chemistry_profile(player: Any) -> Dict[str, Any]:
     prof = getattr(player, "chemistry_profile", None)
     if isinstance(prof, dict):
-        out = dict(_DEFAULT_PROFILE)
-        out.update(prof)
-        for k in _DEFAULT_PROFILE:
-            if k in ("personality", "playstyle"):
-                continue
-            out[k] = int(round(clamp(_to_num(out.get(k), 50.0), 0.0, 100.0)))
-        if out.get("personality") not in PERSONALITIES:
-            out["personality"] = "balanced"
-        if out.get("playstyle") not in PLAYSTYLES:
-            out["playstyle"] = "balanced"
+        # Pure function of the stored profile; called ~60k times a sim month. Memo on
+        # the player keyed by the profile's contents (any change recomputes); hand
+        # back a copy so callers never share the cached dict.
+        key = (id(prof), tuple(prof.items()))
+        memo = getattr(player, "_chem_profile_memo", None)
+        if isinstance(memo, tuple) and len(memo) == 2 and memo[0] == key:
+            return dict(memo[1])
+        out = _clean_chemistry_profile(prof)
+        try:
+            player._chem_profile_memo = (key, dict(out))
+        except Exception:
+            pass
         return out
     return dict(_DEFAULT_PROFILE)
+
+
+def _clean_chemistry_profile(prof: Dict[str, Any]) -> Dict[str, Any]:
+    out = dict(_DEFAULT_PROFILE)
+    out.update(prof)
+    for k in _DEFAULT_PROFILE:
+        if k in ("personality", "playstyle"):
+            continue
+        out[k] = int(round(clamp(_to_num(out.get(k), 50.0), 0.0, 100.0)))
+    if out.get("personality") not in PERSONALITIES:
+        out["personality"] = "balanced"
+    if out.get("playstyle") not in PLAYSTYLES:
+        out["playstyle"] = "balanced"
+    return out
 
 
 def ensure_player_chemistry_profile(player: Any, rng: Optional[random.Random] = None) -> Dict[str, Any]:

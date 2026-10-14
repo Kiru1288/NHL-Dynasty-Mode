@@ -10722,6 +10722,44 @@ class SimEngine:
             return "elite"
         return "normal"
 
+    def _gm_scoring_form(self, p: Any, ledger: Optional[Dict[str, Dict[str, Any]]] = None) -> float:
+        """Scoring form for this player this season: a season-long level times an
+        eight-game hot/cold streak. Fixed per player, season and stretch.
+
+        Without it the same names topped the scoring race every year: weights
+        came from ratings alone. Stars swing less; mid-tier and young players
+        swing more, so breakouts and off years happen.
+        """
+        pid = _id_str(p, "id")
+        if not pid:
+            return 1.0
+        sy = int(getattr(self.league, "season_year", 0) or 0)
+        ovr = float(self._gm_ovr_0_100(p))
+        ident = getattr(p, "identity", None)
+        try:
+            age = int(getattr(ident, "age", None) or getattr(p, "age", 27) or 27)
+        except (TypeError, ValueError):
+            age = 27
+        sd = 0.14 if ovr >= 90.0 else (0.22 if ovr >= 84.0 else 0.28)
+        if age <= 24:
+            sd += 0.06
+
+        def _z(key: str) -> float:
+            seed = int(hashlib.md5(key.encode("utf-8")).hexdigest()[:12], 16)
+            return max(-2.5, min(2.5, random.Random(seed).gauss(0.0, 1.0)))
+
+        season = math.exp(_z(f"form|{pid}|{sy}") * sd)
+        gp = 0
+        if isinstance(ledger, dict):
+            row = ledger.get(pid) or ledger.get(str(pid))
+            if isinstance(row, dict):
+                gp = int(row.get("gp", 0) or 0)
+        streak = math.exp(_z(f"streak|{pid}|{sy}|{gp // 8}") * 0.15)
+        # Stars already score at the top of the curve; a big upside swing put one
+        # at 166 points. Their ceiling is lower; everyone else can break out.
+        ceiling = 1.30 if ovr >= 90.0 else (1.45 if ovr >= 84.0 else 1.8)
+        return max(0.55, min(ceiling, season * streak))
+
     def _gm_scoring_involvement_mult(self, p: Any) -> float:
         """Star concentration: elite forwards pop; defensive D / depth stay grounded."""
         tier = self._gm_player_scoring_tier(p)
@@ -11110,6 +11148,17 @@ class SimEngine:
         return True if not found_any else False
 
     def _gm_pos_str(self, p: Any) -> str:
+        scope = getattr(self, "_gm_game_scope", None)
+        if scope is not None:
+            hit = scope.setdefault("pos", {}).get(id(p))
+            if hit is not None and hit[0] is p:
+                return hit[1]
+            val = self._gm_pos_str_uncached(p)
+            scope["pos"][id(p)] = (p, val)
+            return val
+        return self._gm_pos_str_uncached(p)
+
+    def _gm_pos_str_uncached(self, p: Any) -> str:
         ident = getattr(p, "identity", None)
         pos = getattr(ident, "position", None) if ident else None
         if pos is None or str(getattr(pos, "value", pos) or "").strip() in ("", "?"):
@@ -11427,7 +11476,40 @@ class SimEngine:
         denom = max(0.08, shoot + passing)
         return max(0.04, (2.0 * shoot * passing) / denom)
 
+    def _gm_role_memo(self, bucket: str, p: Any, fn: Any, *, slot: bool = False) -> bool:
+        """Per-game memo for role checks (called ~20k times a game, constant within it)."""
+        scope = getattr(self, "_gm_game_scope", None)
+        if scope is None:
+            return fn(p)
+        key: Any = id(p)
+        if slot:
+            key = (
+                id(p),
+                getattr(p, "_gm_game_line_idx", None),
+                getattr(p, "_gm_game_pair_idx", None),
+                getattr(p, "_gm_game_pair_rank", None),
+            )
+        store = scope.setdefault(bucket, {})
+        hit = store.get(key)
+        if hit is not None and hit[0] is p:
+            return hit[1]
+        val = fn(p)
+        store[key] = (p, val)
+        return val
+
     def _gm_is_certified_sniper(self, p: Any) -> bool:
+        return self._gm_role_memo("sniper", p, self._gm_is_certified_sniper_uncached)
+
+    def _gm_is_certified_playmaker(self, p: Any) -> bool:
+        return self._gm_role_memo("playmaker", p, self._gm_is_certified_playmaker_uncached)
+
+    def _gm_is_goal_first_scorer(self, p: Any) -> bool:
+        return self._gm_role_memo("goal_first", p, self._gm_is_goal_first_scorer_uncached, slot=True)
+
+    def _gm_is_assist_leaning_forward(self, p: Any) -> bool:
+        return self._gm_role_memo("assist_lean", p, self._gm_is_assist_leaning_forward_uncached, slot=True)
+
+    def _gm_is_certified_sniper_uncached(self, p: Any) -> bool:
         pt = self._gm_player_type_str(p)
         shoot = self._gm_rating_avg(p, OFFENSE_KEYS) / 99.0
         passing = self._gm_rating_avg(p, PASSING_KEYS) / 99.0
@@ -11437,7 +11519,7 @@ class SimEngine:
             return True
         return False
 
-    def _gm_is_certified_playmaker(self, p: Any) -> bool:
+    def _gm_is_certified_playmaker_uncached(self, p: Any) -> bool:
         pt = self._gm_player_type_str(p)
         shoot = self._gm_rating_avg(p, OFFENSE_KEYS) / 99.0
         passing = self._gm_rating_avg(p, PASSING_KEYS) / 99.0
@@ -11447,7 +11529,7 @@ class SimEngine:
             return True
         return False
 
-    def _gm_is_goal_first_scorer(self, p: Any) -> bool:
+    def _gm_is_goal_first_scorer_uncached(self, p: Any) -> bool:
         """Matthews/Richard-type only: G can exceed A. Most elite forwards are assist-heavy."""
         if self._gm_pos_str(p).upper() == "D":
             return False
@@ -11463,7 +11545,7 @@ class SimEngine:
             return usage >= 1.10
         return False
 
-    def _gm_is_assist_leaning_forward(self, p: Any) -> bool:
+    def _gm_is_assist_leaning_forward_uncached(self, p: Any) -> bool:
         """Crosby/MacKinnon-type: high points with A clearly above G unless goal-first."""
         if self._gm_pos_str(p).upper() == "D":
             return False
@@ -12629,6 +12711,38 @@ class SimEngine:
             print(f"[STAT LEDGER ADD] {nm} {team_id} {kwargs} {dict(row)}")
 
 
+    def _gm_hot_hand_adj(self, p: Any) -> float:
+        """Rating points a coach adds (or takes off) for how a player is producing.
+
+        CPU auto-lines sorted purely by OVR, so a depth forward on a heater never
+        moved up and a slumping top-liner kept his minutes. Points per game are
+        compared with what his rating predicts, trusted more as games pile up.
+        """
+        ledger = getattr(self, "_gm_current_ledger", None)
+        if not isinstance(ledger, dict):
+            return 0.0
+        pid = _id_str(p, "id")
+        row = ledger.get(pid) if pid else None
+        if not isinstance(row, dict):
+            return 0.0
+        gp = int(row.get("gp", 0) or 0)
+        if gp < 8:
+            return 0.0
+        pts = int(row.get("g", 0) or 0) + int(row.get("a", 0) or 0)
+        ppg = pts / float(gp)
+        ovr = float(self._gm_ovr_0_100(p))
+        is_d = self._gm_is_defense(p)
+        exp = max(0.05, min(1.4, 0.10 + 0.042 * (ovr - 68.0)))
+        if is_d:
+            exp *= 0.45
+        conf = min(1.0, gp / 25.0)
+        adj = (ppg - exp) * (26.0 if is_d else 16.0) * conf
+        return max(-4.0, min(5.0, adj))
+
+    def _gm_line_order_value(self, p: Any) -> float:
+        """Auto-line order: the steep OVR curve, with the hot hand folded in."""
+        return max(14.0, self._gm_ovr_0_100(p) + self._gm_hot_hand_adj(p)) ** 1.55
+
     def _gm_lineup_sort_key(self, p: Any, tank_pressure: int = 0) -> float:
         ovr = self._gm_ovr_0_100(p)
         off = self._gm_rating_avg(p, OFFENSE_KEYS)
@@ -12652,6 +12766,7 @@ class SimEngine:
                 score -= 3.0
         if pos == "D":
             score = 0.52 * ovr + 0.18 * off + 0.24 * df + 0.06 * iq
+        score += self._gm_hot_hand_adj(p)
         return float(score)
 
     def _gm_build_dressed_lineup(
@@ -12755,9 +12870,10 @@ class SimEngine:
         else:
             fw = [p for p in dressed_sk if str(self._gm_pos_str(p)).upper() != "D"]
             defs = [p for p in dressed_sk if str(self._gm_pos_str(p)).upper() == "D"]
-            # Auto path: stack by overall so L1/PP1 are the real stars.
-            fw.sort(key=self._gm_ovr_bonus, reverse=True)
-            defs.sort(key=self._gm_ovr_bonus, reverse=True)
+            # Auto path: stack by overall so L1/PP1 are the real stars, adjusted
+            # for who is producing (a hot depth forward moves up, a slump drops).
+            fw.sort(key=self._gm_line_order_value, reverse=True)
+            defs.sort(key=self._gm_line_order_value, reverse=True)
             lines = [[], [], [], []]
             n = len(fw)
             if n:
@@ -13581,6 +13697,8 @@ class SimEngine:
         from app.sim_engine.gameplay.game_analytics_ledger import CHANCE_TYPE_RAW_XG, credit_assist_xa, credit_shot_attempt_event, pick_chance_type_for_shooter, raw_xg_for_chance, resolve_goal_probability, validate_game_integrity
 
         strength_map = strength_map or {}
+        # Season production for CPU auto-lines (hot hand) — see _gm_hot_hand_adj.
+        self._gm_current_ledger = ledger
         home_dressed, home_gl, home_scratches, _ = self._gm_build_dressed_lineup(home, rng)
         away_dressed, away_gl, away_scratches, _ = self._gm_build_dressed_lineup(away, rng)
         home_units = self._gm_build_game_units(home_dressed, home)
@@ -14611,6 +14729,8 @@ class SimEngine:
         """
         hg = max(0, int(hg))
         ag = max(0, int(ag))
+        # Season production for CPU auto-lines (hot hand) — see _gm_hot_hand_adj.
+        self._gm_current_ledger = ledger
         home_dressed, home_gl, _, _ = self._gm_build_dressed_lineup(home, rng)
         away_dressed, away_gl, _, _ = self._gm_build_dressed_lineup(away, rng)
         # Stamp _gm_game_line_idx before TOI / goal weights — otherwise every
@@ -14710,6 +14830,10 @@ class SimEngine:
                 ledger, p, aid, gp=1, toi_sec=toi, ev_toi_sec=ev_toi, pp_toi_sec=pp_toi, pk_toi_sec=pk_toi,
             )
 
+        # Who actually figured in each even-strength goal (scorer + assists), so
+        # plus-minus starts from the players on the ice for that goal.
+        ev_goal_events: Dict[str, List[List[Any]]] = {}
+
         def _credit_team_goals(
             skaters: List[Any],
             tid: str,
@@ -14773,6 +14897,8 @@ class SimEngine:
                     w_g *= star_adj ** 0.95
                 else:
                     w_g *= star_adj ** 0.50
+                form = self._gm_scoring_form(p, ledger)
+                w_g *= form
                 off_w[pid] = max(0.05, w_g)
 
                 prim = self._gm_primary_assist_weight(p, "EV")
@@ -14791,11 +14917,11 @@ class SimEngine:
                     sec *= 1.25
                 ast_prim_w[pid] = max(
                     0.05,
-                    prim * (star_adj ** 0.70) * (usage_scale ** 0.20) * (toi_f ** 0.70),
+                    prim * (star_adj ** 0.70) * (usage_scale ** 0.20) * (toi_f ** 0.70) * (form ** 0.8),
                 )
                 ast_sec_w[pid] = max(
                     0.05,
-                    sec * (star_adj ** 0.62) * (usage_scale ** 0.16) * (toi_f ** 0.64),
+                    sec * (star_adj ** 0.62) * (usage_scale ** 0.16) * (toi_f ** 0.64) * (form ** 0.6),
                 )
 
             if goals <= 0:
@@ -14837,6 +14963,8 @@ class SimEngine:
             for _sp in fw_pool:
                 _sh = _gm_superstar_goal_claim(self._gm_ovr_0_100(_sp))
                 if _sh > 0.0:
+                    # A star in a slump does not keep his guaranteed share.
+                    _sh *= self._gm_scoring_form(_sp, ledger)
                     star_claims.append((_sp, _sh))
             star_total = sum(c for _, c in star_claims)
             star_scale = (
@@ -14888,6 +15016,7 @@ class SimEngine:
                     gkw["ppg"] = 1
                     ppg_tagged += 1
                 self._gm_ledger_add(ledger, scorer, tid, **gkw)
+                involved: List[Any] = [scorer]
                 scorer_unit = _unit_key(scorer)
                 linemates = [p for p in skaters if p is not scorer and _unit_key(p) == scorer_unit]
                 remaining = linemates + [p for p in skaters if p is not scorer and p not in linemates]
@@ -14931,8 +15060,11 @@ class SimEngine:
                     else:
                         akw["secondary_assists"] = 1
                     self._gm_ledger_add(ledger, assister, tid, **akw)
+                    involved.append(assister)
                     remaining = [p for p in remaining if p is not assister]
                     linemates = [p for p in linemates if p is not assister]
+                if not gkw.get("ppg"):
+                    ev_goal_events.setdefault(tid, []).append(list(involved))
             return off_w, ppg_tagged
 
         def _snapshot_g_a_sog(skaters: List[Any]) -> Dict[str, Tuple[int, int, int]]:
@@ -15009,18 +15141,59 @@ class SimEngine:
                 pi = rng.choices([0, 1, 2], weights=wp or [1.0, 1.0, 1.0], k=1)[0]
                 return li, pi
 
-            def _on_ice(line_i: int, pair_i: int) -> List[Any]:
-                fw = [p for p in fw_pool if _pm_unit_key(p)[1] == line_i][:3]
-                dmen = [p for p in d_pool if _pm_unit_key(p)[1] == pair_i][:2]
-                return fw + dmen
+            # Lines do not stay intact through a shift: a winger jumps on early, a
+            # pair is broken up by a change. Each slot keeps the unit's player most
+            # of the time, otherwise someone from another unit takes it. Whole lines
+            # getting the same +/- every game came from crediting units as blocks.
+            stay_f, stay_d = 0.78, 0.82
 
-            for _ in range(ev_gf):
-                li, pi = _pick_units(line_share, pair_share)
-                for p in _on_ice(li, pi):
+            def _fill(on_ice: List[Any], pool: List[Any], want: int, base_unit: int,
+                      shares: Tuple[float, ...], is_d: bool) -> None:
+                have = [p for p in on_ice if (self._gm_is_defense(p) == is_d)]
+                need = max(0, want - len(have))
+                if need <= 0:
+                    return
+                unit_mates = [p for p in pool if _pm_unit_key(p)[1] == base_unit and p not in on_ice]
+                rng.shuffle(unit_mates)
+                stay = stay_d if is_d else stay_f
+                for p in unit_mates:
+                    if need <= 0:
+                        break
+                    if rng.random() < stay:
+                        on_ice.append(p)
+                        need -= 1
+                others = [p for p in pool if p not in on_ice]
+                while need > 0 and others:
+                    w = [max(0.05, shares[min(len(shares) - 1, _pm_unit_key(p)[1])]) for p in others]
+                    p = rng.choices(others, weights=w, k=1)[0]
+                    on_ice.append(p)
+                    others.remove(p)
+                    need -= 1
+
+            def _on_ice_for(event: Optional[List[Any]], f_share: Tuple[float, ...],
+                            d_share: Tuple[float, ...]) -> List[Any]:
+                li, pi = _pick_units(f_share, d_share)
+                on_ice: List[Any] = []
+                for p in event or []:
+                    if p in skaters and p not in on_ice:
+                        on_ice.append(p)
+                inv_f = [p for p in on_ice if not self._gm_is_defense(p)]
+                inv_d = [p for p in on_ice if self._gm_is_defense(p)]
+                if inv_f:
+                    li = _pm_unit_key(inv_f[0])[1]
+                if inv_d:
+                    pi = _pm_unit_key(inv_d[0])[1]
+                _fill(on_ice, fw_pool, 3, li, f_share, False)
+                _fill(on_ice, d_pool, 2, pi, d_share, True)
+                return on_ice[:5]
+
+            events = list(ev_goal_events.get(str(tid), []) or ev_goal_events.get(tid, []) or [])
+            for i in range(ev_gf):
+                ev = events[i] if i < len(events) else None
+                for p in _on_ice_for(ev, line_share, pair_share):
                     self._gm_ledger_add(ledger, p, tid, gf_on=1.0, plus_minus=1)
             for _ in range(ev_ga):
-                li, pi = _pick_units(ga_line_share, ga_pair_share)
-                for p in _on_ice(li, pi):
+                for p in _on_ice_for(None, ga_line_share, ga_pair_share):
                     self._gm_ledger_add(ledger, p, tid, ga_on=1.0, plus_minus=-1)
 
         _credit_ev_plus_minus(home_sk, home_toi, hid, hg, ag, home_ppg, away_ppg)
@@ -16042,7 +16215,14 @@ class SimEngine:
         base = 3.08 * _GM_LEAGUE_SCORING_PACE_MULT * _board_light_goal_rate_mult(_rules)
         diff = s_home - s_away
         mk = float(_GM_STRENGTH_MATCHUP_GOAL_K)
-        home_mu = base + mk * diff + 0.16 * float(_rules.get("home_ice_mult", 1.0))
+        # Home-ice edge, scaled by the crowd: a confident fan base is worth more at home.
+        try:
+            from app.sim_engine.league.game_rules import fan_home_ice_share, team_fan_confidence
+
+            crowd = 1.0 + fan_home_ice_share(team_fan_confidence(home))
+        except Exception:
+            crowd = 1.0
+        home_mu = base + mk * diff + 0.16 * float(_rules.get("home_ice_mult", 1.0)) * crowd
         away_mu = base - mk * diff
         try:
             home_mu += float(team_scoring_pace_bias(home))

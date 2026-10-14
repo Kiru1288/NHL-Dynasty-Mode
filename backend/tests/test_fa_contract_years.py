@@ -1026,6 +1026,172 @@ class CapSpaceLogicTests(unittest.TestCase):
         self.assertAlmostEqual(float(player.contract["aav_m"]), 5.0, places=2)
         self.assertAlmostEqual(float(player.contract["pending_extension"]["aav_m"]), 7.0, places=2)
 
+    def test_in_season_extension_takes_over_with_its_own_term_not_the_old_cap_grid(self):
+        from services.contract_economy import activate_pending_extension, is_current_ufa_class
+
+        for grid in ([5.0], [5.0] * 6):
+            player = self._skater("ext", years=1, aav=5.0, pending=False, expiry=2027)
+            player.contract["season_cap_hits"] = list(grid)
+            player.contract["nhl_salary_by_year_m"] = list(grid)
+            player.contract["pending_extension"] = {
+                "aav_m": 6.0,
+                "cap_hit_m": 6.0,
+                "years": 4,
+                "years_remaining": 4,
+                "expiry_year": 2031,
+                "effective_season": 2027,
+                "source": "signed",
+                "user_signed": True,
+            }
+            self.assertTrue(activate_pending_extension(player, 2026))
+            c = player.contract
+            self.assertEqual(int(c["years_remaining"]), 4, grid)
+            self.assertEqual(int(c["expiry_year"]), 2031, grid)
+            self.assertAlmostEqual(float(c["aav_m"]), 6.0, places=2)
+            self.assertFalse(c.get("nhl_salary_by_year_m"))
+            self.assertFalse(
+                is_current_ufa_class(
+                    years_remaining=c["years_remaining"],
+                    expiry_year=c["expiry_year"],
+                    season_year=2026,
+                    pending_july1=False,
+                    extension_signed=False,
+                )
+            )
+
+
+class CapScenarioRegressionTests(unittest.TestCase):
+    """Bugs found by the in-season / re-sign / FA / buyout / retirement cap sim."""
+
+    _skater = CapSpaceLogicTests._skater
+    _club = CapSpaceLogicTests._club
+
+    def _aged(self, p, age):
+        p.age = age
+        p.identity = SimpleNamespace(age=age, name=p.name)
+        return p
+
+    def _league(self, team, **fields):
+        base = dict(
+            salary_cap_m=104.0, cap_floor_m=76.9, season_year=2026,
+            cap_schedule_m={2026: 104.0, 2027: 113.5}, teams=[team], free_agents=[],
+        )
+        base.update(fields)
+        return SimpleNamespace(**base)
+
+    def test_buyout_follows_cba_two_thirds_over_twice_the_term(self):
+        from services.contract_economy import estimate_buyout
+
+        vet = self._aged(self._skater("vet", years=3, aav=2.5), 29)
+        est = estimate_buyout(vet)
+        self.assertEqual(est["years"], 6)
+        self.assertAlmostEqual(est["annual_penalty_m"], 2.5 * 3 * (2 / 3) / 6, places=2)
+        kid = self._aged(self._skater("kid", years=2, aav=3.0), 23)
+        self.assertAlmostEqual(estimate_buyout(kid)["total_cost_m"], 2.0, places=2)
+
+    def test_minor_leaguer_buyout_clears_the_ahl_list(self):
+        from services.contract_economy import execute_buyout
+
+        p = self._skater("ahl", years=3, aav=2.5)
+        team = self._club([], ahl_roster=[p])
+        league = self._league(team)
+        res = execute_buyout(team, p, league, 2026)
+        self.assertTrue(res.get("ok"), res)
+        self.assertNotIn(p, team.ahl_roster)
+        self.assertIn(p, league.free_agents)
+
+    def test_user_cannot_extend_with_two_years_left_or_twice(self):
+        from services.contract_economy import sign_player_to_team
+
+        two = self._skater("two", years=2, aav=5.0, expiry=2028)
+        done = self._skater("done", years=1, aav=3.0, expiry=2027)
+        done.contract["pending_extension"] = {"aav_m": 6.0, "years": 4, "expiry_year": 2031}
+        team = self._club([two, done])
+        league = self._league(team)
+        sess = SimpleNamespace(phase="regular", user_team_id="OTT")
+        for p, word in ((two, "final year"), (done, "Already extended")):
+            r = sign_player_to_team(
+                p, team, league, 2026,
+                {"aav_m": 6.5, "years": 3, "context": "extension", "force": True, "_session": sess},
+            )
+            self.assertFalse(r.get("ok"), r)
+            self.assertIn(word, str(r.get("reason")))
+        self.assertAlmostEqual(float(done.contract["pending_extension"]["aav_m"]), 6.0, places=2)
+
+    def test_summer_free_agent_deal_starts_next_season(self):
+        from services.contract_economy import sign_player_to_team
+
+        team = self._club([])
+        fa = self._skater("fa", years=0, aav=0.0)
+        fa.contract = None
+        league = self._league(team, free_agents=[fa])
+        league._session_cap_books = {"in_season": False, "opening_day": True, "season_year": 2027}
+        r = sign_player_to_team(fa, team, league, 2026, {"aav_m": 1.5, "years": 1, "context": "ufa", "force": True})
+        self.assertTrue(r.get("ok"), r)
+        self.assertEqual(int(fa.contract["effective_season"]), 2027)
+        self.assertEqual(int(fa.contract["expiry_year"]), 2028)
+
+    def test_retirement_only_charges_35_plus_deals_and_only_future_seasons(self):
+        from services.franchise_retirement import _apply_retirement_cap_charge
+
+        sess = SimpleNamespace(season_calendar_year=2026, phase="offseason")
+        old = self._skater("old", years=3, aav=4.4, extra={"effective_season": 2026, "expiry_year": 2029})
+        old.identity = SimpleNamespace(age=35)
+        team = self._club([old])
+        row = {}
+        _apply_retirement_cap_charge(sess, team, old, row)
+        self.assertEqual([b["season"] for b in team.buyout_cap_hits], ["2027-28", "2028-29"])
+        self.assertTrue(all(abs(b["amount_m"] - 4.4) < 0.01 for b in team.buyout_cap_hits))
+        young = self._skater("young", years=3, aav=4.4, extra={"effective_season": 2025, "expiry_year": 2028})
+        young.identity = SimpleNamespace(age=31)
+        team2 = self._club([young])
+        _apply_retirement_cap_charge(sess, team2, young, {})
+        self.assertEqual(team2.buyout_cap_hits, [])
+
+
+class CapSpaceBrokerTests(unittest.TestCase):
+    def test_relief_price_scales_with_dead_money(self):
+        from services.contract_economy import cap_relief_price
+
+        def price(hit, fair, years):
+            return cap_relief_price({"cap_hit_m": hit, "fair_aav_m": fair, "years_remaining": years})
+
+        self.assertEqual(price(9.0, 2.0, 4), [1, 3])   # $28M of dead money
+        self.assertEqual(price(6.0, 2.0, 4), [1])      # $16M
+        self.assertEqual(price(4.0, 1.5, 3), [2])      # $7.5M
+        self.assertEqual(price(3.0, 1.5, 3), [3])      # $4.5M
+        self.assertEqual(price(2.5, 1.5, 2), [4])      # $2M
+        self.assertEqual(price(1.6, 1.5, 1), [5])
+
+
+class DestinationFitTests(unittest.TestCase):
+    def _team(self, city, name, roster=()):
+        return SimpleNamespace(team_id=city[:3].upper(), city=city, name=name, roster=list(roster), market=None)
+
+    def test_canadian_market_and_taxes_show_up_as_factors(self):
+        from services.contract_economy import player_destination_factors
+
+        ident = SimpleNamespace(age=27, birth_country="CAN", birth_city="Calgary", name="Home Kid")
+        player = SimpleNamespace(id="home-kid", identity=ident, ovr=80)
+        fit = player_destination_factors(player, self._team("Calgary", "Flames"), own_club=False)
+        keys = {f["key"] for f in fit["factors"]}
+        self.assertIn("canada", keys)
+        self.assertIn("hometown", keys)
+        self.assertGreater(fit["score"], 0)
+        fl = player_destination_factors(player, self._team("Florida", "Panthers"), own_club=False)
+        self.assertTrue(any(f["key"] == "city" and f["effect"] > 0 for f in fl["factors"]))
+
+    def test_same_player_and_club_always_give_the_same_answer(self):
+        from services.contract_economy import player_destination_factors
+
+        ident = SimpleNamespace(age=29, birth_country="SWE", birth_city="Gavle", name="Stable")
+        player = SimpleNamespace(id="stable-1", identity=ident, ovr=84)
+        team = self._team("Toronto", "Maple Leafs")
+        self.assertEqual(
+            player_destination_factors(player, team, own_club=False),
+            player_destination_factors(player, team, own_club=False),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

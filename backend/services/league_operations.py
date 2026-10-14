@@ -387,10 +387,25 @@ def _team_market_tier_live(session: FranchiseSession, team: Any, team_id: str) -
     if val is None:
         return _team_market_tier(team)
     if val >= avg * 1.18:
-        return "large", "Large"
-    if val <= avg * 0.72:
-        return "small", "Small"
-    return "medium", "Mid"
+        tier = ("large", "Large")
+    elif val <= avg * 0.72:
+        tier = ("small", "Small")
+    else:
+        tier = ("medium", "Mid")
+    _sync_team_market_size(team, tier[0])
+    return tier
+
+
+def _sync_team_market_size(team: Any, tier_key: str) -> None:
+    """One market size everywhere. The team's own profile came from a hard-coded city
+    list (Edmonton "small", the Islanders "large") while revenue used this value-based
+    tier, so free agency, trades and the board disagreed for six clubs."""
+    market = getattr(team, "market", None)
+    if market is not None and getattr(market, "market_size", None) != tier_key:
+        try:
+            market.market_size = tier_key
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _cap_index(session: FranchiseSession) -> float:

@@ -94,7 +94,81 @@ def _call_up(team: Any, player: Any) -> None:
             pass
 
 
-def _log_move(session: Any, team: Any, up: Any, down: Optional[Any], method: str, gain: float) -> None:
+def _call_up_from_pool(team: Any, player: Any) -> None:
+    """Junior/European prospect on a signed ELC jumping straight to the NHL."""
+    team.prospect_pool = [p for p in list(getattr(team, "prospect_pool", None) or []) if p is not player]
+    _call_up(team, player)
+
+
+def _season_jump(p: Any) -> float:
+    """Rating points gained since opening night (in-season development)."""
+    from services.contract_economy import _player_ovr  # noqa: WPS433
+
+    start = getattr(p, "season_start_ovr", None) or getattr(p, "_season_start_ovr", None)
+    try:
+        start_f = float(start)
+    except (TypeError, ValueError):
+        return 0.0
+    if start_f <= 1.5:
+        start_f *= 99.0
+    return max(0.0, _player_ovr(p) - start_f)
+
+
+def _ahl_form(session: Any, p: Any) -> tuple:
+    """(rating points of credit, reason) for AHL production vs. what his rating predicts."""
+    from services.contract_economy import _player_id, _player_ovr  # noqa: WPS433
+
+    try:
+        from services.ahl_league import get_player_ahl_season_line  # noqa: WPS433
+
+        line = get_player_ahl_season_line(session, _player_id(p))
+    except Exception:
+        line = None
+    if not line:
+        return 0.0, ""
+    gp = int(line.get("gp") or 0)
+    if gp < 10:
+        return 0.0, ""
+    pts = int(line.get("points") or 0)
+    ppg = pts / gp
+    is_d = _bucket(p) == "D"
+    exp = max(0.15, 0.25 + 0.04 * (_player_ovr(p) - 65.0)) * (0.5 if is_d else 1.0)
+    credit = max(-2.0, min(4.0, (ppg - exp) * (12.0 if is_d else 8.0))) * min(1.0, gp / 20.0)
+    reason = f"{pts} pts in {gp} AHL games" if credit > 0.5 else ""
+    return credit, reason
+
+
+def _nhl_form(session: Any, p: Any) -> float:
+    """Rating points off (or on) for how an NHL regular is producing this season."""
+    from services.contract_economy import _player_id, _player_ovr  # noqa: WPS433
+
+    row = (getattr(session, "player_season_stats", None) or {}).get(_player_id(p))
+    if not isinstance(row, dict):
+        return 0.0
+    gp = int(row.get("gp") or 0)
+    if gp < 10:
+        return 0.0
+    ppg = (int(row.get("g") or 0) + int(row.get("a") or 0)) / gp
+    is_d = _bucket(p) == "D"
+    exp = max(0.05, min(1.4, 0.10 + 0.042 * (_player_ovr(p) - 68.0))) * (0.45 if is_d else 1.0)
+    return max(-3.0, min(3.0, (ppg - exp) * (20.0 if is_d else 12.0))) * min(1.0, gp / 25.0)
+
+
+def _value(session: Any, p: Any, *, nhl: bool) -> tuple:
+    """(rating + form, reason) used to compare a call-up with the player he replaces."""
+    from services.contract_economy import _player_ovr  # noqa: WPS433
+
+    if nhl:
+        return _player_ovr(p) + _nhl_form(session, p), ""
+    credit, reason = _ahl_form(session, p)
+    jump = _season_jump(p)
+    if jump >= 4.0:
+        credit += min(3.0, (jump - 3.0) * 0.75)
+        reason = (reason + "; " if reason else "") + f"up {jump:.0f} OVR this season"
+    return _player_ovr(p) + credit, reason
+
+
+def _log_move(session: Any, team: Any, up: Any, down: Optional[Any], method: str, gain: float, reason: str = "") -> None:
     from services.contract_economy import _player_id, _player_name, _player_ovr  # noqa: WPS433
 
     day = int(getattr(session, "calendar_cursor", 0) or 0)
@@ -106,7 +180,7 @@ def _log_move(session: Any, team: Any, up: Any, down: Optional[Any], method: str
         "abbr": str(getattr(team, "abbreviation", None) or getattr(team, "abbr", "") or "").upper(),
         "up": {"player_id": _player_id(up), "name": _player_name(up), "ovr": round(_player_ovr(up)), "age": int(getattr(getattr(up, "identity", None), "age", 0) or 0)},
         "down": ({"player_id": _player_id(down), "name": _player_name(down), "ovr": round(_player_ovr(down))} if down is not None else None),
-        "summary": "",
+        "summary": reason,
         "method": method,
         "gain": round(gain, 4),
     }
@@ -169,18 +243,29 @@ def _team_moves(session: Any, team: Any, league: Any) -> int:
     while moves < MAX_MOVES_PER_TEAM + 2:
         nhl = [p for p in list(getattr(team, "roster", None) or []) if _healthy(p)]
         ahl = [p for p in list(getattr(team, "ahl_roster", None) or []) if _healthy(p) and player_holds_nhl_spc(p) and id(p) not in tried]
-        if not ahl or not nhl:
+        # Signed prospects playing junior/Europe whose rating has jumped this season.
+        juniors = [
+            p for p in list(getattr(team, "prospect_pool", None) or [])
+            if _healthy(p) and player_holds_nhl_spc(p) and id(p) not in tried and _season_jump(p) >= 4.0
+        ]
+        if not (ahl or juniors) or not nhl:
             return moves
         best: Optional[tuple] = None
         base = team_players(team)
-        for up in sorted(ahl, key=_player_ovr, reverse=True)[:8]:
+        # Rating + form: AHL production and in-season jumps count, and so does a
+        # slumping NHL regular. Ratings alone never rewarded a hot farmhand.
+        cand = sorted(ahl + juniors, key=lambda p: _value(session, p, nhl=False)[0], reverse=True)[:10]
+        for up in cand:
             b = _bucket(up)
-            same = sorted([p for p in nhl if _bucket(p) == b], key=_player_ovr)
+            up_val, why = _value(session, up, nhl=False)
+            same = sorted([p for p in nhl if _bucket(p) == b], key=lambda p: _value(session, p, nhl=True)[0])
             if not same:
                 continue
-            # Weakest few at the position are the candidates to go down.
+            # Weakest few at the position (rating + form) are the candidates to go down.
             for down in same[:3]:
-                if _player_ovr(up) <= _player_ovr(down):
+                down_val = _value(session, down, nhl=True)[0]
+                form_driven = bool(why) and _player_ovr(up) <= _player_ovr(down)
+                if up_val <= down_val + (1.0 if form_driven else 0.0):
                     continue
                 exempt = is_waiver_exempt(down, team, league)
                 if not exempt:
@@ -191,13 +276,20 @@ def _team_moves(session: Any, team: Any, league: Any) -> int:
                         continue
                 gain = roster_delta(team, add=[up], remove=[down], base=base)
                 bar = MIN_GAIN_EXEMPT if exempt else MIN_GAIN_WAIVERS
+                if form_driven:
+                    # The lineup model only sees ratings; a form call-up only has to
+                    # not hurt it much, and never costs a waiver claim.
+                    if not exempt:
+                        continue
+                    bar = -0.003
                 if gain < bar or not _cap_fits(team, league, up, down):
                     continue
-                if best is None or gain > best[0]:
-                    best = (gain, up, down, exempt)
+                score = gain + 0.001 * (up_val - down_val)
+                if best is None or score > best[0]:
+                    best = (score, up, down, exempt, why, gain)
         if best is None:
             return moves
-        gain, up, down, exempt = best
+        _score, up, down, exempt, why, gain = best
         tried.add(id(up))
         if exempt:
             _send_down(team, down)
@@ -209,12 +301,15 @@ def _team_moves(session: Any, team: Any, league: Any) -> int:
             if not res.get("ok"):
                 continue
             method = "waived"
-        _call_up(team, up)
+        if any(p is up for p in list(getattr(team, "prospect_pool", None) or [])):
+            _call_up_from_pool(team, up)
+        else:
+            _call_up(team, up)
         try:
             sync_team_cap_fields(team, league)
         except Exception:
             _log.debug("cap sync failed", exc_info=True)
-        _log_move(session, team, up, down, method, gain)
+        _log_move(session, team, up, down, method, gain, why)
         moves += 1
     return moves
 
@@ -244,6 +339,16 @@ def run_cpu_roster_moves(session: Any, *, force: bool = False) -> Dict[str, Any]
             floor_trades = int(run_cpu_cap_floor_pass(session).get("count") or 0)
         except Exception:
             _log.exception("cap floor pass failed")
+        # Clubs with room sell it to cap-strapped contenders for picks, up to the deadline.
+        try:
+            from services.contract_economy import run_cpu_cap_space_broker_pass  # noqa: WPS433
+            from services.franchise_sim import _calendar_trade_deadline_index  # noqa: WPS433
+
+            deadline = _calendar_trade_deadline_index(session)
+            if phase == "regular" and (deadline is None or day <= int(deadline)):
+                floor_trades += int(run_cpu_cap_space_broker_pass(session).get("count") or 0)
+        except Exception:
+            _log.exception("cap space broker pass failed")
     for team in list(getattr(league, "teams", None) or []):
         if _tid(team) == user_tid:
             continue

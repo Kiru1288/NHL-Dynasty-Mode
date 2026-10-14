@@ -261,6 +261,28 @@ def _pick(rng: random.Random, items: List[Tuple[Any, float]]) -> Any:
     return items[-1][0]
 
 
+def _on_ice_keys(rng: random.Random, units: Dict[str, Tuple[str, int]], involved: List[str],
+                 f_unit: int, d_unit: int) -> List[str]:
+    """Three forwards and two D on the ice for a goal: the players in on it, then
+    their line / pair (each stays on about 4 times in 5), then anyone else."""
+    out = [k for k in involved if k in units]
+    for bucket, want, base in (("F", 3, f_unit), ("D", 2, d_unit)):
+        have = [k for k in out if units[k][0] == bucket]
+        if have:
+            base = units[have[0]][1]
+        need = want - len(have)
+        mates = [k for k, (b, u) in units.items() if b == bucket and u == base and k not in out]
+        rng.shuffle(mates)
+        for k in mates:
+            if need > 0 and rng.random() < 0.8:
+                out.append(k)
+                need -= 1
+        others = [k for k, (b, _u) in units.items() if b == bucket and k not in out]
+        rng.shuffle(others)
+        out.extend(others[:max(0, need)])
+    return out
+
+
 def _play_game(session: Any, st: Dict[str, Any], home: Any, away: Any, iso: str) -> None:
     rng = _rng("ahlgame", st["season"], iso, _tid(home), _tid(away))
     sides = []
@@ -324,6 +346,7 @@ def _play_game(session: Any, st: Dict[str, Any], home: Any, away: Any, iso: str)
             rows[sk]["shots"] += 1
             game_pts[sk] += 1
             mates = [(p, w) for p, w in weights if player_key(p) != sk]
+            involved = [sk]
             for _a in range(2 if rng.random() < 0.72 else 1):
                 ast = _pick(rng, mates)
                 if ast is None:
@@ -331,15 +354,19 @@ def _play_game(session: Any, st: Dict[str, Any], home: Any, away: Any, iso: str)
                 ak = player_key(ast)
                 rows[ak]["assists"] += 1
                 game_pts[ak] += 1
+                involved.append(ak)
                 mates = [(p, w) for p, w in mates if player_key(p) != ak]
-            # even-strength +/-: the scorer's unit and one D pair
+            # even-strength +/-: scorer and assisters are on the ice; the rest of the
+            # five come from their unit with shift mixing. Crediting whole units
+            # gave every linemate an identical +/-.
             bucket, unit = on_ice_unit.get(sk, ("F", 0))
-            for k, (b2, u2) in on_ice_unit.items():
-                if (b2 == bucket and u2 == unit) or (b2 != bucket and u2 == min(unit, 2)):
-                    rows[k]["plus_minus"] += 1
-            for p, _, i in opp["skaters"]:
-                if i == min(unit, 3 if position_bucket(p) == "F" else 2):
-                    _player_row(st, p, opp["team"])["plus_minus"] -= 1
+            for k in _on_ice_keys(rng, on_ice_unit, involved, unit, min(unit, 2)):
+                rows[k]["plus_minus"] += 1
+            opp_unit = {player_key(p): (position_bucket(p), i) for p, _, i in opp["skaters"]}
+            opp_rows = {player_key(p): (p, opp["team"]) for p, _, _ in opp["skaters"]}
+            for k in _on_ice_keys(rng, opp_unit, [], min(unit, 3), min(unit, 2)):
+                op, ot = opp_rows[k]
+                _player_row(st, op, ot)["plus_minus"] -= 1
         for _ in range(_poisson(3.2, rng)):
             who = _pick(rng, [(p, toi) for p, toi, _ in side["skaters"]])
             if who is not None:

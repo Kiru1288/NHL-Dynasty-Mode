@@ -1242,6 +1242,61 @@ def _sync_stability_surface(session: Any, player: Any, team: Any, stability_row:
     }
 
 
+_COMPLAINT_FIX = {
+    "role": "more ice time or a move up the lineup",
+    "management": "a sit-down, and keeping your word",
+    "winning": "a better roster around him; he wants to win",
+    "contract": "an extension or a talk about his deal",
+    "development": "a bigger role to grow into",
+    "belonging": "support from the leadership group",
+    "trade_exposure": "reassurance that he's not on the block",
+    "broken_promise": "delivering on the promise you made",
+    "performance": "usage that matches his production",
+    "organizational": "a clear plan for where the team is going",
+    "temperament": "settling the friction in the room",
+}
+
+
+def _stability_warning_body(session: Any, player: Any, name: str, agent: Dict[str, Any],
+                            stability_row: Dict[str, Any]) -> str:
+    """Why he's unhappy, with his numbers, how close he is to a demand, and what helps.
+
+    The old text was "agent has reached out regarding his satisfaction (stability 61)"
+    with no reason at all."""
+    from app.sim_engine.franchise.trade_stability_engine import (  # noqa: WPS433
+        STABILITY_APATHY_MIN,
+        primary_complaint_from_pressures,
+    )
+
+    pressures = {k: float(v or 0) for k, v in dict(stability_row.get("pressures") or {}).items()}
+    ranked = sorted(pressures.items(), key=lambda kv: -kv[1])
+    top = ranked[0][0] if ranked else ""
+    complaint = primary_complaint_from_pressures(pressures)
+    second = ""
+    if len(ranked) > 1 and ranked[1][1] >= ranked[0][1] * 0.7:
+        second = primary_complaint_from_pressures({ranked[1][0]: 1.0})
+    agent_name = str(agent.get("name") or "His agent")
+    last = name.split(" ")[-1] if name else "He"
+    parts = [f"{agent_name} called about {last}. His main concern is {complaint}"
+             + (f", followed by {second}" if second else "") + "."]
+    row = (getattr(session, "player_season_stats", None) or {}).get(_player_id(player)) or {}
+    gp = int(row.get("gp") or 0)
+    if gp > 0 and str(row.get("position") or "").upper() != "G":
+        toi = int(row.get("toi_sec") or 0) / gp
+        g, a = int(row.get("g") or 0), int(row.get("a") or 0)
+        parts.append(f"This season: {g}-{a}-{g + a} in {gp} games, {int(toi // 60)}:{int(toi % 60):02d} a night.")
+    try:
+        score = float(stability_row.get("trade_stability_score") or 0)
+        parts.append(f"Stability {score:.0f}/100; a trade request becomes possible below {STABILITY_APATHY_MIN}.")
+    except (TypeError, ValueError):
+        pass
+    fix = _COMPLAINT_FIX.get(top)
+    if fix:
+        parts.append(f"What would help: {fix}.")
+    parts.append("No formal trade demand yet.")
+    return " ".join(parts)
+
+
 def _maybe_enqueue_stability_warning(
     session: Any,
     player: Any,
@@ -1278,6 +1333,7 @@ def _maybe_enqueue_stability_warning(
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
 
+    body = _stability_warning_body(session, player, name, agent, stability_row)
     popup = {
         "id": warn_key,
         "kind": "storyline",
@@ -1285,11 +1341,7 @@ def _maybe_enqueue_stability_warning(
         "theme": "warn" if level == 1 else "danger",
         "source_label": f"Agent — {agent.get('name', 'Representative')}",
         "headline": f"{name} — {tag}",
-        "body": (
-            f"{agent.get('name', 'The player’s agent')} has reached out regarding {name}'s "
-            f"satisfaction (stability {stability_row.get('trade_stability_score')}). "
-            f"No formal trade demand yet."
-        ),
+        "body": body,
         "player_id": pid,
         "player_name": name,
         "team_id": tid,
@@ -1318,6 +1370,11 @@ def _maybe_enqueue_stability_warning(
             "type": "trade_stability_warning",
             "headline": popup["headline"],
             "body": popup["body"],
+            # The feed reads title/text like every other notification.
+            "title": popup["headline"],
+            "text": popup["body"],
+            "priority": popup["priority"],
+            "source": "trade_stability",
             "team_id": tid,
             "player_id": pid,
         },

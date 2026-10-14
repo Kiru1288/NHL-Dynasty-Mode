@@ -482,11 +482,20 @@ def team_class_board(
     for slot_no in slots[:3]:
         if crushes >= 2:
             break
+        # No club spends a top-5 pick on a crush from the middle of round one.
+        # This alone sent about 1 in 5 top-3 picks to a public #10-#24.
+        if slot_no <= 5:
+            continue
         rnd = (slot_no - 1) // 32 + 1
         rate = identity["conviction_rate"] + (0.05 if rnd >= 2 else 0.0)
+        if slot_no <= 15:
+            rate *= 0.5
         if _u(seed, "crush", tid, draft_year, slot_no) >= rate:
             continue
-        lo, hi = (slot_no + 9, slot_no + 26) if rnd == 1 else (slot_no + 10, slot_no + 40)
+        if rnd == 1:
+            lo, hi = (slot_no + 5, slot_no + 14) if slot_no <= 15 else (slot_no + 9, slot_no + 26)
+        else:
+            lo, hi = (slot_no + 10, slot_no + 40)
         cands = []
         for pid, row in board.items():
             if pid in used or row["do_not_draft"] or not (lo <= row["public_rank"] <= hi):
@@ -583,6 +592,13 @@ def score_available_for_team(
         score = float(row["value"]) + _need_adjustment(e, needs, identity, overall)
         if row["public_rank"] > overall + window and not row.get("conviction"):
             score -= 1.0  # a club does not take a name this far off every list
+        # Top of the draft: only reach when the club's own scouts also have him
+        # near the top. Identity/noise alone can't move #12 ahead of #2.
+        if overall <= 5:
+            off_public = int(row.get("public_rank") or 999) - (overall + 5)
+            off_private = int(row.get("private_rank") or 999) - (overall + 5)
+            if off_public > 0 and off_private > 0:
+                score -= 0.6 + 0.05 * min(off_public, off_private)
         scored.append((score, e, row))
     scored.sort(key=lambda x: -x[0])
     return scored

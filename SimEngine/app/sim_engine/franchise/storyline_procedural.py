@@ -322,7 +322,7 @@ def compose_data_story_copy(stype: str, ctx: Dict[str, Any], rng: random.Random,
     if stype == "losing_skid":
         if streak >= 2:
             if body:
-                return f"{team} has dropped {streak} straight ({record})."
+                return f"{team}: {streak} straight losses ({record})."
             return f"{team} on a {streak}-game skid ({record})"
         # No verified streak length: never print "0-game" — talk about the record instead.
         if body:
@@ -332,7 +332,7 @@ def compose_data_story_copy(stype: str, ctx: Dict[str, Any], rng: random.Random,
     if stype == "win_streak":
         if streak >= 2:
             if body:
-                return f"{team} has won {streak} straight ({record})."
+                return f"{team}: {streak} straight wins ({record})."
             return f"{team} riding a {streak}-game win streak ({record})"
         if body:
             return f"{team} is {record} and playing well."
@@ -622,29 +622,116 @@ def _compose_life_headline(rule_id: str, entity: Dict[str, Any], fields: Dict[st
     return f"Off-ice friction affecting {name}'s focus"
 
 
-def _compose_life_summary(rule_id: str, entity: Dict[str, Any], fields: Dict[str, float], positive: bool) -> str:
-    tags = _tags(entity)
-    tag_note = f" Profile tags: {', '.join(tags[:3])}." if tags else ""
+# How hard a life beat actually lands (storyline_engine applies these to the rule's
+# base deltas and duration). The effect note quotes the applied numbers.
+LIFE_EVENT_DRAMA = 1.6
+LIFE_EVENT_DAYS_MULT = 1.35
+
+_EFFECT_LABELS = {
+    "morale": "morale",
+    "focus": "focus",
+    "confidence": "confidence",
+    "energy": "energy",
+    "belonging": "sense of belonging",
+    "personal_stress": "stress",
+    "media_stress": "media stress",
+}
+
+
+def _effect_note(rule: Optional[Dict[str, Any]]) -> str:
+    """'Effect: morale -2, focus -2.5 for about 6 days.' from the rule's real deltas."""
+    if not isinstance(rule, dict):
+        return ""
+    parts: List[str] = []
+    for key, val in (rule.get("profile") or {}).items():
+        label = _EFFECT_LABELS.get(str(key).split(".")[-1])
+        if label and abs(float(val)) >= 0.5:
+            parts.append(f"{label} {round(float(val) * LIFE_EVENT_DRAMA, 1):+g}")
+    for key, val in (rule.get("attrs") or {}).items():
+        if abs(float(val)) >= 0.1:
+            parts.append(f"{str(key).replace('_', ' ')} rating {float(val) * LIFE_EVENT_DRAMA:+.1f}")
+    if not parts:
+        return ""
+    days = max(3, int(round(int(rule.get("days") or 0) * LIFE_EVENT_DAYS_MULT))) if rule.get("days") else 0
+    tail = f" for about {days} day{'s' if days != 1 else ''}" if days else ""
+    return f" Effect: {', '.join(parts[:4])}{tail}."
+
+
+def _compose_life_summary(
+    rule_id: str,
+    entity: Dict[str, Any],
+    fields: Dict[str, float],
+    positive: bool,
+    rule: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Plain-English: what happened, the numbers behind it, and what it does to him.
+
+    The fallback used to print engine wording ("Life-state pressure crossed the
+    threshold... Profile tags: ...") with no name and no event."""
+    name = _name(entity)
+    first = name.split(" ")[0] if name else "He"
+    stress = fields.get("personal_stress", 0)
+    effect = _effect_note(rule)
     if rule_id == "family_stress_spillover":
         return (
-            f"Elevated personal stress ({fields.get('personal_stress', 0):.0f}) with strong family orientation "
-            f"({fields.get('family_orientation', 0):.0f}) is competing with hockey focus.{tag_note}"
+            f"{name} is dealing with something at home, and it's showing at the rink: personal stress is up to "
+            f"{stress:.0f}/100 for a player who puts family first ({fields.get('family_orientation', 0):.0f}/100).{effect}"
+        )
+    if rule_id == "sleep_recovery_hit":
+        return (
+            f"{name} hasn't been sleeping well (sleep quality {fields.get('sleep_quality', 0):.0f}/100) and the "
+            f"training staff flagged slower recovery between games.{effect}"
         )
     if rule_id == "media_backlash":
         return (
-            f"Media stress ({fields.get('media_stress', 0):.0f}) and volatility ({fields.get('volatility', 0):.0f}) "
-            f"are amplifying off-ice distraction.{tag_note}"
+            f"Criticism online has gotten to {name}: media stress {fields.get('media_stress', 0):.0f}/100 on a "
+            f"player who runs hot (volatility {fields.get('volatility', 0):.0f}/100).{effect}"
+        )
+    if rule_id == "relocation_family_strain":
+        return (
+            f"{first}'s family is still settling into the city (relocation strain "
+            f"{fields.get('relocation_strain', 0):.0f}/100) and it's taking a toll on him.{effect}"
+        )
+    if rule_id == "housing_instability":
+        return (
+            f"{name}'s living situation is unsettled (home stability {fields.get('home_stability', 0):.0f}/100), "
+            f"adding background stress between games.{effect}"
+        )
+    if rule_id == "partner_friction":
+        return f"{name} is going through a rough patch at home that's carrying into the room.{effect}"
+    if rule_id == "financial_pinch":
+        return (
+            f"An unexpected expense is weighing on {name} (financial stress "
+            f"{fields.get('financial_stress', 0):.0f}/100).{effect}"
+        )
+    if rule_id == "homesick_signal":
+        return (
+            f"{name} is homesick: sense of belonging is down to {fields.get('belonging', 0):.0f}/100 and teammates "
+            f"have noticed he's quieter.{effect}"
         )
     if rule_id == "community_lift":
         _, summary = community_event_copy(
-            _name(entity),
+            name,
             str((entity.get("team_name") or entity.get("team") or "the club")),
             str(entity.get("player_id") or entity.get("id") or ""),
         )
-        return summary + tag_note
+        return summary + effect
+    if rule_id == "family_milestone":
+        return f"Good news at home has {name} in great spirits around the team.{effect}"
+    if rule_id == "belonging_reset":
+        return f"{name}'s family has settled in and he's feeling at home in the city.{effect}"
+    if rule_id == "mentorship_click":
+        return f"A veteran in the room has taken {name} under his wing, and it's showing in practice.{effect}"
+    if rule_id == "confidence_surge":
+        return (
+            f"{name} is playing with confidence after a big moment with the fans (confidence "
+            f"{fields.get('confidence', 0):.0f}/100).{effect}"
+        )
+    if rule_id == "roots_in_city":
+        return f"{name} has bought a home in the city, a sign he plans to stay.{effect}"
     if positive:
-        return f"Life-state signals aligned for a small positive off-ice moment.{tag_note}"
-    return f"Life-state pressure crossed the threshold for a minor negative off-ice event.{tag_note}"
+        return f"Things are going well for {name} away from the rink.{effect}"
+    return f"{name} has something on his mind away from the rink (stress {stress:.0f}/100).{effect}"
 
 
 def _life_rule(
@@ -987,7 +1074,7 @@ def evaluate_life_event_rules(
     rule = rng.choice(band)[1]
     rule_id = str(rule.get("rule_id") or rule.get("id"))
     headline = _compose_life_headline(rule_id, entity, fields, positive)
-    summary = _compose_life_summary(rule_id, entity, fields, positive)
+    summary = _compose_life_summary(rule_id, entity, fields, positive, rule)
     trigger = build_trigger_context(
         cause_type="POSITIVE_LIFE_EVENT" if positive else "MINOR_LIFE_EVENT",
         rule_id=rule_id,

@@ -240,3 +240,27 @@ def test_headline_fingerprint_strips_names_less_than_structure():
     assert "#" in a
     # numbers collapsed; remaining tokens still differ by name, slot cap handles volume
     assert isinstance(b, str)
+
+
+def test_catalog_storyline_names_the_player_instead_of_player():
+    from app.sim_engine.franchise.common import _name_storyline_text
+
+    assert _name_storyline_text("Team insider reports player is unhappy with role", "Nick Suzuki") == (
+        "Team insider reports Suzuki is unhappy with role"
+    )
+    assert _name_storyline_text("Player\u2019s agent leaks frustration through reporter", "Nick Suzuki").startswith("Suzuki's agent")
+    assert _name_storyline_text("Players-only meeting called", "Nick Suzuki") == "Players-only meeting called"
+
+
+def test_life_event_summary_has_name_numbers_and_applied_effect():
+    from app.sim_engine.franchise.storyline_procedural import (
+        LIFE_EVENT_DRAMA,
+        _compose_life_summary,
+    )
+
+    entity = {"player_name": "Chris Tanev", "life": {}, "state": {}, "personality": {}}
+    rule = {"profile": {"state.personal_stress": 2.0, "state.energy": -1.0}, "days": 4}
+    text = _compose_life_summary("housing_instability", entity, {"home_stability": 48.0}, False, rule)
+    assert "Chris Tanev" in text and "48/100" in text
+    assert f"stress +{2.0 * LIFE_EVENT_DRAMA:g}" in text
+    assert "Life-state" not in text and "Profile tags" not in text

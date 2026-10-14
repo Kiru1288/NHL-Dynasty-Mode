@@ -85,3 +85,18 @@ def light_goal_rate_mult(rules: Dict[str, Any]) -> float:
 def points_label(rules: Dict[str, Any]) -> str:
     base = f"{rules['pts_reg_win']}-{rules['pts_ot_win']}-{rules['pts_otl']}-0"
     return base + (" · ties stand" if rules.get("ties_allowed") else "")
+
+
+#: Fan confidence (0-100) at which the home crowd adds nothing extra.
+FAN_NEUTRAL = 60.0
+
+
+def fan_home_ice_share(fan_confidence: Any) -> float:
+    """Extra share of the normal home-ice edge from the crowd: +25% for a sold-out,
+    electric building (fans ~90), down to -25% when the fan base has turned (~30)."""
+    return _clamp((_f(fan_confidence, FAN_NEUTRAL) - FAN_NEUTRAL) / 100.0 * 0.8, -0.25, 0.25)
+
+
+def team_fan_confidence(team: Any) -> float:
+    """The club's current fan confidence (mirrored weekly from the franchise fan profile)."""
+    return _f(getattr(team, "_fan_confidence", None), FAN_NEUTRAL)

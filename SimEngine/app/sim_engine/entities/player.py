@@ -780,6 +780,9 @@ def assign_skater_archetype(position: Position, rng: random.Random) -> str:
     )[0]
 
 
+_AVG_MISSING = object()
+
+
 def _avg(ratings: Dict[str, Any], keys: List[str]) -> float:
     """Category average feeding compute_ovr.
 
@@ -793,16 +796,24 @@ def _avg(ratings: Dict[str, Any], keys: List[str]) -> float:
     if not keys:
         return float(DEFAULT_NHL_RATING)
 
+    # Hot path (millions of calls per season): one dict lookup per key and no
+    # float() call for plain numbers. Same values counted, same sum.
     total = 0.0
     count = 0
+    get = ratings.get
     for k in keys:
-        if k in ratings:
-            v = ratings[k]
+        v = get(k, _AVG_MISSING)
+        if v is _AVG_MISSING:
+            continue
+        cls = v.__class__
+        if cls is int or cls is float:
+            total += v
+        else:
             try:
                 total += float(v)
             except (TypeError, ValueError):
                 continue
-            count += 1
+        count += 1
 
     if count == 0:
         return float(DEFAULT_NHL_RATING)

@@ -713,7 +713,7 @@ def apply_passive_scouting_progress(session: FranchiseSession, *, days: int = 1)
     month = ctx.get("month")
     offseason_gain_mult = 0.35 if month == 7 else 1.0
 
-    entries = _draft_entries(session)
+    entries = _draft_entries(session, background=True)
     if not entries:
         return False
     class_changed = _sync_scouting_class(session, state, entries)
@@ -1137,15 +1137,40 @@ def _normalize_prospect(
     return out
 
 
-def _draft_entries(session: FranchiseSession) -> List[Dict[str, Any]]:
+_BACKGROUND_ENTRIES_MAX_AGE_DAYS = 21
+
+
+def _draft_entries(session: FranchiseSession, *, background: bool = False) -> List[Dict[str, Any]]:
+    """Ranked draft class. ``background=True`` (the daily passive-scouting pass) may
+    reuse the last ranked list for up to 21 days: a full rebuild costs ~16s and
+    prospect growth invalidated it every few sim days. Screens always rebuild."""
     sim = getattr(session, "sim", None)
     rev = int(getattr(session, "_prospect_revision", 0) or 0)
+    cur = int(getattr(session, "calendar_cursor", 0) or 0)
+    # Class identity: a new class arrives at the draft, inside the same season year.
+    season = (
+        int(getattr(session, "season_calendar_year", 0) or 0),
+        str(getattr(session, "phase", "") or ""),
+        bool(getattr(session, "draft_completed", False)),
+    )
     cached = getattr(session, "_cached_draft_class_rankings", None)
     cached_rev = int(getattr(session, "_cached_draft_class_rankings_rev", -1) or -1)
     if isinstance(cached, dict) and cached.get("entries") and cached_rev == rev:
-        return list(cached.get("entries") or [])
+        entries = list(cached.get("entries") or [])
+        session._background_draft_entries = (cur, season, entries)
+        return entries
+    if background:
+        held = getattr(session, "_background_draft_entries", None)
+        if (
+            isinstance(held, tuple) and len(held) == 3 and held[2]
+            and held[1] == season
+            and 0 <= cur - int(held[0]) < _BACKGROUND_ENTRIES_MAX_AGE_DAYS
+        ):
+            return list(held[2])
     board = get_cached_draft_class_rankings(session, sim)
-    return list(board.get("entries") or [])
+    entries = list(board.get("entries") or [])
+    session._background_draft_entries = (cur, season, entries)
+    return entries
 
 
 def get_scouting_prospects(session: FranchiseSession) -> Dict[str, Any]:

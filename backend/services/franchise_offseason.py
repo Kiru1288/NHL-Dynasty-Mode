@@ -5728,13 +5728,22 @@ def _prepare_resign_payload(session: FranchiseSession, *, force: bool = False) -
             row["morale"] = round(morale, 1)
             loyalty = float((demand.get("profile") or {}).get("loyalty") or 0.5)
             importance = float(demand.get("importance") or 0.5)
+            try:
+                from services.contract_economy import player_destination_factors
+
+                fit = player_destination_factors(player, user_team, league, own_club=True)
+            except Exception:
+                fit = {"score": 0.0, "factors": [], "label": "Neutral", "summary": ""}
             stay_interest = max(
                 0.0,
                 min(
                     100.0,
-                    50.0 + (loyalty - 0.5) * 40.0 + (morale - 50.0) * 0.45 + importance * 20.0,
+                    50.0 + (loyalty - 0.5) * 40.0 + (morale - 50.0) * 0.45 + importance * 20.0
+                    + float(fit.get("score") or 0.0) * 0.6,
                 ),
             )
+            row["interest_factors"] = list(fit.get("factors") or [])
+            row["destination_fit"] = fit
             interest = "High" if stay_interest >= 70 else ("Low" if stay_interest < 45 else "Medium")
             row["interest_label"] = interest
             row["interest_level"] = interest
@@ -6166,6 +6175,16 @@ def _open_free_agency(session: FranchiseSession, *, force: bool = False) -> Dict
         # Final-year UFAs deferred at salary-cap become free agents here (July 1).
         if not getattr(session, "july1_contracts_expired", False):
             session.july1_expiry_report = expire_pending_july1_contracts(session)
+        # Before the market opens, clubs with room take bad deals off capped clubs
+        # for picks, so those clubs can spend in free agency. Once per summer.
+        if getattr(session, "_cap_broker_summer", None) != sy_now:
+            session._cap_broker_summer = sy_now
+            try:
+                from services.contract_economy import run_cpu_cap_space_broker_pass
+
+                session.cap_broker_summer_report = run_cpu_cap_space_broker_pass(session, max_trades=4)
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         if not getattr(session, "cpu_rfa_decisions", None):
             session.cpu_rfa_decisions = run_cpu_rfa_decisions(session)
         if not getattr(session, "cpu_own_ufa_resign", None):

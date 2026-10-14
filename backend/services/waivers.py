@@ -13,7 +13,7 @@ Flow (mirrors the real NHL):
 from __future__ import annotations
 
 import random
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 import logging as _logging_swallow
 _swallowed_log = _logging_swallow.getLogger(__name__)
 
@@ -240,24 +240,34 @@ def waiver_wire_payload(session: Any) -> Dict[str, Any]:
     return {"ok": True, "wire": rows, "today": _cursor(session)}
 
 
-def _claim_room(team: Any, league: Any, entry: Dict[str, Any]) -> bool:
+def _claim_room(team: Any, league: Any, entry: Dict[str, Any], cache: Optional[Dict[str, Any]] = None) -> bool:
     from services.contract_economy import get_team_cap_snapshot_full, validate_contract_slots
 
+    row = (cache or {}).get(_tid(team)) if cache is not None else None
     try:
-        snap = get_team_cap_snapshot_full(team, league)
-        if float(snap.get("usable_cap_space_m") or 0.0) < float(entry.get("cap_hit_m") or 0.0) - 0.001:
-            return False
+        if row is None or "space" not in row:
+            snap = get_team_cap_snapshot_full(team, league)
+            space = float(snap.get("usable_cap_space_m") or 0.0)
+            try:
+                slots_ok = bool(validate_contract_slots(team, league, additional=1).get("ok"))
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+                slots_ok = True
+            if cache is not None:
+                cache.setdefault(_tid(team), {}).update({"space": space, "slots_ok": slots_ok})
+        else:
+            space, slots_ok = row["space"], row["slots_ok"]
     except Exception:
         return False
-    try:
-        if not validate_contract_slots(team, league, additional=1).get("ok"):
-            return False
-    except Exception:
-        _swallowed_log.debug("suppressed exception", exc_info=True)
-    return True
+    if space < float(entry.get("cap_hit_m") or 0.0) - 0.001:
+        return False
+    return bool(slots_ok)
 
 
-def _resolve_entry(session: Any, entry: Dict[str, Any]) -> None:
+def _resolve_entry(session: Any, entry: Dict[str, Any], cache: Optional[Dict[str, Any]] = None) -> None:
+    """``cache``: per-team needs / cap room for one wire pass. Nothing about a club
+    changes until it claims someone, so 13 entries x 31 clubs no longer rebuild
+    every club's full cap snapshot (28s of a 34s sim day)."""
     from services.contract_economy import (
         _transfer_waiver_player,
         evaluate_team_position_needs,
@@ -282,13 +292,18 @@ def _resolve_entry(session: Any, entry: Dict[str, Any]) -> None:
     for team in order:
         tid = _tid(team)
         if tid == user_tid:
-            if entry.get("user_claim") and _claim_room(team, league, entry):
+            if entry.get("user_claim") and _claim_room(team, league, entry, cache):
                 winner = team
                 break
             continue
         try:
-            ctx = evaluate_team_position_needs(team, league, getattr(session, "sim", None))
-            if int(ctx.get("slots_remaining") or 0) <= 0 or not _claim_room(team, league, entry):
+            row = cache.get(tid) if cache is not None else None
+            ctx = row.get("needs") if row else None
+            if ctx is None:
+                ctx = evaluate_team_position_needs(team, league, getattr(session, "sim", None))
+                if cache is not None:
+                    cache.setdefault(tid, {})["needs"] = ctx
+            if int(ctx.get("slots_remaining") or 0) <= 0 or not _claim_room(team, league, entry, cache):
                 continue
             if score_waiver_claim_fit(team, player, ctx, league) >= 0.42:
                 winner = team
@@ -300,6 +315,9 @@ def _resolve_entry(session: Any, entry: Dict[str, Any]) -> None:
     portrait = _portrait_fields(player, entry)
     if winner is not None:
         _transfer_waiver_player(player, None, winner, league)
+        if cache is not None:
+            cache.pop(_tid(winner), None)
+            cache.pop(str(entry.get("original_team_id") or ""), None)
         entry["claimed_by"] = _tid(winner)
         entry["waiver_status"] = "claimed"
         try:
@@ -451,13 +469,14 @@ def process_waiver_wire(session: Any) -> Dict[str, Any]:
         return {"resolved": 0}
     now = _cursor(session)
     resolved = 0
+    claim_cache: Dict[str, Any] = {}
     for e in list(_ensure_waiver_wire(league)):
         if e.get("cleared") or e.get("claimed_by"):
             continue
         exp = e.get("expires_cursor")
         if exp is None or int(exp) <= now:
             try:
-                _resolve_entry(session, e)
+                _resolve_entry(session, e, claim_cache)
                 resolved += 1
             except Exception:
                 e["cleared"] = True

@@ -659,38 +659,69 @@ def _sweater_number(player: Any) -> Any:
 
 
 def _apply_retirement_cap_charge(session: FranchiseSession, team: Any, player: Any, row: Dict[str, Any]) -> None:
-    """Years still on the deal stay on the cap as a buyout. Retirement does not erase the contract."""
+    """NHL CBA: a retired player's deal comes off the books, unless it is a 35+
+    contract (signed at 35 or older). Then the full cap hit stays for every
+    season left on it. The old version charged a buyout to everyone, starting
+    with the season that had already been played."""
     if team is None:
         return
     try:
-        from services.contract_economy import estimate_buyout
-        from services.franchise_sim import _contract_years_remaining, player_cap_hit_millions
+        # contract_economy's reader handles dict contracts; franchise_sim's returns 1.
+        from services.contract_economy import _contract_years_remaining, player_cap_hit_millions
     except Exception:
         return
     years = _contract_years_remaining(player)
     hit = float(player_cap_hit_millions(player) or 0)
+    row["cap_hit_removed"] = hit
     if years <= 0 or hit <= 0:
-        row["cap_hit_removed"] = hit
         return
-    est = estimate_buyout(player)
-    buyouts = list(getattr(team, "buyout_cap_hits", None) or [])
     season_year = int(getattr(session, "season_calendar_year", 0) or 0)
-    for i in range(int(est.get("years") or 0)):
-        yr = season_year + i
+    phase = str(getattr(session, "phase", "") or "").lower()
+    in_season = phase in ("regular", "preseason", "playoffs", "playoff_ready")
+    # Before the salary-cap stage burns a year, years_remaining still counts the
+    # season that just ended.
+    burned = bool(getattr(team, "_contract_year_burned", False))
+    future_years = years if (in_season or burned) else years - 1
+    first_season = season_year if in_season else season_year + 1
+    c = getattr(player, "contract", None)
+    c = c if isinstance(c, dict) else {}
+    try:
+        start = int(c.get("effective_season") or c.get("start_year") or 0)
+    except (TypeError, ValueError):
+        start = 0
+    if not start:
+        try:
+            start = int(c.get("expiry_year") or 0) - int(c.get("years") or years)
+        except (TypeError, ValueError):
+            start = 0
+    ident = getattr(player, "identity", None)
+    try:
+        age_now = int(getattr(ident, "age", None) or getattr(player, "age", 0) or 0)
+    except (TypeError, ValueError):
+        age_now = 0
+    age_at_signing = age_now - max(0, season_year - start) if start else age_now
+    row["thirty_five_plus"] = bool(age_at_signing >= 35)
+    if age_at_signing < 35 or future_years <= 0:
+        row["buyout_annual_m"] = 0.0
+        row["buyout_years"] = 0
+        return
+    buyouts = list(getattr(team, "buyout_cap_hits", None) or [])
+    for i in range(int(future_years)):
+        yr = first_season + i
         buyouts.append({
             "season": f"{yr}-{(yr + 1) % 100:02d}",
-            "amount_m": est.get("annual_penalty_m"),
+            "amount_m": round(hit, 3),
             "player_id": _player_id(player),
             "player_name": _player_name(player),
-            "source": "retirement",
+            "source": "retirement_35_plus",
         })
     try:
         team.buyout_cap_hits = buyouts
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
-    row["cap_hit_removed"] = float(est.get("cap_savings_m") or 0)
-    row["buyout_annual_m"] = est.get("annual_penalty_m")
-    row["buyout_years"] = est.get("years")
+    row["cap_hit_removed"] = 0.0
+    row["buyout_annual_m"] = round(hit, 3)
+    row["buyout_years"] = int(future_years)
     contract = getattr(player, "contract", None)
     if contract is not None:
         for attr in ("years_remaining", "term_remaining", "remaining_years"):

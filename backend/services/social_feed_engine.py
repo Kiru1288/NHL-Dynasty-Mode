@@ -1452,6 +1452,10 @@ def _gen_roster_moves(F: _Pass) -> None:
             text = _pick(rng, [f"{abbr} recall {up.get('name')} from the AHL; {down.get('name')} assigned down.",
                                f"Roster move: {up.get('name')} up, {down.get('name')} down for {abbr}.",
                                f"{up.get('name')} gets the call to {abbr}. {down.get('name')} heads to the AHL."])
+        why = str(mv.get("summary") or "").strip()
+        if why:
+            # Form call-ups say why: "18 pts in 20 AHL games", "up 5 OVR this season".
+            text = f"{text} He earned it: {why}."
         _add_post(F, _beat_writer(F, tid), text, kind="roster_move", cat="news", when=F.stamp(F.iso, 10 * 60, 17 * 60, rng),
                   team_ids=[tid], player_id=str(up.get("player_id") or ""), player_name=str(up.get("name") or ""), mag=0.6, knowledge="confirmed")
         posted += 1

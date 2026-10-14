@@ -1822,7 +1822,7 @@ def _franchise_log_injury_and_ui(
         _normalized_notification(
             notification_id=f"notif:{base_id}",
             notification_type="injury",
-            text=f"{player_label} ({team_abbr or tid_cmp}) out {int(games)} games ({injury_type or tier}).",
+            text=f"{player_label} ({team_abbr or tid_cmp}) out {int(games)} game{'s' if int(games) != 1 else ''} ({injury_type or tier}).",
             priority=priority,
             calendar_day=cur_date,
             calendar_iso=str(calendar_iso or ""),
@@ -1840,7 +1840,7 @@ def _franchise_log_injury_and_ui(
             "type": "injury",
             "kind": "injury",
             "headline": f"{player_label} sidelined",
-            "details": f"{team_abbr or tid_cmp} lose {player_label} for {int(games)} games ({injury_type or tier})",
+            "details": f"{team_abbr or tid_cmp} lose {player_label} for {int(games)} game{'s' if int(games) != 1 else ''} ({injury_type or tier})",
             "cause": f"{player_label} suffered a {injury_type or tier} injury.",
             "effects": {
                 "availability_games_delta": -int(games),
@@ -12067,13 +12067,36 @@ def _canonical_lineup_player_id(player: Any) -> str:
         return f"NHL_{raw}" if raw.isdigit() else raw
 
 
-def _synthetic_even_strength_lines_for_team(team: Any) -> Dict[str, Any]:
-    """OVR depth chart for CPU clubs (and user when no saved sheet) — same deploy path as Edit Lines."""
+def _hot_hand_line_value(p: Any, stats: Optional[Dict[str, Any]]) -> float:
+    """OVR plus how he is producing: points per game against what his rating
+    predicts, trusted more as games pile up (+5 / -4 rating points at most).
+
+    CPU depth charts sorted by OVR alone, so a depth forward on a heater never
+    moved up and a slumping top-liner kept his minutes all season.
+    """
+    ovr = float(_player_ovr99(p))
+    row = (stats or {}).get(str(getattr(p, "id", "") or "")) if stats else None
+    if not isinstance(row, dict):
+        return ovr
+    gp = int(row.get("gp") or 0)
+    if gp < 8:
+        return ovr
+    ppg = (int(row.get("g") or 0) + int(row.get("a") or 0)) / float(gp)
+    is_d = _pos_str(p).upper() in ("D", "LD", "RD")
+    exp = max(0.05, min(1.4, 0.10 + 0.042 * (ovr - 68.0))) * (0.45 if is_d else 1.0)
+    adj = (ppg - exp) * (26.0 if is_d else 16.0) * min(1.0, gp / 25.0)
+    return ovr + max(-4.0, min(5.0, adj))
+
+
+def _synthetic_even_strength_lines_for_team(team: Any, stats: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Depth chart for CPU clubs (and user when no saved sheet) — same deploy path as Edit Lines.
+
+    Ordered by OVR and current production (``stats`` = session.player_season_stats)."""
     skaters = [p for p in getattr(team, "roster", None) or [] if _pos_str(p).upper() != "G"]
     fw = [p for p in skaters if _pos_str(p).upper() not in ("D", "LD", "RD")]
     defs = [p for p in skaters if _pos_str(p).upper() in ("D", "LD", "RD")]
-    fw.sort(key=lambda p: -_player_ovr99(p))
-    defs.sort(key=lambda p: -_player_ovr99(p))
+    fw.sort(key=lambda p: -_hot_hand_line_value(p, stats))
+    defs.sort(key=lambda p: -_hot_hand_line_value(p, stats))
     goalies = sorted(
         [p for p in getattr(team, "roster", None) or [] if _pos_str(p).upper() == "G"],
         key=lambda p: -_player_ovr99(p),
@@ -12152,7 +12175,7 @@ def _attach_franchise_saved_lineups(
         ):
             even = None
         if even is None:
-            even = _synthetic_even_strength_lines_for_team(tm)
+            even = _synthetic_even_strength_lines_for_team(tm, getattr(session, "player_season_stats", None))
         if isinstance(even, dict) and (even.get("forwards") or even.get("defense")):
             setattr(tm, "_franchise_saved_lines", even)
             if is_user and even_user is not None:
@@ -13189,12 +13212,15 @@ def _run_franchise_narrative_passes(
         franchise_cause_storyline_daily_pass(session, just_idx, day_meta, rng=session.sim.rng)
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
-    if not full:
-        return
+    # Weekly pull of fan confidence back toward what the standings justify. It ran
+    # only in the full pass, so bulk sims applied every story bump and never the
+    # pull-back: +450 points league-wide a month, every club at 100 by spring.
     try:
         _decay_all_fan_heat(session, just_idx)
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
+    if not full:
+        return
     _franchise_fanout_player_storylines(session, just_idx, day_meta)
     try:
         from services.trade_demand_engine import process_trade_demand_day
@@ -13333,8 +13359,23 @@ def _run_bulk_incremental_catchup(session: FranchiseSession, *, steps_n: int) ->
         _bulk_trade_demand_catchup(session)
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
+    # Development ticks follow the calendar: one every 8 days (depth pools every 5),
+    # however the days were chunked. ``max(1, steps // 8)`` ran a full league-wide
+    # growth pulse on every short bulk call, so a season's 22 prospect pulses were
+    # spent in ~70 days and each cost ~20s.
+    day_now = int(getattr(session, "calendar_days_finished", 0) or 0)
+
+    def _due(attr: str, every: int) -> int:
+        last = getattr(session, attr, None)
+        if last is None:
+            last = day_now - steps_n
+        n = max(0, (day_now - int(last)) // every)
+        if n:
+            setattr(session, attr, int(last) + n * every)
+        return n
+
     try:
-        for _ in range(max(1, steps_n // 8)):
+        for _ in range(_due("_bulk_dev_tick_day", 8)):
             try:
                 _nhl_in_season_development_tick(session)
             except Exception:
@@ -13343,7 +13384,7 @@ def _run_bulk_incremental_catchup(session: FranchiseSession, *, steps_n: int) ->
                 _prospect_in_season_development_tick(session)
             except Exception:
                 _swallowed_log.debug("suppressed exception", exc_info=True)
-        for _ in range(max(1, steps_n // 5)):
+        for _ in range(_due("_bulk_depth_tick_day", 5)):
             _depth_pool_progression_tick(session)
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
@@ -14005,8 +14046,11 @@ def _finalize_regular_calendar_day(
         _swallowed_log.debug("suppressed exception", exc_info=True)
     if not bulk and int(session.calendar_days_finished) % 5 == 0:
         _depth_pool_progression_tick(session)
+        session._bulk_depth_tick_day = int(session.calendar_days_finished)
 
     if not bulk and int(session.calendar_days_finished) % 8 == 0:
+        # Keep the bulk path's calendar in step so it never re-runs these ticks.
+        session._bulk_dev_tick_day = int(session.calendar_days_finished)
         try:
             _nhl_in_season_development_tick(session)
         except Exception:
@@ -22473,12 +22517,276 @@ def apply_completed_trade_fan_reaction(
     return _apply_completed_trade_fan_effects(session, user_team_id, fan_result, enriched_ctx)
 
 
+# ---------------------------------------------------------------------------
+# Fan mood storylines: the crowd is felt, not just a number
+# ---------------------------------------------------------------------------
+
+_FAN_TIER_ORDER = ("Hostile", "Restless", "Steady", "Loyal", "Electric")
+#: Days before the same fan-mood story can hit the same club again.
+_FAN_STORY_COOLDOWN_DAYS = 21
+#: CPU fan stories per week league-wide (the user's club is never capped).
+_FAN_STORY_CPU_WEEKLY_CAP = 3
+
+
+def _fan_record_text(session: FranchiseSession, team_id: str) -> str:
+    try:
+        rec = (getattr(getattr(session, "standings", None), "records", None) or {}).get(str(team_id))
+        if rec is None:
+            return ""
+        return f"{int(getattr(rec, 'wins', 0) or 0)}-{int(getattr(rec, 'losses', 0) or 0)}-{int(getattr(rec, 'otl', 0) or 0)}"
+    except Exception:
+        return ""
+
+
+# kind -> (mood, headline, summary, consequence text, effects)
+#   effects: morale / belonging for the roster, gm_trust for the fan profile,
+#   media for organizational pressure (0..1 scale on the team state).
+_FAN_MOOD_STORIES: Dict[str, Tuple[str, str, str, str, Dict[str, float]]] = {
+    "sellout_streak": (
+        "up", "{team} sell out again: the building is electric",
+        "Fan confidence {fan:.0f}/100 at {record}. Every seat is gone and the lineup is hearing it.",
+        "Room morale +1.5; home-ice edge {home:+.0f}%; free agents +{fa:.0f} interest.",
+        {"morale": 1.5, "belonging": 0.5},
+    ),
+    "players_rave": (
+        "up", "{team} players rave about the home crowd",
+        "With fans at {fan:.0f}/100 the room says the building is giving them a goal a night.",
+        "Belonging +1.5 for the roster; free agents are noticing (+{fa:.0f} interest).",
+        {"morale": 0.8, "belonging": 1.5},
+    ),
+    "jersey_spike": (
+        "up", "{team} jerseys flying off the shelves",
+        "Fan confidence {fan:.0f}/100: merch and sponsorship are running hot.",
+        "Gate, merch and sponsorship {gate} a year; franchise value growth {value:+.1f} pts.",
+        {"morale": 0.5},
+    ),
+    "boos_at_home": (
+        "down", "Boos rain down on {team} at home",
+        "Fan confidence {fan:.0f}/100 at {record}. The crowd turned on the team in the third.",
+        "Room morale -2; home-ice edge {home:+.0f}%; free agents {fa:+.0f} interest.",
+        {"morale": -2.0, "belonging": -0.5, "media": 0.04},
+    ),
+    "empty_seats": (
+        "down", "Empty seats pile up for {team}",
+        "Fans are at {fan:.0f}/100 and it shows in the stands.",
+        "Gate, merch and sponsorship {gate} a year; franchise value growth {value:+.1f} pts.",
+        {"morale": -0.8, "media": 0.03},
+    ),
+    "fire_the_gm": (
+        "down", "\"Fire the GM\" chants break out in {city}",
+        "Fan confidence {fan:.0f}/100 at {record}. The frustration has a target: the front office.",
+        "Fans' trust in the GM -4; media pressure up; room morale -1.",
+        {"morale": -1.0, "gm_trust": -4.0, "media": 0.06},
+    ),
+    "jerseys_on_ice": (
+        "down", "Jerseys thrown on the ice in {city}",
+        "Fans are at {fan:.0f}/100 and some are done: jerseys landed on the ice after the final horn.",
+        "Room morale -3, belonging -1.5; fans' trust in the GM -3; media pressure up.",
+        {"morale": -3.0, "belonging": -1.5, "gm_trust": -3.0, "media": 0.08},
+    ),
+}
+
+
+def _fan_story_numbers(session: FranchiseSession, team_id: str, fan: float) -> Dict[str, Any]:
+    out: Dict[str, Any] = {"fan": fan, "home": 0.0, "fa": 0.0, "value": 0.0, "gate": "$0M"}
+    try:
+        from app.sim_engine.league.game_rules import fan_home_ice_share
+
+        out["home"] = fan_home_ice_share(fan) * 100.0
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    try:
+        from services.contract_economy import fan_fa_interest_points
+
+        out["fa"] = fan_fa_interest_points(fan)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    try:
+        from services.league_governance import FAN_VALUE_COEF
+
+        out["value"] = FAN_VALUE_COEF * (fan - 55.0)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    try:
+        from services.league_operations import calculate_team_revenue
+
+        team = session.team_by_id.get(str(team_id))
+        rev = float((calculate_team_revenue(session, team, str(team_id), annual=True) or {}).get("revenue") or 0.0)
+        mult = 0.70 + 0.45 * max(0.0, min(100.0, fan)) / 100.0
+        gate = rev * (mult - (0.70 + 0.45 * 0.55)) / max(0.1, mult)
+        out["gate"] = f"{'+' if gate >= 0 else '-'}${abs(gate):.1f}M"
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    return out
+
+
+def _emit_fan_story(
+    session: FranchiseSession,
+    team_id: str,
+    kind: str,
+    headline: str,
+    summary: str,
+    consequence: str,
+    calendar_idx: int,
+    *,
+    mood: str,
+    effects: Optional[Dict[str, float]] = None,
+) -> None:
+    """Record the story (storyline feed + social feed), apply what the crowd did,
+    and notify the user when it is their club."""
+    tid = str(team_id)
+    is_user = tid == str(getattr(session, "user_team_id", "") or "")
+    team = session.team_by_id.get(tid)
+    iso = _calendar_iso_for_day(session, int(calendar_idx))
+    abbr = _franchise_team_abbrev(team) if team is not None else tid
+    fx = dict(effects or {})
+    # What the crowd does to the club.
+    try:
+        from app.sim_engine.franchise.storyline_engine import nudge_roster_state  # noqa: WPS433
+
+        nudge_roster_state(session, tid, morale=float(fx.get("morale", 0.0)), belonging=float(fx.get("belonging", 0.0)))
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    if fx.get("gm_trust"):
+        prof = _ensure_team_fan_profile(session, tid)
+        prof["fan_trust_in_gm"] = float(_clamp_fan_score(float(prof.get("fan_trust_in_gm", 58)) + float(fx["gm_trust"])))
+    if fx.get("media") and team is not None:
+        st = getattr(team, "state", None)
+        if st is not None and hasattr(st, "organizational_pressure"):
+            try:
+                st.organizational_pressure = max(0.0, min(1.0, float(st.organizational_pressure) + float(fx["media"])))
+            except (TypeError, ValueError):
+                pass
+    sid = f"fanmood:{tid}:{kind}:{int(calendar_idx)}"
+    _record_storyline(session, {
+        "id": f"story:{sid}",
+        "storyline_id": sid,
+        "type": "fan_mood",
+        "kind": "fan_mood",
+        "category": "fans",
+        "tone": "positive" if mood == "up" else "negative",
+        "headline": headline,
+        "details": f"{summary} {consequence}",
+        "summary": summary,
+        "effect_summary": consequence,
+        "team": tid,
+        "team_id": tid,
+        "team_abbrev": abbr,
+        "priority": "HIGH" if is_user else "MEDIUM",
+        "heat": 62 if is_user else 40,
+        "date": int(calendar_idx),
+        "calendar_day": int(calendar_idx),
+        "calendar_iso": iso,
+        "surfaces": ["storylines", "calendar", "notifications"],
+    })
+    if is_user:
+        session.notifications = getattr(session, "notifications", None) or []
+        session.notifications.append(_normalized_notification(
+            notification_id=f"notif:{sid}",
+            notification_type="fan_mood",
+            text=f"{headline}. {summary} {consequence}",
+            priority="HIGH" if mood == "down" else "MEDIUM",
+            calendar_day=int(calendar_idx),
+            calendar_iso=iso,
+            team_id=tid,
+            source="fan_mood",
+            extra={"title": headline, "mood": mood, "kind": kind},
+        ))
+
+
+def _fan_mood_storylines(session: FranchiseSession, team_id: str, before: float, after: float, calendar_idx: int) -> None:
+    """Weekly: stories when a club's fans change tier, and while they sit at an extreme."""
+    try:
+        from services.league_governance import fan_tier
+    except Exception:
+        return
+    tid = str(team_id)
+    is_user = tid == str(getattr(session, "user_team_id", "") or "")
+    team = session.team_by_id.get(tid)
+    if team is None:
+        return
+    log = getattr(session, "fan_mood_story_log", None)
+    if not isinstance(log, dict):
+        log = {}
+        session.fan_mood_story_log = log
+    club_log = log.setdefault(tid, {})
+    week = int(calendar_idx) // 7
+    if not is_user:
+        budget = log.setdefault("_cpu_week", {})
+        if int(budget.get("week", -1)) != week:
+            budget.clear()
+            budget.update({"week": week, "n": 0})
+        if int(budget.get("n", 0)) >= _FAN_STORY_CPU_WEEKLY_CAP:
+            return
+
+    old_t, new_t = fan_tier(before), fan_tier(after)
+    city = str(getattr(team, "city", "") or "").strip()
+    name = str(getattr(team, "name", "") or tid).strip()
+    if city and not name.lower().startswith(city.lower()):
+        name = f"{city} {name}"
+    city = city or name
+    record = _fan_record_text(session, tid) or "this season"
+    nums = _fan_story_numbers(session, tid, after)
+    nums.update({"team": name, "city": city, "record": record})
+    emitted = False
+
+    # 1) Tier change.
+    if old_t != new_t:
+        up = _FAN_TIER_ORDER.index(new_t) > _FAN_TIER_ORDER.index(old_t)
+        extreme = new_t in ("Electric", "Hostile")
+        if is_user or extreme:
+            headline = (
+                f"{name} fans are {new_t.lower()} now" if up
+                else f"{name} fans slide to {new_t.lower()}"
+            )
+            summary = f"Fan confidence moved {before:.0f} -> {after:.0f} at {record}."
+            consequence = (
+                f"Home-ice edge {nums['home']:+.0f}%, free agents {nums['fa']:+.0f} interest, "
+                f"gate and merch {nums['gate']} a year vs. average fans."
+            )
+            _emit_fan_story(session, tid, f"tier_{new_t.lower()}", headline, summary, consequence, calendar_idx,
+                            mood="up" if up else "down")
+            club_log[f"tier_{new_t.lower()}"] = int(calendar_idx)
+            emitted = True
+
+    # 2) A mood story while fans sit at an extreme (one per club per week at most).
+    if not emitted and (after >= 80 or after < 48):
+        if after >= 80:
+            pool = ["sellout_streak", "players_rave", "jersey_spike"]
+        elif after < 35:
+            pool = ["jerseys_on_ice", "fire_the_gm", "boos_at_home", "empty_seats"]
+        else:
+            pool = ["boos_at_home", "empty_seats", "fire_the_gm"]
+        pool = [k for k in pool if int(calendar_idx) - int(club_log.get(k, -999)) >= _FAN_STORY_COOLDOWN_DAYS]
+        # Not every week: about half the time for the user, a third for CPU clubs.
+        roll = random.Random(f"fanmood|{getattr(session, 'session_id', '')}|{tid}|{week}").random()
+        if pool and roll < (0.5 if is_user else 0.33):
+            # Least-recently told first, so the crowd doesn't repeat itself.
+            oldest = min(int(club_log.get(k, -999)) for k in pool)
+            fresh = [k for k in pool if int(club_log.get(k, -999)) == oldest]
+            kind = fresh[int(roll * 1000) % len(fresh)]
+            mood, head, summ, cons, fx = _FAN_MOOD_STORIES[kind]
+            try:
+                _emit_fan_story(
+                    session, tid, kind, head.format(**nums), summ.format(**nums), cons.format(**nums),
+                    calendar_idx, mood=mood, effects=fx,
+                )
+                club_log[kind] = int(calendar_idx)
+                emitted = True
+            except (KeyError, ValueError):
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+    if emitted and not is_user:
+        log["_cpu_week"]["n"] = int(log["_cpu_week"].get("n", 0)) + 1
+
+
 def _decay_fan_heat_for_team(session: FranchiseSession, team_id: str, calendar_idx: int) -> None:
     profile = _ensure_team_fan_profile(session, team_id)
     week = int(calendar_idx // 7)
     if int(profile.get("last_decay_week", -1)) == week:
         return
     profile["last_decay_week"] = week
+    # Weekly snapshot for the fan-confidence trend shown on the ticker.
+    profile["fan_confidence_last_week"] = float(profile.get("fan_confidence", 55))
     heat = float(profile.get("recent_trade_heat", 0) or 0)
     profile["recent_trade_heat"] = float(_clamp_fan_score(max(0.0, heat - 4.0)))
 
@@ -22497,13 +22805,43 @@ def _decay_fan_heat_for_team(session: FranchiseSession, team_id: str, calendar_i
 
     conf = float(profile.get("fan_confidence", 55))
     trust = float(profile.get("fan_trust_in_gm", 58))
-    if conf < baseline:
-        profile["fan_confidence"] = float(min(baseline, conf + 1.5))
-    elif conf > baseline + 8:
-        profile["fan_confidence"] = float(max(baseline + 4, conf - 0.8))
+    # Pull back toward what the standings justify, harder the further off it is. A
+    # flat -0.8 a week lost to a few +3/+4 story bumps, and every club's fans sat at
+    # 100 by spring (so a .280 club drew like a contender and no one lost money).
+    gap = conf - baseline
+    if gap < 0:
+        profile["fan_confidence"] = float(min(baseline, conf + max(1.5, -gap * 0.20)))
+    elif gap > 4:
+        profile["fan_confidence"] = float(max(baseline + 4, conf - max(0.8, gap * 0.20)))
     if float(profile.get("recent_trade_heat", 0)) <= 8:
         if trust < 58:
             profile["fan_trust_in_gm"] = float(min(58.0, trust + 1.0))
+    # What the standings justify, kept for the "why" breakdown on the Board screen.
+    profile["fan_baseline"] = round(float(baseline), 1)
+    # Mirror onto the club so the game engine (home crowd) and free agency (fan
+    # base appeal) can read it without a session.
+    if team is not None:
+        try:
+            setattr(team, "_fan_confidence", float(profile.get("fan_confidence", 55)))
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    # The crowd reaches the room: weekly morale / belonging nudge for the club's players.
+    try:
+        from app.sim_engine.franchise.storyline_engine import apply_fan_mood_to_roster  # noqa: WPS433
+
+        apply_fan_mood_to_roster(session, str(team_id), float(profile.get("fan_confidence", 55)))
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    # And the league hears about it: tier changes and mood stories with consequences.
+    try:
+        _fan_mood_storylines(
+            session, str(team_id),
+            float(profile.get("fan_confidence_last_week", profile.get("fan_confidence", 55))),
+            float(profile.get("fan_confidence", 55)),
+            int(calendar_idx),
+        )
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _process_trade_fan_legacy_reviews(session: FranchiseSession, calendar_idx: int) -> None:
@@ -22551,8 +22889,15 @@ def _process_trade_fan_legacy_reviews(session: FranchiseSession, calendar_idx: i
 def _decay_all_fan_heat(session: FranchiseSession, calendar_idx: int) -> None:
     """Weekly fan heat decay + legacy trade reviews."""
     utid = str(getattr(session, "user_team_id", "") or "")
+    # Every club's fans drift back toward what its standings justify. Only the user's
+    # did, so CPU fan confidence only ever rose (story bumps) and sat at 100: every
+    # CPU club drew like a contender and none ever lost money.
+    for tid in list((getattr(session, "team_by_id", None) or {}).keys()):
+        try:
+            _decay_fan_heat_for_team(session, str(tid), calendar_idx)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     if utid:
-        _decay_fan_heat_for_team(session, utid, calendar_idx)
         _process_trade_fan_legacy_reviews(session, calendar_idx)
     int(getattr(session, "season_calendar_year", 2025) or 2025)
     if int(calendar_idx) == int(getattr(session, "nhl_regular_season_last_index", 192) or 192):
@@ -24333,6 +24678,14 @@ def player_cap_hit_millions(player: Any) -> float:
 
 def _contract_years_remaining(player: Any) -> int:
     c = getattr(player, "contract", None)
+    # Real-NHL contracts are dicts; getattr on them always missed and this returned 1.
+    if isinstance(c, dict):
+        for key in ("years_remaining", "term_remaining", "remaining_years"):
+            if c.get(key) is not None:
+                try:
+                    return max(0, int(c.get(key)))
+                except (TypeError, ValueError):
+                    pass
     for obj in (player, c):
         if obj is None:
             continue

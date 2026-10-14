@@ -126,3 +126,40 @@ def test_cap_forecast_series_sources():
     assert series[0]["source"] == "current"
     assert series[1]["source"] == "projected_next"
     assert series[2]["source"] == "extrapolated"
+
+
+def test_board_effect_notes_follow_the_tone():
+    from services.league_governance import _effect_tone
+
+    assert _effect_tone("opex", 0.3) == ("con", "Higher operating costs eat profit")
+    assert _effect_tone("opex", -0.3) == ("pro", "Cheaper to run a club")
+    assert _effect_tone("injury_rate", -6.0) == ("pro", "Fewer injuries")
+    assert _effect_tone("injury_rate", 6.0) == ("con", "More injuries")
+    assert _effect_tone("rev_all", 2.0)[0] == "pro"
+
+
+def test_live_market_tier_is_written_back_to_the_team():
+    from types import SimpleNamespace
+
+    from services.league_operations import _sync_team_market_size
+
+    team = SimpleNamespace(market=SimpleNamespace(market_size="small"))
+    _sync_team_market_size(team, "large")
+    assert team.market.market_size == "large"
+
+
+def test_fan_confidence_curves():
+    from services.franchise_paths import ensure_simengine_path
+
+    ensure_simengine_path()
+    from services.contract_economy import fan_fa_interest_points
+    from services.league_governance import fan_lobby_mult, fan_tier
+    from app.sim_engine.league.game_rules import fan_home_ice_share
+
+    assert fan_fa_interest_points(100) == 40.0
+    assert fan_fa_interest_points(70) == 15.0
+    assert fan_fa_interest_points(55) == 0.0
+    assert fan_fa_interest_points(20) == -10.0
+    assert fan_home_ice_share(95) == 0.25 and fan_home_ice_share(20) == -0.25
+    assert fan_lobby_mult(90) == pytest.approx(1.2) and fan_lobby_mult(30) == pytest.approx(0.8)
+    assert fan_tier(90) == "Electric" and fan_tier(30) == "Hostile"

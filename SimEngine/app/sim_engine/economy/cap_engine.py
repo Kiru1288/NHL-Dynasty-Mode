@@ -1141,6 +1141,26 @@ def _player_on_active_roster(team: Any, player: Any) -> bool:
     return False
 
 
+def _session_books_snapshot_kwargs(league: Any, include_expiring: bool) -> Dict[str, Any]:
+    """Season + opening-day flag from the session's cap books (set by the backend).
+
+    Without them the snapshot fell back to the league's lagging season year:
+    the old cap and this season's roster, so the first signing check of a
+    phase could say "Insufficient usable cap space" while every screen showed room.
+    """
+    books = _get(league, "_session_cap_books", None) if league is not None else None
+    if not isinstance(books, dict) or not books.get("season_year"):
+        return {}
+    try:
+        sy = int(books["season_year"])
+    except (TypeError, ValueError):
+        return {}
+    out: Dict[str, Any] = {"season_label": f"{sy}-{(sy + 1) % 100:02d}"}
+    if books.get("opening_day") and not books.get("in_season") and not include_expiring:
+        out["opening_day"] = True
+    return out
+
+
 def can_sign_player(
     team: Any,
     contract_aav_m: float,
@@ -1149,7 +1169,12 @@ def can_sign_player(
     player: Any = None,
     include_expiring: bool = False,
 ) -> Dict[str, Any]:
-    snap = calculate_team_cap_snapshot(team, league=league, include_expiring=bool(include_expiring))
+    snap = calculate_team_cap_snapshot(
+        team,
+        league=league,
+        include_expiring=bool(include_expiring),
+        **_session_books_snapshot_kwargs(league, bool(include_expiring)),
+    )
     needed = max(0.0, float(contract_aav_m))
     roster_add = 0 if _player_on_active_roster(team, player) else 1
     projected_roster_count = snap["activeRosterCount"] + roster_add
@@ -1172,7 +1197,7 @@ def can_sign_player(
 
 
 def can_recall_player(team: Any, player: Any, league: Any = None) -> Dict[str, Any]:
-    snap = calculate_team_cap_snapshot(team, league=league)
+    snap = calculate_team_cap_snapshot(team, league=league, **_session_books_snapshot_kwargs(league, False))
     added = player_cap_hit_millions(player) - buried_cap_hit_millions(player)
     ok = (snap["usableCapSpace"] - max(0.0, added)) >= 0 and snap["activeRosterCount"] < snap["activeRosterMax"]
     reason = "ok" if ok else "Recall would break cap or roster limit"

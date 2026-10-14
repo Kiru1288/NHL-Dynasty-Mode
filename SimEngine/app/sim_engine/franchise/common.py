@@ -83,6 +83,48 @@ def _append_unique_dict_event(rows: List[Dict[str, Any]], event: Dict[str, Any])
     if eid and any(isinstance(x, dict) and str(x.get("id") or "") == eid for x in rows):
         return
     rows.append(event)
+def _name_storyline_text(text: str, full_name: str) -> str:
+    """Put the player in his own story: the catalog says "player" ("Team insider
+    reports player is unhappy with role"). First mention becomes his last name,
+    later ones "he"/"his"."""
+    import re as _re
+
+    last = (str(full_name or "").strip().split(" ") or [""])[-1]
+    if not last or last.lower() == "player":
+        return str(text or "")
+    state = {"n": 0}
+
+    def _sub(m: Any) -> str:
+        word, poss = m.group(1), m.group(2)
+        state["n"] += 1
+        if state["n"] == 1:
+            return f"{last}'s" if poss else last
+        if poss:
+            return "His" if word[0].isupper() else "his"
+        return "He" if word[0].isupper() else "him"
+
+    return _re.sub(r"\b([Pp]layer)(['’]s)?\b(?!s)", _sub, str(text or ""), count=0)
+
+
+def _season_line_note(session: Any, player_id: str) -> str:
+    """' · 41 GP, 12-19-31, +6, 17:42 TOI' from this season's stats, or ''."""
+    row = ((getattr(session, "player_season_stats", None) or {}).get(str(player_id or "")) or {})
+    gp = int(row.get("gp") or 0)
+    if gp <= 0:
+        return ""
+    pos = str(row.get("position") or "").upper()
+    if pos == "G":
+        sa = int(row.get("shots_against") or row.get("goalie_shots_against") or 0)
+        ga = int(row.get("goalie_ga") or row.get("ga") or 0)
+        sv = f", {1 - ga / sa:.3f}".replace("0.", ".", 1) if sa else ""
+        return f" · {gp} GP, {int(row.get('w') or 0)}-{int(row.get('l') or 0)}{sv}"
+    g, a = int(row.get("g") or 0), int(row.get("a") or 0)
+    pm = int(row.get("plus_minus") or 0)
+    toi = int(row.get("toi_sec") or 0) / max(1, gp)
+    toi_txt = f", {int(toi // 60)}:{int(toi % 60):02d} TOI" if toi > 0 else ""
+    return f" · {gp} GP, {g}-{a}-{g + a}, {pm:+d}{toi_txt}"
+
+
 def _normalized_notification(
     *,
     notification_id: str,
@@ -299,7 +341,7 @@ def _franchise_log_injury_and_ui(
         _normalized_notification(
             notification_id=f"notif:{base_id}",
             notification_type="injury",
-            text=f"{player_label} ({team_abbr or tid_cmp}) out {int(games)} games ({injury_type or tier}).",
+            text=f"{player_label} ({team_abbr or tid_cmp}) out {int(games)} game{'s' if int(games) != 1 else ''} ({injury_type or tier}).",
             priority=priority,
             calendar_day=cur_date,
             calendar_iso=str(calendar_iso or ""),
@@ -317,7 +359,7 @@ def _franchise_log_injury_and_ui(
             "type": "injury",
             "kind": "injury",
             "headline": f"{player_label} sidelined",
-            "details": f"{team_abbr or tid_cmp} lose {player_label} for {int(games)} games ({injury_type or tier})",
+            "details": f"{team_abbr or tid_cmp} lose {player_label} for {int(games)} game{'s' if int(games) != 1 else ''} ({injury_type or tier})",
             "cause": f"{player_label} suffered a {injury_type or tier} injury.",
             "effects": {
                 "availability_games_delta": -int(games),
@@ -929,7 +971,12 @@ def _franchise_fanout_player_storylines(session: FranchiseSession, calendar_idx:
             _normalized_notification(
                 notification_id=f"notif:{base_id}",
                 notification_type=notif_type,
-                text=f"{pname} ({abbrev}): {st}{notif_tail}",
+                text=(
+                    f"{_name_storyline_text(st, pname)} ({abbrev}){notif_tail}"
+                    f"{_season_line_note(session, str(row.get('player_id') or ''))}"
+                    if _name_storyline_text(st, pname) != st
+                    else f"{pname} ({abbrev}): {st}{notif_tail}{_season_line_note(session, str(row.get('player_id') or ''))}"
+                ),
                 priority=priority,
                 calendar_day=cur_date,
                 calendar_iso=iso,
