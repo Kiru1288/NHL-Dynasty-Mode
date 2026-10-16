@@ -137,7 +137,7 @@ export const HUB_WARMUP_STAGES = Object.freeze({
 export const HUB_WARMUP_LABELS = Object.freeze({
   environment: "Executive office",
   crests: "League identity",
-  operations: "Hockey operations records",
+  operations: "Records",
 });
 
 function prefetchImage(src, timeoutMs = 25000) {

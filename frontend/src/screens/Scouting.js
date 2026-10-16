@@ -4757,18 +4757,18 @@ function OverviewView({
       <style>{`
         .scout-root {
           /* Entry Draft floor tokens (events/entryDraft/EntryDraftMenu.js) */
-          --bg: #04101a;
-          --panel: rgba(9, 25, 38, 0.94);
+          --bg: #0c214d;
+          --panel: rgba(14, 40, 88, 0.94);
           --panel-2: rgba(12, 35, 52, 0.94);
           --panel-3: rgba(15, 46, 66, 0.78);
           --line: rgba(156, 218, 236, 0.14);
           --line-soft: rgba(156, 218, 236, 0.08);
-          --line-strong: rgba(73, 231, 240, 0.5);
+          --line-strong: rgba(46, 230, 214, 0.5);
           --text: #e9f7fb;
           --muted: #8096a8;
           --muted-2: #607789;
-          --cyan: #13d8e7;
-          --cyan-soft: rgba(19, 216, 231, 0.13);
+          --cyan: #2ee6d6;
+          --cyan-soft: rgba(46, 230, 214, 0.13);
           --gold: #e9a83c;
           --gold-soft: rgba(233, 168, 60, 0.14);
           --green: #52df94;
@@ -4777,12 +4777,12 @@ function OverviewView({
           --red-soft: rgba(255, 96, 109, 0.13);
           --blue: #8ab4ff;
           --depth-registered: inset 0 1px 0 rgba(255, 255, 255, 0.04);
-          --ed-head: "Barlow Condensed", var(--font-broadcast-display), "Archivo Black", "Rajdhani", "Arial Narrow", sans-serif;
+          --ed-head: var(--dd-font-ui, Nunito, sans-serif);
           --ed-mono: var(--font-mono-data, "IBM Plex Mono", Consolas, "Courier New", monospace);
           --ed-body: var(--font-ops-ui, Inter, ui-sans-serif, system-ui, "Segoe UI", sans-serif);
 
           --scout-bg: var(--bg);
-          --scout-bg-2: #020a11;
+          --scout-bg-2: #0b1d45;
           --scout-panel: var(--panel);
           --scout-panel-2: var(--panel-2);
           --scout-panel-3: var(--panel-3);
@@ -4810,7 +4810,7 @@ function OverviewView({
           background:
             radial-gradient(circle at 18% 0%, rgba(57, 185, 255, 0.12), transparent 30%),
             radial-gradient(circle at 90% 12%, rgba(255, 79, 99, 0.09), transparent 26%),
-            linear-gradient(180deg, #061522 0%, #020810 100%);
+            linear-gradient(180deg, #0d2555 0%, #0b1c44 100%);
           font-family:
             Inter,
             ui-sans-serif,
@@ -4851,7 +4851,7 @@ function OverviewView({
         .scout-sidebar {
           min-height: 100vh;
           background:
-            linear-gradient(180deg, rgba(6, 17, 28, 0.98), rgba(2, 8, 15, 0.98));
+            linear-gradient(180deg, rgba(13, 34, 79, 0.98), rgba(11, 28, 68, 0.98));
           border-right: 1px solid var(--scout-line);
           display: flex;
           flex-direction: column;
@@ -5074,7 +5074,7 @@ function OverviewView({
           padding: 0 14px;
           border-radius: 10px;
           border: 1px solid var(--scout-line);
-          background: rgba(8, 24, 39, 0.88);
+          background: rgba(14, 39, 89, 0.88);
           color: var(--scout-text);
           font-size: 11px;
           font-weight: 1000;
@@ -5098,7 +5098,7 @@ function OverviewView({
           border: 1px solid var(--scout-line);
           border-radius: var(--radius-control);
           overflow: hidden;
-          background: rgba(6, 21, 34, 0.72);
+          background: rgba(13, 37, 85, 0.72);
         }
 
         .scout-intel-banner {
@@ -5177,7 +5177,7 @@ function OverviewView({
           padding: 8px 10px;
           border: 1px solid rgba(156, 218, 236, 0.12);
           border-radius: 8px;
-          background: rgba(6, 21, 34, 0.5);
+          background: rgba(13, 37, 85, 0.5);
           color: inherit;
         }
 
@@ -5279,7 +5279,7 @@ function OverviewView({
           border-radius: var(--radius-control);
           overflow: hidden;
           margin-bottom: 12px;
-          background: rgba(7, 21, 35, 0.84);
+          background: rgba(14, 37, 86, 0.84);
         }
   
         .scout-tabs button {
@@ -5324,7 +5324,7 @@ function OverviewView({
           border: 1px solid var(--scout-line);
           border-radius: var(--scout-radius);
           background:
-            linear-gradient(180deg, rgba(9, 26, 42, 0.94), rgba(4, 13, 23, 0.94));
+            linear-gradient(180deg, rgba(14, 40, 92, 0.94), rgba(12, 31, 75, 0.94));
           box-shadow: var(--scout-shadow);
           padding: 16px;
         }
@@ -5342,7 +5342,7 @@ function OverviewView({
           border-radius: var(--scout-radius);
           background:
             linear-gradient(135deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.02)),
-            rgba(8, 23, 37, 0.82);
+            rgba(14, 38, 87, 0.82);
           box-shadow: 0 18px 50px rgba(0, 0, 0, 0.2);
         }
   
@@ -5386,7 +5386,7 @@ function OverviewView({
           top: 0.32em;
           width: 7px;
           height: 0.72em;
-          border: 1px solid var(--ops-cyan, #13d8e7);
+          border: 1px solid var(--ops-cyan, #2ee6d6);
           border-right: 0;
           opacity: 0.75;
         }
@@ -6082,7 +6082,7 @@ function OverviewView({
           background:
             radial-gradient(circle at 35% 28%, rgba(255, 255, 255, 0.22), transparent 16%),
             radial-gradient(circle at 58% 60%, rgba(57, 185, 255, 0.24), transparent 46%),
-            linear-gradient(135deg, rgba(10, 52, 84, 0.98), rgba(3, 18, 32, 0.98));
+            linear-gradient(135deg, rgba(10, 52, 84, 0.98), rgba(12, 35, 83, 0.98));
           box-shadow:
             inset 0 0 84px rgba(0, 0, 0, 0.58),
             0 0 84px rgba(57, 185, 255, 0.22);
@@ -6514,7 +6514,7 @@ function OverviewView({
         }
   
         .scout-field select option {
-          background: #071524;
+          background: #0e2556;
           color: var(--scout-text);
         }
   
@@ -6564,7 +6564,7 @@ function OverviewView({
           top: 0;
           z-index: 2;
           color: var(--scout-muted);
-          background: rgba(6, 18, 30, 0.98);
+          background: rgba(13, 35, 81, 0.98);
           font-size: 11px;
           font-weight: 1000;
           letter-spacing: 0.1em;
@@ -6864,7 +6864,7 @@ function OverviewView({
 
         .staff-card.is-selected {
           border-color: rgba(57, 185, 255, 0.34);
-          border-left-color: var(--ops-cyan, #13d8e7);
+          border-left-color: var(--ops-cyan, #2ee6d6);
           background: rgba(57, 185, 255, 0.08);
         }
   
@@ -7458,8 +7458,8 @@ function OverviewView({
         }
 
         .intensity-picker button.is-active {
-          color: #0b1720;
-          background: var(--ops-cyan, #13d8e7);
+          color: #102653;
+          background: var(--ops-cyan, #2ee6d6);
         }
   
         .cost-card {
@@ -7491,7 +7491,7 @@ function OverviewView({
           min-height: 54px;
           border: 0;
           border-radius: 6px;
-          color: #02101c;
+          color: #0b214f;
           background: linear-gradient(135deg, #6bd2ff, #5cf29c);
           box-shadow:
             0 16px 38px rgba(57, 185, 255, 0.23),
@@ -7596,9 +7596,9 @@ function OverviewView({
           display: grid;
           place-items: center;
           border-radius: var(--radius-hud, 4px);
-          border: 1px solid rgba(19, 216, 231, 0.32);
-          color: var(--ops-cyan, #13d8e7);
-          background: rgba(19, 216, 231, 0.13);
+          border: 1px solid rgba(46, 230, 214, 0.32);
+          color: var(--ops-cyan, #2ee6d6);
+          background: rgba(46, 230, 214, 0.13);
           font-size: 22px;
           line-height: 1;
         }
@@ -7629,8 +7629,8 @@ function OverviewView({
           padding: 14px 16px;
           max-width: 520px;
           border: 1px solid var(--scout-line, rgba(238, 248, 255, 0.14));
-          border-left: 3px solid var(--ops-cyan, #13d8e7);
-          background: rgba(6, 21, 34, 0.6);
+          border-left: 3px solid var(--ops-cyan, #2ee6d6);
+          background: rgba(13, 37, 85, 0.6);
           text-align: left;
         }
   
@@ -7654,7 +7654,7 @@ function OverviewView({
           inset: 0 auto 0 0;
           width: 34%;
           border-radius: 0;
-          background: var(--ops-cyan, #13d8e7);
+          background: var(--ops-cyan, #2ee6d6);
           box-shadow: none;
           animation: scoutIntake 1.6s linear infinite;
         }
@@ -7674,7 +7674,7 @@ function OverviewView({
           font-weight: 900;
           letter-spacing: 0.14em;
           text-transform: uppercase;
-          color: var(--ops-cyan, #13d8e7);
+          color: var(--ops-cyan, #2ee6d6);
         }
   
         .scout-loading p {
@@ -7973,9 +7973,9 @@ function OverviewView({
           height: 100dvh;
           min-height: 100dvh;
           background:
-            radial-gradient(circle at 24% 0%, rgba(19, 216, 231, 0.12), transparent 30%),
+            radial-gradient(circle at 24% 0%, rgba(46, 230, 214, 0.12), transparent 30%),
             radial-gradient(circle at 92% 18%, rgba(233, 168, 60, 0.08), transparent 26%),
-            linear-gradient(180deg, #06131f 0%, #020a11 100%);
+            linear-gradient(180deg, #0d2352 0%, #0b1d45 100%);
           color: var(--text);
           font-family: var(--ed-body);
           font-size: 14px;
@@ -7988,14 +7988,14 @@ function OverviewView({
         .scout-sidebar { display: none; }
         .scout-root *, .scout-root *::before, .scout-root *::after {
           scrollbar-width: thin;
-          scrollbar-color: rgba(110, 173, 191, 0.35) rgba(4, 16, 26, 0.72);
+          scrollbar-color: rgba(110, 173, 191, 0.35) rgba(12, 33, 77, 0.72);
         }
 
         .scout-command {
           position: relative; z-index: 3;
           display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 14px;
           padding: 12px;
-          background: radial-gradient(circle at 0% 0%, rgba(19, 216, 231, 0.08), transparent 42%), var(--panel);
+          background: radial-gradient(circle at 0% 0%, rgba(46, 230, 214, 0.08), transparent 42%), var(--panel);
           border-bottom: 1px solid var(--line);
           box-shadow: var(--depth-registered);
           flex: none;
@@ -8021,7 +8021,7 @@ function OverviewView({
           font-size: 11px; font-weight: 900; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted);
           font-family: var(--ed-mono);
         }
-        .scout-pill.is-on { color: var(--cyan); border-color: rgba(19, 216, 231, 0.4); background: var(--cyan-soft); }
+        .scout-pill.is-on { color: var(--cyan); border-color: rgba(46, 230, 214, 0.4); background: var(--cyan-soft); }
 
         .scout-root .nhlcal-quick-link {
           border: 1px solid var(--line); border-radius: 4px; background: rgba(12, 31, 47, 0.72);
@@ -8030,7 +8030,7 @@ function OverviewView({
           transition: border-color 0.2s ease, background 0.2s ease, transform 0.2s ease;
         }
         .scout-root .nhlcal-quick-link:hover {
-          border-color: var(--line-strong); background: rgba(19, 216, 231, 0.12); color: var(--cyan); transform: translateY(-1px);
+          border-color: var(--line-strong); background: rgba(46, 230, 214, 0.12); color: var(--cyan); transform: translateY(-1px);
         }
         .scout-root .nhlcal-advance-button,
         .scout-root .nhlcal-advance-button-secondary,
@@ -8042,14 +8042,14 @@ function OverviewView({
           transition: border-color 0.18s ease, background 0.18s ease, filter 0.18s ease;
         }
         .scout-root .nhlcal-advance-button,
-        .scout-root .assign-button { border: 0; background: var(--gold); color: #1b1002; box-shadow: none; }
+        .scout-root .assign-button { border: 0; background: var(--gold); color: #182138; box-shadow: none; }
         .scout-root .nhlcal-advance-button:hover:not(:disabled),
         .scout-root .assign-button:hover:not(:disabled) { background: #f0b44a; filter: brightness(1.02); transform: none; }
         .scout-root .nhlcal-advance-button-secondary {
-          border: 1px solid rgba(19, 216, 231, 0.32); background: rgba(7, 22, 35, 0.92); color: var(--text);
+          border: 1px solid rgba(46, 230, 214, 0.32); background: rgba(14, 37, 86, 0.92); color: var(--text);
         }
         .scout-root .nhlcal-advance-button-secondary:hover:not(:disabled) {
-          border-color: rgba(19, 216, 231, 0.55); background: rgba(19, 216, 231, 0.12); color: var(--cyan);
+          border-color: rgba(46, 230, 214, 0.55); background: rgba(46, 230, 214, 0.12); color: var(--cyan);
         }
         .scout-root .nhlcal-advance-button-secondary.is-on { color: var(--gold); border-color: rgba(233, 168, 60, 0.5); background: var(--gold-soft); }
         .scout-root .assign-button { width: 100%; height: 46px; }
@@ -8065,7 +8065,7 @@ function OverviewView({
         .scout-ops-metric.tone-gold .scout-ops-metric__value { color: var(--gold); }
         .scout-ops-metric.tone-cyan .scout-ops-metric__value, .scout-ops-metric.tone-blue .scout-ops-metric__value { color: var(--cyan); }
         .scout-ops-metric.tone-green .scout-ops-metric__value { color: var(--green); }
-        .scout-intel-banner { border: 1px solid var(--line); border-left: 2px solid var(--gold); border-radius: 0; background: rgba(6, 21, 34, 0.72); }
+        .scout-intel-banner { border: 1px solid var(--line); border-left: 2px solid var(--gold); border-radius: 0; background: rgba(13, 37, 85, 0.72); }
 
         .scout-tabs {
           grid-template-columns: repeat(8, minmax(0, 1fr));
@@ -8082,7 +8082,7 @@ function OverviewView({
         }
         .scout-command-rail { max-height: calc(100dvh - 250px); }
         .scout-card, .command-panel, .report-panel {
-          border: 1px solid var(--line); border-radius: 8px; background: rgba(6, 21, 34, 0.62);
+          border: 1px solid var(--line); border-radius: 8px; background: rgba(13, 37, 85, 0.62);
           box-shadow: var(--depth-registered);
         }
         .scout-card-head h3, .command-panel__head h3 {
@@ -8133,7 +8133,7 @@ function OverviewView({
         .desk-name:hover strong { color: var(--cyan); }
         .desk-file small { display: block; margin-top: 4px; font-size: 11px; color: var(--muted); font-family: var(--ed-mono); }
         .desk-bar { position: relative; height: 7px; border-radius: 4px; background: rgba(148, 185, 205, 0.12); }
-        .desk-bar i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 4px; background: linear-gradient(90deg, var(--cyan), rgba(19, 216, 231, 0.5)); }
+        .desk-bar i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 4px; background: linear-gradient(90deg, var(--cyan), rgba(46, 230, 214, 0.5)); }
         .desk-bar b { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--gold); box-shadow: 0 0 8px rgba(233, 168, 60, 0.5); }
         .desk-actions { display: flex; gap: 6px; }
         .desk-actions .nhlcal-advance-button,

@@ -9,8 +9,6 @@ import PlayerHeadshot from "../components/PlayerHeadshot";
 import TeamLogoBadge from "../components/ui/TeamLogoBadge";
 import { ensurePlayerHeadshotFields } from "../utils/playerHeadshots";
 import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
-import "./shared/edraftSkin.css";
-import "./freeAgency/FreeAgencyBoard.css";
 import NegotiationMeetingPanel, { InterestFactors } from "../components/contracts/NegotiationMeetingPanel";
 import { getContractOffice, reSignContract, qualifyRfa, releaseRfaRights, evaluateContractOffer, prospectRightsDecision, previewElcOffer, submitElcOffer, fileArbitration, settleArbitration, matchOfferSheet, declineOfferSheet, submitOfferSheet, advanceFreeAgencyDay, advanceContractNegotiationDay, signFreeAgent, getFreeAgentDetail, getFreeAgencyDesk, getSocialFeed } from "../services/franchiseService";
 import { estimateOfferInterestM, maxNegotiationOfferAavM, projectNegotiationCap } from "../utils/contractNegotiation";
@@ -859,6 +857,7 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
       railHint={null}
       heroContent={
         <div className={`${prefix}-workspace`}>
+          <h1 className={`${prefix}-page-title`}>Contract Table</h1>
           <div className={`${prefix}-office-bar`} aria-label="Contract office summary">
             <strong className={`${prefix}-office-count`}>
               {decisionCount} <span>decisions</span>

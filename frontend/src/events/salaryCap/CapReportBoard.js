@@ -9,7 +9,6 @@ import {
   seasonCapLabel,
   statusTone,
 } from "./capReportHelpers";
-import "./CapReportBoard.css";
 
 function firstDefined(...values) {
   return values.find(

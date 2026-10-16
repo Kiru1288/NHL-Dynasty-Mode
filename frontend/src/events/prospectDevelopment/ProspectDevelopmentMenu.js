@@ -14,8 +14,6 @@ import {
   formatSeasonStats,
   ORG_GROUPS,
 } from "./prospectDevelopmentHelpers";
-import "../../styles/nhlcalShell.css";
-import "./ProspectDevelopment.css";
 
 const TABS = [
   { id: "org", label: "Your Organization" },

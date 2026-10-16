@@ -8,7 +8,6 @@
  * All data comes from the backend team identity engine; nothing is computed here.
  */
 import React, { useEffect, useState } from "react";
-import "./teamIdentity.css";
 import {
   findTeamIdentity,
   loadTeamIdentities,

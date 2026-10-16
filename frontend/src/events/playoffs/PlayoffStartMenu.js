@@ -4,7 +4,6 @@ import { enterPlayoffs, playoffAction } from "../../services/franchiseService";
 import { isNetworkError, formatFranchiseApiError, isTimeoutError } from "../../services/api";
 import { useGameUI } from "../../game/GameUIContext";
 import TeamLogoBadge from "../../components/ui/TeamLogoBadge";
-import "../../styles/nhlcalShell.css";
 
 /**
  * Stanley Cup Playoffs bracket hub (Broadcast Operations register).
@@ -1558,7 +1557,7 @@ export default function PlayoffStartMenu({
 const PO_HUB_CSS = `
 .po-hub-root .po-speed { display: inline-flex; border: 1px solid var(--po-line-2); border-radius: var(--po-radius-sm); overflow: hidden; margin-left: auto; }
 .po-hub-root .po-speed-btn { background: transparent; color: var(--po-muted); border: 0; padding: 6px 10px; font: 800 11px/1 var(--po-ui); letter-spacing: 0.08em; text-transform: uppercase; cursor: pointer; }
-.po-hub-root .po-speed-btn.is-on { background: rgba(19, 216, 231, 0.16); color: var(--po-cyan); }
+.po-hub-root .po-speed-btn.is-on { background: rgba(46, 230, 214, 0.16); color: var(--po-cyan); }
 .po-hub-root .po-pop-stack { position: fixed; right: 18px; top: 72px; z-index: 60; display: grid; gap: 8px; width: min(320px, calc(100vw - 32px)); pointer-events: none; }
 .po-hub-root .po-pop { pointer-events: auto; display: grid; gap: 4px; padding: 10px 12px; background: var(--po-panel); border: 1px solid var(--po-line-2); border-left: 3px solid var(--po-cyan); border-radius: var(--po-radius); box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45); animation: poPopIn 220ms ease-out; }
 .po-hub-root .po-pop.is-gold { border-left-color: var(--po-gold); }
@@ -1581,12 +1580,12 @@ const PO_HUB_CSS = `
 .po-hub-root .po-banner-rule { flex: 1; align-self: center; height: 1px; background: linear-gradient(90deg, rgba(233, 168, 60, 0.5), transparent); }
 .po-hub-root .po-bracket { grid-template-rows: auto 1fr; }
 .po-hub-root .po-conf { font: 800 12px/1 var(--po-display); letter-spacing: 0.22em; text-transform: uppercase; padding: 4px 0 8px; color: var(--po-muted); }
-.po-hub-root .po-conf.is-west { grid-column: 1 / span 3; text-align: left; border-bottom: 2px solid rgba(19, 216, 231, 0.35); }
+.po-hub-root .po-conf.is-west { grid-column: 1 / span 3; text-align: left; border-bottom: 2px solid rgba(46, 230, 214, 0.35); }
 .po-hub-root .po-conf.is-east { grid-column: 5 / span 3; text-align: right; border-bottom: 2px solid rgba(233, 168, 60, 0.35); }
 .po-hub-root .po-conf.is-mid { grid-column: 4; }
 .po-hub-root .po-bracket.is-flat { grid-template-rows: none; }
 .po-hub-root .po-col-head { font-family: var(--po-display); font-size: 11.5px; }
-.po-hub-root .po-card { background: linear-gradient(180deg, rgba(14, 38, 56, 0.96), rgba(8, 24, 36, 0.96)); box-shadow: 0 6px 16px rgba(0, 0, 0, 0.28); }
+.po-hub-root .po-card { background: linear-gradient(180deg, rgba(14, 38, 56, 0.96), rgba(14, 39, 86, 0.96)); box-shadow: 0 6px 16px rgba(0, 0, 0, 0.28); }
 .po-hub-root .po-card.is-user { box-shadow: 0 0 0 1px rgba(233, 168, 60, 0.35), 0 8px 22px rgba(233, 168, 60, 0.12); }
 .po-hub-root .po-row-wins { font-family: var(--po-mono); font-size: 13px; }
 .po-hub-root .po-row.is-out strong { text-decoration: line-through; text-decoration-color: rgba(255, 255, 255, 0.35); }
@@ -1594,19 +1593,19 @@ const PO_HUB_CSS = `
 .po-hub-root .po-row.is-winner { background: linear-gradient(90deg, var(--po-gold-soft), transparent); border-radius: 4px; }
 .po-hub-root .po-pips { display: inline-flex; gap: 3px; }
 .po-hub-root .po-pips i { width: 6px; height: 6px; border-radius: 50%; border: 1px solid rgba(138, 163, 179, 0.5); }
-.po-hub-root .po-pips i.is-on { background: var(--po-cyan); border-color: var(--po-cyan); box-shadow: 0 0 5px rgba(19, 216, 231, 0.55); }
+.po-hub-root .po-pips i.is-on { background: var(--po-cyan); border-color: var(--po-cyan); box-shadow: 0 0 5px rgba(46, 230, 214, 0.55); }
 .po-hub-root .po-row.is-winner .po-pips i.is-on { background: var(--po-gold); border-color: var(--po-gold); box-shadow: 0 0 5px rgba(233, 168, 60, 0.6); }
 .po-hub-root .po-pips.is-dim i.is-on { background: var(--po-muted); border-color: var(--po-muted); box-shadow: none; }
 .po-hub-root .po-desk-team .po-pips i { width: 8px; height: 8px; }
 .po-hub-root .po-strip { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 2px; margin-top: 4px; }
 .po-hub-root .po-strip-cell { position: relative; height: 14px; display: grid; place-items: center; border-radius: 2px; font: 700 8.5px/1 var(--po-mono); color: var(--po-text); background: rgba(255, 255, 255, 0.04); }
-.po-hub-root .po-strip-cell.is-high { background: rgba(19, 216, 231, 0.2); box-shadow: inset 0 -2px 0 var(--po-cyan); }
+.po-hub-root .po-strip-cell.is-high { background: rgba(46, 230, 214, 0.2); box-shadow: inset 0 -2px 0 var(--po-cyan); }
 .po-hub-root .po-strip-cell.is-low { background: rgba(233, 168, 60, 0.16); box-shadow: inset 0 2px 0 var(--po-gold); }
 .po-hub-root .po-strip-cell.is-empty { background: transparent; border: 1px dashed rgba(120, 180, 210, 0.14); }
-.po-hub-root .po-strip-cell sup { position: absolute; top: -5px; right: -1px; font: 900 6.5px/1 var(--po-ui); color: #1a1204; background: var(--po-gold); padding: 1px 2px; border-radius: 2px; }
+.po-hub-root .po-strip-cell sup { position: absolute; top: -5px; right: -1px; font: 900 6.5px/1 var(--po-ui); color: #17233a; background: var(--po-gold); padding: 1px 2px; border-radius: 2px; }
 .po-hub-root .po-desk { position: relative; background: linear-gradient(180deg, var(--po-panel-2), var(--po-panel)); }
 .po-hub-root .po-desk.is-user { border-color: rgba(233, 168, 60, 0.55); box-shadow: 0 0 0 1px rgba(233, 168, 60, 0.2), 0 12px 30px rgba(233, 168, 60, 0.1); }
-.po-hub-root .po-desk-ribbon { align-self: flex-start; padding: 3px 8px; border-radius: 3px; background: var(--po-gold); color: #1a1204; font: 900 9.5px/1 var(--po-ui); letter-spacing: 0.16em; text-transform: uppercase; }
+.po-hub-root .po-desk-ribbon { align-self: flex-start; padding: 3px 8px; border-radius: 3px; background: var(--po-gold); color: #17233a; font: 900 9.5px/1 var(--po-ui); letter-spacing: 0.16em; text-transform: uppercase; }
 .po-hub-root .po-desk-title { font-weight: 800; font-size: 20px; }
 .po-hub-root .po-desk-wins { font-family: var(--po-display); font-size: 36px; }
 .po-hub-root .po-leaders { display: grid; gap: 4px; padding: 8px 10px; border: 1px solid var(--po-line); border-radius: var(--po-radius); background: rgba(0, 0, 0, 0.2); }
@@ -1621,12 +1620,12 @@ const PO_HUB_CSS = `
 .po-hub-root .po-cup-svg.is-lit { filter: drop-shadow(0 0 18px rgba(233, 168, 60, 0.7)); }
 .po-hub-root .po-cup-crest::before { content: ""; position: absolute; inset: -14px -24px; z-index: -1; background: radial-gradient(circle, rgba(233, 168, 60, 0.22), transparent 65%); }
 .po-hub-root .po-cup-champ { font-size: 15px; font-weight: 800; text-shadow: 0 0 12px rgba(233, 168, 60, 0.5); }
-.po-hub-root .po-foot { background: linear-gradient(180deg, rgba(6, 20, 32, 0.96), rgba(2, 8, 14, 0.98)); box-shadow: 0 -8px 20px rgba(0, 0, 0, 0.3); }
+.po-hub-root .po-foot { background: linear-gradient(180deg, rgba(13, 36, 83, 0.96), rgba(11, 28, 67, 0.98)); box-shadow: 0 -8px 20px rgba(0, 0, 0, 0.3); }
 .po-hub-root .po-speed { align-items: center; background: rgba(0, 0, 0, 0.3); border-radius: 999px; padding: 3px; gap: 2px; }
 .po-hub-root .po-speed-label { padding: 0 8px 0 10px; font: 800 9.5px/1 var(--po-ui); letter-spacing: 0.16em; text-transform: uppercase; color: var(--po-muted); }
 .po-hub-root .po-speed-btn { border-radius: 999px; transition: background-color 0.15s ease, color 0.15s ease; }
 .po-hub-root .po-speed-btn:not(.is-on):hover { color: var(--po-text); }
-.po-hub-root .po-speed-btn.is-on { background: var(--po-cyan); color: #021018; box-shadow: 0 0 10px rgba(19, 216, 231, 0.45); }
+.po-hub-root .po-speed-btn.is-on { background: var(--po-cyan); color: #0b214c; box-shadow: 0 0 10px rgba(46, 230, 214, 0.45); }
 @media (max-width: 1100px) {
   .po-hub-root .po-conf.is-west, .po-hub-root .po-conf.is-east { font-size: 10px; letter-spacing: 0.14em; }
   .po-hub-root .po-banner-rule { display: none; }
@@ -1634,24 +1633,24 @@ const PO_HUB_CSS = `
 .po-start-menu-host { height: 100%; min-height: 0; width: 100%; overflow: hidden; }
 
 .po-hub-root {
-  --po-display: "Barlow Condensed", var(--font-broadcast-display, "Archivo Black"), "Arial Narrow", sans-serif;
+  --po-display: var(--dd-font-ui, Nunito, sans-serif);
   --po-ui: var(--font-ops-ui, var(--font-broadcast-ui, "Barlow Semi Condensed", "Inter", "Segoe UI", system-ui, sans-serif));
   --po-mono: var(--font-mono-data, "IBM Plex Mono", Consolas, monospace);
   --po-gold: var(--ops-gold, #e9a83c);
   --po-gold-soft: var(--ops-gold-soft, rgba(233, 168, 60, 0.16));
-  --po-cyan: var(--ops-cyan, #13d8e7);
+  --po-cyan: var(--ops-cyan, #2ee6d6);
   --po-text: var(--ops-text, #e8f1f6);
   --po-muted: var(--ops-text-secondary, #8aa3b3);
   --po-line: var(--ops-grid, rgba(120, 180, 210, 0.16));
   --po-line-2: rgba(120, 180, 210, 0.3);
-  --po-wire: rgba(19, 216, 231, 0.34);
+  --po-wire: rgba(46, 230, 214, 0.34);
   --po-radius: var(--radius-ops, 8px);
   --po-radius-sm: 6px;
-  --po-panel: var(--ops-panel, rgba(6, 20, 32, 0.96));
+  --po-panel: var(--ops-panel, rgba(13, 36, 83, 0.96));
   --po-panel-2: var(--ops-panel-2, rgba(10, 30, 45, 0.96));
-  background: radial-gradient(circle at 20% 0%, rgba(19, 216, 231, 0.1), transparent 32%),
+  background: radial-gradient(circle at 20% 0%, rgba(46, 230, 214, 0.1), transparent 32%),
     radial-gradient(circle at 50% 30%, rgba(233, 168, 60, 0.07), transparent 34%),
-    linear-gradient(180deg, var(--ops-black, #02070c) 0%, var(--ops-navy-deep, #04101a) 100%);
+    linear-gradient(180deg, var(--ops-black, #0b1b41) 0%, var(--ops-navy-deep, #0c214d) 100%);
   height: 100%;
   min-height: 0;
   max-height: 100%;
@@ -1696,10 +1695,10 @@ const PO_HUB_CSS = `
 }
 .po-hub-root .po-btn:focus-visible { outline: 2px solid var(--po-cyan); outline-offset: 2px; }
 .po-hub-root .po-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-.po-hub-root .po-btn--primary { background: var(--po-gold); border-color: var(--po-gold); color: #1a1204; }
+.po-hub-root .po-btn--primary { background: var(--po-gold); border-color: var(--po-gold); color: #17233a; }
 .po-hub-root .po-btn--primary:not(:disabled):hover { background: #f4bb57; }
-.po-hub-root .po-btn--secondary { background: rgba(19, 216, 231, 0.07); border-color: rgba(19, 216, 231, 0.42); color: var(--po-cyan); }
-.po-hub-root .po-btn--secondary:not(:disabled):hover { background: rgba(19, 216, 231, 0.14); }
+.po-hub-root .po-btn--secondary { background: rgba(46, 230, 214, 0.07); border-color: rgba(46, 230, 214, 0.42); color: var(--po-cyan); }
+.po-hub-root .po-btn--secondary:not(:disabled):hover { background: rgba(46, 230, 214, 0.14); }
 .po-hub-root .po-btn--ghost { background: transparent; border-color: var(--po-line-2); color: var(--po-text); }
 .po-hub-root .po-btn--ghost:not(:disabled):hover { border-color: var(--po-cyan); color: var(--po-cyan); }
 .po-hub-root .po-btn--sm { height: 26px; padding: 0 10px; font-size: 10px; }
@@ -1752,9 +1751,9 @@ const PO_HUB_CSS = `
   font-size: 10px;
 }
 .po-hub-root .po-step.is-done { color: var(--po-text); border-color: var(--po-line-2); }
-.po-hub-root .po-step.is-done .po-step-mark { background: rgba(19, 216, 231, 0.18); color: var(--po-cyan); }
+.po-hub-root .po-step.is-done .po-step-mark { background: rgba(46, 230, 214, 0.18); color: var(--po-cyan); }
 .po-hub-root .po-step.is-current { color: var(--po-gold); border-color: rgba(233, 168, 60, 0.6); background: rgba(233, 168, 60, 0.08); }
-.po-hub-root .po-step.is-current .po-step-mark { background: var(--po-gold); color: #1a1204; }
+.po-hub-root .po-step.is-current .po-step-mark { background: var(--po-gold); color: #17233a; }
 .po-hub-root .po-chip {
   display: inline-flex;
   align-items: center;
@@ -1768,7 +1767,7 @@ const PO_HUB_CSS = `
   white-space: nowrap;
 }
 .po-hub-root .po-chip.is-gold { color: var(--po-gold); border-color: rgba(233, 168, 60, 0.6); }
-.po-hub-root .po-chip.is-cyan { color: var(--po-cyan); border-color: rgba(19, 216, 231, 0.45); }
+.po-hub-root .po-chip.is-cyan { color: var(--po-cyan); border-color: rgba(46, 230, 214, 0.45); }
 .po-hub-root .po-chip.is-muted { color: var(--po-muted); }
 
 /* ── notice ── */
@@ -1804,7 +1803,7 @@ const PO_HUB_CSS = `
   padding: 10px 12px 12px;
   border: 1px solid var(--po-line);
   border-radius: var(--radius-panel, 10px);
-  background: linear-gradient(180deg, rgba(8, 26, 40, 0.92), rgba(4, 14, 22, 0.96));
+  background: linear-gradient(180deg, rgba(14, 40, 90, 0.92), rgba(12, 32, 74, 0.96));
   overflow: auto;
 }
 
@@ -1830,7 +1829,7 @@ const PO_HUB_CSS = `
   color: var(--po-muted);
   white-space: nowrap;
 }
-.po-hub-root .po-col-head.is-current { color: var(--po-cyan); border-bottom-color: rgba(19, 216, 231, 0.5); }
+.po-hub-root .po-col-head.is-current { color: var(--po-cyan); border-bottom-color: rgba(46, 230, 214, 0.5); }
 .po-hub-root .po-col.is-cup .po-col-head { color: var(--po-gold); }
 .po-hub-root .po-col-body { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .po-hub-root .po-pair { position: relative; flex: 1; display: flex; flex-direction: column; min-height: 0; }
@@ -1912,10 +1911,10 @@ const PO_HUB_CSS = `
 .po-hub-root .po-card.is-selected { border-color: var(--po-cyan); box-shadow: inset 0 0 0 1px var(--po-cyan); }
 .po-hub-root .po-card.is-user { border-left: 3px solid var(--po-gold); padding-left: 6px; }
 .po-hub-root .po-card.is-pending { background: transparent; border-style: dashed; cursor: default; }
-.po-hub-root .po-card.is-complete { background: rgba(8, 22, 34, 0.92); }
+.po-hub-root .po-card.is-complete { background: rgba(14, 37, 85, 0.92); }
 .po-hub-root .po-card.is-just-set { animation: poSet 0.85s ease; }
 @keyframes poSet {
-  0% { border-color: var(--po-cyan); background: rgba(19, 216, 231, 0.14); }
+  0% { border-color: var(--po-cyan); background: rgba(46, 230, 214, 0.14); }
   100% { background: rgba(10, 30, 45, 0.96); }
 }
 .po-hub-root .po-card-meta {
@@ -1935,7 +1934,7 @@ const PO_HUB_CSS = `
   padding: 1px 4px;
   border-radius: 3px;
   background: var(--po-gold);
-  color: #1a1204;
+  color: #17233a;
   font-size: 9px;
 }
 .po-hub-root .po-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--po-gold); flex-shrink: 0; }
@@ -2091,7 +2090,7 @@ const PO_HUB_CSS = `
   gap: 8px;
   padding: 10px 16px;
   border-top: 1px solid var(--po-line);
-  background: rgba(4, 16, 26, 0.94);
+  background: rgba(12, 33, 77, 0.94);
   flex-shrink: 0;
 }
 .po-hub-root .po-foot-status {
@@ -2107,7 +2106,7 @@ const PO_HUB_CSS = `
 .po-hub-root .po-spinner {
   width: 12px;
   height: 12px;
-  border: 2px solid rgba(19, 216, 231, 0.25);
+  border: 2px solid rgba(46, 230, 214, 0.25);
   border-top-color: var(--po-cyan);
   border-radius: 50%;
   animation: poSpin 0.8s linear infinite;

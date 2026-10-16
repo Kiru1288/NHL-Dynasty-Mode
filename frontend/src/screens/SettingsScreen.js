@@ -195,7 +195,7 @@ export function SettingsScreen() {
 
 const SETTINGS_SCREEN_CSS = `
 .settings-screen.register-shell {
-  background: var(--shell-bg, #03050c);
+  background: var(--shell-bg, #0c1a41);
   color: var(--shell-text, #eef0f5);
 }
 
@@ -318,7 +318,7 @@ const SETTINGS_SCREEN_CSS = `
   position: relative;
   flex: 1;
   height: 6px;
-  background: rgba(3, 5, 12, 0.72);
+  background: rgba(12, 26, 65, 0.72);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 0;
   background-image: repeating-linear-gradient(
@@ -356,7 +356,7 @@ const SETTINGS_SCREEN_CSS = `
   padding: 0 14px;
   border-radius: 6px;
   border: 1px solid rgba(255,255,255,0.12);
-  background: rgba(3,5,12,0.55);
+  background: rgba(12, 26, 65, 0.55);
   color: var(--shell-text, #eef0f5);
   font-weight: 800;
   letter-spacing: 0.06em;
@@ -366,7 +366,7 @@ const SETTINGS_SCREEN_CSS = `
 }
 .settings-scale-btn.is-active {
   border-color: var(--shell-neon, #38bdf8);
-  color: #041018;
+  color: #0c214c;
   background: var(--shell-neon, #38bdf8);
 }
 .settings-screen .settings-note {

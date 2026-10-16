@@ -11102,7 +11102,7 @@ function StatsCentralRedesignStyles() {
         overflow: hidden;
         background:
           radial-gradient(circle at 15% 0%, rgba(0, 206, 222, 0.08), transparent 28%),
-          linear-gradient(180deg, #06131f 0%, #07111c 100%);
+          linear-gradient(180deg, #0d2352 0%, #0e224f 100%);
       }
 
       .statscentral-shell {
@@ -11195,7 +11195,7 @@ function StatsCentralRedesignStyles() {
         gap: 12px;
         align-items: center;
         border-bottom: 1px solid var(--ops-grid, rgba(156, 218, 236, 0.14));
-        background: rgba(4, 16, 26, 0.96);
+        background: rgba(12, 33, 77, 0.96);
       }
 
       .sc-terminal-title {
@@ -11209,7 +11209,7 @@ function StatsCentralRedesignStyles() {
         font-weight: 900;
         letter-spacing: 0.14em;
         text-transform: uppercase;
-        color: var(--ops-cyan, #13d8e7);
+        color: var(--ops-cyan, #2ee6d6);
         line-height: 1;
       }
 
@@ -11239,7 +11239,7 @@ function StatsCentralRedesignStyles() {
         padding: 0 12px;
         border: 0;
         border-right: 1px solid rgba(156, 218, 236, 0.1);
-        background: rgba(6, 21, 34, 0.72);
+        background: rgba(13, 37, 85, 0.72);
         color: var(--ops-text-secondary, #8096a8);
         font-size: 0.6875rem;
         font-weight: 900;
@@ -11254,13 +11254,13 @@ function StatsCentralRedesignStyles() {
       }
 
       .sc-mode-rail button.is-active {
-        background: var(--ops-cyan-soft, rgba(19, 216, 231, 0.13));
+        background: var(--ops-cyan-soft, rgba(46, 230, 214, 0.13));
         color: var(--ops-text, #e9f7fb);
-        box-shadow: inset 0 -2px 0 var(--ops-cyan, #13d8e7);
+        box-shadow: inset 0 -2px 0 var(--ops-cyan, #2ee6d6);
       }
 
       .sc-mode-rail button:hover:not(.is-active) {
-        background: rgba(19, 216, 231, 0.06);
+        background: rgba(46, 230, 214, 0.06);
         color: var(--ops-text, #e9f7fb);
       }
 
@@ -11274,7 +11274,7 @@ function StatsCentralRedesignStyles() {
         align-self: center;
         border: 1px solid var(--ops-grid, rgba(156, 218, 236, 0.14));
         border-radius: var(--radius-control, 6px);
-        background: rgba(6, 21, 34, 0.72);
+        background: rgba(13, 37, 85, 0.72);
         color: var(--ops-text, #e9f7fb);
         font-size: 0.6875rem;
         font-weight: 900;
@@ -11285,8 +11285,8 @@ function StatsCentralRedesignStyles() {
       }
 
       .sc-back-link:hover {
-        border-color: var(--ops-grid-strong, rgba(73, 231, 240, 0.5));
-        background: var(--ops-cyan-soft, rgba(19, 216, 231, 0.13));
+        border-color: var(--ops-grid-strong, rgba(46, 230, 214, 0.5));
+        background: var(--ops-cyan-soft, rgba(46, 230, 214, 0.13));
       }
 
       .sc-menu {
@@ -11302,7 +11302,7 @@ function StatsCentralRedesignStyles() {
         align-self: center;
         padding: 0 18px;
         border: 1px solid rgba(116, 174, 205, 0.18);
-        background: #081826;
+        background: #0e2758;
         color: #8faabd;
         text-align: left;
       }
@@ -11378,7 +11378,7 @@ function StatsCentralRedesignStyles() {
         padding: 8px 10px;
         border-top: 1px solid var(--ops-grid, rgba(156, 218, 236, 0.14));
         border-bottom: 1px solid var(--ops-grid, rgba(156, 218, 236, 0.14));
-        background: rgba(6, 21, 34, 0.72);
+        background: rgba(13, 37, 85, 0.72);
         border-radius: 0;
       }
 
@@ -11397,7 +11397,7 @@ function StatsCentralRedesignStyles() {
       .sc-trend-panel > header > span,
       .sc-league-leaders-header > div > span,
       .sc-leader-category-header > div > span {
-        color: var(--ops-cyan, #13d8e7);
+        color: var(--ops-cyan, #2ee6d6);
         font-size: var(--type-phase-label-size, 0.68rem);
         font-weight: 900;
         letter-spacing: 0.14em;
@@ -11472,7 +11472,7 @@ function StatsCentralRedesignStyles() {
         display: flex;
         align-items: center;
         border: 1px solid rgba(102, 166, 194, 0.18);
-        background: #071522;
+        background: #0e2555;
       }
 
       .sc-player-scope button,
@@ -11507,7 +11507,7 @@ function StatsCentralRedesignStyles() {
         align-items: center;
         padding: 0 8px;
         border: 1px solid rgba(102, 166, 194, 0.2);
-        background: #071522;
+        background: #0e2555;
       }
 
       .sc-player-search span {
@@ -11539,7 +11539,7 @@ function StatsCentralRedesignStyles() {
         gap: 7px;
         padding: 6px 8px;
         border: 1px solid rgba(98, 166, 199, 0.16);
-        background: rgba(7, 23, 35, 0.92);
+        background: rgba(14, 38, 86, 0.92);
       }
 
       .sc-player-filter-group button {
@@ -11552,7 +11552,7 @@ function StatsCentralRedesignStyles() {
       .sc-player-density {
         height: 30px;
         border: 1px solid rgba(102, 166, 194, 0.18);
-        background: #071522;
+        background: #0e2555;
       }
 
       .sc-player-filter-bar select {
@@ -11561,7 +11561,7 @@ function StatsCentralRedesignStyles() {
 
       .sc-player-filter-bar select option,
       .sc-compare-selector-row select option {
-        background: #091927;
+        background: #0e2859;
         color: #e2f2f8;
       }
 
@@ -11617,7 +11617,7 @@ function StatsCentralRedesignStyles() {
         place-content: center;
         gap: 6px;
         border: 1px solid rgba(98, 166, 199, 0.2);
-        background: #081927;
+        background: #0e2859;
         color: #b9d0dc;
         text-align: center;
       }
@@ -11665,7 +11665,7 @@ function StatsCentralRedesignStyles() {
         gap: 3px;
         padding: 6px 8px;
         border: 1px solid rgba(105, 172, 202, 0.17);
-        background: #091a28;
+        background: #0e285a;
       }
 
       .sc-overview-team-header-chips span,
@@ -11700,7 +11700,7 @@ function StatsCentralRedesignStyles() {
         gap: 8px;
         padding: 10px 11px;
         border: 0;
-        background: #0a1b2a;
+        background: #0f295c;
         text-align: left;
         cursor: pointer;
       }
@@ -11880,7 +11880,7 @@ function StatsCentralRedesignStyles() {
         min-height: 0;
         display: grid;
         grid-template-rows: auto minmax(0, 1fr);
-        background: #081927;
+        background: #0e2859;
         overflow: hidden;
       }
 
@@ -11892,12 +11892,12 @@ function StatsCentralRedesignStyles() {
         gap: 12px;
         padding: 7px 10px;
         border: 1px solid rgba(105, 172, 202, 0.18);
-        background: #081927;
+        background: #0e2859;
       }
 
       .sc-overview-module-header span {
         display: block;
-        color: var(--ops-cyan, #13d8e7);
+        color: var(--ops-cyan, #2ee6d6);
         font-size: 11px;
         font-weight: 900;
         letter-spacing: 0.14em;
@@ -11947,8 +11947,8 @@ function StatsCentralRedesignStyles() {
 
       .sc-overview-chip-group button.is-active,
       .sc-overview-chip-group button:hover {
-        background: var(--ops-cyan, #13d8e7);
-        color: #041318;
+        background: var(--ops-cyan, #2ee6d6);
+        color: #0c234c;
       }
 
       .sc-overview-scoring-leaders .sc-table-wrap {
@@ -12044,7 +12044,7 @@ function StatsCentralRedesignStyles() {
         display: grid;
         gap: 2px;
         padding: 8px 9px;
-        background: rgba(8, 28, 42, 0.88);
+        background: rgba(14, 42, 92, 0.88);
       }
 
       .sc-overview-metric-card > span {
@@ -12121,7 +12121,7 @@ function StatsCentralRedesignStyles() {
         gap: 2px;
         padding: 8px 9px;
         border: 0;
-        background: rgba(8, 28, 42, 0.88);
+        background: rgba(14, 42, 92, 0.88);
         text-align: left;
         color: inherit;
       }
@@ -12161,7 +12161,7 @@ function StatsCentralRedesignStyles() {
         display: grid;
         grid-template-rows: auto minmax(0, 1fr);
         border: 1px solid rgba(105, 172, 202, 0.18);
-        background: #081927;
+        background: #0e2859;
       }
 
       .sc-player-insight-panel > header,
@@ -12246,7 +12246,7 @@ function StatsCentralRedesignStyles() {
         gap: 12px;
         padding: 7px 10px;
         border: 1px solid rgba(105, 172, 202, 0.18);
-        background: #081927;
+        background: #0e2859;
       }
 
       .sc-player-table-header > div:first-child {
@@ -12293,8 +12293,8 @@ function StatsCentralRedesignStyles() {
       }
 
       .sc-column-preset-toggle button.is-active {
-        background: var(--ops-cyan, #13d8e7);
-        color: #041318;
+        background: var(--ops-cyan, #2ee6d6);
+        color: #0c234c;
       }
 
       .sc-skaters-page-v3,
@@ -12324,7 +12324,7 @@ function StatsCentralRedesignStyles() {
         grid-template-rows: 26px minmax(0, 1fr);
         overflow: hidden;
         border: 1px solid rgba(105, 172, 202, 0.16);
-        background: #071622;
+        background: #0e2555;
       }
 
       .sc-roster-groups > section > header {
@@ -12352,7 +12352,7 @@ function StatsCentralRedesignStyles() {
         min-height: 30px;
         padding: 7px 12px;
         border-top: 1px solid rgba(104, 170, 198, 0.18);
-        background: rgba(5, 16, 25, 0.97);
+        background: rgba(12, 33, 76, 0.97);
         font-size: 12px;
         line-height: 1.35;
         color: #8fb3c4;
@@ -12374,7 +12374,7 @@ function StatsCentralRedesignStyles() {
         overflow-x: auto;
         overflow-y: auto;
         border: 1px solid rgba(104, 170, 198, 0.14);
-        background: #071622;
+        background: #0e2555;
         scrollbar-width: thin;
         scrollbar-color: rgba(0, 202, 214, 0.35) transparent;
       }
@@ -12421,7 +12421,7 @@ function StatsCentralRedesignStyles() {
         height: 29px;
         padding: 0 8px;
         border-bottom: 1px solid rgba(0, 206, 218, 0.24);
-        background: #06141f;
+        background: #0d2452;
         color: #7e9caf;
         font-size: 11px;
         font-weight: 1000;
@@ -12480,12 +12480,12 @@ function StatsCentralRedesignStyles() {
         z-index: 6;
         width: 34%;
         min-width: 220px;
-        background: #071622;
+        background: #0e2555;
       }
 
       .sc-table thead .is-player-col {
         z-index: 10;
-        background: #06141f;
+        background: #0d2452;
       }
 
       .sc-table tbody tr:hover .is-player-col {
@@ -12541,7 +12541,7 @@ function StatsCentralRedesignStyles() {
         border-radius: 999px;
         overflow: hidden;
         border: 1px solid rgba(156, 218, 236, 0.22);
-        background: rgba(8, 24, 35, 0.94);
+        background: rgba(14, 39, 86, 0.94);
       }
 
       .sc-player-name-cell-simple .sc-player-team-logo img {
@@ -12725,7 +12725,7 @@ function StatsCentralRedesignStyles() {
         padding: 0 9px;
         border: 1px solid rgba(103, 169, 198, 0.14);
         border-top: 0;
-        background: #071522;
+        background: #0e2555;
         color: #648395;
         font-size: 11px;
         font-weight: 900;
@@ -12776,7 +12776,7 @@ function StatsCentralRedesignStyles() {
         gap: 3px;
         padding: 8px 10px;
         border: 1px solid rgba(105, 172, 202, 0.17);
-        background: #091a28;
+        background: #0e285a;
         text-align: left;
       }
 
@@ -12821,7 +12821,7 @@ function StatsCentralRedesignStyles() {
         gap: 2px 12px;
         padding: 8px 10px;
         border: 1px solid rgba(105, 172, 202, 0.16);
-        background: #081927;
+        background: #0e2859;
       }
 
       .sc-analytics-insights > div > span {
@@ -12916,7 +12916,7 @@ function StatsCentralRedesignStyles() {
         grid-template-rows: auto minmax(0, 1fr);
         overflow: hidden;
         border: 1px solid rgba(105, 172, 202, 0.16);
-        background: #081927;
+        background: #0e2859;
       }
 
       .sc-special-team-panel > header > em {
@@ -12937,7 +12937,7 @@ function StatsCentralRedesignStyles() {
         min-height: 68px;
         padding: 9px 11px;
         border: 1px solid rgba(105, 172, 202, 0.16);
-        background: #081927;
+        background: #0e2859;
       }
 
       .sc-trend-content-grid {
@@ -12952,7 +12952,7 @@ function StatsCentralRedesignStyles() {
         display: grid;
         grid-template-rows: auto minmax(0, 1fr);
         border: 1px solid rgba(105, 172, 202, 0.16);
-        background: #081927;
+        background: #0e2859;
       }
 
       .sc-compare-page-v2 {
@@ -12979,7 +12979,7 @@ function StatsCentralRedesignStyles() {
         gap: 8px;
         padding: 7px 9px;
         border: 1px solid rgba(105, 172, 202, 0.16);
-        background: #081927;
+        background: #0e2859;
       }
 
       .sc-compare-selector-row > label > span {
@@ -12993,7 +12993,7 @@ function StatsCentralRedesignStyles() {
         height: 28px;
         border: 1px solid rgba(105, 172, 202, 0.18);
         padding: 0 8px;
-        background: #071522;
+        background: #0e2555;
       }
 
       .sc-compare-pinned {
@@ -13002,7 +13002,7 @@ function StatsCentralRedesignStyles() {
         gap: 4px;
         padding: 0 8px;
         border: 1px solid rgba(105, 172, 202, 0.16);
-        background: #081927;
+        background: #0e2859;
       }
 
       .sc-compare-pinned > span {
@@ -13031,7 +13031,7 @@ function StatsCentralRedesignStyles() {
       .sc-compare-metric-board {
         min-height: 0;
         border: 1px solid rgba(105, 172, 202, 0.17);
-        background: #081927;
+        background: #0e2859;
       }
 
       .sc-compare-card {
@@ -13189,7 +13189,7 @@ function StatsCentralRedesignStyles() {
         border: 1px solid rgba(0, 214, 224, 0.4);
         background:
           linear-gradient(180deg, rgba(0, 204, 216, 0.06), transparent 30%),
-          #071622;
+          #0e2555;
         box-shadow: -20px 0 50px rgba(0, 0, 0, 0.38);
         overflow-y: auto;
       }
@@ -13343,7 +13343,7 @@ function StatsCentralRedesignStyles() {
         gap: 12px;
         padding: 8px 10px;
         border: 1px solid rgba(105, 172, 202, 0.18);
-        background: #081927;
+        background: #0e2859;
       }
 
       .sc-league-leaders-header > div {
@@ -13376,7 +13376,7 @@ function StatsCentralRedesignStyles() {
         gap: 10px;
         padding: 7px 10px;
         border: 1px solid rgba(105, 172, 202, 0.17);
-        background: #081927;
+        background: #0e2859;
       }
 
       .sc-leader-category-header > div {
@@ -13409,7 +13409,7 @@ function StatsCentralRedesignStyles() {
         gap: 2px 8px;
         padding: 8px 10px;
         border: 1px solid rgba(105, 172, 202, 0.17);
-        background: #091a28;
+        background: #0e285a;
       }
 
       .sc-leader-podium article > span {
@@ -13742,7 +13742,7 @@ function StatsCentralStretchStyles() {
         max-height: none !important;
         overflow: auto !important;
         border: 1px solid rgba(104, 170, 198, 0.14) !important;
-        background: #071622 !important;
+        background: #0e2555 !important;
       }
 
       .sc-overview-leader-portrait .sc-avatar {
@@ -13878,7 +13878,7 @@ function StatsCentralStretchStyles() {
         text-align: center !important;
         letter-spacing: 0.14em !important;
         color: #e8a536 !important;
-        background: #041018 !important;
+        background: #0c214c !important;
         white-space: nowrap !important;
       }
 
@@ -13916,9 +13916,9 @@ function StatsCentralStyles() {
   return (
     <style>{`
       .stats-central-screen {
-        --bg: #06121d;
-        --bg-2: #04101a;
-        --panel: rgba(10, 28, 42, 0.94);
+        --bg: #0d2350;
+        --bg-2: #0c214d;
+        --panel: rgba(15, 42, 92, 0.94);
         --panel-2: rgba(12, 36, 54, 0.92);
         --panel-3: rgba(17, 49, 72, 0.82);
         --line: rgba(150, 190, 210, 0.16);
@@ -13943,7 +13943,7 @@ function StatsCentralStyles() {
         background:
           radial-gradient(circle at 22% 0%, rgba(0, 216, 223, 0.13), transparent 28%),
           radial-gradient(circle at 88% 12%, rgba(232, 165, 54, 0.12), transparent 24%),
-          linear-gradient(180deg, #06111b, #03080e 72%);
+          linear-gradient(180deg, #0d224e, #0c1c43 72%);
         font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       }
 
@@ -14184,7 +14184,7 @@ function StatsCentralStyles() {
       }
 
       .sc-scope-toggle button.is-active {
-        color: #0b1114;
+        color: #102248;
         background: var(--ops-gold, #e8a536);
       }
 
@@ -14271,7 +14271,7 @@ function StatsCentralStyles() {
         border: 1px solid rgba(255, 255, 255, 0.085);
         background:
           linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.015)),
-          rgba(7, 22, 35, 0.78);
+          rgba(14, 37, 86, 0.78);
         color: var(--muted);
         cursor: pointer;
         display: flex;
@@ -14294,7 +14294,7 @@ function StatsCentralStyles() {
         border-color: rgba(0, 216, 223, 0.3);
         background:
           linear-gradient(180deg, rgba(0, 216, 223, 0.08), rgba(255, 255, 255, 0.02)),
-          rgba(7, 22, 35, 0.86);
+          rgba(14, 37, 86, 0.86);
       }
 
       .sc-menu button.is-active {
@@ -14441,7 +14441,7 @@ function StatsCentralStyles() {
         background:
           radial-gradient(circle at 12% 0%, rgba(0, 216, 223, 0.12), transparent 34%),
           linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.018)),
-          rgba(10, 28, 42, 0.94);
+          rgba(15, 42, 92, 0.94);
         box-shadow:
           inset 0 1px 0 rgba(255, 255, 255, 0.07),
           0 18px 40px rgba(0, 0, 0, 0.22);
@@ -14768,7 +14768,7 @@ function StatsCentralStyles() {
         color: #ffffff;
         background:
           radial-gradient(circle at 30% 20%, rgba(255, 255, 255, 0.26), transparent 32%),
-          linear-gradient(145deg, rgba(0, 216, 223, 0.38), rgba(10, 28, 42, 0.96));
+          linear-gradient(145deg, rgba(0, 216, 223, 0.38), rgba(15, 42, 92, 0.96));
         border: 1px solid rgba(0, 216, 223, 0.34);
         box-shadow: 0 0 22px rgba(0, 216, 223, 0.13);
       }
@@ -14782,7 +14782,7 @@ function StatsCentralStyles() {
 
       .sc-avatar--logo {
         padding: 4px;
-        background: rgba(8, 18, 30, 0.92);
+        background: rgba(14, 35, 81, 0.92);
         border: 1px solid rgba(255, 255, 255, 0.1);
         box-shadow: 0 0 16px rgba(0, 0, 0, 0.28);
       }
@@ -14797,7 +14797,7 @@ function StatsCentralStyles() {
       .sc-avatar--fallback {
         background:
           radial-gradient(circle at 30% 20%, rgba(255, 255, 255, 0.26), transparent 32%),
-          linear-gradient(145deg, rgba(0, 216, 223, 0.38), rgba(10, 28, 42, 0.96));
+          linear-gradient(145deg, rgba(0, 216, 223, 0.38), rgba(15, 42, 92, 0.96));
         border: 1px solid rgba(0, 216, 223, 0.34);
       }
 
@@ -15026,7 +15026,7 @@ function StatsCentralStyles() {
         overflow: auto;
         border-radius: 6px;
         border: 1px solid rgba(255, 255, 255, 0.075);
-        background: rgba(4, 14, 23, 0.42);
+        background: rgba(12, 32, 75, 0.42);
       }
 
       .sc-table {
@@ -15039,7 +15039,7 @@ function StatsCentralStyles() {
         position: sticky;
         top: 0;
         z-index: 2;
-        background: rgba(5, 18, 29, 0.98);
+        background: rgba(12, 35, 80, 0.98);
         color: var(--muted);
         font-size: 0.6875rem;
         line-height: 1;
@@ -15101,7 +15101,7 @@ function StatsCentralStyles() {
         color: #fff;
         background:
           radial-gradient(circle at 30% 20%, rgba(255, 255, 255, 0.26), transparent 32%),
-          linear-gradient(145deg, rgba(232, 165, 54, 0.38), rgba(10, 28, 42, 0.96));
+          linear-gradient(145deg, rgba(232, 165, 54, 0.38), rgba(15, 42, 92, 0.96));
         border: 1px solid rgba(232, 165, 54, 0.34);
       }
 
@@ -15126,7 +15126,7 @@ function StatsCentralStyles() {
 
       .sc-team-logo-mark--logo {
         padding: 4px;
-        background: rgba(8, 18, 30, 0.92);
+        background: rgba(14, 35, 81, 0.92);
         border: 1px solid rgba(255, 255, 255, 0.1);
         box-shadow: 0 0 16px rgba(0, 0, 0, 0.28);
       }
@@ -15149,7 +15149,7 @@ function StatsCentralStyles() {
         color: #fff;
         background:
           radial-gradient(circle at 30% 20%, rgba(255, 255, 255, 0.26), transparent 32%),
-          linear-gradient(145deg, rgba(232, 165, 54, 0.38), rgba(10, 28, 42, 0.96));
+          linear-gradient(145deg, rgba(232, 165, 54, 0.38), rgba(15, 42, 92, 0.96));
         border: 1px solid rgba(232, 165, 54, 0.34);
       }
 
@@ -15467,7 +15467,7 @@ function StatsCentralStyles() {
         border: 1px solid rgba(255, 255, 255, 0.09);
         background:
           linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.015)),
-          rgba(7, 22, 35, 0.78);
+          rgba(14, 37, 86, 0.78);
         color: var(--text);
         cursor: pointer;
         padding: 12px 16px;
@@ -15594,7 +15594,7 @@ function StatsCentralStyles() {
         border: 1px solid rgba(255, 255, 255, 0.085);
         background:
           linear-gradient(180deg, rgba(255, 255, 255, 0.042), rgba(255, 255, 255, 0.014)),
-          rgba(7, 22, 35, 0.78);
+          rgba(14, 37, 86, 0.78);
         color: var(--text);
         cursor: pointer;
         padding: 7px 12px;
@@ -15610,7 +15610,7 @@ function StatsCentralStyles() {
         border-color: rgba(0, 216, 223, 0.26);
         background:
           linear-gradient(180deg, rgba(0, 216, 223, 0.075), rgba(255, 255, 255, 0.016)),
-          rgba(7, 22, 35, 0.86);
+          rgba(14, 37, 86, 0.86);
       }
 
       .sc-awards-subtabs button.is-active {
@@ -15655,7 +15655,7 @@ function StatsCentralStyles() {
         border: 1px solid rgba(255, 255, 255, 0.075);
         background:
           linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.012)),
-          rgba(10, 28, 42, 0.84);
+          rgba(15, 42, 92, 0.84);
         padding: 9px 11px;
         overflow: hidden;
       }
@@ -15942,7 +15942,7 @@ function StatsCentralStyles() {
         min-height: 42px;
         border-radius: 6px;
         border: 1px solid rgba(255, 255, 255, 0.1);
-        background: rgba(7, 22, 35, 0.9);
+        background: rgba(14, 37, 86, 0.9);
         color: var(--text);
         outline: none;
         padding: 0 12px;
@@ -16014,7 +16014,7 @@ function StatsCentralStyles() {
       .sc-compare-table {
         border-radius: 6px;
         border: 1px solid rgba(255, 255, 255, 0.075);
-        background: rgba(4, 14, 23, 0.42);
+        background: rgba(12, 32, 75, 0.42);
         overflow: auto;
       }
 
@@ -16150,7 +16150,7 @@ function StatsCentralStyles() {
         min-width: 0;
         border-radius: 10px;
         border: 1px solid rgba(255, 255, 255, 0.07);
-        background: rgba(4, 14, 23, 0.45);
+        background: rgba(12, 32, 75, 0.45);
         padding: 9px 10px;
       }
 
@@ -16196,7 +16196,7 @@ function StatsCentralStyles() {
           radial-gradient(circle at 12% 0%, rgba(0, 216, 223, 0.14), transparent 34%),
           radial-gradient(circle at 88% 20%, rgba(232, 165, 54, 0.12), transparent 26%),
           linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.018)),
-          rgba(10, 28, 42, 0.94);
+          rgba(15, 42, 92, 0.94);
         box-shadow:
           inset 0 1px 0 rgba(255, 255, 255, 0.07),
           0 18px 40px rgba(0, 0, 0, 0.22);
@@ -16304,7 +16304,7 @@ function StatsCentralStyles() {
         border: 1px solid rgba(255, 255, 255, 0.09);
         background:
           linear-gradient(180deg, rgba(255, 255, 255, 0.052), rgba(255, 255, 255, 0.016)),
-          rgba(10, 28, 42, 0.88);
+          rgba(15, 42, 92, 0.88);
         box-shadow:
           inset 0 1px 0 rgba(255, 255, 255, 0.055),
           0 12px 26px rgba(0, 0, 0, 0.16);
@@ -16369,7 +16369,7 @@ function StatsCentralStyles() {
         border-color: rgba(232, 165, 54, 0.22);
         background:
           linear-gradient(180deg, rgba(232, 165, 54, 0.075), rgba(255, 255, 255, 0.016)),
-          rgba(10, 28, 42, 0.88);
+          rgba(15, 42, 92, 0.88);
       }
 
       .sc-overview-fixed-card.has-warning b {
@@ -16641,13 +16641,13 @@ function StatsCentralStyles() {
         position: sticky;
         left: 0;
         z-index: 3;
-        background: rgba(5, 18, 29, 0.98);
+        background: rgba(12, 35, 80, 0.98);
       }
 
       .sc-skaters-table td.is-player-col {
         z-index: 2;
         background:
-          linear-gradient(90deg, rgba(5, 18, 29, 0.98), rgba(5, 18, 29, 0.92));
+          linear-gradient(90deg, rgba(12, 35, 80, 0.98), rgba(12, 35, 80, 0.92));
       }
 
       .sc-table th span {
@@ -16959,8 +16959,8 @@ function StatsCentralStyles() {
       }
 
       .sc-column-preset-toggle button.is-active {
-        color: #041318;
-        background: var(--ops-cyan, #13d8e7);
+        color: #0c234c;
+        background: var(--ops-cyan, #2ee6d6);
       }
 
       .sc-skaters-table-v2 {
@@ -16974,13 +16974,13 @@ function StatsCentralStyles() {
         z-index: 4;
         min-width: 220px;
         max-width: 240px;
-        background: rgba(5, 18, 29, 0.98);
+        background: rgba(12, 35, 80, 0.98);
       }
 
       .sc-skaters-table-v2 td.is-player-col {
         z-index: 3;
         background:
-          linear-gradient(90deg, rgba(5, 18, 29, 0.99), rgba(5, 18, 29, 0.94));
+          linear-gradient(90deg, rgba(12, 35, 80, 0.99), rgba(12, 35, 80, 0.94));
         box-shadow: 12px 0 18px rgba(0, 0, 0, 0.16);
       }
 
@@ -17069,7 +17069,7 @@ function StatsCentralStyles() {
       .sc-table th.is-sorted {
         color: var(--cyan);
         background:
-          linear-gradient(180deg, rgba(0, 216, 223, 0.08), rgba(5, 18, 29, 0.98));
+          linear-gradient(180deg, rgba(0, 216, 223, 0.08), rgba(12, 35, 80, 0.98));
       }
 
       .sc-skater-stat {
@@ -17208,7 +17208,7 @@ function StatsCentralStyles() {
         font-weight: 900;
         letter-spacing: 0.14em;
         text-transform: uppercase;
-        color: var(--ops-cyan, #13d8e7);
+        color: var(--ops-cyan, #2ee6d6);
       }
 
       .sc-player-analytics-strip__title strong {
@@ -17224,7 +17224,7 @@ function StatsCentralStyles() {
         border: 1px solid rgba(255, 255, 255, 0.075);
         background:
           linear-gradient(180deg, rgba(255, 255, 255, 0.042), rgba(255, 255, 255, 0.012)),
-          rgba(10, 28, 42, 0.82);
+          rgba(15, 42, 92, 0.82);
         padding: 9px 9px;
         overflow: hidden;
         display: flex;
@@ -17422,9 +17422,9 @@ function StatsCentralStyles() {
         gap: 10px;
         padding: 12px 12px 10px;
         background:
-          radial-gradient(circle at 24% 0%, rgba(19, 216, 231, 0.10), transparent 30%),
+          radial-gradient(circle at 24% 0%, rgba(46, 230, 214, 0.10), transparent 30%),
           radial-gradient(circle at 92% 18%, rgba(233, 168, 60, 0.07), transparent 26%),
-          linear-gradient(180deg, #06131f 0%, #020a11 100%);
+          linear-gradient(180deg, #0d2352 0%, #0b1d45 100%);
       }
 
       .sc-command-bar {
@@ -17434,7 +17434,7 @@ function StatsCentralStyles() {
         align-items: stretch;
         gap: 12px;
         border: 1px solid rgba(156, 218, 236, 0.14);
-        background: rgba(9, 25, 38, 0.94);
+        background: rgba(14, 40, 88, 0.94);
         padding: 10px;
       }
 
@@ -17450,8 +17450,8 @@ function StatsCentralStyles() {
 
       .sc-back-link:hover {
         color: #fff;
-        border-color: rgba(19, 216, 231, 0.42);
-        background: rgba(19, 216, 231, 0.08);
+        border-color: rgba(46, 230, 214, 0.42);
+        background: rgba(46, 230, 214, 0.08);
       }
 
       .sc-command-bar .sc-menu {
@@ -17464,16 +17464,16 @@ function StatsCentralStyles() {
         min-height: 48px;
         border-radius: 0;
         border: 1px solid rgba(156, 218, 236, 0.12);
-        background: rgba(7, 22, 35, 0.72);
+        background: rgba(14, 37, 86, 0.72);
         justify-content: flex-start;
         padding: 0 18px;
       }
 
       .sc-command-bar .sc-menu button.is-active {
-        border-color: rgba(19, 216, 231, 0.45);
+        border-color: rgba(46, 230, 214, 0.45);
         background:
-          linear-gradient(90deg, rgba(19, 216, 231, 0.18), rgba(19, 216, 231, 0.035)),
-          rgba(7, 22, 35, 0.9);
+          linear-gradient(90deg, rgba(46, 230, 214, 0.18), rgba(46, 230, 214, 0.035)),
+          rgba(14, 37, 86, 0.9);
         box-shadow: inset 3px 0 0 var(--cyan);
       }
 
@@ -17581,7 +17581,7 @@ function StatsCentralStyles() {
       .sc-team-profile-card {
         border-radius: 0;
         border-color: rgba(156, 218, 236, 0.14);
-        background: rgba(9, 25, 38, 0.94);
+        background: rgba(14, 40, 88, 0.94);
         box-shadow: none;
         backdrop-filter: none;
       }
@@ -17608,8 +17608,8 @@ function StatsCentralStyles() {
       }
 
       .sc-table th {
-        background: rgba(4, 16, 26, 0.98);
-        border-bottom-color: rgba(19, 216, 231, 0.22);
+        background: rgba(12, 33, 77, 0.98);
+        border-bottom-color: rgba(46, 230, 214, 0.22);
         font-size: 0.6875rem;
       }
 
@@ -17631,7 +17631,7 @@ function StatsCentralStyles() {
         height: 48px;
         border-radius: 0;
         border: 1px solid rgba(156, 218, 236, 0.18);
-        background: rgba(3, 12, 20, 0.92);
+        background: rgba(12, 30, 72, 0.92);
         overflow: visible;
       }
 
@@ -17672,7 +17672,7 @@ function StatsCentralStyles() {
         display: grid;
         place-items: center;
         padding: 3px;
-        background: rgba(4, 16, 26, 0.98);
+        background: rgba(12, 33, 77, 0.98);
         border: 1px solid rgba(233, 168, 60, 0.38);
       }
 
@@ -18028,7 +18028,7 @@ function StatsCentralStyles() {
           linear-gradient(
             180deg,
             rgba(15, 38, 54, 0.94),
-            rgba(7, 23, 35, 0.94)
+            rgba(14, 38, 86, 0.94)
           );
       }
 
@@ -18090,7 +18090,7 @@ function StatsCentralStyles() {
 
       .sc-team-view-tabs button:hover {
         color: #fff;
-        background: rgba(19, 216, 231, 0.06);
+        background: rgba(46, 230, 214, 0.06);
       }
 
       .sc-team-view-tabs button.is-active {
@@ -18098,8 +18098,8 @@ function StatsCentralStyles() {
         background:
           linear-gradient(
             180deg,
-            rgba(19, 216, 231, 0.13),
-            rgba(19, 216, 231, 0.035)
+            rgba(46, 230, 214, 0.13),
+            rgba(46, 230, 214, 0.035)
           );
         box-shadow: inset 0 -3px 0 var(--cyan);
       }
@@ -18141,7 +18141,7 @@ function StatsCentralStyles() {
 
       .sc-team-scope-control button.is-active {
         color: #fff;
-        background: rgba(19, 216, 231, 0.12);
+        background: rgba(46, 230, 214, 0.12);
       }
 
       .sc-team-toolbar-filters select,
@@ -18149,7 +18149,7 @@ function StatsCentralStyles() {
       .sc-team-reset {
         min-width: 0;
         border: 1px solid rgba(156, 218, 236, 0.13);
-        background: rgba(3, 14, 23, 0.78);
+        background: rgba(12, 32, 75, 0.78);
         color: var(--text);
       }
 
@@ -18161,12 +18161,12 @@ function StatsCentralStyles() {
       }
 
       .sc-team-toolbar-filters select:focus {
-        border-color: rgba(19, 216, 231, 0.45);
+        border-color: rgba(46, 230, 214, 0.45);
       }
 
       .sc-team-toolbar-filters option {
         color: #fff;
-        background: #071621;
+        background: #0e2554;
       }
 
       .sc-team-search {
@@ -18207,8 +18207,8 @@ function StatsCentralStyles() {
 
       .sc-team-reset:hover {
         color: #fff;
-        border-color: rgba(19, 216, 231, 0.4);
-        background: rgba(19, 216, 231, 0.08);
+        border-color: rgba(46, 230, 214, 0.4);
+        background: rgba(46, 230, 214, 0.08);
       }
 
       .sc-standings-modes {
@@ -18236,7 +18236,7 @@ function StatsCentralStyles() {
         font-size: 0.75rem;
         letter-spacing: 0.08em;
         text-transform: uppercase;
-        border-bottom: 1px solid rgba(19, 216, 231, 0.3);
+        border-bottom: 1px solid rgba(46, 230, 214, 0.3);
       }
 
       .sc-standings-block header span {
@@ -18279,11 +18279,11 @@ function StatsCentralStyles() {
       }
 
       .sc-standings-table tr.is-user-team-row td {
-        background: rgba(19, 216, 231, 0.1);
+        background: rgba(46, 230, 214, 0.1);
       }
 
       .sc-standings-table tr.is-cutline td {
-        border-bottom: 2px solid rgba(19, 216, 231, 0.55);
+        border-bottom: 2px solid rgba(46, 230, 214, 0.55);
       }
 
       .sc-team-table-panel {
@@ -18292,7 +18292,7 @@ function StatsCentralStyles() {
         display: flex;
         flex-direction: column;
         border: 1px solid rgba(156, 218, 236, 0.14);
-        background: rgba(3, 13, 22, 0.82);
+        background: rgba(12, 31, 74, 0.82);
       }
 
       .sc-team-table-panel .sc-table-wrap {
@@ -18315,7 +18315,7 @@ function StatsCentralStyles() {
       .sc-team-stats-table th {
         height: 38px;
         padding: 0 13px;
-        background: #061722;
+        background: #0d2655;
         color: #8facbc;
         font-size: 0.6875rem;
         letter-spacing: 0.13em;
@@ -18352,11 +18352,11 @@ function StatsCentralStyles() {
       }
 
       .sc-team-stats-table tbody tr.is-interactive-row:hover td {
-        background: rgba(19, 216, 231, 0.055);
+        background: rgba(46, 230, 214, 0.055);
       }
 
       .sc-team-stats-table tbody tr.is-interactive-row:focus-visible td {
-        box-shadow: inset 0 0 0 1px rgba(19, 216, 231, 0.5);
+        box-shadow: inset 0 0 0 1px rgba(46, 230, 214, 0.5);
       }
 
       .sc-team-stats-table tbody tr.is-selected-row td {
@@ -18373,8 +18373,8 @@ function StatsCentralStyles() {
         background:
           linear-gradient(
             90deg,
-            rgba(19, 216, 231, 0.075),
-            rgba(19, 216, 231, 0.025)
+            rgba(46, 230, 214, 0.075),
+            rgba(46, 230, 214, 0.025)
           );
       }
 
@@ -18418,7 +18418,7 @@ function StatsCentralStyles() {
       .sc-team-stats-table thead tr:not(.sc-col-groups) th:nth-child(1),
       .sc-team-stats-table thead tr:not(.sc-col-groups) th:nth-child(2) {
         z-index: 5;
-        background: #061722;
+        background: #0d2655;
       }
 
       .sc-team-scroll-hint {
@@ -18433,12 +18433,12 @@ function StatsCentralStyles() {
       .sc-team-stats-table td:nth-child(1),
       .sc-team-stats-table td:nth-child(2) {
         z-index: 3;
-        background: #071621;
+        background: #0e2554;
       }
 
       .sc-team-stats-table tr:nth-child(even) td:nth-child(1),
       .sc-team-stats-table tr:nth-child(even) td:nth-child(2) {
-        background: #081824;
+        background: #0e2756;
       }
 
       .sc-team-stats-table tr.is-user-team-row td:nth-child(1),
@@ -18485,7 +18485,7 @@ function StatsCentralStyles() {
 
       .sc-team-logo-mark--fallback.is-table {
         border: 1px solid rgba(156, 218, 236, 0.2);
-        background: rgba(8, 24, 35, 0.94);
+        background: rgba(14, 39, 86, 0.94);
         color: #fff;
         font-size: 0.6875rem;
         font-weight: 1000;
@@ -18600,13 +18600,13 @@ function StatsCentralStyles() {
         background:
           radial-gradient(
             circle at 8% 50%,
-            rgba(19, 216, 231, 0.09),
+            rgba(46, 230, 214, 0.09),
             transparent 24%
           ),
           linear-gradient(
             180deg,
             rgba(13, 36, 51, 0.98),
-            rgba(6, 22, 33, 0.98)
+            rgba(13, 37, 84, 0.98)
           );
         overflow: hidden;
       }
@@ -18787,7 +18787,7 @@ function StatsCentralStyles() {
         place-content: center;
         gap: 6px;
         border: 1px solid rgba(156, 218, 236, 0.14);
-        background: rgba(5, 18, 28, 0.82);
+        background: rgba(12, 35, 79, 0.82);
         text-align: center;
       }
 

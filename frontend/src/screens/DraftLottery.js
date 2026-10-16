@@ -602,7 +602,7 @@ function DraftLotteryStyles() {
         color: var(--ops-text);
         font-family: var(--font-ops-ui);
         background:
-          radial-gradient(circle at 14% 0%, rgba(19, 216, 231, 0.1), transparent 28%),
+          radial-gradient(circle at 14% 0%, rgba(46, 230, 214, 0.1), transparent 28%),
           radial-gradient(circle at 88% 8%, rgba(233, 168, 60, 0.06), transparent 22%),
           linear-gradient(180deg, var(--ops-navy) 0%, var(--ops-navy-deep) 100%);
       }
@@ -725,7 +725,7 @@ function DraftLotteryStyles() {
         gap: var(--space-2);
         padding: var(--space-2) var(--space-4);
         border-bottom: 1px solid var(--ops-grid);
-        background: rgba(6, 21, 34, 0.55);
+        background: rgba(13, 37, 85, 0.55);
         color: var(--ops-text-secondary);
         font-size: var(--type-phase-label-size);
         font-weight: 900;

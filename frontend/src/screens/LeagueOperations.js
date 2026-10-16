@@ -26,19 +26,19 @@ const CALM_MOODS = new Set(["calm", "quiet", "stable"]);
 
 const LO_STYLES = `
 .lo-screen {
-  --lo-panel: var(--ops-panel, rgba(9, 25, 38, 0.94));
-  --lo-panel-2: var(--ops-panel-2, rgba(7, 20, 32, 0.92));
+  --lo-panel: var(--ops-panel, rgba(14, 40, 88, 0.94));
+  --lo-panel-2: var(--ops-panel-2, rgba(14, 36, 83, 0.92));
   --lo-line: var(--ops-grid, rgba(156, 218, 236, 0.14));
   --lo-line-strong: var(--ops-grid-strong, rgba(156, 218, 236, 0.28));
   --lo-text: var(--ops-text, #e9f7fb);
   --lo-muted: var(--ops-text-secondary, #93a8b8);
-  --lo-cyan: var(--ops-cyan, #13d8e7);
+  --lo-cyan: var(--ops-cyan, #2ee6d6);
   --lo-gold: var(--ops-gold, #e9a83c);
   --lo-green: var(--ops-success, #52df94);
   --lo-red: var(--ops-injury, #ff606d);
   --lo-yellow: var(--ops-gold, #e9a83c);
   --lo-orange: #ff8c3c;
-  --lo-ink: #0a1622;
+  --lo-ink: #0f2555;
   flex: 1;
   height: 100%;
   max-height: 100%;
@@ -49,16 +49,16 @@ const LO_STYLES = `
   background:
     linear-gradient(rgba(156, 218, 236, 0.035) 1px, transparent 1px),
     linear-gradient(90deg, rgba(156, 218, 236, 0.03) 1px, transparent 1px),
-    radial-gradient(ellipse at 12% 0%, rgba(19, 216, 231, 0.07), transparent 44%),
+    radial-gradient(ellipse at 12% 0%, rgba(46, 230, 214, 0.07), transparent 44%),
     radial-gradient(ellipse at 88% 6%, rgba(233, 168, 60, 0.05), transparent 38%),
-    linear-gradient(180deg, var(--ops-black, #061522) 0%, var(--ops-navy-deep, #020a11) 100%);
+    linear-gradient(180deg, var(--ops-black, #0d2555) 0%, var(--ops-navy-deep, #0b1d45) 100%);
   background-size: 100% 28px, 28px 100%, auto, auto, auto;
   font-family: var(--font-ops-ui, Inter, ui-sans-serif, system-ui, sans-serif);
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
   gap: 8px;
   scrollbar-width: thin;
-  scrollbar-color: rgba(156, 218, 236, 0.28) rgba(4, 14, 22, 0.95);
+  scrollbar-color: rgba(156, 218, 236, 0.28) rgba(12, 32, 74, 0.95);
 }
 .lo-screen,
 .lo-screen * {
@@ -83,18 +83,18 @@ const LO_STYLES = `
 }
 .lo-screen *::-webkit-scrollbar { width: 8px; height: 8px; }
 .lo-screen *::-webkit-scrollbar-track {
-  background: rgba(4, 14, 22, 0.95);
+  background: rgba(12, 32, 74, 0.95);
   border-radius: 8px;
 }
 .lo-screen *::-webkit-scrollbar-thumb {
   background: rgba(156, 218, 236, 0.28);
   border-radius: 8px;
-  border: 2px solid rgba(4, 14, 22, 0.95);
+  border: 2px solid rgba(12, 32, 74, 0.95);
 }
 .lo-screen *::-webkit-scrollbar-thumb:hover {
-  background: rgba(19, 216, 231, 0.45);
+  background: rgba(46, 230, 214, 0.45);
 }
-.lo-screen *::-webkit-scrollbar-corner { background: rgba(4, 14, 22, 0.95); }
+.lo-screen *::-webkit-scrollbar-corner { background: rgba(12, 32, 74, 0.95); }
 
 .lo-header {
   display: flex;
@@ -158,7 +158,7 @@ const LO_STYLES = `
   border-top: 1px solid var(--lo-line);
   border-bottom: 1px solid var(--lo-line);
   border-radius: 0;
-  background: rgba(6, 21, 34, 0.55);
+  background: rgba(13, 37, 85, 0.55);
   max-height: 40px;
 }
 
@@ -223,7 +223,7 @@ const LO_STYLES = `
 .lo-back:focus-visible {
   border-color: var(--lo-cyan);
   outline: none;
-  box-shadow: 0 0 0 2px rgba(19, 216, 231, 0.25);
+  box-shadow: 0 0 0 2px rgba(46, 230, 214, 0.25);
 }
 
 .lo-tabs {
@@ -250,7 +250,7 @@ const LO_STYLES = `
 .lo-tabs button:focus-visible {
   color: var(--lo-cyan);
   outline: none;
-  box-shadow: inset 0 0 0 2px rgba(19, 216, 231, 0.35);
+  box-shadow: inset 0 0 0 2px rgba(46, 230, 214, 0.35);
 }
 .lo-tabs button.active {
   color: var(--lo-cyan);
@@ -485,7 +485,7 @@ const LO_STYLES = `
 .lo-priority-card:focus-visible {
   border-left-color: var(--lo-cyan);
   outline: none;
-  background: rgba(19, 216, 231, 0.06);
+  background: rgba(46, 230, 214, 0.06);
 }
 .lo-priority-card strong {
   font-size: 0.82rem;
@@ -650,7 +650,7 @@ const LO_STYLES = `
   height: 7px;
   border-radius: 50%;
   background: var(--lo-muted);
-  box-shadow: 0 0 0 3px rgba(7, 20, 32, 1);
+  box-shadow: 0 0 0 3px rgba(14, 36, 83, 1);
 }
 .lo-timeline-item.active::before { background: var(--lo-gold); }
 .lo-timeline-item.warn::before { background: var(--lo-orange); }
@@ -699,14 +699,14 @@ const LO_STYLES = `
   color: inherit;
   width: 100%;
 }
-.lo-issue:hover { background: rgba(19, 216, 231, 0.05); border-bottom-color: var(--lo-cyan); }
+.lo-issue:hover { background: rgba(46, 230, 214, 0.05); border-bottom-color: var(--lo-cyan); }
 .lo-issue:focus-visible {
   outline: none;
   border-color: var(--lo-cyan);
-  box-shadow: 0 0 0 2px rgba(19, 216, 231, 0.3);
+  box-shadow: 0 0 0 2px rgba(46, 230, 214, 0.3);
 }
 .lo-issue.selected {
-  background: rgba(19, 216, 231, 0.18);
+  background: rgba(46, 230, 214, 0.18);
   border-color: var(--lo-cyan);
   box-shadow: inset 3px 0 0 var(--lo-cyan);
 }
@@ -741,7 +741,7 @@ const LO_STYLES = `
   border-top: 1px solid var(--lo-line);
   border-bottom: 1px solid var(--lo-line);
   border-radius: 0;
-  background: rgba(6, 21, 34, 0.55);
+  background: rgba(13, 37, 85, 0.55);
 }
 .lo-inspector-mark {
   font-size: 0.6875rem;
@@ -847,12 +847,12 @@ const LO_STYLES = `
 .lo-filters button:focus-visible {
   outline: none;
   border-color: var(--lo-cyan);
-  box-shadow: 0 0 0 2px rgba(19, 216, 231, 0.25);
+  box-shadow: 0 0 0 2px rgba(46, 230, 214, 0.25);
 }
 .lo-filters button.active {
   color: var(--lo-cyan);
-  border-color: rgba(19, 216, 231, 0.45);
-  background: rgba(19, 216, 231, 0.1);
+  border-color: rgba(46, 230, 214, 0.45);
+  background: rgba(46, 230, 214, 0.1);
 }
 
 .lo-markets-body {
@@ -881,7 +881,7 @@ const LO_STYLES = `
   position: sticky;
   top: 0;
   z-index: 1;
-  background: #0a1a28;
+  background: #0f285a;
 }
 .lo-table th,
 .lo-table td {
@@ -922,9 +922,9 @@ const LO_STYLES = `
   outline: 2px solid var(--lo-cyan);
   outline-offset: -2px;
 }
-.lo-table tr.selected { background: rgba(19, 216, 231, 0.1); }
+.lo-table tr.selected { background: rgba(46, 230, 214, 0.1); }
 .lo-table tr.threatened { background: rgba(255, 96, 109, 0.06); }
-.lo-table tr.threatened.selected { background: rgba(19, 216, 231, 0.12); }
+.lo-table tr.threatened.selected { background: rgba(46, 230, 214, 0.12); }
 .lo-table tr.user td:first-child { box-shadow: inset 2px 0 0 var(--lo-gold); }
 
 .lo-col-team { width: 28%; }
@@ -1005,7 +1005,7 @@ const LO_STYLES = `
   border: 1px solid var(--lo-line);
   border-radius: 10px;
   padding: 10px;
-  background: rgba(8, 22, 34, 0.4);
+  background: rgba(14, 37, 85, 0.4);
 }
 
 .lo-risk-col h3 {
@@ -1049,11 +1049,11 @@ const LO_STYLES = `
 .lo-risk-card:focus-visible {
   border-color: var(--lo-cyan);
   outline: none;
-  background: rgba(19, 216, 231, 0.08);
+  background: rgba(46, 230, 214, 0.08);
 }
 .lo-risk-card.selected {
   border-color: var(--lo-cyan);
-  background: rgba(19, 216, 231, 0.12);
+  background: rgba(46, 230, 214, 0.12);
 }
 .lo-risk-card-top {
   display: flex;
@@ -1089,7 +1089,7 @@ const LO_STYLES = `
   grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 0;
   border: 1px solid var(--lo-line);
-  background: linear-gradient(180deg, rgba(12, 32, 48, 0.92), rgba(6, 18, 28, 0.9));
+  background: linear-gradient(180deg, rgba(12, 32, 48, 0.92), rgba(13, 35, 79, 0.9));
   min-width: 0;
 }
 .lo-pulse-cell {
@@ -1136,7 +1136,7 @@ const LO_STYLES = `
 
 .lo-forecast {
   border: 1px solid var(--lo-line);
-  background: rgba(6, 18, 28, 0.72);
+  background: rgba(13, 35, 79, 0.72);
   padding: 10px 12px 8px;
   min-height: 0;
 }
@@ -1261,7 +1261,7 @@ const LO_STYLES = `
   background: var(--lo-muted);
 }
 .lo-timeline-step.current .lo-timeline-dot,
-.lo-timeline-step.active .lo-timeline-dot { background: var(--lo-cyan); box-shadow: 0 0 0 3px rgba(19, 216, 231, 0.2); }
+.lo-timeline-step.active .lo-timeline-dot { background: var(--lo-cyan); box-shadow: 0 0 0 3px rgba(46, 230, 214, 0.2); }
 .lo-timeline-step.negotiating .lo-timeline-dot,
 .lo-timeline-step.gold .lo-timeline-dot,
 .lo-timeline-step.warn .lo-timeline-dot { background: var(--lo-gold); }
@@ -1321,7 +1321,7 @@ const LO_STYLES = `
   color: var(--lo-gold);
 }
 .lo-issue-balance .players {
-  background: rgba(19, 216, 231, 0.18);
+  background: rgba(46, 230, 214, 0.18);
   color: var(--lo-cyan);
 }
 

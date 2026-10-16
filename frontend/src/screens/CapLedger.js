@@ -8,7 +8,6 @@ import PlayerHeadshot from "../components/PlayerHeadshot";
 import { ensurePlayerHeadshotFields } from "../utils/playerHeadshots";
 import { StatusSeal } from "../components/franchise/commandVisuals";
 import CapContractNegotiation from "../components/contracts/CapContractNegotiation";
-import "./CapLedger.css";
 
 const NHL_ROSTER_LIMIT = 23;
 const AHL_ROSTER_LIMIT = 24;

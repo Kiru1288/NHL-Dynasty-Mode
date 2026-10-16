@@ -9,7 +9,6 @@ import WorldJuniorsEvent from "../events/worldJuniors/WorldJuniorsEvent";
 import { resolveWorldJuniorsPayload } from "../events/worldJuniors/wjcPayload";
 import { BoxScoreModal } from "../components/dossier/ProspectVisuals";
 import { getBoxScore } from "../services/franchiseService";
-import "../components/dossier/PlayerDossier.css";
 
 /**
  * CalendarScreen.js

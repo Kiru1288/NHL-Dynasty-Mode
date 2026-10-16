@@ -4,7 +4,6 @@ import {
   deriveTickerStateLabel,
   normalizeTickerGames,
 } from "./tickerGames";
-import "./BroadcastTicker.css";
 
 function useReducedMotion() {
   return useMemo(() => {

@@ -1,6 +1,5 @@
 import React from "react";
 import OffseasonTimeline from "../offseasonTimeline";
-import "../awardsNight/AwardsNight.css";
 
 /**
  * Permanent Hall of Fame event — scaffold for future induction ceremonies.

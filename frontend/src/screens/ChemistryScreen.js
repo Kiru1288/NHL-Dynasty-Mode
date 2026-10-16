@@ -4,7 +4,6 @@ import { getFranchiseChemistry } from "../services/franchiseService";
 import { SCREENS } from "../game/constants";
 import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
 import { CHEMISTRY_BANDS, chemistryLabel, chemistryTone } from "../utils/chemistryScale";
-import "./ChemistryScreen.css";
 
 const LINE_SOURCE_LABELS = {
   "session.lines": "Your saved lines",

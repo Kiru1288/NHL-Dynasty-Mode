@@ -8,8 +8,6 @@ import {
   pickOrdinal,
   revealPaceMs,
 } from "./draftLotteryHelpers";
-import "./DraftLottery.css";
-import "../shared/edraftSkin.css";
 
 function seasonLabel(franchiseState) {
   const y = franchiseState?.season_year || franchiseState?.seasonYear;

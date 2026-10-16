@@ -1,5 +1,4 @@
 import React, { useCallback, useMemo, useState } from "react";
-import "./WorldJuniorsMenu.css";
 
 import {
   buildWjcDraftStockRows,

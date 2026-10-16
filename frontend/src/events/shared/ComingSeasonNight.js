@@ -69,7 +69,7 @@ const COMING_NIGHT_CSS = `
   font-weight: 900;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--ops-cyan, #13d8e7);
+  color: var(--ops-cyan, #2ee6d6);
 }
 .comingnight-title {
   margin: 0;

@@ -1213,7 +1213,7 @@ function TeamNeedsStyles() {
         min-height: 100vh;
         width: 100%;
         background:
-          radial-gradient(circle at 18% 0%, rgba(19, 216, 231, 0.08), transparent 28%),
+          radial-gradient(circle at 18% 0%, rgba(46, 230, 214, 0.08), transparent 28%),
           linear-gradient(180deg, var(--ops-black) 0%, var(--ops-navy-deep) 100%);
         color: var(--text);
         display: grid;
@@ -1235,8 +1235,8 @@ function TeamNeedsStyles() {
       .teamneeds-sidebar {
         min-height: 100vh;
         background:
-          linear-gradient(180deg, rgba(5, 16, 26, 0.98), rgba(3, 10, 17, 0.98)),
-          radial-gradient(circle at 100% 14%, rgba(19, 216, 231, 0.14), transparent 34%);
+          linear-gradient(180deg, rgba(12, 33, 77, 0.98), rgba(12, 29, 69, 0.98)),
+          radial-gradient(circle at 100% 14%, rgba(46, 230, 214, 0.14), transparent 34%);
         border-right: 1px solid var(--line);
         display: flex;
         flex-direction: column;
@@ -1263,7 +1263,7 @@ function TeamNeedsStyles() {
         border: 2px solid rgba(223, 245, 250, 0.52);
         border-radius: 12px;
         color: var(--cyan);
-        box-shadow: 0 0 24px rgba(19, 216, 231, 0.18);
+        box-shadow: 0 0 24px rgba(46, 230, 214, 0.18);
       }
 
       .teamneeds-side-nav {
@@ -1298,7 +1298,7 @@ function TeamNeedsStyles() {
       /* Command rail matches the network standard: hard rail, notched plate. */
       .teamneeds-side-button.is-active {
         color: var(--cyan);
-        background: linear-gradient(90deg, rgba(19, 216, 231, 0.16), rgba(19, 216, 231, 0.02));
+        background: linear-gradient(90deg, rgba(46, 230, 214, 0.16), rgba(46, 230, 214, 0.02));
         clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 0 100%);
       }
 
@@ -1362,8 +1362,8 @@ function TeamNeedsStyles() {
         display: grid;
         place-items: center;
         background:
-          radial-gradient(circle at 30% 0%, rgba(19, 216, 231, 0.35), transparent 34%),
-          linear-gradient(180deg, rgba(18, 42, 61, 0.88), rgba(6, 20, 31, 0.98));
+          radial-gradient(circle at 30% 0%, rgba(46, 230, 214, 0.35), transparent 34%),
+          linear-gradient(180deg, rgba(18, 42, 61, 0.88), rgba(13, 36, 82, 0.98));
         border: 1px solid var(--line-2);
         box-shadow: var(--shadow);
         flex: 0 0 auto;
@@ -1415,7 +1415,7 @@ function TeamNeedsStyles() {
       .teamneeds-draft-board-title {
         text-align: left;
         padding-left: 16px;
-        border-left: 2px solid rgba(19, 216, 231, 0.35);
+        border-left: 2px solid rgba(46, 230, 214, 0.35);
       }
 
       .teamneeds-draft-board-title h2 {
@@ -1452,7 +1452,7 @@ function TeamNeedsStyles() {
       .teamneeds-actions button:hover,
       .teamneeds-card-header button:hover {
         border-color: var(--line-strong);
-        background: rgba(19, 216, 231, 0.12);
+        background: rgba(46, 230, 214, 0.12);
       }
 
       .teamneeds-ops-context {
@@ -1462,7 +1462,7 @@ function TeamNeedsStyles() {
         border-radius: var(--radius-card);
         overflow: hidden;
         margin-top: var(--space-4);
-        background: rgba(6, 21, 34, 0.72);
+        background: rgba(13, 37, 85, 0.72);
       }
 
       .teamneeds-context-cell {
@@ -1486,9 +1486,9 @@ function TeamNeedsStyles() {
         display: grid;
         place-items: center;
         margin-top: 1px;
-        border: 1px solid rgba(19, 216, 231, 0.32);
+        border: 1px solid rgba(46, 230, 214, 0.32);
         border-radius: var(--radius-hud, 4px);
-        background: rgba(19, 216, 231, 0.13);
+        background: rgba(46, 230, 214, 0.13);
         color: var(--cyan);
         font-size: 15px;
         line-height: 1;
@@ -1609,7 +1609,7 @@ function TeamNeedsStyles() {
         padding: var(--space-2);
         border: 1px solid rgba(156, 218, 236, 0.08);
         border-radius: var(--radius-control);
-        background: rgba(6, 21, 34, 0.45);
+        background: rgba(13, 37, 85, 0.45);
         color: var(--text);
         text-align: left;
         cursor: pointer;
@@ -1697,7 +1697,7 @@ function TeamNeedsStyles() {
         background: repeating-linear-gradient(
           90deg,
           transparent 0 calc(20% - 1px),
-          rgba(4, 16, 26, 0.9) calc(20% - 1px) 20%
+          rgba(12, 33, 77, 0.9) calc(20% - 1px) 20%
         );
       }
 
@@ -1845,8 +1845,8 @@ function TeamNeedsStyles() {
         display: grid;
         place-items: center;
         border-radius: var(--radius-ops, 2px);
-        border: 1px solid rgba(19, 216, 231, 0.3);
-        background: rgba(19, 216, 231, 0.08);
+        border: 1px solid rgba(46, 230, 214, 0.3);
+        background: rgba(46, 230, 214, 0.08);
         color: var(--cyan);
         font-weight: 1000;
         font-variant-numeric: tabular-nums;
@@ -1989,7 +1989,7 @@ function TeamNeedsStyles() {
         display: grid;
         place-items: center;
         font-weight: 1000;
-        background: rgba(19, 216, 231, 0.1);
+        background: rgba(46, 230, 214, 0.1);
         color: var(--cyan);
       }
 
@@ -2034,7 +2034,7 @@ function TeamNeedsStyles() {
         padding: 14px 16px;
         border: 1px dashed var(--line);
         border-radius: var(--radius-control, 6px);
-        background: rgba(6, 21, 34, 0.55);
+        background: rgba(13, 37, 85, 0.55);
         color: var(--muted);
         line-height: 1.5;
         font-size: 13px;

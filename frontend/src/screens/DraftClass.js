@@ -1,6 +1,4 @@
 import React, { useMemo, useState, useEffect, useCallback, useRef } from "react";
-import "../styles/game-ui.css";
-import "../styles/draft-war-room.css";
 import { useGameUI } from "../game/GameUIContext";
 import { SCREENS } from "../game/constants";
 import PlayerHeadshot from "../components/PlayerHeadshot";
@@ -5103,8 +5101,8 @@ export default function DraftClass() {
 
         <style>{`
           .dc-root.dc-screen {
-            --dc-font-title: "Barlow Condensed", var(--font-broadcast-display), "Archivo Black", "Rajdhani", "Arial Narrow", sans-serif;
-            --dc-font-number: "Barlow Condensed", var(--font-broadcast-display), "Archivo Black", "Rajdhani", "Arial Narrow", sans-serif;
+            --dc-font-title: var(--dd-font-ui, Nunito, sans-serif);
+            --dc-font-number: var(--dd-font-ui, Nunito, sans-serif);
             --dc-font-ui: var(--font-ops-ui);
             --dc-font-mono: var(--font-mono-data);
             --dc-text: var(--ops-text);
@@ -5115,7 +5113,7 @@ export default function DraftClass() {
             --dc-red: var(--ops-injury);
             --dc-gold: var(--ops-gold);
             --dc-panel: var(--ops-panel);
-            --dc-panel-soft: rgba(6, 21, 34, 0.72);
+            --dc-panel-soft: rgba(13, 37, 85, 0.72);
 
             /* Ceiling ramp: cold slate to hot gold, lightness climbing with the tier so
                the column reads as a gradient even without hue perception. */
@@ -5123,7 +5121,7 @@ export default function DraftClass() {
             --dc-pot-depth: #9db0c6;
             --dc-pot-moderate: #8ab4ff;
             --dc-pot-strong: #38bdf8;
-            --dc-pot-high: #13d8e7;
+            --dc-pot-high: #2ee6d6;
             --dc-pot-elite: #e9a83c;
             --dc-pot-generational: #ffc94d;
 
@@ -5142,18 +5140,18 @@ export default function DraftClass() {
               radial-gradient(circle at 50% 42%, rgba(53, 185, 255, 0.1), transparent 28%),
               radial-gradient(circle at 10% 0%, rgba(43, 228, 255, 0.09), transparent 25%),
               radial-gradient(circle at 90% 8%, rgba(244, 198, 110, 0.07), transparent 20%),
-              linear-gradient(180deg, #04101a, #02070d);
+              linear-gradient(180deg, #0c214d, #0b1b42);
             overflow: hidden;
           }
 
           .dc-screen--loading { display: grid; place-items: center; }
-          .dc-scroll-surface { overflow: auto; scrollbar-width: thin; scrollbar-color: rgba(43, 228, 255, 0.55) rgba(8, 21, 34, 0.55); }
+          .dc-scroll-surface { overflow: auto; scrollbar-width: thin; scrollbar-color: rgba(43, 228, 255, 0.55) rgba(14, 37, 85, 0.55); }
           .dc-scroll-surface::-webkit-scrollbar { width: 10px; height: 10px; }
-          .dc-scroll-surface::-webkit-scrollbar-track { background: rgba(8, 21, 34, 0.55); border-radius: 999px; }
+          .dc-scroll-surface::-webkit-scrollbar-track { background: rgba(14, 37, 85, 0.55); border-radius: 999px; }
           .dc-scroll-surface::-webkit-scrollbar-thumb {
             background: linear-gradient(180deg, rgba(43, 228, 255, 0.75), rgba(43, 228, 255, 0.38));
             border-radius: 999px;
-            border: 2px solid rgba(8, 21, 34, 0.55);
+            border: 2px solid rgba(14, 37, 85, 0.55);
           }
           .dc-scroll-surface::-webkit-scrollbar-thumb:hover {
             background: linear-gradient(180deg, rgba(43, 228, 255, 0.98), rgba(43, 228, 255, 0.6));
@@ -5187,7 +5185,7 @@ export default function DraftClass() {
             gap: 8px;
             backdrop-filter: blur(8px);
             background:
-              linear-gradient(180deg, rgba(8, 24, 39, 0.84), rgba(5, 15, 26, 0.8)),
+              linear-gradient(180deg, rgba(14, 39, 89, 0.84), rgba(12, 32, 77, 0.8)),
               radial-gradient(circle at 50% -18%, rgba(43,228,255,0.08), transparent 62%);
             box-shadow:
               inset 0 1px 0 rgba(255,255,255,0.04),
@@ -5307,7 +5305,7 @@ export default function DraftClass() {
           .dc-back-btn, .dc-nav-chip, .dc-lens-btn, .dc-sort, .dc-mini-select, .dc-profile-tab, .dc-view-full {
             border: 1px solid var(--dc-line);
             border-radius: 4px;
-            background: rgba(7, 18, 30, 0.9);
+            background: rgba(14, 35, 81, 0.9);
             color: var(--dc-text);
             cursor: pointer;
             font-size: 0.6875rem;
@@ -5325,7 +5323,7 @@ export default function DraftClass() {
             padding: 8px 14px;
             border-radius: 10px;
             background:
-              linear-gradient(180deg, rgba(4, 12, 20, 0.98), rgba(3, 9, 16, 0.98)),
+              linear-gradient(180deg, rgba(12, 30, 72, 0.98), rgba(12, 28, 68, 0.98)),
               radial-gradient(circle at 50% -8%, rgba(43,228,255,0.045), transparent 65%);
             border: 1px solid rgba(73, 110, 138, 0.24);
             box-shadow: inset 0 1px 0 rgba(255,255,255,0.02), 0 10px 20px rgba(0,0,0,0.32);
@@ -5397,7 +5395,7 @@ export default function DraftClass() {
             flex-direction: column;
             border-radius: 10px;
             background:
-              linear-gradient(180deg, rgba(4, 12, 20, 0.98), rgba(3, 9, 16, 0.98)),
+              linear-gradient(180deg, rgba(12, 30, 72, 0.98), rgba(12, 28, 68, 0.98)),
               radial-gradient(circle at 50% -8%, rgba(43,228,255,0.045), transparent 65%);
             border: 1px solid rgba(73, 110, 138, 0.24);
             box-shadow: inset 0 1px 0 rgba(255,255,255,0.02), 0 10px 20px rgba(0,0,0,0.32);
@@ -5569,7 +5567,7 @@ export default function DraftClass() {
             padding: 14px 16px;
             border: 1px solid var(--dc-line);
             border-left: 3px solid var(--dc-gold);
-            background: rgba(6, 21, 34, 0.6);
+            background: rgba(13, 37, 85, 0.6);
             max-width: 460px;
           }
           .dc-board-standby__label {
@@ -5604,7 +5602,7 @@ export default function DraftClass() {
             padding-top: 6px;
             padding-bottom: 6px;
             border-bottom: 0;
-            background: rgba(6, 16, 28, 0.98);
+            background: rgba(13, 33, 79, 0.98);
           }
 
           .dc-prospect-board__col {
@@ -5754,8 +5752,8 @@ export default function DraftClass() {
              climb a second axis — wash, then border, then glow. */
           .dc-prospect-row__pot.is-pot-high {
             color: var(--dc-pot-high);
-            background: rgba(19, 216, 231, 0.1);
-            border-color: rgba(19, 216, 231, 0.24);
+            background: rgba(46, 230, 214, 0.1);
+            border-color: rgba(46, 230, 214, 0.24);
           }
 
           .dc-prospect-row__pot.is-pot-elite {
@@ -5795,7 +5793,7 @@ export default function DraftClass() {
             border-radius: 50%;
             overflow: hidden;
             border: 1px solid rgba(118, 200, 245, 0.32);
-            background: linear-gradient(180deg, rgba(12, 30, 48, 0.98), rgba(6, 16, 28, 1));
+            background: linear-gradient(180deg, rgba(12, 30, 48, 0.98), rgba(13, 33, 79, 1));
             display: grid;
             place-items: center;
             box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 4px 14px rgba(0,0,0,0.24);
@@ -5820,7 +5818,7 @@ export default function DraftClass() {
             height: 22px;
             padding: 0 3px;
             border-radius: 4px;
-            background: rgba(8, 21, 34, 0.92);
+            background: rgba(14, 37, 85, 0.92);
             border: 1px solid rgba(118, 200, 245, 0.28);
             color: #e8f4ff;
             font-size: 0.78rem;
@@ -5834,8 +5832,8 @@ export default function DraftClass() {
             --jersey2: #163a56;
             --skin: #c89267;
             --skin-shadow: #875538;
-            --hair: #2a211c;
-            --hair2: #1a1410;
+            --hair: #1f2d4f;
+            --hair2: #172444;
             position: relative;
             z-index: 1;
             background: transparent !important;
@@ -6060,7 +6058,7 @@ export default function DraftClass() {
 
           .dc-action-strip { padding: 2px 10px 8px; }
           .dc-scout-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
-          .dc-scout-menu { display: inline-flex; gap: 5px; padding: 4px 6px; border: 1px solid var(--dc-line); border-radius: var(--radius-hud, 4px); background: rgba(7,18,30,0.7); }
+          .dc-scout-menu { display: inline-flex; gap: 5px; padding: 4px 6px; border: 1px solid var(--dc-line); border-radius: var(--radius-hud, 4px); background: rgba(14, 35, 81, 0.7); }
           .dc-btn {
             border: 1px solid var(--dc-line);
             border-radius: 999px;
@@ -6068,7 +6066,7 @@ export default function DraftClass() {
             font-size: 0.6875rem;
             cursor: pointer;
             color: var(--dc-text);
-            background: rgba(8, 22, 36, 0.92);
+            background: rgba(14, 37, 86, 0.92);
           }
           .dc-btn--primary { border-radius: 0; clip-path: var(--wr-cut-sm); border-color: rgba(43,228,255,0.65); box-shadow: 0 0 18px rgba(43,228,255,0.18); background: linear-gradient(180deg, rgba(27,83,124,0.9), rgba(8,31,50,0.9)); }
           .dc-btn--secondary { background: rgba(14,30,46,0.9); }
@@ -6078,7 +6076,7 @@ export default function DraftClass() {
           .dc-file-toggle-wrap { padding: 0 10px 8px; }
 
           .dc-selected-file__tabs { display: flex; gap: 5px; flex-wrap: wrap; padding: 0 10px 8px; border-bottom: 0; position: relative; }
-          .dc-profile-tab.is-active { color: #061018; background: linear-gradient(180deg, #6df7ff, #47c8d8); border-color: transparent; }
+          .dc-profile-tab.is-active { color: #0d214c; background: linear-gradient(180deg, #6df7ff, #47c8d8); border-color: transparent; }
           .dc-selected-file__detail { min-height: 0; flex: 1; padding: 8px 10px 10px; }
 
           .dc-stock-card { padding: 8px 10px; border-bottom: 0; position: relative; }
@@ -6166,14 +6164,14 @@ export default function DraftClass() {
             text-transform: uppercase;
             border-radius: 10px;
             border: 1px solid rgba(43, 228, 255, 0.35);
-            background: linear-gradient(180deg, rgba(12, 34, 52, 0.95), rgba(8, 21, 34, 0.92));
+            background: linear-gradient(180deg, rgba(12, 34, 52, 0.95), rgba(14, 37, 85, 0.92));
             color: var(--dc-cyan);
             cursor: pointer;
             flex-shrink: 0;
           }
           .dc-view-full--leaders:hover {
             border-color: rgba(43, 228, 255, 0.65);
-            background: linear-gradient(180deg, rgba(16, 42, 64, 0.98), rgba(10, 26, 42, 0.95));
+            background: linear-gradient(180deg, rgba(16, 42, 64, 0.98), rgba(15, 40, 92, 0.95));
           }
           .dc-leader-tabs {
             display: flex;
@@ -6192,7 +6190,7 @@ export default function DraftClass() {
             cursor: pointer;
           }
           .dc-leader-tab.is-active {
-            color: #061018;
+            color: #0d214c;
             background: linear-gradient(180deg, #6df7ff, #47c8d8);
             border-color: transparent;
           }
@@ -6223,7 +6221,7 @@ export default function DraftClass() {
             padding: 16px;
           }
           .dc-leaders-modal-sc {
-            --lm-panel: rgba(10, 28, 42, 0.94);
+            --lm-panel: rgba(15, 42, 92, 0.94);
             --lm-line: rgba(150, 190, 210, 0.16);
             --lm-muted: #8ba0af;
             --lm-cyan: #00d8df;
@@ -6240,7 +6238,7 @@ export default function DraftClass() {
             background:
               radial-gradient(circle at 18% 12%, rgba(43, 228, 255, 0.1), transparent 34%),
               radial-gradient(circle at 88% 12%, rgba(232, 165, 54, 0.08), transparent 24%),
-              linear-gradient(180deg, rgba(8, 21, 34, 0.97), rgba(5, 14, 24, 0.98));
+              linear-gradient(180deg, rgba(14, 37, 85, 0.97), rgba(12, 32, 76, 0.98));
             box-shadow:
               inset 0 1px 0 rgba(255,255,255,0.06),
               0 0 0 1px rgba(43, 228, 255, 0.12),
@@ -6287,14 +6285,14 @@ export default function DraftClass() {
           }
           .dc-leaders-modal__scroll {
             scrollbar-width: thin;
-            scrollbar-color: rgba(0, 216, 223, 0.32) rgba(4, 16, 26, 0.72);
+            scrollbar-color: rgba(0, 216, 223, 0.32) rgba(12, 33, 77, 0.72);
           }
           .dc-leaders-modal__scroll::-webkit-scrollbar {
             width: 6px;
             height: 6px;
           }
           .dc-leaders-modal__scroll::-webkit-scrollbar-track {
-            background: rgba(4, 16, 26, 0.72);
+            background: rgba(12, 33, 77, 0.72);
             border-radius: 999px;
           }
           .dc-leaders-modal__scroll::-webkit-scrollbar-thumb {
@@ -6324,7 +6322,7 @@ export default function DraftClass() {
             cursor: pointer;
           }
           .dc-lm-view-toggle__btn.is-active {
-            color: #041018;
+            color: #0c214c;
             background: var(--lm-cyan, var(--dc-cyan));
             border-color: rgba(0, 216, 223, 0.65);
             box-shadow: 0 0 12px rgba(0, 216, 223, 0.22);
@@ -6367,7 +6365,7 @@ export default function DraftClass() {
             background: rgba(0, 216, 223, 0.08);
           }
           .dc-lm-sort-pill.is-active {
-            color: #041018;
+            color: #0c214c;
             background: linear-gradient(180deg, rgba(0, 216, 223, 0.95), rgba(0, 180, 186, 0.88));
             border-color: rgba(0, 216, 223, 0.65);
             box-shadow: 0 0 10px rgba(0, 216, 223, 0.24);
@@ -6410,7 +6408,7 @@ export default function DraftClass() {
             padding: 10px 12px;
             border-radius: 10px;
             border: 1px solid rgba(118, 200, 245, 0.14);
-            background: rgba(8, 21, 34, 0.72);
+            background: rgba(14, 37, 85, 0.72);
           }
           .dc-lm-row--goalie {
             grid-template-columns: minmax(170px, 0.95fr) minmax(0, 1.8fr) auto;
@@ -6613,7 +6611,7 @@ export default function DraftClass() {
             align-items: baseline;
             gap: 12px;
             padding: 5px 10px;
-            background: rgba(6, 21, 34, 0.6);
+            background: rgba(13, 37, 85, 0.6);
             box-shadow: none;
           }
           .dc-intel-feed.is-idle ul { margin: 0; }
@@ -6712,7 +6710,7 @@ export default function DraftClass() {
             justify-content: stretch;
             padding: 0;
             pointer-events: none;
-            background: rgba(2, 8, 16, 0.96);
+            background: rgba(11, 28, 68, 0.96);
           }
 
           .dc-profile-modal--prospect .dc-signal-panel.dc-dossier-shell {
@@ -6727,7 +6725,7 @@ export default function DraftClass() {
             border-color: var(--ops-grid-2);
             background:
               var(--wr-scan),
-              linear-gradient(180deg, rgba(6, 21, 34, 0.98), rgba(4, 13, 22, 0.98));
+              linear-gradient(180deg, rgba(13, 37, 85, 0.98), rgba(12, 31, 74, 0.98));
           }
 
           .dc-profile-modal--prospect .dc-signal-panel:not(.dc-dossier-shell) {
@@ -6739,11 +6737,11 @@ export default function DraftClass() {
             border-color: var(--ops-grid-2);
             background:
               var(--wr-scan),
-              linear-gradient(180deg, rgba(6, 21, 34, 0.98), rgba(4, 13, 22, 0.98));
+              linear-gradient(180deg, rgba(13, 37, 85, 0.98), rgba(12, 31, 74, 0.98));
           }
 
           .dc-profile-modal--prospect .dc-signal-banner {
-            background: linear-gradient(90deg, rgba(19, 216, 231, 0.08), transparent);
+            background: linear-gradient(90deg, rgba(46, 230, 214, 0.08), transparent);
           }
 
           .dc-profile-modal--prospect .dc-signal-banner span {
@@ -6793,7 +6791,7 @@ export default function DraftClass() {
             position: absolute;
             inset: 0;
             border: 0;
-            background: rgba(2, 8, 16, 0.72);
+            background: rgba(11, 28, 68, 0.72);
             backdrop-filter: blur(7px);
             pointer-events: auto;
             cursor: pointer;
@@ -6813,7 +6811,7 @@ export default function DraftClass() {
               radial-gradient(ellipse 85% 70% at 12% -5%, rgba(56, 190, 255, 0.42), transparent 55%),
               radial-gradient(ellipse 70% 55% at 95% 105%, rgba(30, 140, 255, 0.32), transparent 52%),
               radial-gradient(ellipse 50% 40% at 48% 42%, rgba(40, 120, 210, 0.28), transparent 62%),
-              linear-gradient(165deg, #143a62 0%, #0d2748 38%, #081c36 72%, #04101f 100%);
+              linear-gradient(165deg, #143a62 0%, #0d2748 38%, #081c36 72%, #0c2152 100%);
             box-shadow: 0 30px 80px rgba(0,0,0,0.62), inset 0 1px 0 rgba(118,200,245,0.22);
             overflow: hidden;
             pointer-events: auto;
@@ -6857,7 +6855,7 @@ export default function DraftClass() {
           .dc-featured { display: none !important; }
           .dc-signal-panel--premium .dc-signal-identity {
             background:
-              linear-gradient(180deg, rgba(10,28,44,0.96), rgba(5,14,24,0.88)),
+              linear-gradient(180deg, rgba(10,28,44,0.96), rgba(12, 32, 76, 0.88)),
               repeating-linear-gradient(0deg, transparent, transparent 11px, rgba(118,200,245,0.03) 12px);
           }
 
@@ -6891,7 +6889,7 @@ export default function DraftClass() {
             height: 44px;
             border-radius: 10px;
             border: 1px solid rgba(244,198,110,0.55);
-            background: linear-gradient(180deg, rgba(244,198,110,0.18), rgba(20,30,40,0.85));
+            background: linear-gradient(180deg, rgba(244,198,110,0.18), rgba(20, 43, 90, 0.85));
             color: var(--dc-gold);
             cursor: pointer;
             display: grid;
@@ -6907,7 +6905,7 @@ export default function DraftClass() {
           }
           .dc-shortlist-icon.is-active {
             background: linear-gradient(180deg, #ffe08a, #f0bf55);
-            color: #1a1204;
+            color: #17233a;
             box-shadow: 0 0 20px rgba(244,198,110,0.45);
           }
           .dc-shortlist-icon.is-active svg { fill: currentColor; stroke: currentColor; }
@@ -6943,7 +6941,7 @@ export default function DraftClass() {
             border: 1.5px solid rgba(255,255,255,0.92);
             border-radius: 3px;
             box-shadow: 0 0 0 1px rgba(0,0,0,0.45), 0 4px 14px rgba(0,0,0,0.45), 0 0 18px rgba(43,228,255,0.18);
-            background: #0a1520;
+            background: #0f2553;
           }
           .dc-signal-flag-fallback {
             display: inline-grid;
@@ -6984,7 +6982,7 @@ export default function DraftClass() {
             gap: 1px;
             padding: 4px 7px;
             border-radius: 6px;
-            background: rgba(4,12,20,0.82);
+            background: rgba(12, 30, 72, 0.82);
             border: 1px solid rgba(244,198,110,0.45);
             box-shadow: 0 0 16px rgba(244,198,110,0.2);
           }
@@ -7066,7 +7064,7 @@ export default function DraftClass() {
           .dc-signal-board-card {
             padding: 8px 10px;
             border: 1px solid rgba(118,200,245,0.28);
-            background: linear-gradient(180deg, rgba(43,228,255,0.08), rgba(8,18,28,0.5));
+            background: linear-gradient(180deg, rgba(43,228,255,0.08), rgba(14, 35, 79, 0.5));
             box-shadow: none;
             display: grid;
             gap: 2px;
@@ -7097,7 +7095,7 @@ export default function DraftClass() {
             align-items: center;
             padding: 8px;
             border: 1px solid rgba(118,200,245,0.16);
-            background: rgba(6,16,28,0.7);
+            background: rgba(13, 33, 79, 0.7);
           }
           .dc-signal-club-card .dc-signal-flag { width: 34px; height: 22px; }
           .dc-signal-club-card strong,
@@ -7129,7 +7127,7 @@ export default function DraftClass() {
             gap: 8px;
             padding: 10px 8px 8px;
             border: 1px solid rgba(118,200,245,0.16);
-            background: radial-gradient(circle at 50% 38%, rgba(43,228,255,0.12), transparent 58%), rgba(4,12,22,0.55);
+            background: radial-gradient(circle at 50% 38%, rgba(43,228,255,0.12), transparent 58%), rgba(12, 30, 74, 0.55);
             justify-items: center;
             text-align: center;
           }
@@ -7179,7 +7177,7 @@ export default function DraftClass() {
             justify-content: center;
             text-align: center;
             border-radius: 50%;
-            background: radial-gradient(circle, rgba(8,24,40,0.96), rgba(8,20,34,0.72));
+            background: radial-gradient(circle, rgba(14, 39, 90, 0.96), rgba(14, 36, 85, 0.72));
             box-shadow: 0 0 28px rgba(43,228,255,0.35), inset 0 0 18px rgba(43,228,255,0.12);
             pointer-events: none;
             box-sizing: border-box;
@@ -7241,7 +7239,7 @@ export default function DraftClass() {
             gap: 8px;
             padding: 8px 10px;
             border: 1px solid rgba(118,200,245,0.16);
-            background: linear-gradient(180deg, rgba(10,24,38,0.85), rgba(5,12,20,0.7));
+            background: linear-gradient(180deg, rgba(15, 39, 88, 0.85), rgba(12, 30, 72, 0.7));
           }
           .dc-proj-engine__bar-head {
             display: flex;
@@ -7523,7 +7521,7 @@ export default function DraftClass() {
           }
           .dc-dossier-scout-assign button {
             border: 1px solid var(--dc-line);
-            background: rgba(8, 21, 34, 0.8);
+            background: rgba(14, 37, 85, 0.8);
             color: var(--dc-text);
             font-size: 0.65rem;
             padding: 6px 8px;
@@ -7548,7 +7546,7 @@ export default function DraftClass() {
           }
           .dc-btn--gold {
             border-color: rgba(244,198,110,0.7);
-            color: #1a1204;
+            color: #17233a;
             font-weight: 800;
             background: linear-gradient(180deg, #ffe29a, #f0bf55);
             box-shadow: 0 0 18px rgba(244,198,110,0.35);
@@ -7573,7 +7571,7 @@ export default function DraftClass() {
             gap: 7px;
             min-height: 0;
             overflow: hidden;
-            background: linear-gradient(180deg, rgba(12,36,58,0.95), rgba(6,18,32,0.72));
+            background: linear-gradient(180deg, rgba(12,36,58,0.95), rgba(13, 35, 83, 0.72));
           }
           .dc-dossier-shell .dc-signal-identity {
             grid-area: unset;
@@ -7695,7 +7693,7 @@ export default function DraftClass() {
           .dc-signal-estimate {
             padding: 8px 10px;
             border: 1px solid rgba(118, 200, 245, 0.16);
-            background: linear-gradient(180deg, rgba(12,32,48,0.85), rgba(6,16,28,0.7));
+            background: linear-gradient(180deg, rgba(12,32,48,0.85), rgba(13, 33, 79, 0.7));
             display: grid;
             gap: 2px;
             align-content: start;
@@ -7765,7 +7763,7 @@ export default function DraftClass() {
             gap: 10px;
             min-height: 0;
             overflow: hidden;
-            background: linear-gradient(180deg, rgba(10,22,36,0.95), rgba(6,12,20,0.88));
+            background: linear-gradient(180deg, rgba(15, 37, 86, 0.95), rgba(13, 30, 72, 0.88));
           }
           .dc-signal-decision__block {
             display: grid;
@@ -7800,7 +7798,7 @@ export default function DraftClass() {
             display: grid;
             grid-template-columns: minmax(220px, 0.9fr) minmax(0, 1.4fr);
             gap: 12px 16px;
-            background: rgba(3, 10, 18, 0.72);
+            background: rgba(12, 29, 70, 0.72);
             min-height: 0;
           }
           .dc-signal-chart {
@@ -7921,7 +7919,7 @@ export default function DraftClass() {
             height: 32px;
             border: 1px solid rgba(118, 200, 245, 0.28);
             border-radius: 8px;
-            background: rgba(6, 16, 28, 0.92);
+            background: rgba(13, 33, 79, 0.92);
             cursor: pointer;
             display: grid;
             place-items: center;
@@ -7931,7 +7929,7 @@ export default function DraftClass() {
           }
           .dc-modal-close:hover {
             border-color: rgba(43, 228, 255, 0.55);
-            background: rgba(10, 26, 42, 0.98);
+            background: rgba(15, 40, 92, 0.98);
             color: #fff;
           }
           .dc-modal-close__x {
@@ -8207,7 +8205,7 @@ export default function DraftClass() {
             box-shadow: 0 0 0 1px rgba(244, 198, 110, 0.25), 0 0 24px rgba(244, 198, 110, 0.18);
           }
           .prospect-modal--transcendent .dc-profile-modal__backdrop {
-            background: rgba(8, 6, 2, 0.72);
+            background: rgba(14, 26, 56, 0.72);
           }
           .aura-gold {
             border-color: rgba(244, 198, 110, 0.65) !important;

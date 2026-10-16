@@ -1,5 +1,4 @@
 import React, { useMemo, useState } from "react";
-import "./PlayerHeadshot.css";
 import { resolvePlayerHeadshot } from "../utils/playerHeadshots";
 import { resolveCountryCode, flagApiUrl } from "../utils/countryFlags";
 

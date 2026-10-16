@@ -17,7 +17,6 @@ import {
   normalizeAwardsPayload,
   SEASON_MILESTONES,
 } from "./awardHelpers";
-import "./AwardsNight.css";
 
 const PHASE = {
   GATE: "gate",

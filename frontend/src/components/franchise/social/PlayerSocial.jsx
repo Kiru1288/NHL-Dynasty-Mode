@@ -1,6 +1,5 @@
 import React, { useState } from "react";
 import PlayerHeadshot from "../../PlayerHeadshot";
-import "./PlayerSocial.css";
 
 const arr = (v) => (Array.isArray(v) ? v : []);
 const s = (v) => (v == null ? "" : String(v));

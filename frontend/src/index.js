@@ -1,6 +1,6 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import './styles/global.css';
+import './styles/game.css';
 import { applyFluidUiScale } from './utils/fluidUiScale';
 import { applyGraphicsQualityClass } from './utils/graphicsQuality';
 import App from './App';

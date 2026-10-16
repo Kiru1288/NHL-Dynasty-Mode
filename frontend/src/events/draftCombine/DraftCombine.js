@@ -5,9 +5,6 @@ import { SCREENS } from "../../game/constants";
 import { getTeamLogoSrc } from "../../utils/teamLogos";
 import { getDraftCombineState, submitCombineMeeting } from "../../services/franchiseService";
 import { safeArray } from "../shared/eventHelpers";
-import "../../styles/nhlcalShell.css";
-import "./DraftCombine.css";
-import "../shared/edraftSkin.css";
 
 /* Draft Combine — one screen: movers, top performers, full results table, inline detail. */
 

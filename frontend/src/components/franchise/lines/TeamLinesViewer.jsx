@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import PlayerHeadshot from "../../PlayerHeadshot";
 import { getTeamLinesView } from "../../../services/franchiseService";
-import "./TeamLinesViewer.css";
 
 const arr = (v) => (Array.isArray(v) ? v : []);
 

@@ -4,19 +4,19 @@
  */
 export const CALENDAR_CSS = `
       .nhlcal-root {
-        --bg: #04101a;
-        --bg-2: #061522;
-        --panel: rgba(9, 25, 38, 0.94);
+        --bg: #0c214d;
+        --bg-2: #0d2555;
+        --panel: rgba(14, 40, 88, 0.94);
         --panel-2: rgba(12, 35, 52, 0.94);
         --panel-3: rgba(15, 46, 66, 0.78);
         --line: rgba(156, 218, 236, 0.14);
         --line-2: rgba(115, 229, 241, 0.25);
-        --line-strong: rgba(73, 231, 240, 0.5);
+        --line-strong: rgba(46, 230, 214, 0.5);
         --text: #e9f7fb;
         --muted: #8096a8;
         --muted-2: #607789;
-        --cyan: #13d8e7;
-        --cyan-soft: rgba(19, 216, 231, 0.13);
+        --cyan: #2ee6d6;
+        --cyan-soft: rgba(46, 230, 214, 0.13);
         --gold: #e9a83c;
         --gold-soft: rgba(233, 168, 60, 0.14);
         --green: #52df94;
@@ -35,9 +35,9 @@ export const CALENDAR_CSS = `
         height: 100dvh;
         width: 100%;
         background:
-          radial-gradient(circle at 24% 0%, rgba(19, 216, 231, 0.12), transparent 30%),
+          radial-gradient(circle at 24% 0%, rgba(46, 230, 214, 0.12), transparent 30%),
           radial-gradient(circle at 92% 18%, rgba(233, 168, 60, 0.08), transparent 26%),
-          linear-gradient(180deg, #06131f 0%, #020a11 100%);
+          linear-gradient(180deg, #0d2352 0%, #0b1d45 100%);
         color: var(--text);
         display: grid;
         grid-template-columns: 94px minmax(0, 1fr);
@@ -65,8 +65,8 @@ export const CALENDAR_CSS = `
       .nhlcal-sidebar {
         min-height: 100vh;
         background:
-          linear-gradient(180deg, rgba(5, 16, 26, 0.98), rgba(3, 10, 17, 0.98)),
-          radial-gradient(circle at 100% 14%, rgba(19, 216, 231, 0.14), transparent 34%);
+          linear-gradient(180deg, rgba(12, 33, 77, 0.98), rgba(12, 29, 69, 0.98)),
+          radial-gradient(circle at 100% 14%, rgba(46, 230, 214, 0.14), transparent 34%);
         border-right: 1px solid var(--line);
         display: flex;
         flex-direction: column;
@@ -130,7 +130,7 @@ export const CALENDAR_CSS = `
          broadcast rail and notched out of the rail plate. No glow. */
       .nhlcal-side-button.is-active {
         color: var(--cyan);
-        background: linear-gradient(90deg, rgba(19, 216, 231, 0.16), rgba(19, 216, 231, 0.02));
+        background: linear-gradient(90deg, rgba(46, 230, 214, 0.16), rgba(46, 230, 214, 0.02));
         clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 0 100%);
       }
 
@@ -179,7 +179,7 @@ export const CALENDAR_CSS = `
         padding: 0 3px;
         border-radius: var(--radius-ops, 2px);
         background: var(--cyan);
-        color: #021016;
+        color: #0b214a;
         font-size: 11px;
         display: grid;
         place-items: center;
@@ -224,23 +224,23 @@ export const CALENDAR_CSS = `
       }
 
       .nhlcal-main::-webkit-scrollbar-track {
-        background: rgba(4, 16, 26, 0.72);
+        background: rgba(12, 33, 77, 0.72);
         border-radius: 999px;
       }
 
       .nhlcal-main::-webkit-scrollbar-thumb {
         background: rgba(110, 173, 191, 0.25);
         border-radius: 999px;
-        border: 2px solid rgba(4, 16, 26, 0.72);
+        border: 2px solid rgba(12, 33, 77, 0.72);
       }
 
       .nhlcal-main::-webkit-scrollbar-thumb:hover {
-        background: rgba(19, 216, 231, 0.38);
+        background: rgba(46, 230, 214, 0.38);
       }
 
       .nhlcal-scroll-surface {
         scrollbar-width: thin;
-        scrollbar-color: rgba(110, 173, 191, 0.35) rgba(4, 16, 26, 0.72);
+        scrollbar-color: rgba(110, 173, 191, 0.35) rgba(12, 33, 77, 0.72);
       }
 
       .nhlcal-scroll-surface::-webkit-scrollbar {
@@ -249,18 +249,18 @@ export const CALENDAR_CSS = `
       }
 
       .nhlcal-scroll-surface::-webkit-scrollbar-track {
-        background: rgba(4, 16, 26, 0.72);
+        background: rgba(12, 33, 77, 0.72);
         border-radius: 999px;
       }
 
       .nhlcal-scroll-surface::-webkit-scrollbar-thumb {
-        background: linear-gradient(180deg, rgba(19, 216, 231, 0.34), rgba(110, 173, 191, 0.28));
+        background: linear-gradient(180deg, rgba(46, 230, 214, 0.34), rgba(110, 173, 191, 0.28));
         border-radius: 999px;
-        border: 2px solid rgba(4, 16, 26, 0.72);
+        border: 2px solid rgba(12, 33, 77, 0.72);
       }
 
       .nhlcal-scroll-surface::-webkit-scrollbar-thumb:hover {
-        background: linear-gradient(180deg, rgba(19, 216, 231, 0.52), rgba(110, 173, 191, 0.42));
+        background: linear-gradient(180deg, rgba(46, 230, 214, 0.52), rgba(110, 173, 191, 0.42));
       }
 
       .nhlcal-topbar {
@@ -293,7 +293,7 @@ export const CALENDAR_CSS = `
   line-height: 0.95;
   text-transform: uppercase;
   color: var(--text);
-  text-shadow: 0 0 24px rgba(19, 216, 231, 0.12);
+  text-shadow: 0 0 24px rgba(46, 230, 214, 0.12);
 }
 
       .nhlcal-month-control {
@@ -368,7 +368,7 @@ export const CALENDAR_CSS = `
 
       .nhlcal-month-row button:hover {
         border-color: var(--line-strong);
-        background: rgba(19, 216, 231, 0.12);
+        background: rgba(46, 230, 214, 0.12);
         transform: translateY(-1px);
       }
 
@@ -511,7 +511,7 @@ export const CALENDAR_CSS = `
 
       .nhlcal-quick-link:hover {
         border-color: var(--line-strong);
-        background: rgba(19, 216, 231, 0.12);
+        background: rgba(46, 230, 214, 0.12);
         transform: translateY(-1px);
       }
 
@@ -581,7 +581,7 @@ export const CALENDAR_CSS = `
         gap: 8px;
         border-radius: var(--radius-ops, 2px);
         border: 1px solid rgba(0, 216, 223, 0.28);
-        background: rgba(7, 22, 35, 0.88);
+        background: rgba(14, 37, 86, 0.88);
         color: #dffcff;
         cursor: pointer;
         padding: 0 12px;
@@ -606,7 +606,7 @@ export const CALENDAR_CSS = `
 
       .nhlcal-wjc-hub-button:hover {
         border-color: rgba(232, 165, 54, 0.38);
-        background: rgba(19, 216, 231, 0.08);
+        background: rgba(46, 230, 214, 0.08);
       }
 
       .nhlcal-wjc-hub-button.is-modal {
@@ -624,7 +624,7 @@ export const CALENDAR_CSS = `
         position: fixed;
         inset: 0;
         z-index: 12050;
-        background: #08090c;
+        background: #0e1c41;
         overflow: hidden;
         display: flex;
         flex-direction: column;
@@ -656,7 +656,7 @@ export const CALENDAR_CSS = `
         border-radius: 0;
         clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 0 100%);
         background: #e9a83c;
-        color: #1b1002;
+        color: #182138;
         text-transform: uppercase;
         letter-spacing: 0.12em;
         font-size: 11px;
@@ -678,17 +678,17 @@ export const CALENDAR_CSS = `
 
       .nhlcal-advance-button-secondary {
         min-width: 92px;
-        background: rgba(7, 22, 35, 0.92);
+        background: rgba(14, 37, 86, 0.92);
         color: #dffcff;
-        border: 1px solid rgba(19, 216, 231, 0.32);
+        border: 1px solid rgba(46, 230, 214, 0.32);
         box-shadow: none;
       }
 
       
 
       .nhlcal-advance-button-secondary:hover:not(:disabled) {
-  background: rgba(19, 216, 231, 0.12);
-        border-color: rgba(19, 216, 231, 0.52);
+  background: rgba(46, 230, 214, 0.12);
+        border-color: rgba(46, 230, 214, 0.52);
         filter: brightness(1.06);
       }
 
@@ -705,7 +705,7 @@ export const CALENDAR_CSS = `
       .nhlcal-advance-alert {
         margin: 0 0 18px;
         border: 1px solid var(--line2);
-        background: rgba(8, 23, 35, 0.92);
+        background: rgba(14, 38, 86, 0.92);
         border-radius: 6px;
         padding: 16px 18px;
         display: flex;
@@ -757,7 +757,7 @@ export const CALENDAR_CSS = `
         border-color: rgba(244, 189, 82, 0.42);
         background:
           radial-gradient(circle at 0% 0%, rgba(244, 189, 82, 0.16), transparent 38%),
-          rgba(8, 23, 35, 0.94);
+          rgba(14, 38, 86, 0.94);
       }
 
       .nhlcal-advance-alert.is-blocked strong {
@@ -768,7 +768,7 @@ export const CALENDAR_CSS = `
         border-color: rgba(255, 100, 100, 0.42);
         background:
           radial-gradient(circle at 0% 0%, rgba(255, 100, 100, 0.16), transparent 38%),
-          rgba(8, 23, 35, 0.94);
+          rgba(14, 38, 86, 0.94);
       }
 
       .nhlcal-advance-alert.is-error strong {
@@ -792,7 +792,7 @@ export const CALENDAR_CSS = `
         gap: 0;
         border-top: 1px solid var(--line);
         border-bottom: 1px solid var(--line);
-        background: rgba(6, 21, 34, 0.72);
+        background: rgba(13, 37, 85, 0.72);
         border-radius: var(--radius-control, 6px);
         overflow: hidden;
         box-shadow: none;
@@ -940,7 +940,7 @@ export const CALENDAR_CSS = `
         flex-direction: column;
         border: 1px solid var(--line);
         border-radius: var(--radius-card, 8px);
-        background: rgba(6, 21, 34, 0.82);
+        background: rgba(13, 37, 85, 0.82);
         overflow: hidden;
         box-shadow: var(--depth-registered, inset 0 1px 0 rgba(255, 255, 255, 0.04));
       }
@@ -949,7 +949,7 @@ export const CALENDAR_CSS = `
         flex: 0 0 auto;
         padding: 8px 10px;
         border-bottom: 1px solid var(--line);
-        background: rgba(5, 17, 27, 0.72);
+        background: rgba(12, 34, 78, 0.72);
       }
 
       .nhlcal-calendar-toolbar-group {
@@ -976,7 +976,7 @@ export const CALENDAR_CSS = `
       .nhlcal-calendar-toolbar-group button:hover {
         border-color: var(--line-strong);
         color: var(--text);
-        background: rgba(19, 216, 231, 0.11);
+        background: rgba(46, 230, 214, 0.11);
       }
 
       .nhlcal-week-header {
@@ -984,7 +984,7 @@ export const CALENDAR_CSS = `
         grid-template-columns: repeat(7, 1fr);
         height: 34px;
         border-bottom: 1px solid var(--line);
-        background: rgba(5, 17, 27, 0.62);
+        background: rgba(12, 34, 78, 0.62);
         border-radius: 12px 12px 0 0;
         overflow: hidden;
       }
@@ -1021,7 +1021,7 @@ export const CALENDAR_CSS = `
   border: 0;
   border-right: 1px solid rgba(156, 218, 236, 0.11);
   border-bottom: 1px solid rgba(156, 218, 236, 0.11);
-  background: linear-gradient(180deg, rgba(11, 31, 45, 0.72), rgba(7, 22, 34, 0.72));
+  background: linear-gradient(180deg, rgba(11, 31, 45, 0.72), rgba(14, 37, 85, 0.72));
   color: var(--text);
   text-align: left;
   padding: 10px 11px;
@@ -1039,13 +1039,13 @@ export const CALENDAR_CSS = `
 
       /* Selection is a hard broadcast frame, not a glow. */
       .nhlcal-day-cell.is-selected {
-        box-shadow: inset 0 0 0 2px rgba(19, 216, 231, 0.95);
+        box-shadow: inset 0 0 0 2px rgba(46, 230, 214, 0.95);
         z-index: 5;
       }
 
       .nhlcal-day-cell.is-today:not(.is-selected) {
         background:
-          linear-gradient(180deg, rgba(233, 168, 60, 0.1), rgba(7, 22, 34, 0.82));
+          linear-gradient(180deg, rgba(233, 168, 60, 0.1), rgba(14, 37, 85, 0.82));
       }
 
       /* Department signature: the timeline notch. Today is registered on the
@@ -1096,39 +1096,39 @@ export const CALENDAR_CSS = `
 
       .nhlcal-day-cell:hover {
         background:
-          linear-gradient(180deg, rgba(16, 44, 62, 0.84), rgba(7, 25, 38, 0.82));
+          linear-gradient(180deg, rgba(16, 44, 62, 0.84), rgba(14, 40, 88, 0.82));
         z-index: 4;
       }
 
       .nhlcal-day-cell.is-muted {
         color: rgba(233, 247, 251, 0.38);
         background:
-          linear-gradient(180deg, rgba(8, 18, 28, 0.72), rgba(5, 12, 19, 0.72));
+          linear-gradient(180deg, rgba(14, 35, 79, 0.72), rgba(12, 30, 71, 0.72));
       }
 
       .nhlcal-day-cell.has-team-game {
         background:
-          radial-gradient(circle at 50% 50%, rgba(19, 216, 231, 0.11), transparent 72%),
-          linear-gradient(180deg, rgba(9, 37, 51, 0.86), rgba(5, 22, 33, 0.86));
+          radial-gradient(circle at 50% 50%, rgba(46, 230, 214, 0.11), transparent 72%),
+          linear-gradient(180deg, rgba(9, 37, 51, 0.86), rgba(12, 37, 84, 0.86));
       }
 
       .nhlcal-day-cell.has-special-events {
         background:
           radial-gradient(circle at 12% 6%, rgba(233, 168, 60, 0.12), transparent 34%),
-          linear-gradient(180deg, rgba(13, 34, 48, 0.82), rgba(6, 22, 34, 0.82));
+          linear-gradient(180deg, rgba(13, 34, 48, 0.82), rgba(13, 37, 85, 0.82));
       }
 
       .nhlcal-day-cell.has-critical-event {
         background:
           radial-gradient(circle at 12% 6%, rgba(255, 96, 109, 0.18), transparent 36%),
           radial-gradient(circle at 88% 12%, rgba(233, 168, 60, 0.13), transparent 34%),
-          linear-gradient(180deg, rgba(38, 18, 29, 0.86), rgba(8, 22, 34, 0.86));
+          linear-gradient(180deg, rgba(29, 35, 80, 0.86), rgba(14, 37, 85, 0.86));
       }
 
       .nhlcal-day-cell.has-high-event:not(.has-critical-event) {
         background:
           radial-gradient(circle at 12% 6%, rgba(233, 168, 60, 0.17), transparent 36%),
-          linear-gradient(180deg, rgba(31, 35, 37, 0.86), rgba(7, 22, 34, 0.86));
+          linear-gradient(180deg, rgba(26, 46, 87, 0.86), rgba(14, 37, 85, 0.86));
       }
 
       .nhlcal-day-number-row {
@@ -1161,7 +1161,7 @@ export const CALENDAR_CSS = `
         border-radius: var(--radius-ops, 2px);
         background: rgba(233, 168, 60, 0.95);
         border: 1px solid rgba(255, 214, 135, 0.45);
-        color: #1b1002;
+        color: #182138;
         font-size: 11px;
         font-weight: 1000;
         font-variant-numeric: tabular-nums;
@@ -1211,12 +1211,12 @@ export const CALENDAR_CSS = `
       .nhlcal-corner-cut {
         width: 0;
         height: 0;
-        border-top: 13px solid rgba(19, 216, 231, 0.62);
+        border-top: 13px solid rgba(46, 230, 214, 0.62);
         border-left: 13px solid transparent;
         position: absolute;
         top: -10px;
         right: -11px;
-        filter: drop-shadow(0 0 8px rgba(19, 216, 231, 0.28));
+        filter: drop-shadow(0 0 8px rgba(46, 230, 214, 0.28));
         opacity: 0.85;
       }
 
@@ -1261,7 +1261,7 @@ export const CALENDAR_CSS = `
         border-color: rgba(255, 214, 135, 0.48);
         background:
           radial-gradient(circle at 0% 0%, rgba(233, 168, 60, 0.22), transparent 58%),
-          linear-gradient(180deg, rgba(64, 43, 20, 0.88), rgba(23, 25, 29, 0.82));
+          linear-gradient(180deg, rgba(64, 43, 20, 0.88), rgba(22, 40, 80, 0.82));
       }
 
       .nhlcal-special-event-icon {
@@ -1326,7 +1326,7 @@ export const CALENDAR_CSS = `
         border-color: rgba(255, 96, 109, 0.34);
         background:
           radial-gradient(circle at 0% 0%, rgba(255, 96, 109, 0.16), transparent 56%),
-          linear-gradient(180deg, rgba(60, 22, 31, 0.78), rgba(18, 20, 25, 0.74));
+          linear-gradient(180deg, rgba(60, 22, 31, 0.78), rgba(19, 36, 76, 0.74));
       }
 
       .nhlcal-special-event-tile.tone-medical .nhlcal-special-event-icon {
@@ -1336,23 +1336,23 @@ export const CALENDAR_CSS = `
       }
 
       .nhlcal-special-event-tile.tone-trade {
-        border-color: rgba(19, 216, 231, 0.32);
+        border-color: rgba(46, 230, 214, 0.32);
         background:
-          radial-gradient(circle at 0% 0%, rgba(19, 216, 231, 0.16), transparent 56%),
-          linear-gradient(180deg, rgba(16, 48, 58, 0.78), rgba(18, 23, 28, 0.74));
+          radial-gradient(circle at 0% 0%, rgba(46, 230, 214, 0.16), transparent 56%),
+          linear-gradient(180deg, rgba(16, 48, 58, 0.78), rgba(19, 38, 79, 0.74));
       }
 
       .nhlcal-special-event-tile.tone-trade .nhlcal-special-event-icon {
         color: #baf9ff;
-        background: rgba(19, 216, 231, 0.13);
-        border-color: rgba(19, 216, 231, 0.28);
+        background: rgba(46, 230, 214, 0.13);
+        border-color: rgba(46, 230, 214, 0.28);
       }
 
       .nhlcal-special-event-tile.tone-draft {
         border-color: rgba(138, 180, 255, 0.35);
         background:
           radial-gradient(circle at 0% 0%, rgba(138, 180, 255, 0.18), transparent 56%),
-          linear-gradient(180deg, rgba(42, 28, 66, 0.78), rgba(18, 20, 28, 0.74));
+          linear-gradient(180deg, rgba(42, 28, 66, 0.78), rgba(19, 36, 79, 0.74));
       }
 
       .nhlcal-special-event-tile.tone-draft .nhlcal-special-event-icon {
@@ -1365,7 +1365,7 @@ export const CALENDAR_CSS = `
         border-color: rgba(82, 223, 148, 0.34);
         background:
           radial-gradient(circle at 0% 0%, rgba(82, 223, 148, 0.16), transparent 56%),
-          linear-gradient(180deg, rgba(20, 58, 40, 0.78), rgba(16, 23, 23, 0.74));
+          linear-gradient(180deg, rgba(20, 58, 40, 0.78), rgba(18, 38, 75, 0.74));
       }
 
       .nhlcal-special-event-tile.tone-playoff .nhlcal-special-event-icon {
@@ -1380,7 +1380,7 @@ export const CALENDAR_CSS = `
         border-color: rgba(138, 180, 255, 0.34);
         background:
           radial-gradient(circle at 0% 0%, rgba(138, 180, 255, 0.17), transparent 56%),
-          linear-gradient(180deg, rgba(25, 39, 68, 0.78), rgba(16, 21, 29, 0.74));
+          linear-gradient(180deg, rgba(25, 39, 68, 0.78), rgba(18, 37, 80, 0.74));
       }
 
       .nhlcal-special-event-tile.tone-showcase .nhlcal-special-event-icon,
@@ -1425,8 +1425,8 @@ export const CALENDAR_CSS = `
           border-color 120ms ease,
           box-shadow 120ms ease;
         background:
-          radial-gradient(circle at 0% 0%, rgba(19, 216, 231, 0.11), transparent 55%),
-          linear-gradient(180deg, rgba(16, 44, 62, 0.82), rgba(7, 24, 36, 0.84));
+          radial-gradient(circle at 0% 0%, rgba(46, 230, 214, 0.11), transparent 55%),
+          linear-gradient(180deg, rgba(16, 44, 62, 0.82), rgba(14, 39, 86, 0.84));
         border: 1px solid rgba(156, 218, 236, 0.16);
         box-shadow:
           inset 0 1px 0 rgba(255, 255, 255, 0.05),
@@ -1434,7 +1434,7 @@ export const CALENDAR_CSS = `
       }
 
       .nhlcal-game-tile:hover {
-        border-color: rgba(19, 216, 231, 0.34);
+        border-color: rgba(46, 230, 214, 0.34);
         box-shadow:
           inset 0 1px 0 rgba(255, 255, 255, 0.08),
           0 6px 14px rgba(0, 0, 0, 0.25);
@@ -1451,40 +1451,40 @@ export const CALENDAR_CSS = `
       .nhlcal-game-tile.is-final {
         background:
           radial-gradient(circle at 0% 0%, rgba(76, 130, 158, 0.08), transparent 60%),
-          linear-gradient(180deg, rgba(11, 31, 46, 0.84), rgba(5, 19, 29, 0.88));
+          linear-gradient(180deg, rgba(11, 31, 46, 0.84), rgba(12, 35, 80, 0.88));
       }
 
       .nhlcal-game-tile.is-final.result-win {
         background:
           radial-gradient(circle at 0% 0%, rgba(68, 204, 128, 0.16), transparent 58%),
-          linear-gradient(180deg, rgba(17, 64, 44, 0.7), rgba(8, 35, 24, 0.72));
+          linear-gradient(180deg, rgba(17, 64, 44, 0.7), rgba(14, 46, 76, 0.72));
         border-color: rgba(95, 226, 155, 0.34);
       }
 
       .nhlcal-game-tile.is-final.result-loss {
         background:
           radial-gradient(circle at 0% 0%, rgba(238, 86, 86, 0.16), transparent 58%),
-          linear-gradient(180deg, rgba(72, 24, 28, 0.7), rgba(36, 11, 14, 0.72));
+          linear-gradient(180deg, rgba(72, 24, 28, 0.7), rgba(28, 30, 67, 0.72));
         border-color: rgba(241, 120, 120, 0.34);
       }
 
       .nhlcal-game-tile.is-final.result-otl {
         background:
           radial-gradient(circle at 0% 0%, rgba(233, 168, 60, 0.15), transparent 58%),
-          linear-gradient(180deg, rgba(64, 45, 20, 0.68), rgba(35, 24, 12, 0.72));
+          linear-gradient(180deg, rgba(64, 45, 20, 0.68), rgba(28, 39, 65, 0.72));
         border-color: rgba(233, 168, 60, 0.3);
       }
 
       .nhlcal-game-tile.is-upcoming {
-        border-color: rgba(19, 216, 231, 0.2);
+        border-color: rgba(46, 230, 214, 0.2);
       }
 
       .nhlcal-game-tile.is-expanded {
-        border-color: rgba(19, 216, 231, 0.52);
+        border-color: rgba(46, 230, 214, 0.52);
         box-shadow:
           inset 0 1px 0 rgba(255, 255, 255, 0.09),
-          0 0 0 1px rgba(19, 216, 231, 0.18),
-          0 10px 24px rgba(5, 20, 30, 0.35);
+          0 0 0 1px rgba(46, 230, 214, 0.18),
+          0 10px 24px rgba(12, 36, 81, 0.35);
       }
 
       .nhlcal-game-tile-accent {
@@ -1492,7 +1492,7 @@ export const CALENDAR_CSS = `
         height: 100%;
         min-height: 42px;
         border-radius: 0;
-        box-shadow: 0 0 8px rgba(19, 216, 231, 0.45);
+        box-shadow: 0 0 8px rgba(46, 230, 214, 0.45);
       }
 
       .nhlcal-game-tile-logo {
@@ -1544,8 +1544,8 @@ export const CALENDAR_CSS = `
 
       .nhlcal-game-relation.home {
         color: rgba(152, 246, 255, 0.95);
-        background: rgba(19, 216, 231, 0.18);
-        border-color: rgba(19, 216, 231, 0.38);
+        background: rgba(46, 230, 214, 0.18);
+        border-color: rgba(46, 230, 214, 0.38);
       }
 
       .nhlcal-game-relation.away {
@@ -1637,8 +1637,8 @@ export const CALENDAR_CSS = `
         height: 22px;
         padding: 0 6px;
         border-radius: 7px;
-        border: 1px solid rgba(19, 216, 231, 0.24);
-        background: rgba(19, 216, 231, 0.08);
+        border: 1px solid rgba(46, 230, 214, 0.24);
+        background: rgba(46, 230, 214, 0.08);
         color: rgba(180, 238, 245, 0.95);
         display: inline-flex;
         align-items: center;
@@ -1661,8 +1661,8 @@ export const CALENDAR_CSS = `
         margin-top: 6px;
         padding: 8px;
         border-radius: 9px;
-        background: rgba(2, 10, 16, 0.32);
-        border-top: 1px solid rgba(19, 216, 231, 0.18);
+        background: rgba(11, 29, 68, 0.32);
+        border-top: 1px solid rgba(46, 230, 214, 0.18);
         display: grid;
         gap: 8px;
       }
@@ -1753,7 +1753,7 @@ export const CALENDAR_CSS = `
         width: 245px;
         border: 1px solid var(--line-2);
         border-radius: 12px;
-        background: rgba(4, 15, 24, 0.98);
+        background: rgba(12, 32, 76, 0.98);
         padding: 12px;
         box-shadow: 0 20px 50px rgba(0, 0, 0, 0.42);
         z-index: 20;
@@ -1783,7 +1783,7 @@ export const CALENDAR_CSS = `
   justify-content: space-between;
   gap: 10px;
   border-top: 1px solid var(--line);
-  background: rgba(5, 16, 25, 0.72);
+  background: rgba(12, 33, 76, 0.72);
   border-radius: 0 0 12px 12px;
 }
 
@@ -1897,7 +1897,7 @@ export const CALENDAR_CSS = `
       .nhlcal-calendar-actions button.is-active {
         border-color: var(--line-strong);
         color: var(--text);
-        background: rgba(19, 216, 231, 0.11);
+        background: rgba(46, 230, 214, 0.11);
       }
       .nhlcal-calendar-footer .nhlcal-calendar-actions {
         display: none;
@@ -1992,7 +1992,7 @@ export const CALENDAR_CSS = `
 
       .nhlcal-tab-row button.is-active {
   border-color: var(--line-strong);
-  background: rgba(19, 216, 231, 0.14);
+  background: rgba(46, 230, 214, 0.14);
   box-shadow: inset 0 -2px 0 var(--cyan);
 }
 
@@ -2000,7 +2000,7 @@ export const CALENDAR_CSS = `
       .nhlcal-card {
         border: 1px solid var(--line);
         border-radius: var(--radius-card, 8px);
-        background: rgba(6, 21, 34, 0.78);
+        background: rgba(13, 37, 85, 0.78);
         box-shadow: none;
       }
 
@@ -2266,8 +2266,8 @@ export const CALENDAR_CSS = `
 
       .nhlcal-empty-orb {
         padding: 0 0 7px;
-        border-bottom: 2px solid var(--ops-cyan, #13d8e7);
-        color: var(--ops-cyan, #13d8e7);
+        border-bottom: 2px solid var(--ops-cyan, #2ee6d6);
+        color: var(--ops-cyan, #2ee6d6);
         font-size: 11px;
         font-weight: 900;
         letter-spacing: 0.16em;
@@ -2372,7 +2372,7 @@ export const CALENDAR_CSS = `
       .nhlcal-selected-section-head button {
         border: 1px solid var(--line);
         border-radius: var(--radius-ops, 2px);
-        background: rgba(19, 216, 231, 0.07);
+        background: rgba(46, 230, 214, 0.07);
         color: var(--cyan);
         padding: 5px 9px;
         font-size: 11px;
@@ -2520,10 +2520,10 @@ export const CALENDAR_CSS = `
         display: flex;
         flex-direction: column;
         overflow: hidden;
-        border-color: rgba(19, 216, 231, 0.22);
+        border-color: rgba(46, 230, 214, 0.22);
         box-shadow:
           0 12px 28px rgba(0, 0, 0, 0.28),
-          inset 0 1px 0 rgba(19, 216, 231, 0.08);
+          inset 0 1px 0 rgba(46, 230, 214, 0.08);
       }
 
       .nhlcal-standings-card--extended {
@@ -2560,9 +2560,9 @@ export const CALENDAR_CSS = `
       }
 
       .nhlcal-standings-full-link {
-        border: 1px solid rgba(19, 216, 231, 0.24);
+        border: 1px solid rgba(46, 230, 214, 0.24);
         border-radius: 8px;
-        background: rgba(19, 216, 231, 0.08);
+        background: rgba(46, 230, 214, 0.08);
         color: var(--cyan);
         padding: 6px 10px;
         font-size: 11px;
@@ -2611,8 +2611,8 @@ export const CALENDAR_CSS = `
 
       .nhlcal-standings-full-button:hover,
       .nhlcal-standings-full-link:hover {
-        border-color: rgba(19, 216, 231, 0.42);
-        background: rgba(19, 216, 231, 0.1);
+        border-color: rgba(46, 230, 214, 0.42);
+        background: rgba(46, 230, 214, 0.1);
       }
 
       .nhlcal-standings-head,
@@ -2663,7 +2663,7 @@ export const CALENDAR_CSS = `
 
       .nhlcal-standings-row.is-user-team {
         color: var(--cyan);
-        background: rgba(19, 216, 231, 0.1);
+        background: rgba(46, 230, 214, 0.1);
         box-shadow: inset 3px 0 0 var(--cyan);
       }
 
@@ -2872,7 +2872,7 @@ export const CALENDAR_CSS = `
       .nhlcal-storyline-choice-button {
         border: 1px solid var(--line);
         border-radius: var(--radius-hud, 4px);
-        background: rgba(19, 216, 231, 0.07);
+        background: rgba(46, 230, 214, 0.07);
         color: var(--cyan);
         min-height: 26px;
         padding: 0 9px;
@@ -2950,7 +2950,7 @@ export const CALENDAR_CSS = `
       .nhlcal-small-empty b {
         display: block;
         margin-bottom: 3px;
-        color: var(--ops-cyan, #13d8e7);
+        color: var(--ops-cyan, #2ee6d6);
         font-size: 11px;
         font-weight: 900;
         letter-spacing: 0.16em;
@@ -3042,8 +3042,8 @@ export const CALENDAR_CSS = `
         border: 1px solid rgba(156, 218, 236, 0.11);
         border-radius: 9px;
         background:
-          linear-gradient(180deg, rgba(15, 38, 56, 0.84), rgba(8, 25, 38, 0.78)),
-          radial-gradient(circle at 100% 30%, rgba(19, 216, 231, 0.1), transparent 52%);
+          linear-gradient(180deg, rgba(15, 38, 56, 0.84), rgba(14, 40, 88, 0.78)),
+          radial-gradient(circle at 100% 30%, rgba(46, 230, 214, 0.1), transparent 52%);
         padding: 13px;
         display: flex;
         align-items: center;
@@ -3080,7 +3080,7 @@ export const CALENDAR_CSS = `
       }
 
       .nhlcal-diagnostic-tile em {
-        color: rgba(19, 216, 231, 0.56);
+        color: rgba(46, 230, 214, 0.56);
         font-size: 34px;
         font-style: normal;
       }
@@ -3271,7 +3271,7 @@ export const CALENDAR_CSS = `
         align-items: center;
         justify-content: center;
         border-radius: 999px;
-        background: rgba(2, 11, 18, 0.85);
+        background: rgba(11, 30, 70, 0.85);
         border: 1px solid rgba(103, 157, 183, 0.32);
         overflow: hidden;
         box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
@@ -3372,7 +3372,7 @@ export const CALENDAR_CSS = `
         position: fixed;
         inset: 0;
         z-index: 100;
-        background: rgba(0, 5, 10, 0.58);
+        background: rgba(10, 26, 63, 0.58);
         backdrop-filter: blur(7px);
         display: flex;
       }
@@ -3391,7 +3391,7 @@ export const CALENDAR_CSS = `
         position: fixed;
         inset: 0;
         z-index: 100;
-        background: rgba(0, 5, 10, 0.58);
+        background: rgba(10, 26, 63, 0.58);
         backdrop-filter: blur(7px);
         display: flex;
         align-items: center;
@@ -3406,7 +3406,7 @@ export const CALENDAR_CSS = `
         border-radius: 6px;
         background:
           radial-gradient(circle at 0% 0%, rgba(233, 168, 60, 0.13), transparent 38%),
-          linear-gradient(180deg, rgba(7, 21, 34, 0.98), rgba(2, 9, 15, 0.98));
+          linear-gradient(180deg, rgba(14, 37, 85, 0.98), rgba(11, 28, 68, 0.98));
         box-shadow: 0 28px 90px rgba(0, 0, 0, 0.55);
       }
 
@@ -3414,14 +3414,14 @@ export const CALENDAR_CSS = `
         border-color: rgba(255, 96, 109, 0.48);
         background:
           radial-gradient(circle at 0% 0%, rgba(255, 96, 109, 0.16), transparent 38%),
-          linear-gradient(180deg, rgba(32, 12, 20, 0.98), rgba(2, 9, 15, 0.98));
+          linear-gradient(180deg, rgba(26, 30, 72, 0.98), rgba(11, 28, 68, 0.98));
       }
 
       .nhlcal-event-modal.tone-trade {
-        border-color: rgba(19, 216, 231, 0.45);
+        border-color: rgba(46, 230, 214, 0.45);
         background:
-          radial-gradient(circle at 0% 0%, rgba(19, 216, 231, 0.14), transparent 38%),
-          linear-gradient(180deg, rgba(7, 21, 34, 0.98), rgba(2, 9, 15, 0.98));
+          radial-gradient(circle at 0% 0%, rgba(46, 230, 214, 0.14), transparent 38%),
+          linear-gradient(180deg, rgba(14, 37, 85, 0.98), rgba(11, 28, 68, 0.98));
       }
 
       .nhlcal-event-modal-head {
@@ -3558,12 +3558,12 @@ export const CALENDAR_CSS = `
         overflow: auto;
         z-index: 101;
         border: 1px solid var(--line-strong);
-        border-top: 2px solid var(--ops-cyan, #13d8e7);
+        border-top: 2px solid var(--ops-cyan, #2ee6d6);
         border-radius: 6px;
         background: linear-gradient(
           180deg,
-          rgba(7, 21, 34, 0.98),
-          rgba(2, 9, 15, 0.98)
+          rgba(14, 37, 85, 0.98),
+          rgba(11, 28, 68, 0.98)
         );
         box-shadow: 0 28px 90px rgba(0, 0, 0, 0.55);
       }
@@ -3616,8 +3616,8 @@ export const CALENDAR_CSS = `
 
       .nhlcal-injury-report-close:hover {
         color: var(--text);
-        border-color: var(--ops-cyan, #13d8e7);
-        background: rgba(19, 216, 231, 0.1);
+        border-color: var(--ops-cyan, #2ee6d6);
+        background: rgba(46, 230, 214, 0.1);
       }
 
       .nhlcal-injury-report-body {
@@ -3650,8 +3650,8 @@ export const CALENDAR_CSS = `
         overflow: auto;
         border-left: 1px solid var(--line-strong);
         background:
-          radial-gradient(circle at 0% 0%, rgba(19, 216, 231, 0.13), transparent 34%),
-          linear-gradient(180deg, rgba(7, 21, 34, 0.98), rgba(2, 9, 15, 0.98));
+          radial-gradient(circle at 0% 0%, rgba(46, 230, 214, 0.13), transparent 34%),
+          linear-gradient(180deg, rgba(14, 37, 85, 0.98), rgba(11, 28, 68, 0.98));
         box-shadow: -30px 0 80px rgba(0, 0, 0, 0.55);
       }
 
@@ -3704,7 +3704,7 @@ export const CALENDAR_CSS = `
       .nhlcal-modal header button:hover {
         color: var(--text);
         border-color: var(--ops-cyan);
-        background: rgba(19, 216, 231, 0.1);
+        background: rgba(46, 230, 214, 0.1);
       }
 
       .nhlcal-drawer-tabs {
@@ -3734,7 +3734,7 @@ export const CALENDAR_CSS = `
       .nhlcal-drawer-tabs button.is-active {
         color: var(--text);
         border-bottom-color: var(--cyan);
-        background: rgba(19, 216, 231, 0.08);
+        background: rgba(46, 230, 214, 0.08);
       }
 
       .nhlcal-drawer-body {
@@ -3770,7 +3770,7 @@ export const CALENDAR_CSS = `
         border: 1px solid rgba(156, 218, 236, 0.1);
         border-radius: 10px;
         background:
-          linear-gradient(180deg, rgba(18, 42, 60, 0.72), rgba(7, 23, 34, 0.72));
+          linear-gradient(180deg, rgba(18, 42, 60, 0.72), rgba(14, 38, 85, 0.72));
         color: var(--text);
         text-align: left;
         padding: 13px;
@@ -3783,7 +3783,7 @@ export const CALENDAR_CSS = `
 
       .nhlcal-drawer-nav-card:hover {
         border-color: var(--line-strong);
-        background: rgba(19, 216, 231, 0.08);
+        background: rgba(46, 230, 214, 0.08);
         transform: translateY(-1px);
       }
 
@@ -3846,8 +3846,8 @@ export const CALENDAR_CSS = `
       }
 
       .nhlcal-drawer-event.tone-trade {
-        border-color: rgba(19, 216, 231, 0.22) !important;
-        background: rgba(19, 216, 231, 0.035) !important;
+        border-color: rgba(46, 230, 214, 0.22) !important;
+        background: rgba(46, 230, 214, 0.035) !important;
       }
 
       .nhlcal-drawer-empty {
@@ -3884,7 +3884,7 @@ export const CALENDAR_CSS = `
         border-radius: var(--radius-ops, 2px);
         display: grid;
         place-items: center;
-        background: rgba(19, 216, 231, 0.1);
+        background: rgba(46, 230, 214, 0.1);
         color: var(--cyan);
         font-size: 11px;
         font-weight: 1000;
@@ -3973,12 +3973,12 @@ export const CALENDAR_CSS = `
       .nhlcal-modal {
         width: min(520px, 94vw);
         border: 1px solid var(--line-strong);
-        border-top: 2px solid var(--ops-cyan, #13d8e7);
+        border-top: 2px solid var(--ops-cyan, #2ee6d6);
         border-radius: 6px;
         background: linear-gradient(
           180deg,
-          rgba(9, 27, 42, 0.98),
-          rgba(3, 11, 18, 0.98)
+          rgba(14, 41, 92, 0.98),
+          rgba(12, 30, 70, 0.98)
         );
         box-shadow: 0 30px 90px rgba(0, 0, 0, 0.58);
         overflow: hidden;
@@ -4055,13 +4055,13 @@ export const CALENDAR_CSS = `
       }
 
       .nhlcal-settings-list button.is-active {
-        background: rgba(19, 216, 231, 0.06);
-        box-shadow: inset 2px 0 0 var(--ops-cyan, #13d8e7);
+        background: rgba(46, 230, 214, 0.06);
+        box-shadow: inset 2px 0 0 var(--ops-cyan, #2ee6d6);
       }
 
       .nhlcal-settings-list button.is-active::before {
-        border-color: var(--ops-cyan, #13d8e7);
-        background: var(--ops-cyan, #13d8e7);
+        border-color: var(--ops-cyan, #2ee6d6);
+        background: var(--ops-cyan, #2ee6d6);
       }
 
       .nhlcal-settings-list span {
@@ -4375,7 +4375,7 @@ export const CALENDAR_CSS = `
         border-radius: var(--radius-ops, 2px);
         border-width: 0 0 0 3px;
         border-left-color: var(--ops-gold);
-        background: linear-gradient(90deg, rgba(233, 168, 60, 0.14), rgba(7, 22, 34, 0.55));
+        background: linear-gradient(90deg, rgba(233, 168, 60, 0.14), rgba(14, 37, 85, 0.55));
         box-shadow: none;
         min-height: 30px;
         padding: 4px 6px;
@@ -4385,12 +4385,12 @@ export const CALENDAR_CSS = `
 
       .nhlcal-special-event-tile.priority-critical {
         border-left-color: var(--ops-signal-red);
-        background: linear-gradient(90deg, rgba(200, 16, 46, 0.2), rgba(7, 22, 34, 0.55));
+        background: linear-gradient(90deg, rgba(200, 16, 46, 0.2), rgba(14, 37, 85, 0.55));
       }
 
       .nhlcal-special-event-tile.priority-high {
         border-left-color: var(--ops-cyan);
-        background: linear-gradient(90deg, rgba(19, 216, 231, 0.16), rgba(7, 22, 34, 0.55));
+        background: linear-gradient(90deg, rgba(46, 230, 214, 0.16), rgba(14, 37, 85, 0.55));
       }
 
       .nhlcal-special-event-copy strong {
@@ -4473,13 +4473,13 @@ export const CALENDAR_CSS = `
         font-size: 14px;
       }
       .nhlcal-month-title-block h2 {
-        font-family: "Archivo Black", "Barlow Condensed", "Arial Narrow", sans-serif;
+        font-family: var(--dd-font-ui, Nunito, sans-serif);
         font-size: clamp(26px, 2.4vw, 34px);
         letter-spacing: 0.03em;
         line-height: 1.05;
       }
       .nhlcal-team-identity h1 {
-        font-family: "Barlow Condensed", "Archivo Black", "Arial Narrow", sans-serif;
+        font-family: var(--dd-font-ui, Nunito, sans-serif);
         font-size: clamp(22px, 2vw, 28px);
         letter-spacing: 0.04em;
       }
@@ -4524,7 +4524,7 @@ export const CALENDAR_CSS = `
       }
       .nhlcal-hero-title {
         margin: 0;
-        font-family: "Archivo Black", "Barlow Condensed", "Arial Narrow", sans-serif;
+        font-family: var(--dd-font-ui, Nunito, sans-serif);
         font-size: clamp(24px, 2.3vw, 32px);
         line-height: 1.05;
         color: var(--text);

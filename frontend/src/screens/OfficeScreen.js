@@ -2305,23 +2305,23 @@ const OFFICE_SCREEN_CSS = `
 }
 
 .office-screen.register-office .hub-sidebar__link.is-selected {
-  background: rgba(201, 168, 106, 0.12) !important;
-  color: var(--office-brass, #c9a86a) !important;
-  box-shadow: inset 3px 0 0 rgba(201, 168, 106, 0.55);
+  background: rgba(248, 213, 138, 0.12) !important;
+  color: var(--office-brass, #f8d58a) !important;
+  box-shadow: inset 3px 0 0 rgba(248, 213, 138, 0.55);
 }
 
 .office-screen.register-office .hub-live-status__chip {
   border-radius: var(--radius-ops, 2px) !important;
-  background: rgba(201, 168, 106, 0.08) !important;
-  color: var(--office-brass, #c9a86a) !important;
-  border: 1px solid rgba(201, 168, 106, 0.22);
+  background: rgba(248, 213, 138, 0.08) !important;
+  color: var(--office-brass, #f8d58a) !important;
+  border: 1px solid rgba(248, 213, 138, 0.22);
 }
 
 .office-screen.register-office .office-screen__kicker {
   font-family: var(--font-mono-data, "IBM Plex Mono", monospace);
   font-size: 11px;
   letter-spacing: 0.16em;
-  color: var(--office-brass, #c9a86a);
+  color: var(--office-brass, #f8d58a);
 }
 
 .office-screen.register-office .office-screen__title {
@@ -2345,16 +2345,16 @@ const OFFICE_SCREEN_CSS = `
 }
 
 .office-screen.register-office .hub-progress__fill {
-  background: linear-gradient(90deg, rgba(201, 168, 106, 0.45), var(--office-brass, #c9a86a)) !important;
+  background: linear-gradient(90deg, rgba(248, 213, 138, 0.45), var(--office-brass, #f8d58a)) !important;
 }
 
 .office-screen.register-office .hub-progress__fill--gold {
-  background: linear-gradient(90deg, rgba(201, 168, 106, 0.55), var(--office-brass, #c9a86a)) !important;
+  background: linear-gradient(90deg, rgba(248, 213, 138, 0.55), var(--office-brass, #f8d58a)) !important;
 }
 
 .office-screen.register-office .game-btn--primary {
-  border-color: rgba(201, 168, 106, 0.45) !important;
-  background: rgba(201, 168, 106, 0.14) !important;
+  border-color: rgba(248, 213, 138, 0.45) !important;
+  background: rgba(248, 213, 138, 0.14) !important;
   color: var(--office-text, #ece8e0) !important;
 }
 
@@ -2364,7 +2364,7 @@ const OFFICE_SCREEN_CSS = `
 }
 
 .office-screen.register-office .hub-reward-tile__v {
-  color: var(--office-brass, #c9a86a) !important;
+  color: var(--office-brass, #f8d58a) !important;
 }
 
 @media (prefers-reduced-motion: reduce) {

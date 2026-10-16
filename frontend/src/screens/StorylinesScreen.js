@@ -24,8 +24,6 @@ import { SocialPostCard, PlayerSocialRail } from "../components/franchise/social
 import { PlayerProfileModal, normalizeRosterBrowserPlayer } from "./RosterScreen";
 import { collectLockerPulse, buildHubStoryTicker, isRoutineLeagueTrade } from "../utils/lockerRoomPulse";
 import { resolveChapterMap, chapterNumericValue } from "../utils/chapterAttributes";
-import "../styles/storylinesTokens.css";
-import "../styles/meetingsDesk.css";
 
 /*
   StorylinesScreen — franchise narrative command center.
@@ -2500,9 +2498,7 @@ function RinkOddities({ stories, onOpen, onResolve, busyChoice, onShowAll, limit
   return (
     <section className="sl-odd" aria-label="Rink Oddities">
       <div className="sl-odd__head">
-        <h3>
-          <span aria-hidden>🎪</span> Rink Oddities
-        </h3>
+        <h3>Rink Oddities</h3>
         <span className="sl-odd__sub">The weird side of the league</span>
         {onShowAll && stories.length > limit ? (
           <button type="button" className="sl-odd__all" onClick={onShowAll}>
@@ -3907,7 +3903,7 @@ function AwardsRacePanel({ boards, status, sealed, sealedMessage }) {
         .sl-awards__head h2 { margin: 4px 0 6px; font-size: 28px; }
         .sl-awards__head span, .sl-awards__status { color: #9aa8b5; font-size: 13px; }
         .sl-awards__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
-        .sl-awards__card { background: #12181f; border: 1px solid rgba(255,255,255,0.08); border-radius: 14px; padding: 12px 12px 6px; }
+        .sl-awards__card { background: #132752; border: 1px solid rgba(255,255,255,0.08); border-radius: 14px; padding: 12px 12px 6px; }
         .sl-awards__card header { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; }
         .sl-awards__card header strong { font-size: 18px; }
         .sl-awards__card header em { font-style: normal; color: #8ea0b0; font-size: 12px; }
@@ -4569,18 +4565,18 @@ export default function StorylinesScreen() {
         .sl-trend--click { cursor: pointer; }
         .sl-trend--click:hover { background: rgba(57, 214, 230, 0.08); }
         .nhlcal-sl-root {
-          --bg-deep: #030b13;
-          --panel: rgba(10, 26, 40, 0.82);
-          --panel-2: rgba(7, 19, 30, 0.78);
-          --panel-3: rgba(5, 14, 23, 0.94);
+          --bg-deep: #0c1e47;
+          --panel: rgba(15, 40, 90, 0.82);
+          --panel-2: rgba(14, 35, 81, 0.78);
+          --panel-3: rgba(12, 32, 75, 0.94);
           --line: rgba(150, 214, 235, 0.13);
           --line-2: rgba(150, 214, 235, 0.24);
-          --line-strong: rgba(73, 231, 240, 0.55);
+          --line-strong: rgba(46, 230, 214, 0.55);
           --text: #eaf7fc;
           --muted: #7e94a6;
           --muted-2: #9fb4c4;
-          --cyan: #16dcea;
-          --cyan-dim: rgba(22, 220, 234, 0.14);
+          --cyan: #2ee6d6;
+          --cyan-dim: rgba(46, 230, 214, 0.14);
           --gold: #e9a83c;
           --brass: #c9a227;
           --gold-dim: rgba(233, 168, 60, 0.14);
@@ -4598,10 +4594,10 @@ export default function StorylinesScreen() {
           flex-direction: column;
           width: 100%;
           background:
-            radial-gradient(ellipse 70% 50% at 18% -6%, rgba(22, 220, 234, 0.13), transparent 60%),
+            radial-gradient(ellipse 70% 50% at 18% -6%, rgba(46, 230, 214, 0.13), transparent 60%),
             radial-gradient(ellipse 50% 40% at 92% 4%, rgba(233, 168, 60, 0.09), transparent 60%),
             radial-gradient(ellipse 80% 60% at 50% 108%, rgba(20, 60, 92, 0.35), transparent 65%),
-            linear-gradient(178deg, #071726 0%, #030b13 55%, #01060b 100%);
+            linear-gradient(178deg, #0e2658 0%, #0c1e47 55%, #0a1a40 100%);
           color: var(--text);
           font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         }
@@ -4639,8 +4635,8 @@ export default function StorylinesScreen() {
           border: 1px solid var(--line);
           border-radius: 12px;
           background:
-            linear-gradient(120deg, rgba(22,220,234,.06), transparent 42%),
-            linear-gradient(180deg, rgba(12,32,48,.92), rgba(6,17,27,.92));
+            linear-gradient(120deg, rgba(46, 230, 214, .06), transparent 42%),
+            linear-gradient(180deg, rgba(12,32,48,.92), rgba(13, 34, 78, .92));
           box-shadow: 0 14px 34px rgba(0,0,0,.34), inset 0 1px 0 rgba(255,255,255,.04);
         }
         .sl-command__crest { width: 46px; height: 46px; display: grid; place-items: center; flex-shrink: 0;
@@ -4666,13 +4662,13 @@ export default function StorylinesScreen() {
           font-size: 11px; font-weight: 900; letter-spacing: .09em; text-transform: uppercase;
           transition: border-color .15s ease, background .15s ease, transform .12s ease;
         }
-        .sl-command__nav button:hover { border-color: var(--line-strong); background: rgba(22,220,234,.12); transform: translateY(-1px); }
+        .sl-command__nav button:hover { border-color: var(--line-strong); background: rgba(46, 230, 214, .12); transform: translateY(-1px); }
 
         /* ------------- ticker ------------- */
         .sl-ticker {
           display: flex; align-items: stretch; overflow: hidden;
           border: 1px solid var(--line); border-radius: 9px;
-          background: linear-gradient(90deg, rgba(255,95,109,.1), rgba(6,17,27,.9) 26%);
+          background: linear-gradient(90deg, rgba(255,95,109,.1), rgba(13, 34, 78, .9) 26%);
         }
         .sl-ticker__flag {
           flex-shrink: 0; display: flex; align-items: center; gap: 7px; padding: 0 14px;
@@ -4692,7 +4688,7 @@ export default function StorylinesScreen() {
 
         /* ------------- departments ------------- */
         .sl-depts { display: flex; gap: 6px; flex-wrap: wrap; padding: 5px; border: 1px solid var(--line);
-          border-radius: 11px; background: rgba(6,17,27,.6); }
+          border-radius: 11px; background: rgba(13, 34, 78, .6); }
         .sl-depts button {
           display: inline-flex; align-items: center; gap: 7px; position: relative;
           height: 34px; padding: 0 15px; border-radius: 8px; cursor: pointer;
@@ -4702,18 +4698,18 @@ export default function StorylinesScreen() {
         }
         .sl-depts button em { font-style: normal; font-size: 12px; opacity: .8; }
         .sl-depts button:hover { color: var(--text); background: rgba(255,255,255,.04); }
-        .sl-depts button.is-active { color: #041018; background: linear-gradient(180deg, #2ee6f0, #12b9c9);
-          border-color: rgba(22,220,234,.4); box-shadow: 0 4px 14px rgba(22,220,234,.22); }
+        .sl-depts button.is-active { color: #0c214c; background: linear-gradient(180deg, #2ee6f0, #12b9c9);
+          border-color: rgba(46, 230, 214, .4); box-shadow: 0 4px 14px rgba(46, 230, 214, .22); }
         .sl-depts .sl-dept-count {
           min-width: 17px; height: 17px; padding: 0 5px; border-radius: 9px; display: grid; place-items: center;
-          font-size: 9.5px; font-weight: 900; background: var(--red); color: #290308;
+          font-size: 9.5px; font-weight: 900; background: var(--red); color: #1e183d;
         }
-        .sl-depts button.is-active .sl-dept-count { background: #062028; color: #7fe9f2; }
+        .sl-depts button.is-active .sl-dept-count { background: #0d2c5a; color: #7fe9f2; }
 
         .sl-market {
           display: flex; align-items: center; gap: 10px; margin: 0; padding: 8px 14px;
           border: 1px solid rgba(201,162,39,.28); border-left: 3px solid var(--brass); border-radius: 0 8px 8px 0;
-          background: linear-gradient(90deg, rgba(201,162,39,.12), rgba(6,17,27,.5));
+          background: linear-gradient(90deg, rgba(201,162,39,.12), rgba(13, 34, 78, .5));
           font-size: 11.5px; font-weight: 800; color: #f0cf93;
         }
         .sl-market em { font-style: normal; font-size: 9.5px; letter-spacing: .16em; text-transform: uppercase; color: var(--brass); }
@@ -4732,13 +4728,13 @@ export default function StorylinesScreen() {
           position: relative; overflow: hidden;
           display: grid; grid-template-columns: 168px minmax(0,1fr); gap: 22px; align-items: center;
           padding: 22px 26px; border: 1px solid var(--line-2); border-radius: 14px;
-          background: linear-gradient(135deg, rgba(13,36,53,.95), rgba(5,15,24,.95));
+          background: linear-gradient(135deg, rgba(13,36,53,.95), rgba(12, 32, 76, .95));
           box-shadow: 0 22px 52px rgba(0,0,0,.42), inset 0 1px 0 rgba(255,255,255,.05);
           animation: slRise .38s cubic-bezier(.2,.7,.3,1) both;
         }
         .sl-lead::before {
           content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
-          background: linear-gradient(180deg, var(--cyan), rgba(22,220,234,.1));
+          background: linear-gradient(180deg, var(--cyan), rgba(46, 230, 214, .1));
         }
         .sl-lead--hot::before { background: linear-gradient(180deg, var(--gold), rgba(233,168,60,.1)); }
         .sl-lead--boiling::before { background: linear-gradient(180deg, var(--red), rgba(255,95,109,.1)); }
@@ -4748,7 +4744,7 @@ export default function StorylinesScreen() {
         .sl-lead__main { position: relative; z-index: 1; min-width: 0; }
         .sl-lead__kickers { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
         .sl-lead__flag { font-size: 9.5px; font-weight: 900; letter-spacing: .18em; text-transform: uppercase;
-          color: #041018; background: linear-gradient(90deg, #ffd27a, var(--gold)); padding: 4px 10px; border-radius: 4px; }
+          color: #0c214c; background: linear-gradient(90deg, #ffd27a, var(--gold)); padding: 4px 10px; border-radius: 4px; }
         .sl-lead__age { font-size: 10.5px; font-weight: 800; color: var(--muted); margin-left: auto; }
         .sl-lead__headline { margin: 0 0 10px; font-size: clamp(21px, 2.5vw, 31px); line-height: 1.14; font-weight: 800; letter-spacing: -.01em; }
         .sl-lead__summary { margin: 0 0 14px; font-size: 14px; line-height: 1.55; color: rgba(234,247,252,.8); max-width: 76ch; }
@@ -4803,7 +4799,7 @@ export default function StorylinesScreen() {
         .sl-score--lg { width: 58px; height: 58px; }
         .sl-score--crit { background: rgba(255,95,109,.16); border-color: rgba(255,95,109,.55); color: #ff9aa2; }
         .sl-score--high { background: rgba(233,168,60,.16); border-color: rgba(233,168,60,.5); color: #ffcd7a; }
-        .sl-score--mid { background: rgba(22,220,234,.12); border-color: rgba(22,220,234,.4); color: var(--cyan); }
+        .sl-score--mid { background: rgba(46, 230, 214, .12); border-color: rgba(46, 230, 214, .4); color: var(--cyan); }
         .sl-score--low { background: rgba(150,214,235,.07); border-color: rgba(150,214,235,.22); color: var(--muted); }
 
         /* ------------- faces ------------- */
@@ -4816,7 +4812,7 @@ export default function StorylinesScreen() {
         .sl-face-logo { width: 22px; height: 22px; object-fit: contain; }
         .sl-face-ratings { display: flex; gap: 4px; }
         .sl-face-ratings em { font-style: normal; font-size: 9px; font-weight: 900; letter-spacing: .04em;
-          color: #d7f6ff; background: rgba(8, 28, 42, .9); border: 1px solid rgba(120, 210, 230, .35);
+          color: #d7f6ff; background: rgba(14, 42, 92, .9); border: 1px solid rgba(120, 210, 230, .35);
           border-radius: 4px; padding: 1px 4px; }
         .sl-teammark { display: grid; place-items: center; border-radius: 8px; border: 1px solid var(--line-2);
           background: rgba(255,255,255,.03); overflow: hidden; flex-shrink: 0; }
@@ -4827,7 +4823,7 @@ export default function StorylinesScreen() {
         .sl-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 14px; flex-wrap: wrap; }
         .sl-chips { display: flex; gap: 5px; flex-wrap: wrap; }
         .sl-chip { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 13px; cursor: pointer;
-          border: 1px solid var(--line); border-radius: 999px; background: rgba(10,28,42,.6); color: rgba(234,247,252,.7);
+          border: 1px solid var(--line); border-radius: 999px; background: rgba(15, 42, 92, .6); color: rgba(234,247,252,.7);
           font-size: 10.5px; font-weight: 900; letter-spacing: .07em; text-transform: uppercase;
           transition: border-color .15s ease, color .15s ease, background .15s ease; }
         .sl-chip:hover { color: var(--text); border-color: var(--line-2); }
@@ -4835,7 +4831,7 @@ export default function StorylinesScreen() {
         .sl-chip b { font-weight: 800; opacity: .55; }
         .sl-tools { display: flex; gap: 8px; align-items: center; }
         .sl-input { height: 32px; padding: 0 12px; width: 210px; border-radius: 8px; border: 1px solid var(--line);
-          background: rgba(6,18,29,.86); color: var(--text); font-size: 12px; font-weight: 700; }
+          background: rgba(13, 35, 80, .86); color: var(--text); font-size: 12px; font-weight: 700; }
         .sl-input:focus { outline: none; border-color: var(--line-strong); }
         .sl-tools select { height: 32px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--line);
           background: rgba(12,32,48,.9); color: var(--text); font-size: 11px; font-weight: 800; cursor: pointer; }
@@ -4851,7 +4847,7 @@ export default function StorylinesScreen() {
           position: relative; overflow: hidden; text-align: left; cursor: pointer;
           display: flex; flex-direction: column; gap: 11px;
           padding: 13px 15px 13px 18px; border: 1px solid var(--line); border-radius: 12px;
-          background: linear-gradient(160deg, rgba(11,29,44,.86), rgba(5,15,24,.9));
+          background: linear-gradient(160deg, rgba(11,29,44,.86), rgba(12, 32, 76, .9));
           color: inherit;
           animation: slRise .34s cubic-bezier(.2,.7,.3,1) both;
           transition: transform .16s ease, border-color .16s ease, box-shadow .16s ease;
@@ -4859,17 +4855,17 @@ export default function StorylinesScreen() {
         .sl-card:hover { transform: translateY(-2px); border-color: var(--line-strong); box-shadow: 0 14px 30px rgba(0,0,0,.4); }
         .sl-card__rail { position: absolute; left: 0; top: 0; bottom: 0; width: 3px; }
         .sl-card--cool .sl-card__rail { background: linear-gradient(180deg, #3aa8c4, rgba(58,168,196,.15)); }
-        .sl-card--warm .sl-card__rail { background: linear-gradient(180deg, var(--cyan), rgba(22,220,234,.15)); }
+        .sl-card--warm .sl-card__rail { background: linear-gradient(180deg, var(--cyan), rgba(46, 230, 214, .15)); }
         .sl-card--hot .sl-card__rail { background: linear-gradient(180deg, var(--gold), rgba(233,168,60,.15)); }
         .sl-card--boiling .sl-card__rail { background: linear-gradient(180deg, var(--red), rgba(255,95,109,.15)); }
         .sl-card.is-breaking { border-color: rgba(255,95,109,.28); }
-        .sl-card.is-ours { background: linear-gradient(160deg, rgba(14,38,56,.9), rgba(5,15,24,.9)); }
+        .sl-card.is-ours { background: linear-gradient(160deg, rgba(14,38,56,.9), rgba(12, 32, 76, .9)); }
         .sl-card.is-ours::after { content: ""; position: absolute; right: 0; top: 0; width: 42px; height: 42px;
-          background: linear-gradient(225deg, rgba(22,220,234,.16), transparent 60%); pointer-events: none; }
+          background: linear-gradient(225deg, rgba(46, 230, 214, .16), transparent 60%); pointer-events: none; }
         .sl-card.is-stale { opacity: .78; }
         .sl-card__top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
         .sl-card__decision { font-size: 9.5px; font-weight: 900; letter-spacing: .12em; text-transform: uppercase;
-          color: #041018; background: linear-gradient(90deg, #ffd27a, var(--gold)); padding: 3px 8px; border-radius: 4px; }
+          color: #0c214c; background: linear-gradient(90deg, #ffd27a, var(--gold)); padding: 3px 8px; border-radius: 4px; }
         .sl-card__age { margin-left: auto; font-size: 10px; font-weight: 800; color: var(--muted); white-space: nowrap; }
         .sl-card__body { display: flex; gap: 12px; align-items: flex-start; }
         .sl-card__text { min-width: 0; }
@@ -4891,10 +4887,10 @@ export default function StorylinesScreen() {
           animation: slRise .32s cubic-bezier(.2,.7,.3,1) both; }
         @media (max-width: 1060px) { .sl-case { grid-template-columns: 1fr; } }
         .sl-case__main { border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
-          background: linear-gradient(180deg, rgba(10,27,41,.9), rgba(5,14,23,.92)); }
+          background: linear-gradient(180deg, rgba(15, 41, 91, .9), rgba(12, 32, 75, .92)); }
         .sl-case__hero { position: relative; display: flex; gap: 18px; align-items: flex-start; padding: 20px 22px;
           border-bottom: 1px solid var(--line);
-          background: linear-gradient(120deg, rgba(22,220,234,.05), transparent 55%); }
+          background: linear-gradient(120deg, rgba(46, 230, 214, .05), transparent 55%); }
         .sl-case__hero-main { flex: 1; min-width: 0; }
         .sl-case__crumbs { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
         .sl-back { border: 1px solid var(--line-2); border-radius: 7px; background: rgba(255,255,255,.03); cursor: pointer;
@@ -4932,7 +4928,7 @@ export default function StorylinesScreen() {
           background: linear-gradient(180deg, var(--cyan), rgba(150,214,235,.12)); }
         .sl-spine__list li { position: relative; padding-bottom: 16px; }
         .sl-spine__dot { position: absolute; left: -21px; top: 4px; width: 11px; height: 11px; border-radius: 50%;
-          background: #061a26; border: 2px solid var(--cyan); }
+          background: #0d2858; border: 2px solid var(--cyan); }
         .sl-spine__list li.is-latest .sl-spine__dot { border-color: var(--red); box-shadow: 0 0 0 4px rgba(255,95,109,.13); }
         .sl-spine__dot--ghost { border-color: rgba(150,214,235,.3); }
         .sl-spine__list li.is-next { opacity: .55; padding-bottom: 0; }
@@ -4977,11 +4973,11 @@ export default function StorylinesScreen() {
         /* ------------- rail ------------- */
         .sl-rail { display: grid; gap: 12px; position: sticky; top: 0; }
         .sl-panel { border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px;
-          background: linear-gradient(180deg, rgba(10,27,41,.86), rgba(5,14,23,.9)); }
+          background: linear-gradient(180deg, rgba(15, 41, 91, .86), rgba(12, 32, 75, .9)); }
         .sl-panel h3 { margin: 0 0 12px; font-size: 10px; font-weight: 900; letter-spacing: .16em;
           text-transform: uppercase; color: var(--cyan); }
         .sl-panel--desk { border-color: rgba(201,162,39,.34);
-          background: linear-gradient(180deg, rgba(38,29,12,.75), rgba(9,17,24,.92)); }
+          background: linear-gradient(180deg, rgba(29, 42, 65, .75), rgba(14, 34, 76, .92)); }
         .sl-panel--desk h3 { color: var(--brass); }
 
         .sl-bars { display: grid; gap: 12px; }
@@ -5013,13 +5009,13 @@ export default function StorylinesScreen() {
           position: relative; overflow: hidden; text-align: left; cursor: pointer; color: var(--text);
           display: block; width: 100%; padding: 12px 14px; border-radius: 10px;
           border: 1px solid var(--line-2);
-          background: linear-gradient(180deg, rgba(22,220,234,.07), rgba(255,255,255,.015));
+          background: linear-gradient(180deg, rgba(46, 230, 214, .07), rgba(255,255,255,.015));
           transition: border-color .15s ease, background .15s ease, transform .12s ease;
         }
         .sl-choice::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 2px;
           background: var(--cyan); opacity: .55; }
         .sl-choice:hover:not(:disabled) { border-color: var(--line-strong); transform: translateY(-1px);
-          background: linear-gradient(180deg, rgba(22,220,234,.16), rgba(255,255,255,.03)); }
+          background: linear-gradient(180deg, rgba(46, 230, 214, .16), rgba(255,255,255,.03)); }
         .sl-choice:disabled { opacity: .5; cursor: not-allowed; }
         .sl-choice strong { display: block; font-size: 12px; font-weight: 900; letter-spacing: .04em;
           text-transform: uppercase; margin-bottom: 4px; }
@@ -5093,18 +5089,18 @@ export default function StorylinesScreen() {
         .sl-bubble p { margin: 0; font-size: 15px; line-height: 1.6; }
         .sl-bubble--gm {
           margin-left: auto; border-color: rgba(233,168,60,.35);
-          background: linear-gradient(180deg, rgba(233,168,60,.14), rgba(8,18,28,.9));
+          background: linear-gradient(180deg, rgba(233,168,60,.14), rgba(14, 35, 79, .9));
           box-shadow: 0 10px 28px rgba(0,0,0,.22);
         }
         .sl-bubble--gm .sl-bubble__speaker { color: var(--gold); }
         .sl-bubble--player {
-          margin-right: auto; border-color: rgba(22,220,234,.28);
-          background: linear-gradient(180deg, rgba(22,220,234,.1), rgba(8,18,28,.88));
+          margin-right: auto; border-color: rgba(46, 230, 214, .28);
+          background: linear-gradient(180deg, rgba(46, 230, 214, .1), rgba(14, 35, 79, .88));
         }
         .sl-bubble--player .sl-bubble__speaker { color: var(--cyan); }
         .sl-bubble--reporter {
           margin-right: auto; border-color: rgba(201,146,255,.28);
-          background: linear-gradient(180deg, rgba(201,146,255,.08), rgba(8,18,28,.88));
+          background: linear-gradient(180deg, rgba(201,146,255,.08), rgba(14, 35, 79, .88));
         }
         .sl-bubble--reporter .sl-bubble__speaker { color: var(--purple); }
         @keyframes slBubbleIn {
@@ -5116,7 +5112,7 @@ export default function StorylinesScreen() {
         .sl-trade-board {
           position: relative; overflow: hidden; margin: 14px 0; padding: 16px;
           border: 1px solid rgba(201,146,255,.28); border-radius: 14px;
-          background: linear-gradient(180deg, rgba(201,146,255,.08), rgba(5,14,23,.92));
+          background: linear-gradient(180deg, rgba(201,146,255,.08), rgba(12, 32, 75, .92));
         }
         .sl-trade-board.is-compact { margin: 10px 0 0; padding: 10px 12px; }
         .sl-trade-board__glow {
@@ -5188,7 +5184,7 @@ export default function StorylinesScreen() {
         .sl-trade-asset__meta { min-width: 0; }
         .sl-trade-asset__ovr {
           flex-shrink: 0; font-size: 10px; font-weight: 900; letter-spacing: .06em;
-          color: #041018; background: linear-gradient(180deg, #2ee6f0, #12b9c9); padding: 2px 6px; border-radius: 4px;
+          color: #0c214c; background: linear-gradient(180deg, #2ee6f0, #12b9c9); padding: 2px 6px; border-radius: 4px;
         }
         .sl-trade-asset__meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; font-size: 11.5px; font-weight: 800; color: var(--muted); }
         .sl-trade-asset__meta em { font-style: normal; text-transform: uppercase; letter-spacing: .06em; }
@@ -5207,15 +5203,15 @@ export default function StorylinesScreen() {
         .sl-press__question {
           margin: 0 0 12px; font-size: 14px; line-height: 1.55; font-style: italic;
           color: rgba(234,247,252,.9); padding: 12px 14px; border-radius: 12px;
-          border: 1px solid rgba(22,220,234,.2); background: rgba(22,220,234,.05);
+          border: 1px solid rgba(46, 230, 214, .2); background: rgba(46, 230, 214, .05);
         }
 
         /* ------------- decision desk strip ------------- */
         .sl-desk { border: 1px solid rgba(201,162,39,.3); border-radius: 12px; padding: 12px 16px;
-          background: linear-gradient(100deg, rgba(201,162,39,.11), rgba(6,17,27,.7) 55%); }
+          background: linear-gradient(100deg, rgba(201,162,39,.11), rgba(13, 34, 78, .7) 55%); }
         .sl-desk__head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
         .sl-desk__head h3 { margin: 0; font-size: 10.5px; font-weight: 900; letter-spacing: .16em; text-transform: uppercase; color: var(--brass); }
-        .sl-desk__count { font-size: 9.5px; font-weight: 900; letter-spacing: .1em; color: #2a1f06;
+        .sl-desk__count { font-size: 9.5px; font-weight: 900; letter-spacing: .1em; color: #1f2c3b;
           background: var(--gold); padding: 3px 8px; border-radius: 4px; }
         .sl-desk__list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px,1fr)); gap: 9px; }
         .sl-desk__item { display: flex; align-items: center; gap: 10px; text-align: left; cursor: pointer;
@@ -5226,7 +5222,7 @@ export default function StorylinesScreen() {
           display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
         .sl-desk__item span { display: block; font-size: 10px; font-weight: 800; color: var(--muted); margin-top: 2px; }
         .sl-impact-report { border: 1px solid rgba(126,224,176,.22); border-radius: 12px; padding: 14px 16px;
-          margin-bottom: 14px; background: linear-gradient(180deg, rgba(18,32,28,.92), rgba(10,16,14,.88)); }
+          margin-bottom: 14px; background: linear-gradient(180deg, rgba(19, 44, 79, .92), rgba(15, 33, 67, .88)); }
         .sl-impact-report__head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
         .sl-impact-report__head h3 { margin: 0; font-size: 11px; font-weight: 900; letter-spacing: .14em; text-transform: uppercase; color: #7ee0b0; }
         .sl-impact-report__sub { font-size: 10px; color: var(--muted); }
@@ -5269,30 +5265,30 @@ export default function StorylinesScreen() {
         .sl-two { display: grid; grid-template-columns: minmax(0,1fr) minmax(250px,320px); gap: 16px; align-items: start; }
         @media (max-width: 1000px) { .sl-two { grid-template-columns: 1fr; } }
         .sl-subtabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; padding: 4px;
-          border: 1px solid var(--line); border-radius: 10px; background: rgba(6,17,27,.6); width: fit-content; }
+          border: 1px solid var(--line); border-radius: 10px; background: rgba(13, 34, 78, .6); width: fit-content; }
         .sl-subtabs button { border: 0; border-radius: 7px; background: transparent; cursor: pointer;
           padding: 8px 15px; color: var(--muted); font-size: 10.5px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; }
         .sl-subtabs button:hover { color: var(--text); background: rgba(255,255,255,.04); }
-        .sl-subtabs button.is-active { color: #041018; background: linear-gradient(180deg, #2ee6f0, #12b9c9); }
+        .sl-subtabs button.is-active { color: #0c214c; background: linear-gradient(180deg, #2ee6f0, #12b9c9); }
         .sl-feed { display: grid; gap: 10px; }
         .sl-post { text-align: left; cursor: pointer; color: inherit; padding: 12px 14px;
-          border: 1px solid var(--line); border-radius: 11px; background: rgba(10,27,41,.7);
+          border: 1px solid var(--line); border-radius: 11px; background: rgba(15, 41, 91, .7);
           transition: border-color .15s ease, transform .12s ease;
           animation: slRise .3s cubic-bezier(.2,.7,.3,1) both; }
         .sl-post:hover { border-color: var(--line-strong); transform: translateY(-1px); }
         .sl-post__head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 7px; }
         .sl-post__avatar { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; flex-shrink: 0;
-          background: linear-gradient(160deg, rgba(22,220,234,.22), rgba(201,146,255,.18));
+          background: linear-gradient(160deg, rgba(46, 230, 214, .22), rgba(201,146,255,.18));
           font-size: 10.5px; font-weight: 900; color: #eaf7fc; align-self: center; }
         .sl-post__head strong { font-size: 12.5px; font-weight: 800; }
         .sl-post__head span { font-size: 11px; font-weight: 700; color: var(--muted); }
         .sl-post__head em { margin-left: auto; font-style: normal; font-size: 10px; font-weight: 800; color: var(--muted); }
         .sl-post__verified { color: var(--cyan); font-size: 11px; }
         .sl-post p { margin: 0; font-size: 13px; line-height: 1.5; }
-        .sl-post__badge { text-transform: uppercase; font-size: 10px; font-weight: 800; letter-spacing: .08em; padding: 1px 6px; border-radius: 4px; background: rgba(19,216,231,.12); color: #13d8e7; }
-        .sl-attach { margin-top: 8px; padding: 8px 10px; border: 1px solid rgba(156,218,236,.16); border-radius: 8px; background: rgba(4,16,26,.6); display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; }
+        .sl-post__badge { text-transform: uppercase; font-size: 10px; font-weight: 800; letter-spacing: .08em; padding: 1px 6px; border-radius: 4px; background: rgba(46, 230, 214, .12); color: #2ee6d6; }
+        .sl-attach { margin-top: 8px; padding: 8px 10px; border: 1px solid rgba(156,218,236,.16); border-radius: 8px; background: rgba(12, 33, 77, .6); display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; }
         .sl-attach small { color: #8fb3c4; font-size: 11px; }
-        .sl-attach b { font-family: "Barlow Condensed", sans-serif; font-size: 16px; letter-spacing: .04em; }
+        .sl-attach b { font-family: var(--dd-font-ui, Nunito, sans-serif); font-size: 16px; letter-spacing: .04em; }
         .sl-attach--score > span { font-size: 10px; font-weight: 900; color: #e9a83c; text-transform: uppercase; letter-spacing: .1em; }
         .sl-attach--score small { flex-basis: 100%; }
         .sl-attach--player > div { display: flex; flex-direction: column; gap: 2px; }
@@ -5309,7 +5305,7 @@ export default function StorylinesScreen() {
         .sl-pills button.is-active { border-color: rgba(233,168,60,.55); color: var(--gold); background: var(--gold-dim); }
 
         .sl-thread { width: 100%; text-align: left; cursor: pointer; color: inherit; padding: 12px 14px;
-          border: 1px solid var(--line); border-radius: 11px; background: rgba(10,27,41,.7);
+          border: 1px solid var(--line); border-radius: 11px; background: rgba(15, 41, 91, .7);
           transition: border-color .15s ease; }
         .sl-thread:hover { border-color: var(--line-strong); }
         .sl-thread.is-controversial { border-color: rgba(255,138,76,.32); background: rgba(255,110,50,.05); }
@@ -5319,14 +5315,14 @@ export default function StorylinesScreen() {
         .sl-thread h4 { margin: 0 0 6px; font-size: 13.5px; line-height: 1.35; font-weight: 700; }
         .sl-thread p { margin: 0; font-size: 12px; line-height: 1.45; color: var(--muted-2); }
         .sl-comments { display: grid; gap: 9px; margin: 9px 0 0; padding: 11px 14px;
-          border: 1px solid var(--line); border-top: 0; border-radius: 0 0 11px 11px; background: rgba(4,12,20,.6); }
+          border: 1px solid var(--line); border-top: 0; border-radius: 0 0 11px 11px; background: rgba(12, 30, 72, .6); }
         .sl-comment { font-size: 12px; line-height: 1.45; color: var(--muted-2); padding-left: 10px;
           border-left: 2px solid rgba(150,214,235,.15); }
         .sl-comment em { display: block; font-style: normal; font-size: 10px; font-weight: 900; color: var(--cyan); margin-bottom: 3px; }
         .sl-comment.is-rival { border-left-color: rgba(255,95,109,.4); }
 
-        .sl-pulse { border: 1px solid rgba(22,220,234,.22); border-radius: 10px; padding: 12px 14px;
-          background: rgba(22,220,234,.05); margin-bottom: 12px; }
+        .sl-pulse { border: 1px solid rgba(46, 230, 214, .22); border-radius: 10px; padding: 12px 14px;
+          background: rgba(46, 230, 214, .05); margin-bottom: 12px; }
         .sl-pulse span { font-size: 9.5px; font-weight: 900; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
         .sl-pulse strong { display: block; font-size: 22px; font-weight: 900; margin: 5px 0 3px; }
         .sl-pulse p { margin: 0; font-size: 11px; color: var(--muted); font-weight: 700; }
@@ -5341,7 +5337,7 @@ export default function StorylinesScreen() {
 
         /* ------------- insiders ------------- */
         .sl-insider { text-align: left; cursor: pointer; color: inherit; padding: 12px 14px;
-          border: 1px solid var(--line); border-radius: 11px; background: rgba(10,27,41,.7);
+          border: 1px solid var(--line); border-radius: 11px; background: rgba(15, 41, 91, .7);
           transition: border-color .15s ease, transform .12s ease; }
         .sl-insider:hover { border-color: var(--line-strong); transform: translateX(2px); }
         .sl-insider__head { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; margin-bottom: 5px; }
@@ -5354,9 +5350,9 @@ export default function StorylinesScreen() {
 
         /* ------------- press room ------------- */
         .sl-press { border: 1px solid var(--line); border-radius: 12px; margin-bottom: 14px; overflow: hidden;
-          background: linear-gradient(180deg, rgba(10,27,41,.9), rgba(5,14,23,.92)); }
+          background: linear-gradient(180deg, rgba(15, 41, 91, .9), rgba(12, 32, 75, .92)); }
         .sl-press__head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 14px 18px;
-          border-bottom: 1px solid var(--line); background: linear-gradient(90deg, rgba(22,220,234,.06), transparent 60%); }
+          border-bottom: 1px solid var(--line); background: linear-gradient(90deg, rgba(46, 230, 214, .06), transparent 60%); }
         .sl-press__head strong { font-size: 15px; font-weight: 800; }
         .sl-press__head span { font-size: 10.5px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
         .sl-press__mics { margin-left: auto; font-size: 9.5px; font-weight: 900; letter-spacing: .14em;
@@ -5369,7 +5365,7 @@ export default function StorylinesScreen() {
           font-size: 10px; font-weight: 900; letter-spacing: .1em; text-transform: uppercase; color: var(--cyan); }
         .sl-press__reporter i { font-style: normal; width: 6px; height: 6px; border-radius: 50%; background: var(--cyan); }
         .sl-pressroom__intro { border: 1px solid var(--line); border-radius: 12px; padding: 14px 18px; margin-bottom: 14px;
-          display: grid; gap: 10px; background: rgba(22,220,234,.03); }
+          display: grid; gap: 10px; background: rgba(46, 230, 214, .03); }
         .sl-pressroom__intro strong { font-size: 13px; letter-spacing: .08em; text-transform: uppercase; }
         .sl-pressroom__intro p { margin: 4px 0 0; font-size: 12.5px; line-height: 1.5; color: var(--muted-2); }
         .sl-pressroom__levers { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
@@ -5401,11 +5397,11 @@ export default function StorylinesScreen() {
         .sl-fallout-sec h4 { margin: 0 0 8px; font-size: 10.5px; font-weight: 900; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
         .sl-fallout-sec p { margin: 4px 0; font-size: 12.5px; color: var(--muted-2); }
         .sl-press-link { margin: 6px 0 12px; padding: 8px 12px; border-radius: 8px; cursor: pointer; font-weight: 800; font-size: 12px;
-          border: 1px solid rgba(22,220,234,.4); background: rgba(22,220,234,.08); color: var(--cyan); }
+          border: 1px solid rgba(46, 230, 214, .4); background: rgba(46, 230, 214, .08); color: var(--cyan); }
 
         /* ------------- archive ------------- */
         .sl-era { border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; margin-bottom: 14px;
-          background: linear-gradient(180deg, rgba(10,27,41,.86), rgba(5,14,23,.9)); }
+          background: linear-gradient(180deg, rgba(15, 41, 91, .86), rgba(12, 32, 75, .9)); }
         .sl-era__head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 10px;
           padding-bottom: 10px; border-bottom: 1px solid var(--line); }
         .sl-era__head h3 { margin: 0; font-size: 16px; font-weight: 800; letter-spacing: .02em; }
@@ -5416,13 +5412,13 @@ export default function StorylinesScreen() {
         .sl-era__stories { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px,1fr)); gap: 8px; }
         .sl-era__stories button { text-align: left; cursor: pointer; color: inherit; padding: 10px 12px;
           border: 1px solid transparent; border-radius: 8px; background: rgba(255,255,255,.02); }
-        .sl-era__stories button:hover { border-color: var(--line-2); background: rgba(22,220,234,.06); }
+        .sl-era__stories button:hover { border-color: var(--line-2); background: rgba(46, 230, 214, .06); }
         .sl-era__stories strong { display: block; font-size: 12.5px; line-height: 1.35; margin-bottom: 3px; }
         .sl-era__stories em { font-style: normal; font-size: 10px; font-weight: 800; color: var(--muted); }
 
         /* ------------- meetings room ------------- */
         .sl-room { position: relative; border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px;
-          background: linear-gradient(180deg, rgba(10,27,41,.86), rgba(5,14,23,.9)); }
+          background: linear-gradient(180deg, rgba(15, 41, 91, .86), rgba(12, 32, 75, .9)); }
         /* overflow:hidden lets a flex item shrink to the viewport, clipping instead of scrolling */
         .sl-app > .sl-room { flex-shrink: 0; }
         .sl-room--cinematic {
@@ -5430,7 +5426,7 @@ export default function StorylinesScreen() {
           border-color: rgba(201,162,39,.28);
           background:
             radial-gradient(120% 80% at 50% -10%, rgba(233,168,60,.12), transparent 55%),
-            linear-gradient(180deg, rgba(12,22,34,.96), rgba(4,10,18,.98));
+            linear-gradient(180deg, rgba(16, 37, 85, .96), rgba(12, 29, 70, .98));
           box-shadow: inset 0 1px 0 rgba(255,255,255,.04), 0 18px 48px rgba(0,0,0,.35);
         }
         .sl-room__vignette {
@@ -5468,7 +5464,7 @@ export default function StorylinesScreen() {
 
         .sl-pm-cause {
           position: relative; z-index: 1; margin-bottom: 16px; padding: 12px 14px;
-          border: 1px solid rgba(22,220,234,.18); border-radius: 10px; background: rgba(22,220,234,.04);
+          border: 1px solid rgba(46, 230, 214, .18); border-radius: 10px; background: rgba(46, 230, 214, .04);
         }
         .sl-pm-cause h4 { margin: 0 0 8px; font-size: 9.5px; font-weight: 900; letter-spacing: .14em; text-transform: uppercase; color: var(--cyan); }
         .sl-pm-cause ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
@@ -5476,7 +5472,7 @@ export default function StorylinesScreen() {
         .sl-pm-cause li em { font-style: normal; font-weight: 900; color: var(--gold); font-variant-numeric: tabular-nums; }
         .sl-pm-cause-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
         .sl-pm-cause-chips em { font-style: normal; font-size: 9.5px; font-weight: 800; letter-spacing: .04em;
-          text-transform: uppercase; color: var(--cyan); border: 1px solid rgba(22,220,234,.22); padding: 2px 7px; border-radius: 999px; }
+          text-transform: uppercase; color: var(--cyan); border: 1px solid rgba(46, 230, 214, .22); padding: 2px 7px; border-radius: 999px; }
 
         .sl-pm-effects { position: relative; z-index: 1; margin-top: 14px; }
         .sl-pm-effects h4 { margin: 0 0 10px; font-size: 9.5px; font-weight: 900; letter-spacing: .14em; text-transform: uppercase; color: var(--cyan); }
@@ -5500,7 +5496,7 @@ export default function StorylinesScreen() {
         .sl-meeting-outcome--cinematic {
           position: relative; z-index: 1; overflow: hidden; margin: 16px 0;
           padding: 16px 18px; border: 1px solid rgba(82,223,148,.28); border-radius: 12px;
-          background: linear-gradient(180deg, rgba(82,223,148,.08), rgba(5,14,23,.7));
+          background: linear-gradient(180deg, rgba(82,223,148,.08), rgba(12, 32, 75, .7));
         }
         .sl-meeting-outcome__glow {
           position: absolute; inset: -40% auto auto -20%; width: 220px; height: 220px; border-radius: 50%;
@@ -5510,12 +5506,12 @@ export default function StorylinesScreen() {
         .sl-meeting-outcome h4 { margin: 0 0 8px; font-size: 18px; line-height: 1.35; font-weight: 800; }
         .sl-meeting-outcome--negative {
           border-color: rgba(255,95,109,.35);
-          background: linear-gradient(180deg, rgba(255,95,109,.1), rgba(5,14,23,.7));
+          background: linear-gradient(180deg, rgba(255,95,109,.1), rgba(12, 32, 75, .7));
         }
         .sl-meeting-outcome--negative .sl-meeting-outcome__kicker { color: var(--red); }
         .sl-meeting-outcome--positive {
           border-color: rgba(82,223,148,.28);
-          background: linear-gradient(180deg, rgba(82,223,148,.08), rgba(5,14,23,.7));
+          background: linear-gradient(180deg, rgba(82,223,148,.08), rgba(12, 32, 75, .7));
         }
         .sl-meeting-outcome--positive .sl-meeting-outcome__kicker { color: var(--green); }
         .sl-meeting-outcome__summary { margin: 0 0 12px; font-size: 13px; line-height: 1.55; color: var(--muted-2); }
@@ -5526,9 +5522,9 @@ export default function StorylinesScreen() {
           font-size: 10px; font-weight: 900; letter-spacing: .16em; text-transform: uppercase; color: var(--cyan); }
         .sl-block__bar .sl-block__title { margin: 0; }
         .sl-block__title em { font-style: normal; font-size: 9.5px; padding: 2px 7px; border-radius: 999px;
-          background: rgba(22,220,234,.15); color: var(--cyan); }
+          background: rgba(46, 230, 214, .15); color: var(--cyan); }
         .sl-block__title--alert { color: var(--gold); }
-        .sl-block__title--alert em { background: var(--gold); color: #2a1f06; }
+        .sl-block__title--alert em { background: var(--gold); color: #1f2c3b; }
 
         .sl-roster { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px,1fr)); gap: 8px; }
         .sl-rosterrow { display: flex; align-items: center; gap: 11px; width: 100%; text-align: left; cursor: pointer;
@@ -5555,11 +5551,11 @@ export default function StorylinesScreen() {
         .sl-request { border: 1px solid rgba(233,168,60,.3); border-left: 3px solid var(--gold); border-radius: 0 10px 10px 0;
           background: rgba(233,168,60,.05); padding: 14px 16px; margin-bottom: 12px; position: relative; z-index: 1; }
         .sl-request--cinematic {
-          background: linear-gradient(135deg, rgba(233,168,60,.08), rgba(5,14,23,.4));
+          background: linear-gradient(135deg, rgba(233,168,60,.08), rgba(12, 32, 75, .4));
           box-shadow: 0 10px 28px rgba(0,0,0,.18);
         }
         .sl-request__flag { display: inline-block; margin-bottom: 8px; font-size: 9px; font-weight: 900;
-          letter-spacing: .14em; text-transform: uppercase; color: #2a1f06; background: var(--gold); padding: 3px 8px; border-radius: 4px; }
+          letter-spacing: .14em; text-transform: uppercase; color: #1f2c3b; background: var(--gold); padding: 3px 8px; border-radius: 4px; }
         .sl-request__head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
         .sl-request__head strong { font-size: 14px; font-weight: 800; }
         .sl-request__head span { font-size: 11.5px; font-weight: 800; color: var(--muted); }
@@ -5585,7 +5581,7 @@ export default function StorylinesScreen() {
         .sl-typing i:nth-child(3) { animation-delay: .3s; }
         @keyframes slTyping { 0%, 80%, 100% { opacity: .25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-3px); } }
         .sl-tension { margin: 10px 0 16px; padding: 12px 14px; border: 1px solid var(--line-2); border-radius: 12px;
-          background: rgba(8,18,26,.55); display: grid; gap: 10px; position: relative; z-index: 1; }
+          background: rgba(14, 35, 77, .55); display: grid; gap: 10px; position: relative; z-index: 1; }
         .sl-tension__head { display: flex; gap: 8px; flex-wrap: wrap; }
         .sl-tension__chip { font-size: 10px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase;
           padding: 3px 8px; border-radius: 999px; border: 1px solid var(--line-2); color: rgba(234,247,252,.8); }
@@ -5608,9 +5604,9 @@ export default function StorylinesScreen() {
           text-decoration: underline; padding: 0 0 10px; }
         .sl-mchoices { display: grid; gap: 10px; }
         .sl-mchoice { text-align: left; display: grid; gap: 4px; padding: 12px 14px; border-radius: 12px; cursor: pointer;
-          border: 1px solid var(--line-2); background: rgba(10,24,34,.7); color: inherit; animation: slLineIn .3s ease-out both;
+          border: 1px solid var(--line-2); background: rgba(15, 39, 85, .7); color: inherit; animation: slLineIn .3s ease-out both;
           transition: transform .12s, border-color .2s; }
-        .sl-mchoice:hover:not(:disabled) { transform: translateY(-1px); border-color: rgba(22,220,234,.55); }
+        .sl-mchoice:hover:not(:disabled) { transform: translateY(-1px); border-color: rgba(46, 230, 214, .55); }
         .sl-mchoice:disabled { opacity: .55; cursor: default; }
         .sl-mchoice strong { font-size: 14.5px; }
         .sl-mchoice__detail { font-size: 12.5px; color: rgba(220,236,244,.7); }
@@ -5621,7 +5617,7 @@ export default function StorylinesScreen() {
         .sl-mchoice--danger { border-color: rgba(255,95,109,.4); }
         .sl-mchoice--danger .sl-mchoice__read { color: var(--red); }
         .sl-verdict { margin-top: 14px; padding: 16px; border-radius: 14px; border: 1px solid var(--line-2);
-          background: rgba(8,18,26,.7); animation: slVerdictIn .5s ease-out both; position: relative; z-index: 1; }
+          background: rgba(14, 35, 77, .7); animation: slVerdictIn .5s ease-out both; position: relative; z-index: 1; }
         @keyframes slVerdictIn { from { opacity: 0; transform: scale(.97); } to { opacity: 1; transform: none; } }
         .sl-verdict h3 { margin: 4px 0 12px; font-size: 20px; }
         .sl-verdict__kicker { margin: 0; font-size: 10.5px; font-weight: 900; letter-spacing: .1em; text-transform: uppercase; color: rgba(220,236,244,.6); }
@@ -5629,8 +5625,8 @@ export default function StorylinesScreen() {
         .sl-verdict--mixed { border-color: rgba(233,168,60,.45); }
         .sl-verdict--bad { border-color: rgba(255,95,109,.5); }
         .sl-verdict__actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
-        .sl-verdict__btn { padding: 9px 14px; border-radius: 10px; border: 1px solid rgba(22,220,234,.5);
-          background: rgba(22,220,234,.12); color: inherit; font-weight: 800; cursor: pointer; }
+        .sl-verdict__btn { padding: 9px 14px; border-radius: 10px; border: 1px solid rgba(46, 230, 214, .5);
+          background: rgba(46, 230, 214, .12); color: inherit; font-weight: 800; cursor: pointer; }
         .sl-room--meeting.is-walkout .sl-room__vignette { background: radial-gradient(circle at 50% 30%, rgba(255,95,109,.14), transparent 70%); }
         .md-choice--open strong::after { content: " →"; }
         @media (prefers-reduced-motion: reduce) {
@@ -5647,9 +5643,9 @@ export default function StorylinesScreen() {
         .sl-dialogue__line p { margin: 0; font-size: 15px; line-height: 1.65; }
         .sl-dialogue__line.is-player p { color: rgba(234,247,252,.94); font-size: 16px; }
 
-        .sl-ovr { border: 1px solid rgba(22,220,234,.22); border-radius: 10px; background: rgba(22,220,234,.05);
+        .sl-ovr { border: 1px solid rgba(46, 230, 214, .22); border-radius: 10px; background: rgba(46, 230, 214, .05);
           padding: 12px 14px; margin-bottom: 14px; position: relative; z-index: 1; }
-        .sl-ovr--cinematic { border-color: rgba(22,220,234,.3); background: linear-gradient(180deg, rgba(22,220,234,.08), rgba(255,255,255,.02)); }
+        .sl-ovr--cinematic { border-color: rgba(46, 230, 214, .3); background: linear-gradient(180deg, rgba(46, 230, 214, .08), rgba(255,255,255,.02)); }
         .sl-ovr h4 { margin: 0 0 8px; font-size: 10px; font-weight: 900; letter-spacing: .12em;
           text-transform: uppercase; color: var(--cyan); }
         .sl-ovr ul { margin: 0; padding-left: 18px; font-size: 12.5px; line-height: 1.55; color: var(--muted-2); }
@@ -5685,19 +5681,19 @@ export default function StorylinesScreen() {
         /* ------------- empty ------------- */
         .sl-empty { display: grid; justify-items: center; text-align: center; gap: 6px; padding: 46px 24px;
           border: 1px solid var(--line); border-radius: 14px;
-          background: linear-gradient(180deg, rgba(9,24,37,.6), rgba(4,12,20,.6)); }
-        .sl-empty__mark { font-size: 30px; color: rgba(22,220,234,.35); margin-bottom: 6px; animation: slPulse 3.4s ease-in-out infinite; }
+          background: linear-gradient(180deg, rgba(14, 39, 87, .6), rgba(12, 30, 72, .6)); }
+        .sl-empty__mark { font-size: 30px; color: rgba(46, 230, 214, .35); margin-bottom: 6px; animation: slPulse 3.4s ease-in-out infinite; }
         .sl-empty__kicker { margin: 0; font-size: 9.5px; font-weight: 900; letter-spacing: .2em; text-transform: uppercase; color: var(--cyan); }
         .sl-empty h2 { margin: 2px 0 4px; font-size: 17px; font-weight: 800; letter-spacing: .02em; }
         .sl-empty__body { margin: 0; max-width: 46ch; font-size: 12.5px; line-height: 1.6; color: var(--muted); }
 
         /* ------------- breaking ------------- */
         .sl-breaking { position: fixed; inset: 0; z-index: 12000; display: grid; place-items: center; padding: 24px;
-          background: rgba(1,5,10,.82); backdrop-filter: blur(6px); cursor: pointer;
+          background: rgba(10, 26, 63, .82); backdrop-filter: blur(6px); cursor: pointer;
           animation: slFade .2s ease both; }
         .sl-breaking__card { position: relative; overflow: hidden; cursor: default; width: min(600px, 100%);
           border: 1px solid rgba(255,95,109,.5); border-top: 4px solid var(--red); border-radius: 4px;
-          background: linear-gradient(165deg, rgba(46,9,14,.98), rgba(7,19,30,.99));
+          background: linear-gradient(165deg, rgba(46,9,14,.98), rgba(14, 35, 81, .99));
           box-shadow: 0 30px 80px rgba(0,0,0,.6), 0 0 0 1px rgba(255,95,109,.14);
           animation: slSlam .34s cubic-bezier(.16,.9,.3,1) both; }
         .sl-breaking__strip { display: flex; align-items: center; gap: 9px; padding: 10px 20px;
@@ -5714,8 +5710,8 @@ export default function StorylinesScreen() {
           border: 1px solid var(--line-2); background: rgba(255,255,255,.04); color: var(--text);
           font-size: 11.5px; font-weight: 900; letter-spacing: .06em; text-transform: uppercase; }
         .sl-breaking__actions button:hover { border-color: var(--line-strong); }
-        .sl-breaking__actions button.is-primary { border-color: rgba(22,220,234,.5);
-          background: linear-gradient(180deg, #2ee6f0, #12b9c9); color: #041018; }
+        .sl-breaking__actions button.is-primary { border-color: rgba(46, 230, 214, .5);
+          background: linear-gradient(180deg, #2ee6f0, #12b9c9); color: #0c214c; }
 
         /* ------------- debug ------------- */
         .sl-effect-breakdown { margin-top: 8px; font-size: 12px; }
@@ -5736,7 +5732,7 @@ export default function StorylinesScreen() {
         .sl-locker-card__body p { margin: 0 0 8px; font-size: 12px; line-height: 1.45; color: rgba(234,247,252,.88); }
         .sl-locker-card__chips { display: flex; flex-wrap: wrap; gap: 6px; }
         .sl-locker-card--story, .sl-locker-card--trigger {
-          border-color: rgba(22,220,234,.22); background: linear-gradient(180deg, rgba(22,220,234,.06), rgba(255,255,255,.02));
+          border-color: rgba(46, 230, 214, .22); background: linear-gradient(180deg, rgba(46, 230, 214, .06), rgba(255,255,255,.02));
         }
         .sl-locker-card__tag { display: inline-block; margin-bottom: 6px; font-size: 9px; font-weight: 900; letter-spacing: .12em; text-transform: uppercase; color: var(--cyan); }
         .sl-locker-card--story p, .sl-locker-card--trigger p { margin: 4px 0 0; font-size: 12px; line-height: 1.45; color: var(--muted-2); }

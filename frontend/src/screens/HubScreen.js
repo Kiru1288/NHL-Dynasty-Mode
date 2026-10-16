@@ -4,7 +4,6 @@ import { HUB_MENU, SCREENS } from "../game/constants";
 import { GameFooter } from "../components/game/GameFooter";
 import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
 import { getFranchisePhaseCta } from "../events/FranchiseEventOverlay";
-import "../styles/motion-control.css";
 import FirstPersonOfficeHub, {
   FRANCHISE_COMMAND_REGISTRY,
   OFFICE_NAV_TARGETS,
@@ -753,152 +752,46 @@ export function HubScreen() {
       {/* Desk console: an engraved instrument cluster rather than a row of
           web pills. The clock advance is the primary control; bulk simulation
           reads as one segmented dial so it cannot wrap onto a second row. */}
-      <div
-        style={{
-          position: "absolute",
-          right: 22,
-          bottom: 54,
-          zIndex: 5,
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "flex-end",
-          gap: 6,
-          pointerEvents: "auto",
-          maxWidth: "min(96vw, 720px)",
-        }}
-      >
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
+      <div className="hub-console">
+        <div className="hub-console__row">
           <button
             type="button"
+            className="hub-console__advance"
             disabled={!canAdvance || advancing}
             onClick={onAdvanceDay}
-            style={{
-              minHeight: 34,
-              padding: "0 16px",
-              borderRadius: 3,
-              border: "1px solid rgba(201,168,106,0.55)",
-              background: "rgba(201,168,106,0.14)",
-              color: "#f4e3bd",
-              fontWeight: 900,
-              fontSize: 12,
-              letterSpacing: "0.1em",
-              cursor: advancing ? "not-allowed" : "pointer",
-            }}
           >
-            {advancing ? "ADVANCING..." : "Advance one day"}
+            {advancing ? "Advancing..." : "▶ Advance one day"}
           </button>
 
           {(franchiseState?.flags?.can_enter_playoffs || phaseCta) && phaseCta !== "Advance Day" ? (
-            <button
-              type="button"
-              disabled={advancing}
-              onClick={handlePhaseCta}
-              style={{
-                minHeight: 34,
-                padding: "0 14px",
-                borderRadius: 3,
-                border: "1px solid rgba(201,168,106,0.34)",
-                background: "rgba(10,12,16,0.86)",
-                color: "#e7d7b4",
-                fontWeight: 900,
-                fontSize: 12,
-                letterSpacing: "0.1em",
-                cursor: advancing ? "not-allowed" : "pointer",
-              }}
-            >
+            <button type="button" className="hub-console__phase" disabled={advancing} onClick={handlePhaseCta}>
               {(phaseCta || "ENTER PLAYOFFS").toUpperCase()}
             </button>
           ) : null}
 
-          <button
-            type="button"
-            onClick={() => setScreen(ROUTE_SCREENS.CHEMISTRY)}
-            style={{
-              minHeight: 34,
-              padding: "0 14px",
-              borderRadius: 3,
-              border: "1px solid rgba(201,168,106,0.24)",
-              background: "rgba(10,12,16,0.86)",
-              color: "#cbbfa6",
-              fontWeight: 900,
-              fontSize: 12,
-              letterSpacing: "0.1em",
-            }}
-          >
+          <button type="button" className="hub-console__quiet" onClick={() => setScreen(ROUTE_SCREENS.CHEMISTRY)}>
             Team chemistry
           </button>
         </div>
 
-        <div
-          style={{
-            display: "flex",
-            alignItems: "stretch",
-            border: "1px solid rgba(201,168,106,0.24)",
-            borderRadius: 3,
-            background: "rgba(10,12,16,0.86)",
-            overflow: "hidden",
-          }}
-        >
-          <span
-            style={{
-              display: "flex",
-              alignItems: "center",
-              padding: "0 10px",
-              color: "rgba(201,168,106,0.75)",
-              fontSize: 11,
-              fontWeight: 900,
-              letterSpacing: "0.16em",
-            }}
-          >
-            SIM DAYS
-          </span>
-
+        <div className="hub-console__sims">
+          <span className="hub-console__sims-label">Sim days</span>
           <button
             type="button"
+            className="hub-console__chip"
             disabled={!canSimRegularSeason}
-            onClick={() =>
-              onAdvanceFranchise?.({ mode: "season", count: 1, auto_resolve: true })
-            }
+            onClick={() => onAdvanceFranchise?.({ mode: "season", count: 1, auto_resolve: true })}
             title="Simulate the rest of the regular season (testing)"
-            style={{
-              minHeight: 32,
-              padding: "0 12px",
-              border: 0,
-              borderLeft: "1px solid rgba(201,168,106,0.18)",
-              background: "transparent",
-              color: "#e7d7b4",
-              fontWeight: 900,
-              fontSize: 11,
-              letterSpacing: "0.08em",
-              cursor: canSimRegularSeason ? "pointer" : "not-allowed",
-              opacity: canSimRegularSeason ? 1 : 0.4,
-            }}
           >
-            {advancing ? "SIMMING..." : "Rest of season"}
+            {advancing ? "Simming..." : "Rest of season"}
           </button>
-
           {[7, 15, 30].map((days) => (
             <button
               key={days}
               type="button"
+              className="hub-console__chip"
               disabled={blockBulkSim || advancing}
-              onClick={() =>
-                onAdvanceFranchise?.({ mode: "days", count: days, auto_resolve: true })
-              }
-              style={{
-                minHeight: 32,
-                padding: "0 12px",
-                border: 0,
-                borderLeft: "1px solid rgba(201,168,106,0.18)",
-                background: "transparent",
-                color: "#cbbfa6",
-                fontWeight: 900,
-                fontSize: 11,
-                letterSpacing: "0.08em",
-                fontVariantNumeric: "tabular-nums",
-                cursor: advancing ? "not-allowed" : "pointer",
-                opacity: blockBulkSim || advancing ? 0.4 : 1,
-              }}
+              onClick={() => onAdvanceFranchise?.({ mode: "days", count: days, auto_resolve: true })}
             >
               {days} days
             </button>

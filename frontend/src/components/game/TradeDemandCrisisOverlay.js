@@ -117,7 +117,7 @@ export function TradeDemandCrisisOverlay() {
         .trade-crisis-overlay__backdrop {
           position: absolute;
           inset: 0;
-          background: rgba(4, 8, 16, 0.82);
+          background: rgba(12, 28, 68, 0.82);
           backdrop-filter: blur(3px);
         }
         .trade-crisis-overlay__panel {
@@ -125,7 +125,7 @@ export function TradeDemandCrisisOverlay() {
           width: min(560px, calc(100vw - 32px));
           border: 1px solid rgba(255, 90, 90, 0.45);
           border-radius: 14px;
-          background: linear-gradient(165deg, rgba(22, 12, 18, 0.97), rgba(10, 14, 24, 0.98));
+          background: linear-gradient(165deg, rgba(21, 30, 70, 0.97), rgba(15, 32, 76, 0.98));
           box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55), inset 0 0 0 1px rgba(255, 255, 255, 0.04);
           padding: 24px 26px 22px;
           color: #f3f6fb;
@@ -235,7 +235,7 @@ export function TradeDemandCrisisOverlay() {
           text-transform: uppercase;
           font-size: 12px;
           cursor: pointer;
-          color: #12080a;
+          color: #131c3f;
           background: linear-gradient(90deg, #ffb4b4, #ff6868);
         }
       `}</style>

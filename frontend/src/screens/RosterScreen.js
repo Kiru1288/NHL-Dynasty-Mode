@@ -16,7 +16,6 @@ import { getBaseOverall, getOverallDrop, getUniversalOverall } from "../utils/pl
 import { getRosterMoves, moveRosterPlayer, getStatsCentral, previewElcOffer, submitElcOffer, getBoxScore, getPlayerGameLog } from "../services/franchiseService";
 import { BoxScoreModal, PlayerPerformanceLog } from "../components/dossier/ProspectVisuals";
 import { resolveWjcDossierBlock } from "./prospectDossierHelpers";
-import "../components/dossier/PlayerDossier.css";
 
 /**
  * RosterScreen.js
@@ -3559,7 +3558,10 @@ function PremiumPlayerRow({ player, selected, onSelect, showTeam = false }) {
 
       <span className="nhlrost-board-row__stats">{compactBoardStats(player)}</span>
 
-      <span className="nhlrost-board-row__avail">
+      <span
+        className="nhlrost-board-row__avail"
+        data-avail={String(player.availability?.label || player.availability_status || "Active").toLowerCase()}
+      >
         {player.availability?.label || player.availability_status || "Active"}
       </span>
     </button>
@@ -7573,9 +7575,9 @@ function RosterScreenStyles() {
   return (
     <style>{`
       .nhlrost-root {
-        --bg: var(--ops-navy, #04101a);
-        --bg-2: var(--ops-navy-deep, #020a11);
-        --panel: var(--ops-panel, rgba(9, 25, 38, 0.94));
+        --bg: var(--ops-navy, #0c214d);
+        --bg-2: var(--ops-navy-deep, #0b1d45);
+        --panel: var(--ops-panel, rgba(14, 40, 88, 0.94));
         --panel-2: var(--ops-panel-2, rgba(12, 35, 52, 0.94));
         --panel-3: var(--ops-panel-3, rgba(15, 46, 66, 0.78));
         --line: var(--ops-grid, rgba(156, 218, 236, 0.14));
@@ -7583,7 +7585,7 @@ function RosterScreenStyles() {
         --text: var(--ops-text, #e9f7fb);
         --muted: var(--ops-text-secondary, #8096a8);
         --muted-2: var(--ops-text-disabled, #607789);
-        --cyan: var(--ops-cyan, #13d8e7);
+        --cyan: var(--ops-cyan, #2ee6d6);
         --blue: var(--ops-info, #8ab4ff);
         --gold: var(--ops-gold, #e9a83c);
         --green: var(--ops-success, #52df94);
@@ -7596,9 +7598,9 @@ function RosterScreenStyles() {
         grid-template-columns: 72px minmax(0, 1fr);
         overflow: hidden;
         background:
-          radial-gradient(circle at 22% 0%, rgba(19, 216, 231, 0.08), transparent 28%),
+          radial-gradient(circle at 22% 0%, rgba(46, 230, 214, 0.08), transparent 28%),
           radial-gradient(circle at 88% 12%, rgba(233, 168, 60, 0.06), transparent 24%),
-          linear-gradient(180deg, var(--ops-navy, #06111b), var(--ops-navy-deep, #03080e) 72%);
+          linear-gradient(180deg, var(--ops-navy, #0d224e), var(--ops-navy-deep, #0c1c43) 72%);
         color: var(--text);
         font-family: var(--font-ops-ui, Inter, ui-sans-serif, system-ui, sans-serif);
       }
@@ -7623,7 +7625,7 @@ function RosterScreenStyles() {
         min-height: 100vh;
         padding: 14px 8px 18px;
         border-right: 1px solid rgba(255, 255, 255, 0.06);
-        background: linear-gradient(180deg, rgba(8, 23, 36, 0.98), rgba(4, 12, 20, 0.98));
+        background: linear-gradient(180deg, rgba(14, 38, 86, 0.98), rgba(12, 30, 72, 0.98));
         display: flex;
         flex-direction: column;
         align-items: center;
@@ -7686,7 +7688,7 @@ function RosterScreenStyles() {
 
       .nhlrost-side-nav button.is-active {
         color: var(--cyan);
-        background: linear-gradient(90deg, rgba(19, 216, 231, 0.12), transparent 72%);
+        background: linear-gradient(90deg, rgba(46, 230, 214, 0.12), transparent 72%);
       }
 
       .nhlrost-side-nav button.is-active::before {
@@ -7869,7 +7871,7 @@ function RosterScreenStyles() {
       .nhlrost-row.has-trade-concern.is-selected {
         box-shadow:
           inset 3px 0 0 rgba(239, 68, 68, 0.72),
-          inset 0 0 0 1px rgba(19, 216, 231, 0.18);
+          inset 0 0 0 1px rgba(46, 230, 214, 0.18);
       }
 
       .nhlrost-profile-zone--trade-stability {
@@ -7946,7 +7948,7 @@ function RosterScreenStyles() {
 
       .nhlrost-search-mode-segment button.is-active,
       .nhlrost-pool-segment button.is-active {
-        color: #031018;
+        color: #0c214c;
         background: #00d0d8;
         box-shadow: none;
       }
@@ -8039,7 +8041,7 @@ function RosterScreenStyles() {
         border-radius: var(--radius-ops, 2px);
         padding: 3px 8px;
         color: var(--cyan);
-        background: var(--ops-cyan-soft, rgba(19, 216, 231, 0.13));
+        background: var(--ops-cyan-soft, rgba(46, 230, 214, 0.13));
         border: 1px solid var(--line-2);
         font-size: var(--type-phase-label-size, 0.68rem);
         font-weight: 900;
@@ -8054,7 +8056,7 @@ function RosterScreenStyles() {
         min-height: 0;
         overflow: auto;
         padding: 0;
-        border-left: 3px solid rgba(4, 16, 26, 0.9);
+        border-left: 3px solid rgba(12, 33, 77, 0.9);
         background-image: repeating-linear-gradient(
           180deg,
           var(--line-2) 0 10px,
@@ -8095,7 +8097,7 @@ function RosterScreenStyles() {
         padding: 0 10px;
         min-height: 30px;
         border-bottom: 1px solid var(--line-2);
-        background: rgba(4, 16, 26, 0.98);
+        background: rgba(12, 33, 77, 0.98);
         color: var(--muted);
         font-size: var(--type-dept-label-size, 0.72rem);
         font-weight: 900;
@@ -8146,12 +8148,12 @@ function RosterScreenStyles() {
       }
 
       .nhlrost-board-row:hover {
-        background: var(--ops-cyan-soft, rgba(19, 216, 231, 0.13));
+        background: var(--ops-cyan-soft, rgba(46, 230, 214, 0.13));
       }
 
       /* Selected personnel row lifts out of the file like a pulled tab. */
       .nhlrost-board-row.is-selected {
-        background: var(--ops-table-sel, rgba(19, 216, 231, 0.13));
+        background: var(--ops-table-sel, rgba(46, 230, 214, 0.13));
         box-shadow: inset 3px 0 0 var(--cyan);
         clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 0 100%);
       }
@@ -8253,7 +8255,7 @@ function RosterScreenStyles() {
         border-radius: 11px 10px 10px 9px;
         background:
           linear-gradient(155deg, rgba(255, 255, 255, 0.1) 0%, transparent 42%),
-          linear-gradient(325deg, var(--plate-inner), rgba(4, 10, 20, 0.88));
+          linear-gradient(325deg, var(--plate-inner), rgba(12, 29, 72, 0.88));
         border: 1px solid var(--plate-border);
         box-shadow:
           0 0 0 1px rgba(0, 0, 0, 0.45) inset,
@@ -8329,7 +8331,7 @@ function RosterScreenStyles() {
         text-transform: uppercase;
         text-align: center;
         color: #e8f7ff;
-        background: rgba(5, 12, 24, 0.94);
+        background: rgba(12, 30, 76, 0.94);
         border: 1px solid var(--plate-border);
         border-radius: 4px;
         box-shadow: 0 0 8px var(--plate-glow);
@@ -8640,7 +8642,7 @@ function RosterScreenStyles() {
         position: absolute;
         inset: 0;
         border: 0;
-        background: rgba(2, 8, 14, 0.82);
+        background: rgba(11, 28, 67, 0.82);
         backdrop-filter: blur(8px);
         cursor: pointer;
       }
@@ -8655,7 +8657,7 @@ function RosterScreenStyles() {
         border: 1px solid rgba(255, 255, 255, 0.1);
         background:
           linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.018)),
-          rgba(8, 23, 36, 0.96);
+          rgba(14, 38, 86, 0.96);
         box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
         overflow: hidden;
         scrollbar-gutter: stable;
@@ -8725,8 +8727,8 @@ function RosterScreenStyles() {
         color: var(--cyan);
         border-radius: 999px;
         padding: 4px 10px;
-        border: 1px solid rgba(19, 216, 231, 0.25);
-        background: rgba(19, 216, 231, 0.07);
+        border: 1px solid rgba(46, 230, 214, 0.25);
+        background: rgba(46, 230, 214, 0.07);
       }
 
       .nhlrost-profile-modal__status-line {
@@ -9027,7 +9029,7 @@ function RosterScreenStyles() {
         margin: 0;
         padding: 10px 12px;
         border-left: 3px solid var(--cyan);
-        background: rgba(19, 216, 231, 0.06);
+        background: rgba(46, 230, 214, 0.06);
         border-radius: 0 8px 8px 0;
       }
       .nhlrost-media-quotes blockquote strong {
@@ -9212,7 +9214,7 @@ function RosterScreenStyles() {
       .nhlrost-chip-button.is-active {
         border-color: rgba(0, 216, 223, 0.42);
         background: rgba(0, 216, 223, 0.12);
-        box-shadow: inset 3px 0 0 var(--ops-cyan, #13d8e7);
+        box-shadow: inset 3px 0 0 var(--ops-cyan, #2ee6d6);
       }
 
       /* Primary roster action carries the rink cut. */
@@ -9252,7 +9254,7 @@ function RosterScreenStyles() {
         border: 1px solid rgba(255, 255, 255, 0.09);
         background:
           linear-gradient(180deg, rgba(255, 255, 255, 0.052), rgba(255, 255, 255, 0.02)),
-          rgba(7, 22, 35, 0.86);
+          rgba(14, 37, 86, 0.86);
         padding: 12px 14px;
         box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
         display: flex;
@@ -9266,7 +9268,7 @@ function RosterScreenStyles() {
         border-color: rgba(255, 100, 100, 0.38);
         background:
           linear-gradient(180deg, rgba(255, 100, 100, 0.11), rgba(255, 255, 255, 0.02)),
-          rgba(7, 22, 35, 0.88);
+          rgba(14, 37, 86, 0.88);
       }
 
       .nhlrost-stat-strip span {
@@ -9644,7 +9646,7 @@ function RosterScreenStyles() {
         outline: none;
         background:
           linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.025)),
-          rgba(3, 11, 19, 0.86);
+          rgba(12, 30, 71, 0.86);
         color: var(--text);
         padding: 0 11px;
         font-size: 0.78rem;
@@ -9665,7 +9667,7 @@ function RosterScreenStyles() {
       }
 
       .nhlrost-control select option {
-        background: #071625;
+        background: #0e2557;
         color: var(--text);
       }
 
@@ -9740,7 +9742,7 @@ function RosterScreenStyles() {
         border-radius: 10px;
         border: 1px solid rgba(255, 255, 255, 0.09);
         background:
-          linear-gradient(180deg, rgba(10, 28, 42, 0.98), rgba(6, 18, 29, 0.98));
+          linear-gradient(180deg, rgba(15, 42, 92, 0.98), rgba(13, 35, 80, 0.98));
         color: var(--muted);
         text-transform: uppercase;
         letter-spacing: 0.12em;
@@ -9795,7 +9797,7 @@ function RosterScreenStyles() {
         border: 1px solid rgba(255, 255, 255, 0.075);
         background:
           linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.018)),
-          rgba(5, 18, 29, 0.72);
+          rgba(12, 35, 80, 0.72);
         color: var(--text);
         text-align: left;
         cursor: pointer;
@@ -9839,7 +9841,7 @@ function RosterScreenStyles() {
         border-color: rgba(0, 216, 223, 0.26);
         background:
           linear-gradient(180deg, rgba(0, 216, 223, 0.07), rgba(255, 255, 255, 0.022)),
-          rgba(6, 22, 35, 0.86);
+          rgba(13, 37, 86, 0.86);
       }
 
       .nhlrost-row.is-selected,
@@ -9847,7 +9849,7 @@ function RosterScreenStyles() {
         border-color: rgba(0, 216, 223, 0.48);
         background:
           linear-gradient(90deg, rgba(0, 216, 223, 0.12), rgba(255, 255, 255, 0.03)),
-          rgba(6, 22, 35, 0.92);
+          rgba(13, 37, 86, 0.92);
         box-shadow:
           inset 3px 0 0 rgba(0, 216, 223, 0.85),
           0 0 16px rgba(0, 216, 223, 0.08);
@@ -9890,7 +9892,7 @@ function RosterScreenStyles() {
       .nhlrost-row__persona {
         display: block;
         margin-top: 2px;
-        color: rgba(201, 168, 106, 0.92);
+        color: rgba(248, 213, 138, 0.92);
         font-size: 0.66rem;
         font-style: normal;
         font-weight: 800;
@@ -10124,7 +10126,7 @@ function RosterScreenStyles() {
         letter-spacing: 0.14em;
         text-transform: uppercase;
         vertical-align: middle;
-        box-shadow: 0 0 0 1px #2a0000;
+        box-shadow: 0 0 0 1px #1f1636;
       }
 
       .nhlrost-status-strip {
@@ -10161,12 +10163,12 @@ function RosterScreenStyles() {
       .nhlrost-player-card:hover,
       .nhlrost-rating-card:hover {
         transform: none;
-        background: var(--ops-cyan-soft, rgba(19, 216, 231, 0.13));
+        background: var(--ops-cyan-soft, rgba(46, 230, 214, 0.13));
       }
 
       .nhlrost-player-card.is-selected,
       .nhlrost-rating-card.is-selected {
-        background: var(--ops-table-sel, rgba(19, 216, 231, 0.13));
+        background: var(--ops-table-sel, rgba(46, 230, 214, 0.13));
         box-shadow: inset 3px 0 0 var(--cyan);
       }
 
@@ -10618,7 +10620,7 @@ function RosterScreenStyles() {
       .nhlrost-profile-zone--bio {
         grid-column: 1;
         grid-row: 1 / span 2;
-        background: rgba(19, 216, 231, 0.04);
+        background: rgba(46, 230, 214, 0.04);
         border-left: 3px solid var(--cyan);
       }
 
@@ -10920,19 +10922,19 @@ function RosterScreenStyles() {
 
       .nhlrost-profile-readout p,
 .nhlrost-move-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 0.6rem; }
-      .nhlrost-move-card { display: flex; align-items: center; gap: 0.65rem; padding: 0.7rem 0.85rem; text-align: left; border-radius: 8px; border: 1px solid rgba(19, 216, 231, 0.28); background: rgba(8, 22, 34, 0.85); color: #e8f4fa; cursor: pointer; transition: border-color 0.15s, background 0.15s; }
-      .nhlrost-move-card:hover:not(:disabled) { border-color: #13d8e7; background: rgba(19, 216, 231, 0.08); }
+      .nhlrost-move-card { display: flex; align-items: center; gap: 0.65rem; padding: 0.7rem 0.85rem; text-align: left; border-radius: 8px; border: 1px solid rgba(46, 230, 214, 0.28); background: rgba(14, 37, 85, 0.85); color: #e8f4fa; cursor: pointer; transition: border-color 0.15s, background 0.15s; }
+      .nhlrost-move-card:hover:not(:disabled) { border-color: #2ee6d6; background: rgba(46, 230, 214, 0.08); }
       .nhlrost-move-card--down { border-color: rgba(233, 168, 60, 0.32); }
       .nhlrost-move-card--down:hover:not(:disabled) { border-color: #e9a83c; background: rgba(233, 168, 60, 0.08); }
       .nhlrost-move-card:disabled { opacity: 0.45; cursor: not-allowed; }
-      .nhlrost-move-card__arrow { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 6px; font-size: 0.8rem; background: rgba(19, 216, 231, 0.14); color: #13d8e7; flex: 0 0 auto; }
+      .nhlrost-move-card__arrow { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 6px; font-size: 0.8rem; background: rgba(46, 230, 214, 0.14); color: #2ee6d6; flex: 0 0 auto; }
       .nhlrost-move-card--down .nhlrost-move-card__arrow { background: rgba(233, 168, 60, 0.14); color: #e9a83c; }
       .nhlrost-move-card__text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-      .nhlrost-move-card__text strong { font-family: "Barlow Condensed", sans-serif; font-size: 1rem; letter-spacing: 0.04em; text-transform: uppercase; }
+      .nhlrost-move-card__text strong { font-family: var(--dd-font-ui, Nunito, sans-serif); font-size: 1rem; letter-spacing: 0.04em; text-transform: uppercase; }
       .nhlrost-move-card__text small { color: #8fb3c4; font-size: 0.72rem; }
-      .nhlrost-move-confirm { margin-bottom: 0.75rem; padding: 0.8rem 0.9rem; border-radius: 8px; border: 1px solid #13d8e7; background: rgba(19, 216, 231, 0.07); }
+      .nhlrost-move-confirm { margin-bottom: 0.75rem; padding: 0.8rem 0.9rem; border-radius: 8px; border: 1px solid #2ee6d6; background: rgba(46, 230, 214, 0.07); }
       .nhlrost-move-confirm--down { border-color: #e9a83c; background: rgba(233, 168, 60, 0.07); }
-      .nhlrost-move-confirm__title { margin: 0 0 4px; font-family: "Barlow Condensed", sans-serif; font-size: 1.05rem; letter-spacing: 0.04em; text-transform: uppercase; color: #e8f4fa; }
+      .nhlrost-move-confirm__title { margin: 0 0 4px; font-family: var(--dd-font-ui, Nunito, sans-serif); font-size: 1.05rem; letter-spacing: 0.04em; text-transform: uppercase; color: #e8f4fa; }
       .nhlrost-move-confirm__body { margin: 0 0 0.6rem; color: #9fc0cf; font-size: 0.78rem; }
       .nhlrost-move-confirm__actions { display: flex; gap: 0.5rem; }
             .nhlrost-muted-text {
@@ -11121,7 +11123,7 @@ function RosterScreenStyles() {
         border-left: 1px solid rgba(255, 255, 255, 0.12);
         background:
           radial-gradient(circle at 30% 0%, rgba(0, 216, 223, 0.13), transparent 30%),
-          linear-gradient(180deg, rgba(8, 23, 36, 0.98), rgba(3, 9, 15, 0.98));
+          linear-gradient(180deg, rgba(14, 38, 86, 0.98), rgba(12, 28, 68, 0.98));
         box-shadow: -24px 0 60px rgba(0, 0, 0, 0.45);
         display: grid;
         grid-template-rows: auto auto minmax(0, 1fr);
@@ -11546,7 +11548,7 @@ function RosterScreenStyles() {
         gap: 0;
         border: 1px solid rgba(255, 255, 255, 0.08);
         border-radius: var(--radius-hud, 4px);
-        background: rgba(4, 16, 26, 0.4);
+        background: rgba(12, 33, 77, 0.4);
         overflow: hidden;
       }
 
@@ -11608,8 +11610,8 @@ function RosterScreenStyles() {
       /* Selection is a single leading rail plus a wash — one treatment, so a
          selected row cannot be confused with a hover or a status accent. */
       .nhlrost-board-row.is-selected {
-        background: var(--ops-table-sel, rgba(19, 216, 231, 0.13));
-        box-shadow: inset 3px 0 0 var(--ops-cyan, #13d8e7);
+        background: var(--ops-table-sel, rgba(46, 230, 214, 0.13));
+        box-shadow: inset 3px 0 0 var(--ops-cyan, #2ee6d6);
       }
 
       .nhlrost-board-row:focus-visible {
@@ -11653,7 +11655,7 @@ function RosterScreenStyles() {
 
       .nhlrost-profile-modal__hero {
         padding: 10px 16px 8px;
-        border-bottom: 2px solid var(--ops-cyan, #13d8e7);
+        border-bottom: 2px solid var(--ops-cyan, #2ee6d6);
       }
 
       .nhlrost-profile-modal__headshot.player-headshot.size-xl,
@@ -11710,9 +11712,9 @@ function RosterScreenStyles() {
          section rule replaces per-card borders. */
       .nhlrost-profile-scorecard {
         border: 0;
-        border-left: 3px solid var(--ops-cyan, #13d8e7);
+        border-left: 3px solid var(--ops-cyan, #2ee6d6);
         border-radius: 0;
-        background: rgba(19, 216, 231, 0.05);
+        background: rgba(46, 230, 214, 0.05);
       }
 
       .nhlrost-profile-scorecard:nth-child(2) {
@@ -11742,13 +11744,13 @@ function RosterScreenStyles() {
 
       .nhlrost-detail-tabs button:hover {
         background: rgba(255, 255, 255, 0.03);
-        box-shadow: inset 0 -2px 0 rgba(19, 216, 231, 0.35);
+        box-shadow: inset 0 -2px 0 rgba(46, 230, 214, 0.35);
       }
 
       .nhlrost-detail-tabs button.is-active {
-        background: rgba(19, 216, 231, 0.08);
-        color: var(--ops-cyan, #13d8e7);
-        box-shadow: inset 0 -2px 0 var(--ops-cyan, #13d8e7);
+        background: rgba(46, 230, 214, 0.08);
+        color: var(--ops-cyan, #2ee6d6);
+        box-shadow: inset 0 -2px 0 var(--ops-cyan, #2ee6d6);
       }
 
       .nhlrost-profile-modal__body {
@@ -12015,9 +12017,9 @@ function RosterScreenStyles() {
 
       .nhlrost-call-meeting-btn {
         margin-top: 10px;
-        border: 1px solid rgba(19, 216, 231, 0.35);
+        border: 1px solid rgba(46, 230, 214, 0.35);
         border-radius: 6px;
-        background: rgba(19, 216, 231, 0.08);
+        background: rgba(46, 230, 214, 0.08);
         color: var(--cyan);
         font-size: 11px;
         font-weight: 900;
@@ -12028,7 +12030,7 @@ function RosterScreenStyles() {
       }
       .nhlrost-call-meeting-btn:hover {
         border-color: var(--cyan);
-        background: rgba(19, 216, 231, 0.14);
+        background: rgba(46, 230, 214, 0.14);
       }
       .nhlrost-profile-zone--relationship h3 {
         color: var(--gold);

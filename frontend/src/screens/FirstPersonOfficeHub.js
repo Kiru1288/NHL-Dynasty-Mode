@@ -43,7 +43,6 @@ import React, {
   import { resolveFranchiseTeamLogo, toLogoUrl } from "../utils/teamLogos";
   import { collectLockerPulse, buildHubStoryTicker } from "../utils/lockerRoomPulse";
   import { SCREENS } from "../game/constants";
-  import "./FirstPersonOfficeHub.css";
   import officeFontBold from "../styles/ArchivoBlack-Regular.ttf";
   import officeWallTextureSrc from "../pictures/office-wall-tile-1024.jpg";
 
@@ -58,10 +57,11 @@ import React, {
   const MENU_LANDMARK = {
     artPx: 208,
     padPx: 17,
-    distanceFactor: 1.92,
-    hitBox: [1.16, 1.3, 0.52],
-    hitBoxOffset: [0, -0.04, 0.28],
-    vignette: [1.26, 1.36],
+    /* Gallery wall plaques read ~15% larger than the old office posters. */
+    distanceFactor: 2.2,
+    hitBox: [1.34, 1.62, 0.52],
+    hitBoxOffset: [0, -0.1, 0.28],
+    vignette: [1.45, 1.56],
     /** Two hanging lines plus the elevated crest medallion above them. */
     crestY: 2.66,
     upperBandY: 2.46,
@@ -486,6 +486,8 @@ import React, {
   }
 
   const USE_RETRO_OFFICE_PACK = false;
+  /** Double Dash gallery hub: one curved wall, two rows of flat plaques. */
+  const GALLERY_HUB = true;
 
   /**
    * Gitignored (GitHub 100MB limit): styles/Retro Office Pack/Itch Upload/
@@ -4652,7 +4654,7 @@ import React, {
           </mesh>
         ) : null}
 
-        <LandmarkMount kind={mount} accent={mountAccent || accent} />
+        <LandmarkMount kind={GALLERY_HUB ? null : mount} accent={mountAccent || accent} />
 
         <Html
           center
@@ -5745,6 +5747,153 @@ import React, {
     );
   }
 
+  /* ---------------------------------------------------------------------------
+     Gallery hub (Double Dash pass). The office room is replaced by one curved
+     navy wall carrying every destination as a flat plaque in two rows of seven,
+     with the club crest at the centre of the top row.
+     ------------------------------------------------------------------------- */
+
+  /** Wall curve: z = GALLERY_WALL.z + x² · curve (a circle of radius 1 / 2·curve). */
+  const GALLERY_WALL = { z: -1.9, curve: 0.04, colStep: 1.4, topY: 2.45, lowY: 0.7 };
+
+  function galleryPlacement(col, row) {
+    const x = (col - 3) * GALLERY_WALL.colStep;
+    return {
+      position: [x, row === 0 ? GALLERY_WALL.topY : GALLERY_WALL.lowY, GALLERY_WALL.z + x * x * GALLERY_WALL.curve],
+      rotation: [0, -Math.atan(2 * GALLERY_WALL.curve * x), 0],
+    };
+  }
+
+  const GALLERY_WALL_RADIUS = 1 / (2 * GALLERY_WALL.curve);
+
+  function GalleryRoom() {
+    const wallMaterial = useMemo(
+      () =>
+        new THREE.ShaderMaterial({
+          side: THREE.BackSide,
+          vertexShader: `varying vec2 vUv; varying vec3 vW;
+            void main(){ vUv = uv; vW = (modelMatrix * vec4(position, 1.)).xyz; gl_Position = projectionMatrix * viewMatrix * vec4(vW, 1.); }`,
+          fragmentShader: `varying vec2 vUv; varying vec3 vW;
+            void main(){
+              float y = vW.y;
+              vec3 base = mix(vec3(.07,.14,.33), vec3(.13,.24,.5), smoothstep(-.2, 4.2, y));
+              base *= 1. - smoothstep(.0, .02, abs(fract(vUv.x * 46.) - .5) - .47) * .25;     // panel seams
+              float rail = smoothstep(.05, .0, abs(y - 3.62)) + smoothstep(.04, .0, abs(y - .08)); // brass rails
+              base = mix(base, vec3(.85, .62, .3), rail * .8);
+              base += vec3(.18, .9, .84) * exp(-pow((vW.x + 4.2) / 2.8, 2.)) * smoothstep(4.4, .4, y) * .2; // turquoise wash
+              base += vec3(1., .7, .54) * exp(-pow((vW.x - 4.2) / 2.8, 2.)) * smoothstep(4.4, .4, y) * .2;  // peach wash
+              gl_FragColor = vec4(pow(base, vec3(2.2)), 1.);   // authored in sRGB; the hub pipeline outputs linear -> sRGB
+            }`,
+        }),
+      []
+    );
+    const floorMaterial = useMemo(
+      () =>
+        new THREE.ShaderMaterial({
+          vertexShader: `varying vec3 vW; void main(){ vW = (modelMatrix * vec4(position, 1.)).xyz; gl_Position = projectionMatrix * viewMatrix * vec4(vW, 1.); }`,
+          fragmentShader: `varying vec3 vW;
+            void main(){
+              vec3 c = vec3(.05, .09, .2);
+              c *= .85 + .15 * smoothstep(.0, .04, abs(fract(vW.x * 1.6) - .5) - .46);
+              c += vec3(1., .62, .45) * exp(-dot(vW.xz - vec2(0., 0.), vW.xz - vec2(0., 0.)) / 12.) * .16;
+              c += vec3(.18, .9, .84) * exp(-dot(vW.xz - vec2(-3.5, -1.), vW.xz - vec2(-3.5, -1.)) / 6.) * .07;
+              gl_FragColor = vec4(pow(c, vec3(2.2)), 1.);
+            }`,
+        }),
+      []
+    );
+    useEffect(() => () => { wallMaterial.dispose(); floorMaterial.dispose(); }, [wallMaterial, floorMaterial]);
+
+    return (
+      <group raycast={() => null}>
+        <mesh
+          position={[0, 2.1, GALLERY_WALL.z + GALLERY_WALL_RADIUS + 0.08]}
+          material={wallMaterial}
+          raycast={() => null}
+        >
+          <cylinderGeometry args={[GALLERY_WALL_RADIUS + 0.08, GALLERY_WALL_RADIUS + 0.08, 4.8, 96, 1, true, Math.PI - 0.62, 1.24]} />
+        </mesh>
+        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 2]} material={floorMaterial} raycast={() => null}>
+          <planeGeometry args={[24, 16]} />
+        </mesh>
+      </group>
+    );
+  }
+
+  function CommandDiorama({ hovered, prefersReducedMotion }) {
+    return (
+      <MenuDiorama hovered={hovered} prefersReducedMotion={prefersReducedMotion} kicker="Command" name="Franchise Command" accent="#9fd6ea">
+        <defs>
+          <linearGradient id="fcBody" x1="50%" y1="0%" x2="50%" y2="100%">
+            <stop offset="0%" stopColor="#1f3442" />
+            <stop offset="100%" stopColor="#04080c" />
+          </linearGradient>
+          <radialGradient id="fcGlow" cx="50%" cy="45%" r="55%">
+            <stop offset="0%" stopColor="#9fd6ea" stopOpacity="0.35" />
+            <stop offset="100%" stopColor="#9fd6ea" stopOpacity="0" />
+          </radialGradient>
+        </defs>
+        <ellipse className="menu-glow" cx="220" cy="230" rx="180" ry="150" fill="url(#fcGlow)" />
+        <path d="M110 120 L330 120 L330 280 L110 280 Z" fill="url(#fcBody)" stroke="#9fd6ea" strokeWidth="2.4" strokeOpacity="0.45" />
+        <path d="M128 138 L312 138 L312 262 L128 262 Z" fill="#0b1a24" stroke="#9fd6ea" strokeOpacity="0.25" />
+        <path className="menu-graph" d="M146 230 L186 196 L222 214 L262 170 L296 184" fill="none" stroke="#dff6ff" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" opacity="0.8" />
+        <circle cx="262" cy="170" r="7" fill="#9fd6ea" />
+        <path d="M80 290 L360 290 L384 330 L56 330 Z" fill="url(#fcBody)" stroke="#9fd6ea" strokeWidth="2" strokeOpacity="0.35" />
+        <path d="M190 306 L250 306" stroke="#9fd6ea" strokeWidth="5" strokeOpacity="0.35" strokeLinecap="round" />
+      </MenuDiorama>
+    );
+  }
+
+  function CalendarDiorama({ hovered, prefersReducedMotion }) {
+    return (
+      <MenuDiorama hovered={hovered} prefersReducedMotion={prefersReducedMotion} kicker="Season Timeline" name="Calendar" accent="#dbe7ef">
+        <defs>
+          <linearGradient id="caBody" x1="50%" y1="0%" x2="50%" y2="100%">
+            <stop offset="0%" stopColor="#26343e" />
+            <stop offset="100%" stopColor="#05090d" />
+          </linearGradient>
+        </defs>
+        <path d="M96 118 L344 118 L344 362 L96 362 Z" fill="url(#caBody)" stroke="#dbe7ef" strokeWidth="2.4" strokeOpacity="0.4" />
+        <path d="M96 118 L344 118 L344 168 L96 168 Z" fill="#c0554d" opacity="0.55" />
+        <path d="M150 96 L150 140 M290 96 L290 140" stroke="#dbe7ef" strokeWidth="9" strokeLinecap="round" opacity="0.55" />
+        {[0, 1, 2, 3].map((r) =>
+          [0, 1, 2, 3, 4].map((c) => (
+            <rect key={`${r}-${c}`} x={116 + c * 44} y={186 + r * 42} width="30" height="28" rx="4" fill="#dbe7ef" opacity={r === 1 && c === 2 ? 0.95 : 0.12} />
+          ))
+        )}
+        <circle className="menu-ring" cx="220" cy="242" r="24" fill="none" stroke="#e0a06a" strokeWidth="3.5" />
+      </MenuDiorama>
+    );
+  }
+
+  function LeagueOpsDiorama({ hovered, prefersReducedMotion }) {
+    return (
+      <MenuDiorama hovered={hovered} prefersReducedMotion={prefersReducedMotion} kicker="League Office" name="League Operations" accent="#7fb8f0">
+        <defs>
+          <linearGradient id="loSuitPlaque" x1="50%" y1="0%" x2="50%" y2="100%">
+            <stop offset="0%" stopColor="#1a2c3c" />
+            <stop offset="100%" stopColor="#02050a" />
+          </linearGradient>
+          <radialGradient id="loHaloPlaque" cx="50%" cy="30%" r="50%">
+            <stop offset="0%" stopColor="#7fb8f0" stopOpacity="0.45" />
+            <stop offset="100%" stopColor="#7fb8f0" stopOpacity="0" />
+          </radialGradient>
+        </defs>
+        <ellipse className="menu-glow" cx="220" cy="150" rx="150" ry="120" fill="url(#loHaloPlaque)" />
+        <g className="menu-hero">
+          <path
+            d="M220 96 c20 0 36 16 36 38 c0 16 -8 28 -19 34 c38 10 62 40 66 86 l10 146 l-186 0 l10 -146 c4 -46 28 -76 66 -86 c-11 -6 -19 -18 -19 -34 c0 -22 16 -38 36 -38 z"
+            fill="url(#loSuitPlaque)"
+            stroke="#7fb8f0"
+            strokeWidth="2.2"
+            strokeOpacity="0.4"
+          />
+          <path d="M220 176 l-14 26 l14 20 l14 -20 z" fill="#dbe7ef" opacity="0.25" />
+        </g>
+      </MenuDiorama>
+    );
+  }
+
   function PhysicalDraftBoard({ hovered, draftWeek = false }) {
     return <DraftWarRoomEntrance hovered={hovered} draftWeek={draftWeek} />;
   }
@@ -5913,6 +6062,90 @@ import React, {
       Number(unreadMessages || 0) > 0 ||
       mood.hasUrgentDecisions;
     const weather = officeWeather || deriveSeasonalWeather(currentDate);
+
+    if (GALLERY_HUB) {
+      const plaque = (id, col, row, render, extra = {}) => {
+        const place = galleryPlacement(col, row);
+        return (
+          <InteractiveGroup
+            key={id}
+            id={id}
+            label=""
+            position={place.position}
+            rotation={place.rotation}
+            hoveredId={hoveredId}
+            setHoveredId={setHoveredId}
+            onOpen={handleOpenPanel}
+            hoverScale={1}
+            hoverLift={0}
+            hitBoxArgs={MENU_LANDMARK.hitBox}
+            hitBoxPosition={MENU_LANDMARK.hitBoxOffset}
+            activateOnPointerDown
+            hideHoverLabel
+            showHoverCorners={false}
+            {...extra}
+          >
+            {render}
+          </InteractiveGroup>
+        );
+      };
+      const crest = galleryPlacement(3, 0);
+
+      return (
+        <HubLowPowerContext.Provider value={lowPowerMode}>
+          <color attach="background" args={["#0c1a3e"]} />
+          <fog attach="fog" args={["#0c1a3e", 14, 30]} />
+          <CameraRig
+            resetToken={resetToken}
+            activePanel={activePanel}
+            lowPowerMode={lowPowerMode}
+            prefersReducedMotion={prefersReducedMotion}
+            hoveredId={hoveredId}
+            leagueOpsClickToken={leagueOpsClickToken}
+          />
+          <hemisphereLight intensity={0.7} color="#bfe0ff" groundColor="#1a2a5a" />
+          <ambientLight intensity={0.45} color="#9fb8e0" />
+          <pointLight position={[-4.5, 2.6, 0.6]} intensity={0.8} color="#2ee6d6" distance={8} />
+          <pointLight position={[4.5, 2.6, 0.6]} intensity={0.8} color="#ffb48a" distance={8} />
+          <GalleryRoom />
+
+          {/* Top row: team building · club crest · league intelligence */}
+          {plaque("draftClass", 0, 0, (hovered) => (
+            <DraftClassDiorama hovered={hovered} prefersReducedMotion={prefersReducedMotion} seasonYear={seasonYear} currentDate={currentDate} />
+          ))}
+          {plaque("messages", 1, 0, (hovered) => <TradeHubDiorama hovered={hovered} prefersReducedMotion={prefersReducedMotion} />, { lowPowerMode })}
+          {plaque("roster", 2, 0, (hovered) => <RosterDiorama hovered={hovered} prefersReducedMotion={prefersReducedMotion} />)}
+          <WallHeroLogo
+            teamLogo={teamLogo}
+            teamName={teamName}
+            hovered={hoveredId === "teamIdentity"}
+            position={[crest.position[0], crest.position[1] + 0.1, crest.position[2] + 0.22]}
+            scale={1.12}
+          />
+          {plaque("lines", 4, 0, (hovered) => <StrategyDiorama hovered={hovered} prefersReducedMotion={prefersReducedMotion} />)}
+          {plaque("stats", 5, 0, (hovered) => <StatsDiorama hovered={hovered} prefersReducedMotion={prefersReducedMotion} record={record} />)}
+          {plaque("leagueCentral", 6, 0, (hovered) => <LeagueOpsDiorama hovered={hovered} prefersReducedMotion={prefersReducedMotion} />, {
+            onOpen: handleLeagueOpsOpen,
+            openId: OFFICE_PANEL_IDS.LEAGUE_CENTRAL,
+          })}
+
+          {/* Bottom row */}
+          {plaque("dashboard", 0, 1, (hovered) => <CommandDiorama hovered={hovered} prefersReducedMotion={prefersReducedMotion} />)}
+          {plaque("calendar", 1, 1, (hovered) => <CalendarDiorama hovered={hovered} prefersReducedMotion={prefersReducedMotion} />)}
+          {plaque("contracts", 2, 1, (hovered) => (
+            <ContractsDiorama hovered={hovered} prefersReducedMotion={prefersReducedMotion} capSpace={capSpace} capPressure={capPressure} />
+          ))}
+          {plaque("teamIdentity", 3, 1, (hovered) => <IdentityDiorama hovered={hovered} prefersReducedMotion={prefersReducedMotion} />)}
+          {plaque("standings", 4, 1, (hovered) => (
+            <StandingsDiorama hovered={hovered} prefersReducedMotion={prefersReducedMotion} standingsRank={standingsRank} record={record} />
+          ))}
+          {plaque("news", 5, 1, (hovered) => (
+            <StorylinesDiorama hovered={hovered} prefersReducedMotion={prefersReducedMotion} activeStorylines={activeStorylines} />
+          ))}
+          {plaque("awards", 6, 1, (hovered) => <LegacyDiorama hovered={hovered} prefersReducedMotion={prefersReducedMotion} />)}
+        </HubLowPowerContext.Provider>
+      );
+    }
 
     return (
       <HubLowPowerContext.Provider value={lowPowerMode}>

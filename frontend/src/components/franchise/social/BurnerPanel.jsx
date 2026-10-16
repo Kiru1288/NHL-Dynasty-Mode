@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getBurnerState, postBurnerMessage, previewBurnerPost } from "../../../services/franchiseService";
-import "./BurnerPanel.css";
 
 // Highlighting uses the server's own weights (burner state payload), so the preview
 // marks exactly the words the risk score counts (bug F10).

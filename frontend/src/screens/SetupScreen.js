@@ -75,19 +75,6 @@ function clubConference(code) {
   return DIVISION_BY_CODE[code] || ["National", "Hockey League"];
 }
 
-function deedFileNo(code, dateText) {
-  const year = String(dateText || "").match(/\d{4}/)?.[0] || "2026";
-  const club = String(code || "NHL").slice(0, 3).toUpperCase();
-  return `NHL-HO-${club}-${year}`;
-}
-
-function gmInitials(name) {
-  const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
-  if (!parts.length) return "GM";
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
-}
-
 const NHL_FUN_FACTS = [
   "Wayne Gretzky recorded four separate 200-point seasons.",
   "Glenn Hall started 502 consecutive regular-season games in goal.",
@@ -337,34 +324,20 @@ function AppointmentDeedSheet({
   const teamName = selected?.name || "National Hockey League Club";
   const teamCode = selected?.code || "NHL";
   const [conference, division] = clubConference(teamCode);
-  const fileNo = deedFileNo(teamCode, contractDate);
   const logoSrc =
     selected?.logo ||
     resolveFranchiseTeamLogo(selected?.raw || selected, selected?.name || teamDisplayName(selected));
 
+  const steps = [
+    { key: "team", label: "Team", done: Boolean(selected) },
+    { key: "name", label: "Name", done: Boolean(gmName?.trim()) },
+    { key: "sign", label: "Sign", done: signatureReady },
+  ];
+
   return (
     <article className="setup-deed-sheet">
       <div className="setup-deed-paper">
-        <header className="setup-deed-docket">
-          <div>
-            <span>Office of the Commissioner</span>
-            <strong>Hockey Operations · Confidential</strong>
-          </div>
-          <div>
-            <span>File no.</span>
-            <strong>{fileNo}</strong>
-          </div>
-        </header>
-
-        <p className="setup-deed-kicker">National Hockey League</p>
-        <h2 className="setup-deed-title">
-          General Manager
-          <span>Appointment Deed</span>
-        </h2>
-        <p className="setup-deed-parties">
-          This instrument is made between the League and the Club of Record named below,
-          to take effect on the date executed.
-        </p>
+        <h2 className="setup-deed-title">General Manager</h2>
 
         <div className="setup-deed-club">
           {logoSrc ? <img src={logoSrc} alt="" /> : <em>{teamCode}</em>}
@@ -374,8 +347,16 @@ function AppointmentDeedSheet({
           </div>
         </div>
 
+        <ol className="setup-steps" aria-label="Setup progress">
+          {steps.map((step, i) => (
+            <li key={step.key} className={step.done ? "is-done" : ""}>
+              <b>{i + 1}</b> {step.label}{step.done ? " ✓" : ""}
+            </li>
+          ))}
+        </ol>
+
         <label className="setup-deed-gm">
-          <span>Appointed General Manager</span>
+          <span className="setup-sr-only">General Manager name</span>
           <input
             type="text"
             value={gmName}
@@ -435,58 +416,8 @@ function AppointmentDeedSheet({
           </fieldset>
         </div>
 
-        <dl className="setup-deed-meta">
-          <div>
-            <dt>Appointment term</dt>
-            <dd>Year one</dd>
-          </div>
-          <div>
-            <dt>Effective date</dt>
-            <dd>{contractDate || "—"}</dd>
-          </div>
-          <div>
-            <dt>Player universe</dt>
-            <dd>{playerUniverse === "real_nhl" ? "Real NHL players" : "Generated players"}</dd>
-          </div>
-          <div>
-            <dt>League health system</dt>
-            <dd>{injuriesEnabled ? "Enabled" : "Disabled"}</dd>
-          </div>
-        </dl>
-
-        <ol className="setup-deed-articles">
-          <li>
-            <strong>Art. I — Appointment.</strong>
-            {" "}The undersigned is appointed General Manager of the Club of Record
-            for a term of one League year, renewable by continued operations.
-          </li>
-          <li>
-            <strong>Art. II — Player universe.</strong>
-            {" "}Rosters shall be drawn from{" "}
-            {playerUniverse === "real_nhl" ? "the real NHL player universe" : "a generated player universe"}
-            , as scheduled on this deed.
-          </li>
-          <li>
-            <strong>Art. III — Health system.</strong>
-            {" "}League injury administration is{" "}
-            {injuriesEnabled ? "enabled" : "disabled"}
-            {" "}for the term of this appointment.
-          </li>
-          <li>
-            <strong>Art. IV — Powers.</strong>
-            {" "}The General Manager accepts authority over hockey operations,
-            transactions, contracts, staff, roster construction, scouting, and
-            franchise strategy, subject to the Constitution and this deed.
-          </li>
-        </ol>
-
         <div className="setup-deed-sign">
-          <span>General Manager signature · Executed in counterpart</span>
           <SignaturePad onInkChange={setSignatureReady} />
-          <div className="setup-deed-sign-meta">
-            <small>{signatureReady ? "Signature captured" : "Sign on the line above"}</small>
-            <small>Witness: League Secretary</small>
-          </div>
           <div className={`setup-deed-seal ${signatureReady ? "is-struck" : ""}`} aria-hidden="true">
             <em>NHL</em>
             <span>Hockey Ops</span>
@@ -501,13 +432,8 @@ function AppointmentDeedSheet({
 
         <button type="button" className="setup-accept-btn" disabled={!canContinue} onClick={onAccept}>
           <span>Begin franchise</span>
-          <small>Execute deed · Open hockey operations</small>
+          {!canContinue && !loading ? <small>Sign to unlock</small> : null}
         </button>
-        <footer className="setup-deed-footer">
-          <span>Page 1 of 1</span>
-          <span>Schedule A attached</span>
-          <span>{fileNo}</span>
-        </footer>
       </div>
     </article>
   );
@@ -525,70 +451,13 @@ const TeamSelection = React.memo(function TeamSelection({
   signatureReady,
 }) {
   const clubList = teams.length ? teams : buildOrderedTeams(buildDefaultFranchiseTeamList());
-  const teamCode = selected?.code || "NHL";
-  const [conference, division] = clubConference(teamCode);
-  const fileNo = deedFileNo(teamCode, contractDate);
 
   return (
     <section className="setup-team-selector">
       <header className="setup-panel-heading">
-        <span>Schedule A · Club of record</span>
-        <strong>Choose your club · {clubList.length} NHL clubs</strong>
+        <strong>Select your team</strong>
       </header>
       <ClubBallBoard teams={clubList} selectedIndex={selectedIndex} onSelect={onSelect} />
-      <aside className="setup-schedule">
-        <div className="setup-schedule-head">
-          <span>Exhibit A</span>
-          <strong>Particulars of appointment</strong>
-          <em>{fileNo}</em>
-        </div>
-        <dl className="setup-schedule-grid">
-          <div>
-            <dt>Club of record</dt>
-            <dd>{selected?.name || "Select a club"}</dd>
-          </div>
-          <div>
-            <dt>Abbreviation</dt>
-            <dd>{teamCode}</dd>
-          </div>
-          <div>
-            <dt>Conference</dt>
-            <dd>{conference}</dd>
-          </div>
-          <div>
-            <dt>Division</dt>
-            <dd>{division}</dd>
-          </div>
-          <div>
-            <dt>Appointed GM</dt>
-            <dd>{gmName?.trim() || "To be named"}</dd>
-          </div>
-          <div>
-            <dt>Effective</dt>
-            <dd>{contractDate || "—"}</dd>
-          </div>
-          <div>
-            <dt>Player names</dt>
-            <dd>{playerUniverse === "real_nhl" ? "Real NHL" : "Generated"}</dd>
-          </div>
-          <div>
-            <dt>Health system</dt>
-            <dd>{injuriesEnabled ? "Enabled" : "Disabled"}</dd>
-          </div>
-        </dl>
-        <p className="setup-schedule-clause">
-          The Club of Record is the sole franchise named on this deed. Crest
-          selection on this schedule constitutes identification of the Club
-          for all hockey operations, transactions, and League filings during
-          Year One. Execution of the signature block on page 1 binds the
-          General Manager to the Articles herein.
-        </p>
-        <div className="setup-schedule-marks">
-          <span>Initials {gmInitials(gmName)}</span>
-          <span>{signatureReady ? "Deed executed" : "Awaiting signature"}</span>
-          <span>Commissioner copy retained</span>
-        </div>
-      </aside>
     </section>
   );
 });
@@ -624,12 +493,18 @@ function SetupLoadingScreen({
       })),
     [warmup]
   );
-  const settled = categories.filter(({ status }) => status === "ready").length;
+  const crestSrc =
+    selected?.logo ||
+    resolveFranchiseTeamLogo(selected?.raw || selected, selected?.name || teamDisplayName(selected));
 
   return (
     <div className="setup-loading-screen" role="status" aria-live="polite">
       <div className="setup-loading-panel">
-        <small>Franchise Mode</small>
+        {crestSrc ? (
+          <div className="setup-loading-crest" aria-hidden="true">
+            <span><img src={crestSrc} alt="" /></span>
+          </div>
+        ) : null}
         <h2>{selected?.name || "NHL"}</h2>
         <p>
           {failed
@@ -655,11 +530,10 @@ function SetupLoadingScreen({
                 </li>
               ))}
             </ul>
-            <div
-              className={`setup-loading-bar ${settled === categories.length ? "is-complete" : ""}`}
-              aria-hidden="true"
-            >
-              <span />
+            <div className="setup-loading-word" aria-hidden="true">
+              {"LOADING".split("").map((ch, i) => (
+                <b key={i} style={{ animationDelay: `${i * 0.08}s` }}>{ch}</b>
+              ))}
             </div>
           </>
         ) : null}
@@ -780,10 +654,6 @@ export function SetupScreen() {
     >
       {appStage === APP_STAGE.CONFIGURE ? (
         <main className="setup-config-layout setup-config-layout--desk">
-          <div className="setup-config-topline">
-            <strong>Franchise Agreement</strong>
-            <small>Complete the schedule, then sign and execute</small>
-          </div>
           <div className="setup-config-grid">
             <AppointmentDeedSheet
               selected={selected}
@@ -846,8 +716,8 @@ const SETUP_SCREEN_CSS = `
   --setup-font: var(--font-ops-ui, Inter, ui-sans-serif, system-ui, sans-serif);
   --setup-text: #f0ede6;
   --setup-muted: rgba(229, 225, 216, 0.62);
-  --setup-line: rgba(201, 168, 106, 0.28);
-  --setup-gold: #c9a86a;
+  --setup-line: rgba(248, 213, 138, 0.28);
+  --setup-gold: #f8d58a;
   position: fixed;
   z-index: 23000;
   inset: 0;
@@ -859,8 +729,8 @@ const SETUP_SCREEN_CSS = `
   font-family: var(--setup-font);
   color: var(--setup-text);
   background:
-    radial-gradient(ellipse 80% 60% at 50% 0%, rgba(40, 32, 18, 0.45), transparent 58%),
-    linear-gradient(180deg, #0c0e14, #08090d 55%, #050608);
+    radial-gradient(ellipse 80% 60% at 50% 0%, rgba(30, 44, 70, 0.45), transparent 58%),
+    linear-gradient(180deg, #102048, #0e1c42 55%, #0c1a3d);
 }
 .setup-root *,
 .setup-root *::before,
@@ -905,7 +775,7 @@ const SETUP_SCREEN_CSS = `
   padding: 0 10px 4px;
   text-transform: uppercase;
   letter-spacing: 0.13em;
-  border-bottom: 1px solid rgba(201, 168, 106, 0.18);
+  border-bottom: 1px solid rgba(248, 213, 138, 0.18);
 }
 .setup-config-topline small {
   justify-self: end;
@@ -928,11 +798,11 @@ const SETUP_SCREEN_CSS = `
   grid-template-columns: minmax(380px, 0.42fr) minmax(0, 0.58fr);
   gap: clamp(12px, 1.6vw, 22px);
   padding: clamp(12px, 1.8vh, 18px) clamp(14px, 1.8vw, 22px) clamp(12px, 1.8vh, 18px) 34px;
-  border: 1px solid rgba(201, 168, 106, 0.32);
+  border: 1px solid rgba(248, 213, 138, 0.32);
   border-radius: 3px;
   background:
-    linear-gradient(90deg, rgba(18, 14, 10, 0.96) 0 22px, transparent 22px),
-    linear-gradient(178deg, rgba(36, 30, 22, 0.96), rgba(12, 10, 9, 0.98));
+    linear-gradient(90deg, rgba(19, 32, 63, 0.96) 0 22px, transparent 22px),
+    linear-gradient(178deg, rgba(28, 43, 74, 0.96), rgba(16, 29, 62, 0.98));
   box-shadow:
     0 48px 120px rgba(0, 0, 0, 0.55),
     inset 0 0 0 1px rgba(255, 226, 168, 0.05),
@@ -947,19 +817,19 @@ const SETUP_SCREEN_CSS = `
   left: 9px;
   width: 8px;
   background:
-    radial-gradient(circle at 50% 12%, #1a1612 4px, transparent 5px),
-    radial-gradient(circle at 50% 32%, #1a1612 4px, transparent 5px),
-    radial-gradient(circle at 50% 52%, #1a1612 4px, transparent 5px),
-    radial-gradient(circle at 50% 72%, #1a1612 4px, transparent 5px),
-    radial-gradient(circle at 50% 90%, #1a1612 4px, transparent 5px);
-  border-right: 1px solid rgba(201, 168, 106, 0.22);
+    radial-gradient(circle at 50% 12%, #172546 4px, transparent 5px),
+    radial-gradient(circle at 50% 32%, #172546 4px, transparent 5px),
+    radial-gradient(circle at 50% 52%, #172546 4px, transparent 5px),
+    radial-gradient(circle at 50% 72%, #172546 4px, transparent 5px),
+    radial-gradient(circle at 50% 90%, #172546 4px, transparent 5px);
+  border-right: 1px solid rgba(248, 213, 138, 0.22);
   pointer-events: none;
 }
 .setup-config-grid::after {
   content: "";
   position: absolute;
   inset: 7px;
-  border: 1px solid rgba(201, 168, 106, 0.12);
+  border: 1px solid rgba(248, 213, 138, 0.12);
   pointer-events: none;
 }
 
@@ -970,11 +840,11 @@ const SETUP_SCREEN_CSS = `
   gap: 10px;
   overflow: hidden;
   padding: 10px 12px 12px;
-  border: 1px solid rgba(201, 168, 106, 0.28);
+  border: 1px solid rgba(248, 213, 138, 0.28);
   background:
     linear-gradient(180deg, rgba(255, 236, 190, 0.03), transparent 18%),
-    linear-gradient(178deg, rgba(24, 20, 16, 0.92), rgba(11, 10, 9, 0.96));
-  box-shadow: inset 0 0 0 6px rgba(8, 7, 6, 0.35), inset 0 0 0 7px rgba(201, 168, 106, 0.16);
+    linear-gradient(178deg, rgba(22, 36, 68, 0.92), rgba(16, 29, 62, 0.96));
+  box-shadow: inset 0 0 0 6px rgba(14, 27, 59, 0.35), inset 0 0 0 7px rgba(248, 213, 138, 0.16);
 }
 .setup-panel-heading {
   display: flex;
@@ -1005,16 +875,16 @@ const SETUP_SCREEN_CSS = `
   flex-direction: column;
   overflow: hidden;
   padding: 14px 16px 10px 22px;
-  border: 1px solid rgba(201, 168, 106, 0.28);
+  border: 1px solid rgba(248, 213, 138, 0.28);
   background:
     linear-gradient(180deg, rgba(255, 236, 190, 0.035), transparent 16%),
     repeating-linear-gradient(
       180deg,
       transparent 0 27px,
-      rgba(201, 168, 106, 0.035) 27px 28px
+      rgba(248, 213, 138, 0.035) 27px 28px
     ),
-    linear-gradient(178deg, rgba(24, 20, 16, 0.94), rgba(11, 10, 9, 0.97));
-  box-shadow: inset 0 0 0 6px rgba(8, 7, 6, 0.35), inset 0 0 0 7px rgba(201, 168, 106, 0.16);
+    linear-gradient(178deg, rgba(22, 36, 68, 0.94), rgba(16, 29, 62, 0.97));
+  box-shadow: inset 0 0 0 6px rgba(14, 27, 59, 0.35), inset 0 0 0 7px rgba(248, 213, 138, 0.16);
 }
 .setup-deed-paper::before {
   content: "CONFIDENTIAL";
@@ -1026,7 +896,7 @@ const SETUP_SCREEN_CSS = `
   font-size: clamp(42px, 5vw, 72px);
   font-weight: 900;
   letter-spacing: 0.22em;
-  color: rgba(201, 168, 106, 0.055);
+  color: rgba(248, 213, 138, 0.055);
   pointer-events: none;
   white-space: nowrap;
 }
@@ -1038,7 +908,7 @@ const SETUP_SCREEN_CSS = `
   bottom: 16px;
   left: 11px;
   width: 2px;
-  background: linear-gradient(180deg, transparent, rgba(168, 42, 42, 0.55) 8%, rgba(201, 168, 106, 0.55) 92%, transparent);
+  background: linear-gradient(180deg, transparent, rgba(168, 42, 42, 0.55) 8%, rgba(248, 213, 138, 0.55) 92%, transparent);
   pointer-events: none;
 }
 .setup-deed-paper > * { position: relative; z-index: 1; }
@@ -1049,8 +919,8 @@ const SETUP_SCREEN_CSS = `
   align-items: end;
   margin: 0 0 12px;
   padding: 0 0 10px;
-  border-bottom: 2px solid rgba(201, 168, 106, 0.42);
-  box-shadow: 0 1px 0 rgba(201, 168, 106, 0.18);
+  border-bottom: 2px solid rgba(248, 213, 138, 0.42);
+  box-shadow: 0 1px 0 rgba(248, 213, 138, 0.18);
 }
 .setup-deed-docket span,
 .setup-deed-footer span {
@@ -1184,8 +1054,8 @@ const SETUP_SCREEN_CSS = `
   gap: 8px;
   min-height: 34px;
   padding: 6px 8px;
-  border: 1px solid rgba(201, 168, 106, 0.22);
-  background: rgba(8, 7, 6, 0.25);
+  border: 1px solid rgba(248, 213, 138, 0.22);
+  background: rgba(14, 27, 59, 0.25);
   color: var(--setup-text);
   cursor: pointer;
 }
@@ -1193,20 +1063,20 @@ const SETUP_SCREEN_CSS = `
   width: 12px;
   height: 12px;
   border-radius: 50%;
-  border: 1px solid rgba(201, 168, 106, 0.4);
-  background: #1c1710;
+  border: 1px solid rgba(248, 213, 138, 0.4);
+  background: #182644;
   box-shadow: none;
 }
 .setup-token.is-on {
-  border-color: rgba(201, 168, 106, 0.7);
-  background: rgba(201, 168, 106, 0.1);
+  border-color: rgba(248, 213, 138, 0.7);
+  background: rgba(248, 213, 138, 0.1);
 }
 .setup-token.is-on .setup-token-orb {
-  border-color: #c9a86a;
-  background: radial-gradient(circle at 32% 28%, #f3e2b0, #c9a86a 42%, #6a4e1c 100%);
+  border-color: #f8d58a;
+  background: radial-gradient(circle at 32% 28%, #f3e2b0, #f8d58a 42%, #6a4e1c 100%);
 }
 .setup-token strong { font-size: 10px; font-weight: 900; letter-spacing: 0.08em; text-transform: uppercase; text-align: left; }
-.setup-deed-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; margin: 0 0 12px; padding-bottom: 10px; border-bottom: 1px dashed rgba(201, 168, 106, 0.28); }
+.setup-deed-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; margin: 0 0 12px; padding-bottom: 10px; border-bottom: 1px dashed rgba(248, 213, 138, 0.28); }
 .setup-deed-meta dd { margin: 4px 0 0; font-size: 13px; font-weight: 900; text-transform: uppercase; }
 .setup-deed-legal { margin: 0 0 12px; font-size: 12px; line-height: 1.45; color: var(--setup-muted); }
 .setup-deed-articles {
@@ -1243,8 +1113,8 @@ const SETUP_SCREEN_CSS = `
   justify-items: center;
   gap: 1px;
   border-radius: 50%;
-  border: 2px solid rgba(201, 168, 106, 0.28);
-  background: radial-gradient(circle at 35% 30%, rgba(80, 22, 22, 0.15), rgba(12, 10, 9, 0.2));
+  border: 2px solid rgba(248, 213, 138, 0.28);
+  background: radial-gradient(circle at 35% 30%, rgba(80, 22, 22, 0.15), rgba(16, 29, 62, 0.2));
   transform: rotate(-14deg);
   opacity: 0.28;
   pointer-events: none;
@@ -1254,18 +1124,18 @@ const SETUP_SCREEN_CSS = `
   font-size: 13px;
   font-weight: 900;
   letter-spacing: 0.12em;
-  color: #c9a86a;
+  color: #f8d58a;
 }
 .setup-deed-seal span {
   font-size: 7px !important;
   letter-spacing: 0.14em;
-  color: rgba(201, 168, 106, 0.8) !important;
+  color: rgba(248, 213, 138, 0.8) !important;
 }
 .setup-deed-seal.is-struck {
   opacity: 0.92;
   border-color: #b4232a;
   box-shadow: 0 0 0 3px rgba(180, 35, 42, 0.18), inset 0 0 12px rgba(180, 35, 42, 0.25);
-  background: radial-gradient(circle at 35% 30%, rgba(180, 35, 42, 0.35), rgba(40, 10, 10, 0.4));
+  background: radial-gradient(circle at 35% 30%, rgba(180, 35, 42, 0.35), rgba(30, 29, 63, 0.4));
 }
 .setup-deed-seal.is-struck em,
 .setup-deed-seal.is-struck span { color: #e8b3b0 !important; }
@@ -1277,7 +1147,7 @@ const SETUP_SCREEN_CSS = `
   touch-action: none;
   cursor: crosshair;
   border: 0;
-  border-bottom: 1px solid rgba(201, 168, 106, 0.45);
+  border-bottom: 1px solid rgba(248, 213, 138, 0.45);
   background: transparent;
 }
 .setup-signature-pad path { fill: #e8d5a0; }
@@ -1309,7 +1179,7 @@ const SETUP_SCREEN_CSS = `
   gap: 8px;
   margin-top: 8px;
   padding-top: 8px;
-  border-top: 1px solid rgba(201, 168, 106, 0.28);
+  border-top: 1px solid rgba(248, 213, 138, 0.28);
 }
 .setup-deed-footer span:nth-child(2) { text-align: center; color: var(--setup-gold); }
 .setup-deed-footer span:last-child { text-align: right; }
@@ -1327,7 +1197,7 @@ const SETUP_SCREEN_CSS = `
   gap: 2px;
   padding: 8px 16px;
   border: 1px solid color-mix(in srgb, var(--team-accent) 64%, rgba(255,255,255,.18));
-  background: linear-gradient(180deg, color-mix(in srgb, var(--team-accent) 15%, rgba(13,15,20,.98)), rgba(7,9,13,.98));
+  background: linear-gradient(180deg, color-mix(in srgb, var(--team-accent) 15%, rgba(16, 32, 72, .98)), rgba(14, 28, 66, .98));
   color: #f0e8db;
   cursor: pointer;
 }
@@ -1364,8 +1234,8 @@ const SETUP_SCREEN_CSS = `
   display: grid;
   place-items: center;
   border-radius: 50%;
-  border: 1px solid rgba(201, 168, 106, 0.28);
-  background: radial-gradient(circle at 32% 28%, #6a5a40, #1c1710 62%, #070605 100%);
+  border: 1px solid rgba(248, 213, 138, 0.28);
+  background: radial-gradient(circle at 32% 28%, #6a5a40, #182644 62%, #0e1a3a 100%);
   box-shadow: 0 10px 14px rgba(0, 0, 0, 0.5), inset -6px -8px 12px rgba(0, 0, 0, 0.45), inset 4px 5px 8px rgba(255, 236, 190, 0.12);
 }
 .setup-club-ball-orb img,
@@ -1382,12 +1252,12 @@ const SETUP_SCREEN_CSS = `
   color: var(--setup-muted);
 }
 .setup-club-ball.is-selected .setup-club-ball-orb {
-  border-color: rgba(201, 168, 106, 0.78);
-  box-shadow: 0 0 0 2px rgba(201, 168, 106, 0.35), 0 12px 16px rgba(0, 0, 0, 0.5);
+  border-color: rgba(248, 213, 138, 0.78);
+  box-shadow: 0 0 0 2px rgba(248, 213, 138, 0.35), 0 12px 16px rgba(0, 0, 0, 0.5);
 }
 .setup-club-ball.is-selected strong { color: var(--setup-gold); }
 .setup-club-ball:hover .setup-club-ball-orb,
-.setup-club-ball:focus-visible .setup-club-ball-orb { border-color: rgba(201, 168, 106, 0.55); }
+.setup-club-ball:focus-visible .setup-club-ball-orb { border-color: rgba(248, 213, 138, 0.55); }
 
 .setup-schedule {
   min-height: 0;
@@ -1396,8 +1266,8 @@ const SETUP_SCREEN_CSS = `
   align-content: start;
   gap: 10px;
   padding: 10px 12px 12px;
-  border: 1px solid rgba(201, 168, 106, 0.28);
-  background: linear-gradient(180deg, rgba(201, 168, 106, 0.05), rgba(8, 7, 6, 0.2));
+  border: 1px solid rgba(248, 213, 138, 0.28);
+  background: linear-gradient(180deg, rgba(248, 213, 138, 0.05), rgba(14, 27, 59, 0.2));
 }
 .setup-schedule-head {
   display: grid;
@@ -1405,7 +1275,7 @@ const SETUP_SCREEN_CSS = `
   gap: 10px;
   align-items: end;
   padding-bottom: 8px;
-  border-bottom: 2px solid rgba(201, 168, 106, 0.38);
+  border-bottom: 2px solid rgba(248, 213, 138, 0.38);
 }
 .setup-schedule-head span,
 .setup-schedule-head em {
@@ -1462,7 +1332,7 @@ const SETUP_SCREEN_CSS = `
   place-items: center;
   min-height: 36px;
   padding: 6px 8px;
-  border: 1px dashed rgba(201, 168, 106, 0.4);
+  border: 1px dashed rgba(248, 213, 138, 0.4);
   font-size: 8px;
   font-weight: 800;
   letter-spacing: 0.12em;
@@ -1480,7 +1350,7 @@ const SETUP_SCREEN_CSS = `
   padding: 22px;
   background:
     radial-gradient(circle at 50% 34%, color-mix(in srgb, var(--team-accent) 10%, transparent), transparent 42%),
-    linear-gradient(180deg, rgba(4, 5, 8, 0.92), rgba(4, 5, 8, 0.96));
+    linear-gradient(180deg, rgba(12, 26, 61, 0.92), rgba(12, 26, 61, 0.96));
 }
 .setup-loading-panel {
   width: min(560px, 100%);
@@ -1488,8 +1358,8 @@ const SETUP_SCREEN_CSS = `
   justify-items: center;
   gap: 7px;
   padding: 30px;
-  border: 1px solid rgba(201, 168, 106, 0.22);
-  background: linear-gradient(180deg, rgba(15, 14, 14, 0.92), rgba(8, 8, 10, 0.96));
+  border: 1px solid rgba(248, 213, 138, 0.22);
+  background: linear-gradient(180deg, rgba(18, 32, 67, 0.92), rgba(14, 28, 63, 0.96));
   text-align: center;
   box-shadow: 0 36px 110px rgba(0, 0, 0, 0.5);
 }
@@ -1568,8 +1438,8 @@ const SETUP_SCREEN_CSS = `
 .setup-loading-actions { display: flex; gap: 8px; margin-top: 12px; }
 .setup-loading-retry,
 .setup-loading-back {
-  border: 1px solid rgba(201, 168, 106, 0.35);
-  background: rgba(201, 168, 106, 0.08);
+  border: 1px solid rgba(248, 213, 138, 0.35);
+  background: rgba(248, 213, 138, 0.08);
   color: var(--setup-gold);
   padding: 8px 14px;
   font-size: 11px;

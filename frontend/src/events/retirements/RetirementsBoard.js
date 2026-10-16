@@ -14,7 +14,6 @@ import {
   retireeToHeadshotPlayer,
   sortRetirees,
 } from "./retirementHelpers";
-import "./RetirementsBoard.css";
 
 function seasonLabel(franchiseState) {
   const y = franchiseState?.season_year || franchiseState?.seasonYear;

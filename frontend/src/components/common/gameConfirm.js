@@ -12,8 +12,8 @@ function ensureStyle() {
   el.id = STYLE_ID;
   el.textContent = `
 .gcf-backdrop{position:fixed;inset:0;z-index:4000;display:flex;align-items:center;justify-content:center;
-  background:rgba(4,10,18,.62);padding:16px}
-.gcf-card{width:min(420px,100%);background:#0f1b29;color:#e6eef6;border:1px solid rgba(255,255,255,.14);
+  background:rgba(12, 29, 70, .62);padding:16px}
+.gcf-card{width:min(420px,100%);background:#12295b;color:#e6eef6;border:1px solid rgba(255,255,255,.14);
   border-radius:10px;box-shadow:0 18px 48px rgba(0,0,0,.45);padding:20px 20px 16px;font:500 15px/1.45 inherit}
 .gcf-title{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:#8fb2d6;margin:0 0 8px}
 .gcf-msg{margin:0 0 18px;white-space:pre-wrap}

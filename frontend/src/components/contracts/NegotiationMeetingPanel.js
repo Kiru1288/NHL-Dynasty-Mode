@@ -287,7 +287,7 @@ function toneFor(res) {
 }
 
 const CSS = `
-.nmp { border: 1px solid rgba(115,229,241,.22); border-radius: 10px; margin: 10px 0; background: rgba(19,216,231,.03); }
+.nmp { border: 1px solid rgba(115,229,241,.22); border-radius: 10px; margin: 10px 0; background: rgba(46, 230, 214, .03); }
 .nmp__toggle { width: 100%; display: flex; align-items: center; gap: 10px; padding: 9px 12px; background: transparent;
   border: 0; color: inherit; cursor: pointer; text-align: left; }
 .nmp__toggle span { font-size: 15px; font-weight: 900; letter-spacing: .06em; text-transform: uppercase; }
@@ -299,12 +299,12 @@ const CSS = `
 .nmp__read small { font-weight: 600; color: #8fb4c4; font-size: 14px; }
 .nmp__label { display: block; font-size: 13px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; color: #8fb4c4; margin-bottom: 6px; }
 .nmp__trust { position: relative; height: 6px; border-radius: 3px; background: rgba(255,255,255,.08); margin-top: 6px; }
-.nmp__trust i { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: #13d8e7; }
+.nmp__trust i { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: #2ee6d6; }
 .nmp__trust b { position: absolute; right: 0; top: -16px; font-size: 13px; color: #8fb4c4; }
 .nmp__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px; }
 .nmp__opt { text-align: left; padding: 12px 14px; border-radius: 8px; cursor: pointer; color: inherit;
   border: 1px solid rgba(115,229,241,.22); background: rgba(255,255,255,.02); display: grid; gap: 4px; }
-.nmp__opt:hover:not(:disabled) { border-color: #13d8e7; background: rgba(19,216,231,.08); }
+.nmp__opt:hover:not(:disabled) { border-color: #2ee6d6; background: rgba(46, 230, 214, .08); }
 .nmp__opt:disabled { opacity: .5; cursor: default; }
 .nmp__opt strong { font-size: 16px; }
 .nmp__opt span { font-size: 14px; color: #c5dbe6; line-height: 1.4; }

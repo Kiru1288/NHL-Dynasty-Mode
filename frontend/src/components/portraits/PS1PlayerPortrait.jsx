@@ -14,7 +14,6 @@ import {
   getTeamPortraitColors,
   mapPortraitSizeToHeadshot,
 } from "./ps1PortraitUtils";
-import "./PS1PlayerPortrait.css";
 
 /**
  * PS1-style 3D player portrait for profile/detail modals.
