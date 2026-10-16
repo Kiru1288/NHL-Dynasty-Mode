@@ -6679,10 +6679,16 @@ import React, {
   }) {
     const mood = officeMood || {};
     const urgent = officeSafeArray(urgentItems);
-    const wireTicker = useMemo(
-      () => buildHubStoryTicker(franchiseState, { limit: 16 }),
-      [franchiseState]
-    );
+    // The wire repeats a headline when two storylines share it; show each once.
+    const wireTicker = useMemo(() => {
+      const seen = new Set();
+      return buildHubStoryTicker(franchiseState, { limit: 16 }).filter((item) => {
+        const key = String(item?.headline || "").trim().toLowerCase();
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    }, [franchiseState]);
     const [briefingOpen, setBriefingOpen] = useState(false);
     const [tourOpen, setTourOpen] = useState(() => {
       try {
@@ -6711,21 +6717,20 @@ import React, {
         <div className="office-reticle" aria-hidden="true" />
 
         <div className="office-broadcast">
-          <span className="office-broadcast__where">GM office</span>
           <TeamLogoBadge teamLogo={teamLogo} teamName={teamName} size={28} variant="badge" />
           <strong>{teamName}</strong>
           <span>{safeText(currentDate, "Today")}</span>
           {phaseLabel ? <em>{phaseLabel}</em> : null}
-          <span>Record {safeText(record, "0-0-0")}</span>
-          <span>{formatMoney(capSpace)} available</span>
-          {nextGame ? <span>Next {safeText(nextGame, "")}</span> : null}
+          <span>{safeText(record, "0-0-0")}</span>
+          <span><b>{formatMoney(capSpace)}</b> cap space</span>
+          {nextGame && !/no game/i.test(String(nextGame)) ? <span>Next: {safeText(nextGame, "")}</span> : null}
         </div>
 
         {tourOpen ? (
           <div className="office-tour">
             <p>
-              Hover a brass corner to see what a station does. Click to enter.
-              Drag to look around. R returns home. M opens the directory.
+              Click a station on the wall to open it. Drag to look around.
+              R returns to the middle, M opens the directory.
             </p>
             <button type="button" onClick={dismissTour}>
               Got it
@@ -6750,6 +6755,7 @@ import React, {
           className={`office-urgent-desk office-urgent-desk--compact${briefingOpen ? " is-open" : ""}`}
           onClick={() => setBriefingOpen((open) => !open)}
         >
+          {urgent.length ? <b className="office-urgent-desk__count">{urgent.length}</b> : null}
           <span>
             {topStory
               ? topStory.title

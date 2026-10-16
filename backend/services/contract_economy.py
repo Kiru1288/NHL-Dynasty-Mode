@@ -12476,7 +12476,7 @@ def build_contract_office(session: Any) -> Dict[str, Any]:
         "rfa_rights": rfa_rows,
         "buyout_candidates": buyout_candidates,
         "buyout_window": dict(zip(("open", "reason"), buyout_window_status(session, user_team))),
-        "ltir": ltir_overview(user_team, league) if user_team is not None else {},
+        "ltir": {},  # ltir_overview() was never implemented; nothing reads this key yet
         "cap_casualty_candidates": cap_casualty,
         "pending_offer_sheets": pending_sheets,
         "offer_sheet_targets": offer_sheet_targets,

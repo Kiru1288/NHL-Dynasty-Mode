@@ -1680,7 +1680,8 @@ function fmtMoneyM(v) {
 }
 
 function fmtCap(v) {
-  return `$${num(v, 0).toFixed(1)}M`;
+  // Two decimals, same as Contracts and the Trade Desk.
+  return `$${num(v, 0).toFixed(2)}M`;
 }
 
 function riskClass(label) {
@@ -2465,51 +2466,36 @@ function OverviewWorkspace({ data, onOpenIssue }) {
 
   return (
     <div className="lo-ov lo-enter">
-      <section className="lo-pulse" aria-label="League pulse">
-        <div className="lo-pulse-cell dominant">
-          <span>Current Cap</span>
-          <b>{fmtCap(data.salary_cap)}</b>
+      {/* One hero: where the cap is going. Everything else is supporting fact. */}
+      <section className="lo-hero" aria-label="Salary cap outlook">
+        <div className="lo-hero__main">
+          <span className="lo-hero__label">Cap next season</span>
+          <strong>{fmtCap(data.projected_salary_cap)}</strong>
+          <span className={`lo-hero__delta ${capChange < 0 ? "neg" : "pos"}`}>
+            {capChange >= 0 ? "+" : "−"}{fmtCap(Math.abs(capChange))} · {data.cap_change_type || "Flat cap"}
+          </span>
         </div>
-        <div className="lo-pulse-cell">
-          <span>Next Season</span>
-          <b className="gold">{fmtCap(data.projected_salary_cap)}</b>
-        </div>
-        <div className="lo-pulse-cell">
-          <span>Change</span>
-          <b className={capChange < 0 ? "neg" : "pos"}>
-            {capChange >= 0 ? "+" : ""}
-            {fmtCap(capChange)}
-          </b>
-          <em>{data.cap_change_type || "Flat Cap"}</em>
-        </div>
-        <div className="lo-pulse-cell">
-          <span>League Revenue</span>
-          <b className="gold">{revenueLabel}</b>
-        </div>
-        <div className="lo-pulse-cell">
-          <span>Escrow</span>
-          <b>{escrowPct}%</b>
-        </div>
-        <div className="lo-pulse-cell">
-          <span>Cap Drivers</span>
-          <b>{plusCount}/{Math.max(drivers.length, 1)}</b>
-          <em>lifting</em>
-        </div>
-        <div className="lo-pulse-cell sentiment">
-          <span>Sentiment</span>
-          <div className="lo-pulse-moods">
-            {ownerMood.players ? <em>Players <b>{ownerMood.players}</b></em> : null}
-            {ownerMood.fans ? <em>Fans <b className="pos">{ownerMood.fans}</b></em> : null}
-            {!ownerMood.players && !ownerMood.fans && moods.length === 0 ? (
-              <em>Stable</em>
-            ) : null}
+        <dl className="lo-hero__facts">
+          <div><dt>Cap now</dt><dd>{fmtCap(data.salary_cap)}</dd></div>
+          <div><dt>League revenue</dt><dd>{revenueLabel}</dd></div>
+          <div><dt>Escrow</dt><dd>{escrowPct}%</dd></div>
+          <div><dt>Cap drivers lifting</dt><dd>{plusCount} of {Math.max(drivers.length, 1)}</dd></div>
+          <div>
+            <dt>Mood</dt>
+            <dd>
+              {ownerMood.players ? <>Players <b>{ownerMood.players}</b></> : null}
+              {ownerMood.players && ownerMood.fans ? " · " : null}
+              {ownerMood.fans ? <>Fans <b className="pos">{ownerMood.fans}</b></> : null}
+              {!ownerMood.players && !ownerMood.fans && moods.length === 0 ? "Stable" : null}
+            </dd>
           </div>
-        </div>
+        </dl>
       </section>
 
+      <div className="lo-ov-grid">
       <div className="lo-forecast">
         <div className="lo-forecast-head">
-          <h2>Cap Forecast</h2>
+          <h2>Cap forecast</h2>
           <div className="lo-confidence-text">{confidence.rangeLabel || "—"}</div>
         </div>
         <CapForecastChart
@@ -2519,7 +2505,7 @@ function OverviewWorkspace({ data, onOpenIssue }) {
       </div>
 
       <div className="lo-priority">
-        <h3 className="lo-priority-title">Priority Decisions</h3>
+        <h3 className="lo-priority-title">Decisions on the table</h3>
         <div className="lo-priority-list">
           {topIssues.length ? (
             topIssues.map((issue) => {
@@ -2564,6 +2550,7 @@ function OverviewWorkspace({ data, onOpenIssue }) {
             <div className="lo-empty">No priority decisions</div>
           )}
         </div>
+      </div>
       </div>
     </div>
   );
@@ -3038,20 +3025,20 @@ export default function LeagueOperations() {
 
       <header className="lo-header">
         <div className="lo-header-left">
-          <h1>League Operations</h1>
-          <div className="lo-header-meta">
-            <span className="season">{data.season || "—"}</span>
-            <span aria-hidden="true">·</span>
-            <span className="status">{leagueStatus}</span>
-            <span aria-hidden="true">·</span>
-            <span className="lo-header-note">Intelligence Display</span>
+          <button type="button" className="lo-back" onClick={() => setScreen(SCREENS.HUB)} aria-label="Back to hub">
+            ←
+          </button>
+          <div>
+            <h1>League Operations</h1>
+            <div className="lo-header-meta">
+              <span className="season">{data.season || "—"}</span>
+              <span aria-hidden="true">·</span>
+              <span className="status">{leagueStatus}</span>
+            </div>
           </div>
         </div>
         <div className="lo-header-right">
           <YourImpactStrip user={data.user_team} />
-          <button type="button" className="lo-back" onClick={() => setScreen(SCREENS.HUB)}>
-            Back
-          </button>
         </div>
       </header>
 

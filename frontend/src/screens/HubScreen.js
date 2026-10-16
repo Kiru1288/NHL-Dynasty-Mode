@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useGameUI } from "../game/GameUIContext";
 import { HUB_MENU, SCREENS } from "../game/constants";
 import { GameFooter } from "../components/game/GameFooter";
@@ -499,6 +499,12 @@ export function HubScreen() {
     () => (Array.isArray(franchiseState?.hub_warnings) ? franchiseState.hub_warnings : []),
     [franchiseState?.hub_warnings]
   );
+  // Roster/cap warnings read as one line under the team strip; the GM can open
+  // the details or hide them until the warning text changes.
+  const [warningsOpen, setWarningsOpen] = useState(false);
+  const [hiddenWarningKey, setHiddenWarningKey] = useState("");
+  const warningKey = hubWarnings.map((w) => w.id || w.message).join("|");
+  const showWarnings = hubWarnings.length > 0 && hiddenWarningKey !== warningKey;
 
   const hubOfficeSnapshot = useMemo(
     () => ({
@@ -629,47 +635,38 @@ export function HubScreen() {
     );
   }
 
+  // One primary per moment: in phases with a timeline step (offseason, playoffs)
+  // that step leads and "advance a day" steps back.
+  const hasPhaseCta = Boolean(
+    (franchiseState?.flags?.can_enter_playoffs || phaseCta) && phaseCta !== "Advance Day"
+  );
+  const phaseCtaRaw = String(phaseCta || "Enter playoffs");
+  const phaseCtaLabel = phaseCtaRaw.charAt(0).toUpperCase() + phaseCtaRaw.slice(1).toLowerCase();
+
   return (
     <div className="game-screen hub-screen">
-      {hubWarnings.length ? (
-        <div
-          role="status"
-          style={{
-            position: "absolute",
-            top: 12,
-            left: "50%",
-            transform: "translateX(-50%)",
-            zIndex: 30,
-            width: "min(920px, calc(100vw - 32px))",
-            display: "flex",
-            flexDirection: "column",
-            gap: 8,
-            pointerEvents: "none",
-          }}
-        >
-          {hubWarnings.map((warning) => (
-            <div
-              key={warning.id || warning.message}
-              style={{
-                pointerEvents: "auto",
-                padding: "10px 14px",
-                borderRadius: 12,
-                border: "1px solid rgba(251, 191, 36, 0.45)",
-                background: "rgba(120, 53, 15, 0.88)",
-                color: "#fff7ed",
-                fontWeight: 700,
-                fontSize: 13,
-                boxShadow: "0 12px 32px rgba(0,0,0,0.28)",
-              }}
-            >
-              {warning.message}
-              {Array.isArray(warning.issues) && warning.issues.length > 1 ? (
-                <div style={{ marginTop: 4, fontSize: 12, fontWeight: 600, opacity: 0.9 }}>
-                  {warning.issues.slice(1, 3).join(" · ")}
-                </div>
-              ) : null}
-            </div>
-          ))}
+      {showWarnings ? (
+        <div className={`hub-alert${warningsOpen ? " is-open" : ""}`} role="status">
+          <button type="button" className="hub-alert__line" onClick={() => setWarningsOpen((v) => !v)} aria-expanded={warningsOpen}>
+            <span className="hub-alert__icon" aria-hidden="true">!</span>
+            <span className="hub-alert__text">{hubWarnings[0].message}</span>
+            {hubWarnings.length > 1 ? <span className="hub-alert__more">+{hubWarnings.length - 1}</span> : null}
+          </button>
+          <button type="button" className="hub-alert__hide" onClick={() => setHiddenWarningKey(warningKey)} aria-label="Hide warnings">
+            ×
+          </button>
+          {warningsOpen ? (
+            <ul className="hub-alert__list">
+              {hubWarnings.map((warning) => (
+                <li key={warning.id || warning.message}>
+                  <strong>{warning.message}</strong>
+                  {Array.isArray(warning.issues) && warning.issues.length > 1 ? (
+                    <span>{warning.issues.slice(1, 4).join(" · ")}</span>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          ) : null}
         </div>
       ) : null}
       <FirstPersonOfficeHub
@@ -695,56 +692,11 @@ export function HubScreen() {
       />
 
       {error ? (
-        <div
-          style={{
-            position: "absolute",
-            left: 18,
-            top: 190,
-            zIndex: 20,
-            maxWidth: 420,
-            padding: "12px 14px",
-            borderRadius: 14,
-            background: "rgba(120, 0, 20, 0.86)",
-            color: "white",
-            fontWeight: 800,
-            boxShadow: "0 18px 45px rgba(0,0,0,0.35)",
-            display: "flex",
-            flexDirection: "column",
-            gap: 10,
-          }}
-        >
-          <div>{error}</div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <button
-              type="button"
-              onClick={() => refreshFranchise?.()}
-              style={{
-                border: "1px solid rgba(255,255,255,0.35)",
-                background: "rgba(255,255,255,0.12)",
-                color: "white",
-                fontWeight: 800,
-                borderRadius: 10,
-                padding: "6px 10px",
-                cursor: "pointer",
-              }}
-            >
-              Retry connection
-            </button>
-            <button
-              type="button"
-              onClick={() => setError?.(null)}
-              style={{
-                border: "1px solid rgba(255,255,255,0.35)",
-                background: "transparent",
-                color: "white",
-                fontWeight: 800,
-                borderRadius: 10,
-                padding: "6px 10px",
-                cursor: "pointer",
-              }}
-            >
-              Dismiss
-            </button>
+        <div className="hub-error" role="alert">
+          <p>{error}</p>
+          <div className="hub-error__actions">
+            <button type="button" onClick={() => refreshFranchise?.()}>Retry connection</button>
+            <button type="button" onClick={() => setError?.(null)}>Dismiss</button>
           </div>
         </div>
       ) : null}
@@ -754,49 +706,51 @@ export function HubScreen() {
           reads as one segmented dial so it cannot wrap onto a second row. */}
       <div className="hub-console">
         <div className="hub-console__row">
-          <button
-            type="button"
-            className="hub-console__advance"
-            disabled={!canAdvance || advancing}
-            onClick={onAdvanceDay}
-          >
-            {advancing ? "Advancing..." : "▶ Advance one day"}
-          </button>
-
-          {(franchiseState?.flags?.can_enter_playoffs || phaseCta) && phaseCta !== "Advance Day" ? (
-            <button type="button" className="hub-console__phase" disabled={advancing} onClick={handlePhaseCta}>
-              {(phaseCta || "ENTER PLAYOFFS").toUpperCase()}
-            </button>
-          ) : null}
-
           <button type="button" className="hub-console__quiet" onClick={() => setScreen(ROUTE_SCREENS.CHEMISTRY)}>
             Team chemistry
           </button>
-        </div>
-
-        <div className="hub-console__sims">
-          <span className="hub-console__sims-label">Sim days</span>
           <button
             type="button"
-            className="hub-console__chip"
-            disabled={!canSimRegularSeason}
-            onClick={() => onAdvanceFranchise?.({ mode: "season", count: 1, auto_resolve: true })}
-            title="Simulate the rest of the regular season (testing)"
+            className={`hub-console__advance${hasPhaseCta ? " is-secondary" : ""}`}
+            disabled={!canAdvance || advancing}
+            onClick={onAdvanceDay}
           >
-            {advancing ? "Simming..." : "Rest of season"}
+            {advancing ? "Advancing…" : "Advance one day"}
           </button>
-          {[7, 15, 30].map((days) => (
-            <button
-              key={days}
-              type="button"
-              className="hub-console__chip"
-              disabled={blockBulkSim || advancing}
-              onClick={() => onAdvanceFranchise?.({ mode: "days", count: days, auto_resolve: true })}
-            >
-              {days} days
+          {hasPhaseCta ? (
+            <button type="button" className="hub-console__phase" disabled={advancing} onClick={handlePhaseCta}>
+              {phaseCtaLabel}
             </button>
-          ))}
+          ) : null}
         </div>
+
+        {canSimRegularSeason || !blockBulkSim ? (
+          <div className="hub-console__sims" role="group" aria-label="Simulate several days">
+            <span className="hub-console__sims-label">Sim</span>
+            {canSimRegularSeason ? (
+              <button
+                type="button"
+                className="hub-console__chip"
+                disabled={advancing}
+                onClick={() => onAdvanceFranchise?.({ mode: "season", count: 1, auto_resolve: true })}
+                title="Simulate the rest of the regular season"
+              >
+                {advancing ? "Simming…" : "Rest of season"}
+              </button>
+            ) : null}
+            {[7, 15, 30].map((days) => (
+              <button
+                key={days}
+                type="button"
+                className="hub-console__chip"
+                disabled={blockBulkSim || advancing}
+                onClick={() => onAdvanceFranchise?.({ mode: "days", count: days, auto_resolve: true })}
+              >
+                {days} days
+              </button>
+            ))}
+          </div>
+        ) : null}
       </div>
 
       <GameFooter />

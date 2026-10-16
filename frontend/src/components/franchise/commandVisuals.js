@@ -48,7 +48,8 @@ export function RankChange({ rank, previous, delta }) {
   if (!Number.isFinite(prev) && Number.isFinite(d) && d !== 0) {
     prev = current + d;
   }
-  if (!Number.isFinite(prev) || prev === current) {
+  // A delta from the full board can't be applied to a filtered/re-sourced rank.
+  if (!Number.isFinite(prev) || prev === current || prev < 1) {
     return <span className="fc-rank">#{current}</span>;
   }
   const improved = prev > current;

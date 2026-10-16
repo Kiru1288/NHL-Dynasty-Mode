@@ -1917,9 +1917,10 @@ function emptySlots(n = SLOTS) {
   return Array.from({ length: n }, () => null);
 }
 
+// Every slot is always on the table: the board shows the deal's full shape.
 function padSlots(assets) {
   const list = safeArray(assets).slice(0, SLOTS);
-  if (list.length < SLOTS) list.push(null);
+  while (list.length < SLOTS) list.push(null);
   return list;
 }
 
@@ -2308,40 +2309,6 @@ function playerCapImpactLabel(side, capHit) {
   return side === "left" ? `LEAVING ${amt}` : `ARRIVING ${amt}`;
 }
 
-function PackageCapStrip({ team, outgoingAssets, incomingAssets, sideLabel = "" }) {
-  const baseCap = Number(team?.capSpace);
-  const projected = Number.isFinite(baseCap)
-    ? projectedTeamCapSpace(team, outgoingAssets, incomingAssets)
-    : null;
-  const delta =
-    Number.isFinite(baseCap) && Number.isFinite(projected) ? projected - baseCap : null;
-  const deltaGood = delta == null ? null : delta >= 0;
-  const label = sideLabel || (team?.isUser ? "Your space" : "Partner space");
-  const nowText = Number.isFinite(baseCap) ? formatMoneyShort(baseCap) : "—";
-  const afterText = Number.isFinite(projected) ? formatMoneyShort(projected) : "—";
-  const deltaText =
-    delta == null
-      ? "—"
-      : `${delta >= 0 ? "+" : "−"}${formatMoneyShort(Math.abs(delta))}`;
-
-  return (
-    <div className="trade-package-cap-strip" title={`${label}: space now → after trade`}>
-      <span className="trade-package-cap-label">{label}</span>
-      <span className="trade-package-cap-flow">
-        <span className="trade-package-cap-now">{nowText}</span>
-        <span className="trade-package-cap-arrow" aria-hidden="true">→</span>
-        <span className="trade-package-cap-after">{afterText}</span>
-      </span>
-      <span
-        className={`trade-package-cap-delta ${
-          deltaGood == null ? "" : deltaGood ? "good" : "bad"
-        }`}
-      >
-        {deltaText}
-      </span>
-    </div>
-  );
-}
 
 function packageBalanceQualitative(userGive, partnerGive) {
   const left = Number(userGive) || 0;
@@ -5424,38 +5391,36 @@ function PartnerReadCard({ team, interest, info }) {
   const needs = safeArray(info?.needs).slice(0, 3);
   const surplus = safeArray(info?.surplus).slice(0, 2);
   const leverage = team.marketPressure?.tradeLeverageHint;
+  // One strip: who you're dealing with, what moves them, and (on demand) how
+  // they judge. Cap room is not repeated here — it sits on their roster rail.
   return (
-    <div className={`th-read side-${side}`}>
-      <div className="th-read-main">
-        <div className="th-read-head">
-          <span className="th-kicker">Partner GM read</span>
-          <strong>{team.gmPersonality || "Pragmatic Dealer"}</strong>
-          <em className={`th-side-pill side-${side}`}>{team.tradeDirectionLabel || team.direction || "—"}</em>
-        </div>
-        <div className="th-read-grid">
-          <div><span>Wants</span><strong>{appetite.wants}</strong></div>
-          <div><span>Avoids</span><strong>{appetite.avoids}</strong></div>
-          <div><span>Cap room</span><strong className="th-num">{team.capSpace != null ? formatMoneyM(team.capSpace) : "—"}</strong></div>
-          <div>
-            <span>{interest != null ? "Interest" : "Leverage"}</span>
-            <strong>{interest != null ? `${Math.round(interest * 100)}%` : leverage || team.marketPressure?.label || "—"}</strong>
-          </div>
-        </div>
-        {(needs.length > 0 || surplus.length > 0) && (
-          <div className="th-read-needs">
-            {needs.length > 0 && <span>Needs</span>}
-            {needs.map((n) => <em key={n} className="is-need">{n}</em>)}
-            {surplus.length > 0 && <span>Has extra</span>}
-            {surplus.map((n) => <em key={n} className="is-surplus">{n}</em>)}
-          </div>
-        )}
-        <p className="th-read-tip">{appetite.tip}</p>
+    <div className={`th-read th-read--strip side-${side}`} title={appetite.tip}>
+      <div className="th-read-who">
+        <span className="th-kicker">{team.abbr || "Partner"} GM</span>
+        <strong>{team.gmPersonality || "Pragmatic Dealer"}</strong>
       </div>
-      <ol className="th-read-steps" aria-label="How the partner judges a deal">
-        {TRADE_JUDGING_STEPS.map(([k, v]) => (
-          <li key={k}><strong>{k}</strong><span>{v}</span></li>
-        ))}
-      </ol>
+      <dl className="th-read-facts">
+        <div><dt>Wants</dt><dd>{appetite.wants}</dd></div>
+        <div><dt>Avoids</dt><dd>{appetite.avoids}</dd></div>
+        <div className={interest != null ? "is-interest" : ""}>
+          <dt>{interest != null ? "Interest" : "Leverage"}</dt>
+          <dd>{interest != null ? `${Math.round(interest * 100)}%` : leverage || team.marketPressure?.label || "—"}</dd>
+        </div>
+      </dl>
+      {(needs.length > 0 || surplus.length > 0) && (
+        <div className="th-read-needs">
+          {needs.map((n) => <em key={`n-${n}`} className="is-need">Needs {n}</em>)}
+          {surplus.map((n) => <em key={`s-${n}`} className="is-surplus">Has {n}</em>)}
+        </div>
+      )}
+      <details className="th-read-how">
+        <summary>How they judge</summary>
+        <ol className="th-read-steps" aria-label="How the partner judges a deal">
+          {TRADE_JUDGING_STEPS.map(([k, v]) => (
+            <li key={k}><strong>{k}</strong><span>{v}</span></li>
+          ))}
+        </ol>
+      </details>
     </div>
   );
 }
@@ -6359,113 +6324,6 @@ function RosterCapacityStrip({ team, compact = false }) {
   );
 }
 
-function IntelListRow({ label, value, tone }) {
-  const display =
-    value == null || value === "" || (typeof value === "number" && !Number.isFinite(value))
-      ? "—"
-      : value;
-  return (
-    <div className={`trade-intel-row ${tone || ""}`} data-row={String(label || "").toLowerCase()}>
-      <span className="trade-intel-label">{label}</span>
-      <strong className="trade-intel-value">{display}</strong>
-    </div>
-  );
-}
-
-function TeamIntelDashboard({
-  team,
-  onViewPlayers,
-  onTeamDetail,
-  isActive,
-  projectedCapSpace = null,
-}) {
-  if (!team) return null;
-  const r = team.ratings || {};
-  const baseCap = Number(team.capSpace);
-  const liveCap = Number.isFinite(Number(projectedCapSpace)) ? Number(projectedCapSpace) : baseCap;
-  const hasLiveCap = Number.isFinite(liveCap);
-  const capChanged =
-    Number.isFinite(baseCap) && Number.isFinite(liveCap) && Math.abs(liveCap - baseCap) >= 0.005;
-  const cap = hasLiveCap ? formatCapCompact(liveCap) : null;
-  const capTone = !hasLiveCap ? "" : liveCap < 0 ? "bad" : capChanged ? (liveCap > baseCap ? "ok" : "warn") : "ok";
-  const playoff =
-    team.playoffOdds != null && Number.isFinite(Number(team.playoffOdds))
-      ? `${team.playoffOdds}%`
-      : null;
-  const status = sidebarStatusLabel(team);
-  const topNeed = safeArray(team.needsSummary?.needs_short || team.needsSummary?.needs)[0] || null;
-  const nhlLine = formatRosterCapacityLine(team);
-  const slotsLine = formatContractSlotsLine(team);
-  const composition = formatRosterCompositionLine(team);
-
-  // Keep the desk readable — deep intel lives in Details / View Players.
-  const rows = [
-    { label: "OVR", value: r.overall, tone: "gold" },
-    { label: "REC", value: team.record },
-    {
-      label: "SPACE",
-      value: capChanged
-        ? `${cap} (${liveCap >= baseCap ? "+" : ""}${formatCapCompact(liveCap - baseCap)})`
-        : cap,
-      tone: capTone,
-    },
-    nhlLine ? { label: "NHL", value: nhlLine, tone: Number(team.rosterCapacity?.nhl_count) > 23 ? "bad" : "ok" } : null,
-    composition ? { label: "DEPTH", value: composition } : null,
-    slotsLine
-      ? {
-          label: "SLOTS",
-          value: slotsLine,
-          tone: Number(team.contractSlots?.used) > Number(team.contractSlots?.limit ?? 50) ? "bad" : "ok",
-        }
-      : null,
-    { label: "STATUS", value: status },
-    playoff ? { label: "PLAYOFF", value: playoff } : null,
-    team.gmPersonality ? { label: "GM STYLE", value: team.gmPersonality, tone: "neutral" } : null,
-    team.pickCount ? { label: "PICKS", value: `${team.pickCount} owned` } : null,
-    topNeed ? { label: "NEED", value: String(topNeed).toUpperCase() } : null,
-  ].filter(Boolean);
-
-  return (
-    <div className={`trade-team-intel ${isActive ? "is-active" : ""}`}>
-      <button
-        type="button"
-        className="trade-intel-hero"
-        onClick={() => onViewPlayers?.()}
-        title="View roster assets"
-      >
-        <TradeLogo team={team} size={68} />
-        <div className="trade-intel-hero-text">
-          <strong>{team.abbr || team.name}</strong>
-          <span className="trade-intel-status-badge">{status}</span>
-          {hasLiveCap ? (
-            <span className={`trade-intel-hero-cap ${capTone}`}>
-              Space {cap}
-              {topNeed ? ` · Need ${String(topNeed)}` : ""}
-            </span>
-          ) : null}
-        </div>
-      </button>
-
-      <RosterCapacityStrip team={team} />
-
-      <div className="trade-intel-list trade-intel-list-lean">
-        {rows.map((row) => (
-          <IntelListRow key={row.label} label={row.label} value={row.value} tone={row.tone} />
-        ))}
-      </div>
-
-      <div className="trade-intel-foot">
-        <button type="button" className="trade-intel-view-players" onClick={() => onViewPlayers?.()}>
-          View Players
-        </button>
-        <button type="button" className="trade-intel-detail-link" onClick={() => onTeamDetail?.(team)}>
-          Details
-        </button>
-      </div>
-    </div>
-  );
-}
-
 function TeamPlayersDrawer({
   team,
   side,
@@ -6542,17 +6400,54 @@ function TeamBrowserPanel({
   onQuickAdd,
   isActive,
   projectedCapSpace = null,
+  iceholeByPlayerId = null,
+  onOpenIcehole = null,
 }) {
   if (!team) return null;
+  const baseCap = Number(team.capSpace);
+  const liveCap = Number.isFinite(Number(projectedCapSpace)) ? Number(projectedCapSpace) : baseCap;
+  const capDelta = Number.isFinite(baseCap) && Number.isFinite(liveCap) ? liveCap - baseCap : 0;
+  const capTone = !Number.isFinite(liveCap) ? "" : liveCap < 0 ? "bad" : Math.abs(capDelta) >= 0.005 ? (capDelta > 0 ? "ok" : "warn") : "";
+  const nhlLine = formatRosterCapacityLine(team);
+  const composition = formatRosterCompositionLine(team);
 
+  // The roster *is* the side panel: the asset list sits beside the package it
+  // feeds, so building a deal never needs a drawer. Team intel is one header.
   return (
-    <aside className={`trade-team-intel-panel trade-team-panel-${side} ${isActive ? "is-active" : ""}`}>
-      <TeamIntelDashboard
-        team={team}
-        onViewPlayers={onViewPlayers}
-        onTeamDetail={onTeamClick}
-        isActive={isActive}
-        projectedCapSpace={projectedCapSpace}
+    <aside className={`trade-team-intel-panel trade-roster-rail trade-team-panel-${side} ${isActive ? "is-active" : ""}`}>
+      <header className="trade-roster-rail__head">
+        <button type="button" className="trade-roster-rail__team" onClick={() => onTeamClick?.(team)} title="Team details">
+          <TradeLogo team={team} size={52} />
+          <span className="trade-roster-rail__name">
+            <strong>{team.abbr || team.name}</strong>
+            <em>{sidebarStatusLabel(team)}{team.record ? ` · ${team.record}` : ""}</em>
+          </span>
+        </button>
+        <dl className="trade-roster-rail__facts">
+          <div className={capTone ? `tone-${capTone}` : ""}>
+            <dt>Space</dt>
+            <dd>
+              {Number.isFinite(liveCap) ? formatCapCompact(liveCap) : "—"}
+              {Math.abs(capDelta) >= 0.005 ? <small>{capDelta > 0 ? "+" : ""}{formatCapCompact(capDelta)}</small> : null}
+            </dd>
+          </div>
+          {nhlLine ? <div><dt>NHL</dt><dd>{nhlLine.replace(/\s*NHL$/i, "")}</dd></div> : null}
+          {composition ? <div><dt>Depth</dt><dd>{composition}</dd></div> : null}
+        </dl>
+        <button type="button" className="trade-roster-rail__expand" onClick={() => onViewPlayers?.()} title="Open the full roster view">
+          Full view
+        </button>
+      </header>
+      <AssetPool
+        teamId={team.id}
+        side={side}
+        meta={meta}
+        usedIds={usedIds}
+        onDragStart={onDragStart}
+        onQuickAdd={onQuickAdd}
+        onAssetClick={onAssetClick}
+        iceholeByPlayerId={iceholeByPlayerId}
+        onOpenIcehole={onOpenIcehole}
       />
     </aside>
   );
@@ -7941,8 +7836,15 @@ export default function TradeHub() {
           />
         </main>
       ) : (
-        <main className="trade-hub-main trade-hub-war-room-layout">
+        <main className="trade-hub-main trade-hub-war-room-layout th-deal-layout">
+          <PartnerReadCard
+            team={partnerTeam}
+            info={needsIndex[partnerId]}
+            interest={hasProposed && evaluation ? evaluation.interest_level?.[partnerId] ?? null : null}
+          />
           <TeamBrowserPanel
+            iceholeByPlayerId={iceholeByPlayerId}
+            onOpenIcehole={openIceholeThread}
             team={userTeam}
             side="left"
             evaluation={hasProposed ? evaluation : null}
@@ -7962,24 +7864,14 @@ export default function TradeHub() {
             onQuickAdd={(item) => handleQuickAdd("left", meta.userTeamId, item)}
           />
 
-          <section className="trade-hub-centre trade-hub-centre-focus">
-            <PartnerReadCard
-              team={partnerTeam}
-              info={needsIndex[partnerId]}
-              interest={hasProposed && evaluation ? evaluation.interest_level?.[partnerId] ?? null : null}
-            />
+          <section className="trade-hub-centre trade-hub-centre-focus th-deal-table">
             <div className="trade-construction-grid">
               <div className="trade-package-col">
                 <div className="trade-package-header">
-                  <TradeLogo team={userTeam} size={72} />
+                  <TradeLogo team={userTeam} size={44} />
                   <div className="trade-package-header-main">
-                    <span>YOU SEND</span>
-                    <PackageCapStrip
-                      team={userTeam}
-                      outgoingAssets={leftAssets}
-                      incomingAssets={rightAssets}
-                      sideLabel="Your space"
-                    />
+                    <span>You send</span>
+                    <small>{userOutgoing.length} of {SLOTS}</small>
                   </div>
                 </div>
                 {leftPadded.map((asset, i) => (
@@ -8003,15 +7895,10 @@ export default function TradeHub() {
 
               <div className="trade-package-col">
                 <div className="trade-package-header">
-                  <TradeLogo team={partnerTeam} size={72} />
+                  <TradeLogo team={partnerTeam} size={44} />
                   <div className="trade-package-header-main">
-                    <span>{partnerTeam?.abbr || "PARTNER"} SENDS</span>
-                    <PackageCapStrip
-                      team={partnerTeam}
-                      outgoingAssets={rightAssets}
-                      incomingAssets={leftAssets}
-                      sideLabel="Partner space"
-                    />
+                    <span>{partnerTeam?.abbr || "Partner"} sends</span>
+                    <small>{partnerOutgoing.length} of {SLOTS}</small>
                   </div>
                 </div>
                 {rightPadded.map((asset, i) => (
@@ -8110,6 +7997,8 @@ export default function TradeHub() {
           </section>
 
           <TeamBrowserPanel
+            iceholeByPlayerId={iceholeByPlayerId}
+            onOpenIcehole={openIceholeThread}
             team={partnerTeam}
             side="right"
             evaluation={hasProposed ? evaluation : null}

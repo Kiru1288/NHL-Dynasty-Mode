@@ -9,9 +9,10 @@ import PlayerHeadshot from "../components/PlayerHeadshot";
 import TeamLogoBadge from "../components/ui/TeamLogoBadge";
 import { ensurePlayerHeadshotFields } from "../utils/playerHeadshots";
 import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
+import CapContractNegotiation from "../components/contracts/CapContractNegotiation";
 import NegotiationMeetingPanel, { InterestFactors } from "../components/contracts/NegotiationMeetingPanel";
-import { getContractOffice, reSignContract, qualifyRfa, releaseRfaRights, evaluateContractOffer, prospectRightsDecision, previewElcOffer, submitElcOffer, fileArbitration, settleArbitration, matchOfferSheet, declineOfferSheet, submitOfferSheet, advanceFreeAgencyDay, advanceContractNegotiationDay, signFreeAgent, getFreeAgentDetail, getFreeAgencyDesk, getSocialFeed } from "../services/franchiseService";
-import { estimateOfferInterestM, maxNegotiationOfferAavM, projectNegotiationCap } from "../utils/contractNegotiation";
+import { getContractOffice, qualifyRfa, releaseRfaRights, evaluateContractOffer, prospectRightsDecision, previewElcOffer, submitElcOffer, fileArbitration, settleArbitration, matchOfferSheet, declineOfferSheet, submitOfferSheet, advanceFreeAgencyDay, advanceContractNegotiationDay, signFreeAgent, getFreeAgentDetail, getFreeAgencyDesk, getSocialFeed } from "../services/franchiseService";
+import { projectNegotiationCap } from "../utils/contractNegotiation";
 import { formatMoney, formatPick, getPlayerName, getPlayerOverall, getPlayerPosition, pickFranchiseData, safeArray } from "./shared/eventHelpers";
 
 function computeOfferCapHitM(aav, years, signingBonus = 0) {
@@ -232,23 +233,15 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
 
   const [payload, setPayload] = React.useState(initial);
   const [loading, setLoading] = React.useState(!safeArray(initial?.contracts).length);
-  const [filter, setFilter] = React.useState("all");
+  // Open on the players who need a decision, not the whole signed roster.
+  const [filter, setFilter] = React.useState("expiring");
   const [sortKey, setSortKey] = React.useState("overall");
   const [sortDir, setSortDir] = React.useState("desc");
   const [selectedId, setSelectedId] = React.useState(null);
   const [panelMode, setPanelMode] = React.useState("detail"); // detail | negotiate
-  const [meetingRev, setMeetingRev] = React.useState(0);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState("");
-  const [response, setResponse] = React.useState(null);
-  const [offerAav, setOfferAav] = React.useState("");
-  const [offerYears, setOfferYears] = React.useState("2");
-  const [offerNtc, setOfferNtc] = React.useState(false);
-  const [offerNtcMode, setOfferNtcMode] = React.useState("NONE");
-  const [offerNmc, setOfferNmc] = React.useState(false);
-  const [offerTwoWay, setOfferTwoWay] = React.useState(false);
-  const [offerBonus, setOfferBonus] = React.useState("0");
-  const [offerContractType, setOfferContractType] = React.useState("nhl_one_way");
+  const [, setResponse] = React.useState(null);
   const [dayFlash, setDayFlash] = React.useState(null);
   const [dealPopup, setDealPopup] = React.useState(null);
   const rowRefs = React.useRef({});
@@ -337,42 +330,6 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  React.useEffect(() => {
-    if (panelMode !== "negotiate" || !selected?.player_id || busy) return undefined;
-    let cancelled = false;
-    const t = window.setTimeout(async () => {
-      try {
-        const result = await evaluateContractOffer({
-          player_id: selected.player_id,
-          aav_m: Number(offerAav) || 0,
-          years: Math.max(1, parseInt(offerYears, 10) || 1),
-          ntc: offerNtcMode === "FULL" || offerNtcMode === "MODIFIED",
-          ntc_mode: offerNtcMode,
-          m_ntc: offerNtcMode === "MODIFIED",
-          nmc: offerNmc,
-          two_way: offerTwoWay,
-          signing_bonus_m: Number(offerBonus) || 0,
-          contract_category: offerContractType || "nhl_one_way",
-          context: "re_sign",
-        });
-        if (!cancelled && result?.evaluation) {
-          const yearsSent = Math.max(1, parseInt(offerYears, 10) || 1);
-          const bonusSent = Number(offerBonus) || 0;
-          setResponse({
-            ...result,
-            _offerStamp: `${computeOfferCapHitM(Number(offerAav) || 0, yearsSent, bonusSent)}|${yearsSent}|${offerNtcMode}|${offerNmc}|${bonusSent}`,
-          });
-        }
-      } catch {
-        /* preview is best-effort */
-      }
-    }, 220);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(t);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [panelMode, selectedId, offerAav, offerYears, offerNtc, offerNtcMode, offerNmc, offerBonus, offerContractType, meetingRev]);
 
   const contracts = safeArray(payload?.contracts);
   const expiring = safeArray(payload?.expiring_contracts || payload?.expiring);
@@ -396,33 +353,11 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
     pending.find((r) => String(r.player_id) === String(selectedId)) ||
     null;
 
-    React.useEffect(() => {
-    if (!selected) return;
-    const ask =
-      selected.player_ask_aav_m ??
-      selected.requested_cap_hit ??
-      selected.qualifying_offer_aav_m ??
-      selected.previous_aav_m ??
-      selected.aav_m ??
-      1;
-    const years =
-      selected.requested_term ??
-      (selected.contract_status === "rfa_rights" ? 1 : selected.extension_estimate?.likelyTerm) ??
-      2;
-    setOfferAav(String(Number(ask).toFixed(3)));
-    setOfferYears(String(years));
-    setOfferNtc(Boolean(selected.clause_ask === "NTC" || selected.clause_ask === "NMC"));
-    setOfferNtcMode(
-      selected.clause_ask === "M-NTC" ? "MODIFIED" : selected.clause_ask === "NTC" ? "FULL" : "NONE"
-    );
-    setOfferNmc(Boolean(selected.clause_ask === "NMC"));
-    setOfferTwoWay(Boolean(selected.two_way));
-    setOfferBonus("0");
-    const legal = safeArray(selected.legal_contract_types).find((t) => t.enabled !== false);
-    setOfferContractType(legal?.id || (selected.two_way ? "nhl_two_way" : "nhl_one_way"));
+
+  React.useEffect(() => {
     setResponse(null);
     setError("");
-  }, [selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedId]);
 
   const resignSeasonYear = intOr(payload?.season_year, 0);
 
@@ -578,23 +513,7 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
   const capSpace = Number(
     cap.usable_cap_space_m ?? cap.cap_space ?? franchiseState?.team?.cap_space ?? 0
   );
-  const offerAavNum = Number(offerAav) || 0;
   const resignBonusRules = payload?.signing_bonus || {};
-  const maxTermOwn = Math.max(1, Number(resignBonusRules.max_term_own || 7));
-  const termOptionsOwn = Array.from({ length: maxTermOwn }, (_, i) => i + 1);
-  const offerYearsNum = Math.min(maxTermOwn, Math.max(1, parseInt(offerYears, 10) || 1));
-  const bonusCapM = resignBonusRules.eligible
-    ? Math.floor(offerAavNum * offerYearsNum * Number(resignBonusRules.max_bonus_pct || 0) * 40) / 40
-    : 0;
-  const offerBonusNum = Math.min(bonusCapM, Math.max(0, Number(offerBonus) || 0));
-  const offerCapHitNum = computeOfferCapHitM(offerAavNum, offerYearsNum, offerBonusNum);
-  const capProj = projectNegotiationCap({
-    capSnapshot: cap,
-    playerRow: selected || {},
-    offerCapHitM: offerCapHitNum,
-  });
-  const projectedSpace = capProj.projectedAfterM;
-  const projectedNextSeason = capProj.projectedNextSeasonM;
   const askAav = Number(
     selected?.player_ask_aav_m ??
       selected?.requested_cap_hit ??
@@ -665,89 +584,6 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
     }
   };
 
-  const submitOffer = () => {
-    if (!selected?.player_id) return;
-    const category = offerContractType || "nhl_one_way";
-    const isNhl = String(category).startsWith("nhl");
-    return runAction(
-      () =>
-        reSignContract({
-          player_id: selected.player_id,
-          aav_m: offerAavNum,
-          years: offerYearsNum,
-          ntc: offerNtcMode === "FULL" || offerNtcMode === "MODIFIED",
-          ntc_mode: offerNtcMode,
-          m_ntc: offerNtcMode === "MODIFIED",
-          nmc: offerNmc,
-          two_way: category === "nhl_two_way" || offerTwoWay,
-          signing_bonus_m: offerBonusNum,
-          contract_category: category,
-          contract_type: isNhl ? undefined : category,
-          context: "re_sign",
-        }),
-      { announceDeal: true }
-    );
-  };
-
-  const previewOffer = () => {
-    if (!selected?.player_id) return;
-    const category = offerContractType || "nhl_one_way";
-    return runAction(() =>
-      evaluateContractOffer({
-        player_id: selected.player_id,
-        aav_m: offerAavNum,
-        years: offerYearsNum,
-        ntc: offerNtcMode === "FULL" || offerNtcMode === "MODIFIED",
-        ntc_mode: offerNtcMode,
-        m_ntc: offerNtcMode === "MODIFIED",
-        nmc: offerNmc,
-        two_way: category === "nhl_two_way" || offerTwoWay,
-        signing_bonus_m: offerBonusNum,
-        contract_category: category,
-        context: "re_sign",
-      })
-    );
-  };
-
-  const acceptCounter = () => {
-    const counter = response?.player_response || response?.evaluation?.counter_offer || {};
-    const aav = counter.counter_cap_hit ?? counter.aav_m;
-    const years = counter.counter_term ?? counter.years;
-    if (aav == null || years == null || !selected?.player_id) return;
-    setOfferAav(String(aav));
-    setOfferYears(String(years));
-    if (counter.counter_ntc != null || counter.ntc != null) {
-      const hasNtc = Boolean(counter.counter_ntc ?? counter.ntc);
-      setOfferNtc(hasNtc);
-      const mode = String(counter.ntc_mode || "").toUpperCase();
-      setOfferNtcMode(mode === "MODIFIED" || mode === "M-NTC" ? "MODIFIED" : hasNtc ? "FULL" : "NONE");
-    }
-    if (counter.counter_nmc != null || counter.nmc != null) {
-      setOfferNmc(Boolean(counter.counter_nmc ?? counter.nmc));
-    }
-    if (counter.counter_signing_bonus_m != null || counter.signing_bonus_m != null) {
-      setOfferBonus(String(counter.counter_signing_bonus_m ?? counter.signing_bonus_m ?? 0));
-    }
-    return runAction(
-      () =>
-        reSignContract({
-          player_id: selected.player_id,
-          aav_m: Number(aav),
-          years: Number(years),
-          ntc: Boolean(counter.counter_ntc ?? counter.ntc ?? offerNtcMode !== "NONE"),
-          ntc_mode: counter.ntc_mode || offerNtcMode,
-          m_ntc: (counter.ntc_mode || offerNtcMode) === "MODIFIED",
-          nmc: Boolean(counter.counter_nmc ?? counter.nmc ?? offerNmc),
-          signing_bonus_m: Number(
-            counter.counter_signing_bonus_m ?? counter.signing_bonus_m ?? offerBonus ?? 0
-          ),
-          two_way: offerTwoWay,
-          context: "re_sign",
-        }),
-      { announceDeal: true }
-    );
-  };
-
   const simNegotiationDay = async () => {
     if (busy) return;
     setBusy(true);
@@ -781,52 +617,11 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
   const selectedOvr = selected?.overall ?? selected?.ovr ?? getPlayerOverall(selected);
   const selectedInterest = resignInterestLabel(selected);
   const selectedArchetype = resignArchetype(selected);
-  const offerDiff = askAav ? offerAavNum - askAav : 0;
-  const offerDiffLabel =
-    !askAav
-      ? "No ask on file"
-      : Math.abs(offerDiff) < 0.05
-        ? "Perfect Match"
-        : offerDiff > 0
-          ? `+${formatMoney(offerDiff)} above ask`
-          : `${formatMoney(offerDiff)} below ask`;
-  const sliderMax = maxNegotiationOfferAavM({
-    capSnapshot: cap,
-    playerRow: selected || {},
-    cbaMaxSalaryM: resignBonusRules.max_salary_m,
-  });
-  const sliderMin = 0.775;
   const agentBits = resignAgentBits(selected, askAav, askYears);
   const decisionCount = summary.pendingDecisions ?? pending.length;
   const ufaCount = summary.ufaCount ?? filterCounts.ufa;
   const rfaCount = summary.rfaCount ?? filterCounts.rfa;
   const ownWindow = payload?.own_fa_window || {};
-  const bonusElig = payload?.signing_bonus || {};
-  const bonusAllowed = Boolean(bonusElig.eligible);
-  const liveInterest = estimateOfferInterestM({
-    offerAavM: offerAavNum,
-    offerCapHitM: offerCapHitNum,
-    wantAavM: askAav || offerAavNum || 1,
-    offerYears: offerYearsNum,
-    wantYears: askYears || offerYearsNum,
-    stayInterest: Number(selected?.stay_interest),
-    signingBonusM: offerBonusNum,
-    preferredClause: selected?.clause_ask,
-    ntcMode: offerNtcMode,
-    nmc: offerNmc,
-  });
-  const serverInterest = Number(response?.evaluation?.interest ?? response?.player_response?.interest);
-  const offerStamp = `${offerCapHitNum}|${offerYearsNum}|${offerNtcMode}|${offerNmc}|${offerBonusNum}`;
-  const negoInterest =
-    response?.evaluation && response._offerStamp === offerStamp && Number.isFinite(serverInterest)
-      ? serverInterest
-      : liveInterest;
-  const negoFeedback =
-    response?.player_response?.feedback ||
-    response?.evaluation?.reason ||
-    (selected?.pending_offer
-      ? `Offer pending — ${selected.pending_offer.days_remaining ?? "?"} day(s) left`
-      : null);
   const slotUsed =
     slots.used != null
       ? slots.used
@@ -853,50 +648,54 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
       footerAlign="split"
       onContinue={continueDisabled ? undefined : onContinue}
       onBack={onBack}
+      hideRail
       railTitle="Queue"
       railHint={null}
       heroContent={
         <div className={`${prefix}-workspace`}>
-          <h1 className={`${prefix}-page-title`}>Contract Table</h1>
-          <div className={`${prefix}-office-bar`} aria-label="Contract office summary">
-            <strong className={`${prefix}-office-count`}>
-              {decisionCount} <span>decisions</span>
-            </strong>
-            <span className={`${prefix}-office-meta`}>
-              {ufaCount} UFA · {rfaCount} RFA
-            </span>
-            <span className={`${prefix}-office-cap`}>{formatMoney(capSpace)} available</span>
-            <span className={`${prefix}-office-window`}>
-              Exclusive {ownWindow.day ?? 0}/{ownWindow.days_total ?? 6}
-              {ownWindow.days_remaining != null ? ` · ${ownWindow.days_remaining}d left` : ""}
-            </span>
-            <button
-              type="button"
-              className={`${prefix}-sim-day-btn`}
-              disabled={busy || Boolean(ownWindow.complete)}
-              onClick={simNegotiationDay}
-            >
-              Sim Day
-            </button>
-            {slotUsed != null && slots.limit != null ? (
-              <span className={`${prefix}-office-slots`}>
-                {slotUsed}/{slots.limit} contracts
+          <div className={`${prefix}-head`}>
+            <div className={`${prefix}-head__title`}>
+              <h1 className={`${prefix}-page-title`}>Re-sign your players</h1>
+              <p>
+                <b>{decisionCount}</b> {decisionCount === 1 ? "decision" : "decisions"} · {ufaCount} UFA · {rfaCount} RFA
+                {slotUsed != null && slots.limit != null ? ` · ${slotUsed}/${slots.limit} contracts` : ""}
+              </p>
+            </div>
+            <div className={`${prefix}-head__cap`}>
+              <strong>{formatMoney(capSpace)}</strong>
+              <span>cap space</span>
+            </div>
+            <div className={`${prefix}-head__window`}>
+              <span>
+                Exclusive window · day {ownWindow.day ?? 0} of {ownWindow.days_total ?? 6}
+                {ownWindow.days_remaining != null ? ` · ${ownWindow.days_remaining} left` : ""}
               </span>
-            ) : null}
-            {dayFlash ? <em className={`${prefix}-office-flash`}>{dayFlash}</em> : null}
-            {warnings[0] ? <em className={`${prefix}-office-warn`}>{warnings[0]}</em> : null}
+              <button
+                type="button"
+                className={`${prefix}-sim-day-btn`}
+                disabled={busy || Boolean(ownWindow.complete)}
+                onClick={simNegotiationDay}
+              >
+                Sim a day
+              </button>
+            </div>
           </div>
-          <div className={`${prefix}-filter-row`}>
+          {dayFlash || warnings[0] ? (
+            <p className={`${prefix}-head__flash`} role="status">{dayFlash || warnings[0]}</p>
+          ) : null}
+          <div className={`${prefix}-filter-row`} role="tablist" aria-label="Filter players">
             {[
-              ["all", "All"],
-              ["expiring", "Expiring"],
+              ["expiring", "Decisions"],
               ["ufa", "UFAs"],
               ["rfa", "RFAs"],
-              ["extension", "Extensions"],
+              ["extension", "Extension-eligible"],
+              ["all", "Whole roster"],
             ].map(([id, label]) => (
               <button
                 key={id}
                 type="button"
+                role="tab"
+                aria-selected={filter === id}
                 className={`${prefix}-filter-chip${filter === id ? " is-active" : ""}`}
                 onClick={() => setFilter(id)}
               >
@@ -906,7 +705,7 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
             ))}
           </div>
 
-          <div className={`${prefix}-table-layout`}>
+          <div className={`${prefix}-table-layout${panelMode === "negotiate" && selected ? " is-negotiating" : ""}`}>
             <div className={`${prefix}-table-wrap`} ref={tableWrapRef}>
               {loading ? (
                 <p className={`${prefix}-empty`}>Loading organization contracts…</p>
@@ -968,7 +767,7 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
                           }}
                           className={[
                             active ? "is-selected" : "",
-                            primaryAction ? "is-actionable" : "",
+                            primaryAction ? "is-actionable" : "is-settled",
                           ]
                             .filter(Boolean)
                             .join(" ")}
@@ -997,11 +796,11 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
                           <td>{formatMoney(resignMoney(row))}</td>
                           <td>{resignTermText(row)}</td>
                           <td>
-                            <span
-                              className={`${prefix}-interest-pill tone-${resignInterestTone(interest)}`}
-                            >
-                              {interest}
-                            </span>
+                            {primaryAction || statusTone ? (
+                              <span className={`${prefix}-interest-pill tone-${resignInterestTone(interest)}`}>
+                                {interest}
+                              </span>
+                            ) : null}
                           </td>
                           <td>
                             {primaryAction ? (
@@ -1016,9 +815,7 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
                               >
                                 {primaryAction.id === "qualify_rfa" ? "Qualify" : "Negotiate"}
                               </button>
-                            ) : (
-                              <span className={`${prefix}-muted`}>—</span>
-                            )}
+                            ) : null}
                           </td>
                         </tr>
                       );
@@ -1181,116 +978,6 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
                             </button>
                           ))}
                       </div>
-                      {selected.ineligible_reason ? (
-                        <p className={`${prefix}-context`}>{selected.ineligible_reason}</p>
-                      ) : null}
-                    </div>
-                  ) : (
-                    <div className={`${prefix}-detail-body ${prefix}-nego-body`}>
-                      <div className={`${prefix}-nego-scroll`}>
-                        <div className={`${prefix}-cap-banner`}>
-                          <div>
-                            <span>Cap space</span>
-                            <strong className="is-green">{formatMoney(capSpace)}</strong>
-                          </div>
-                          <div>
-                            <span>After offer</span>
-                            <strong
-                              className={
-                                projectedSpace != null && projectedSpace < 0 ? "is-red" : "is-green"
-                              }
-                            >
-                              {projectedSpace != null ? formatMoney(projectedSpace) : "—"}
-                            </strong>
-                          </div>
-                          <div>
-                            <span>Next season</span>
-                            <strong
-                              className={
-                                projectedNextSeason != null && projectedNextSeason < 0 ? "is-red" : "is-green"
-                              }
-                            >
-                              {projectedNextSeason != null ? formatMoney(projectedNextSeason) : "—"}
-                            </strong>
-                          </div>
-                        </div>
-
-                        <div className={`${prefix}-offer-compare`}>
-                          <div>
-                            <span>Ask</span>
-                            <strong>
-                              {askAav ? formatMoney(askAav) : "—"}
-                              <em>{askYears ? `${askYears}y` : ""}</em>
-                            </strong>
-                          </div>
-                          <div>
-                            <span>Your offer</span>
-                            <strong>
-                              {formatMoney(offerAavNum)}
-                              <em>{offerYearsNum}y</em>
-                            </strong>
-                          </div>
-                        </div>
-                        <p
-                          className={`${prefix}-offer-diff-line ${
-                            Math.abs(offerDiff) < 0.05
-                              ? "is-green"
-                              : offerDiff < 0
-                                ? "is-warn"
-                                : "is-cyan"
-                          }`}
-                        >
-                          {offerDiffLabel}
-                        </p>
-
-                        <NegotiationMeetingPanel
-                          playerId={selected?.player_id}
-                          compact
-                          onChanged={() => setMeetingRev((v) => v + 1)}
-                        />
-
-                        <div className={`${prefix}-nego-meter`} aria-label="Negotiation interest">
-                          <div className={`${prefix}-nego-meter-head`}>
-                            <span>Deal interest</span>
-                            <strong>{negoInterest ? `${Math.round(negoInterest)}` : "—"}</strong>
-                          </div>
-                          <div className={`${prefix}-nego-meter-track`}>
-                            <span
-                              className={`${prefix}-nego-meter-fill tone-${
-                                negoInterest >= 88
-                                  ? "instant"
-                                  : negoInterest >= 62
-                                    ? "good"
-                                    : negoInterest >= 40
-                                      ? "mid"
-                                      : "bad"
-                              }`}
-                              style={{ width: `${Math.max(4, Math.min(100, negoInterest || 4))}%` }}
-                            />
-                            <i className={`${prefix}-nego-meter-mark`} style={{ left: "62%" }} title="Accept" />
-                            <i
-                              className={`${prefix}-nego-meter-mark is-instant`}
-                              style={{ left: "88%" }}
-                              title="Instant"
-                            />
-                          </div>
-                          <p className={`${prefix}-nego-meter-note`}>
-                            {negoFeedback ||
-                              `${resignInterestLabel(selected)} stay interest · Prefer ${
-                                selected.clause_ask || "no clause"
-                              }`}
-                          </p>
-                        </div>
-
-                        <InterestFactors
-                          title="Staying here"
-                          factors={response?.evaluation?.interest_factors || selected.interest_factors}
-                          fit={{
-                            ...(response?.evaluation?.destination_fit || selected.destination_fit || {}),
-                            fit_premium_pct: response?.evaluation?.fit_premium_pct,
-                          }}
-                        />
-
                         {(selected.can_qualify ||
                           selected.arbitration_eligible ||
                           selected.can_file_arbitration ||
@@ -1330,7 +1017,7 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
                                         Number(
                                           selected.player_ask_aav_m ||
                                             selected.requested_cap_hit ||
-                                            offerAav
+                                            selected.qualifying_offer_aav_m
                                         ) || 0,
                                     })
                                   )
@@ -1383,238 +1070,45 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
                             ) : null}
                           </div>
                         )}
-
-                        <div className={`${prefix}-deal-controls`}>
-                          {safeArray(selected.legal_contract_types).length ? (
-                            <label className={`${prefix}-field ${prefix}-select-field`}>
-                              Type
-                              <div className={`${prefix}-select-wrap`}>
-                                <select
-                                  value={offerContractType}
-                                  disabled={busy}
-                                  onChange={(e) => setOfferContractType(e.target.value)}
-                                >
-                                  {safeArray(selected.legal_contract_types)
-                                    .filter((t) => t.enabled !== false)
-                                    .map((t) => (
-                                      <option key={t.id} value={t.id}>
-                                        {t.label}
-                                      </option>
-                                    ))}
-                                </select>
-                              </div>
-                            </label>
-                          ) : null}
-
-                          <div className={`${prefix}-slider-block`}>
-                            <div className={`${prefix}-slider-head`}>
-                              <span>Annual salary (AAV)</span>
-                              <strong>{formatMoney(offerAavNum)}</strong>
-                            </div>
-                            <input
-                              type="range"
-                              className={`${prefix}-salary-slider`}
-                              min={sliderMin}
-                              max={sliderMax}
-                              step="0.025"
-                              value={Math.min(
-                                sliderMax,
-                                Math.max(sliderMin, offerAavNum || sliderMin)
-                              )}
-                              disabled={busy}
-                              onChange={(e) => setOfferAav(Number(e.target.value).toFixed(3))}
-                            />
-                          </div>
-
-                          <div className={`${prefix}-term-block`}>
-                            <span className={`${prefix}-mini-label`}>Term</span>
-                            <div
-                              className={`${prefix}-term-seg`}
-                              role="group"
-                              aria-label="Contract term"
-                            >
-                              {termOptionsOwn.map((y) => (
-                                <button
-                                  key={y}
-                                  type="button"
-                                  className={offerYearsNum === y ? "is-active" : ""}
-                                  disabled={busy}
-                                  onClick={() => setOfferYears(String(y))}
-                                >
-                                  {y}
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-
-                          <div className={`${prefix}-check-row is-clauses`}>
-                            <label className={offerNtcMode === "FULL" ? "is-on" : ""}>
-                              <input
-                                type="radio"
-                                name={`${prefix}-ntc-mode`}
-                                checked={offerNtcMode === "FULL"}
-                                disabled={busy || offerNmc}
-                                onChange={() => {
-                                  setOfferNtcMode("FULL");
-                                  setOfferNtc(true);
-                                }}
-                              />
-                              NTC
-                              {selected.clause_ask === "NTC" ? <em>asked</em> : null}
-                            </label>
-                            <label className={offerNtcMode === "MODIFIED" ? "is-on" : ""}>
-                              <input
-                                type="radio"
-                                name={`${prefix}-ntc-mode`}
-                                checked={offerNtcMode === "MODIFIED"}
-                                disabled={busy || offerNmc}
-                                onChange={() => {
-                                  setOfferNtcMode("MODIFIED");
-                                  setOfferNtc(true);
-                                }}
-                              />
-                              M-NTC
-                              {selected.clause_ask === "M-NTC" ? <em>asked</em> : null}
-                            </label>
-                            <label className={offerNtcMode === "NONE" && !offerNmc ? "is-on" : ""}>
-                              <input
-                                type="radio"
-                                name={`${prefix}-ntc-mode`}
-                                checked={offerNtcMode === "NONE" && !offerNmc}
-                                disabled={busy || offerNmc}
-                                onChange={() => {
-                                  setOfferNtcMode("NONE");
-                                  setOfferNtc(false);
-                                }}
-                              />
-                              None
-                            </label>
-                            <label className={offerNmc ? "is-on" : ""}>
-                              <input
-                                type="checkbox"
-                                checked={offerNmc}
-                                disabled={busy}
-                                onChange={(e) => {
-                                  setOfferNmc(e.target.checked);
-                                  if (e.target.checked) {
-                                    setOfferNtcMode("NONE");
-                                    setOfferNtc(false);
-                                  }
-                                }}
-                              />
-                              NMC
-                              {selected.clause_ask === "NMC" ? <em>asked</em> : null}
-                            </label>
-                            <label>
-                              <input
-                                type="checkbox"
-                                checked={offerTwoWay}
-                                disabled={busy}
-                                onChange={(e) => setOfferTwoWay(e.target.checked)}
-                              />
-                              Two-way
-                            </label>
-                          </div>
-
-                          <div className={`${prefix}-slider-block`}>
-                            <div className={`${prefix}-slider-head`}>
-                              <span>Signing bonus</span>
-                              <strong>
-                                {bonusAllowed ? formatMoney(offerBonusNum) : "Locked"}
-                              </strong>
-                            </div>
-                            {bonusAllowed ? (
-                              <input
-                                type="range"
-                                className={`${prefix}-salary-slider`}
-                                min={0}
-                                max={bonusCapM}
-                                step="0.025"
-                                value={offerBonusNum}
-                                disabled={busy}
-                                onChange={(e) => setOfferBonus(Number(e.target.value).toFixed(3))}
-                              />
-                            ) : (
-                              <p className={`${prefix}-context`}>
-                                {bonusElig.label ||
-                                  "Signing bonuses require NHL revenue ≥ $155M"}
-                              </p>
-                            )}
-                          </div>
-                        </div>
-
-                        {response?.player_response?.feedback || response?.evaluation ? (
-                          <div className={`${prefix}-rights-callout`}>
-                            <span>Response</span>
-                            <strong>
-                              {response.status || response.player_response?.status || "—"}
-                              {response.player_response?.feedback
-                                ? ` · ${response.player_response.feedback}`
-                                : response.reason
-                                  ? ` · ${response.reason}`
-                                  : ""}
-                            </strong>
-                            {response?.evaluation?.interest != null ? (
-                              <p className={`${prefix}-context`} style={{ margin: "0.35rem 0 0" }}>
-                                Interest {response.evaluation.interest}
-                                {response.evaluation.accept_cut != null
-                                  ? ` — needs ≥${response.evaluation.accept_cut} to accept`
-                                  : ""}
-                                {response.evaluation.agent_mood
-                                  ? ` · ${response.evaluation.agent_mood}`
-                                  : ""}
-                              </p>
-                            ) : null}
-                            <p className={`${prefix}-context`} style={{ margin: "0.25rem 0 0" }}>
-                              Cap hit {formatMoney(offerCapHitNum)} (AAV {formatMoney(offerAavNum)}
-                              {offerBonusNum > 0 ? ` + ${formatMoney(offerBonusNum)} bonus` : ""})
-                            </p>
-                          </div>
-                        ) : null}
-                        {error ? <p className={`${prefix}-warn`}>{error}</p> : null}
-                      </div>
-
-                      <div className={`${prefix}-negotiate-actions`}>
-                        <button
-                          type="button"
-                          className={`${prefix}-ghost-btn ${prefix}-preview-btn`}
-                          disabled={busy}
-                          onClick={previewOffer}
-                        >
-                          Preview
-                        </button>
-                        <button
-                          type="button"
-                          className={`${prefix}-cta-btn ${prefix}-submit-btn`}
-                          disabled={busy}
-                          onClick={submitOffer}
-                        >
-                          {busy ? "Submitting…" : "Submit Offer"}
-                        </button>
-                        {response?.status === "countered" ? (
-                          <button
-                            type="button"
-                            className={`${prefix}-decision-btn is-recommended`}
-                            disabled={busy}
-                            onClick={acceptCounter}
-                          >
-                            <span>
-                              Accept counter
-                              <span className={`${prefix}-decision-meta`}>
-                                {formatMoney(
-                                  response.player_response?.counter_cap_hit ??
-                                    response.evaluation?.counter_offer?.aav_m
-                                )}{" "}
-                                ·{" "}
-                                {response.player_response?.counter_term ??
-                                  response.evaluation?.counter_offer?.years}
-                                y
-                              </span>
-                            </span>
-                          </button>
-                        ) : null}
-                      </div>
+                      {selected.ineligible_reason ? (
+                        <p className={`${prefix}-context`}>{selected.ineligible_reason}</p>
+                      ) : null}
+                      {error ? <p className={`${prefix}-warn`} role="alert">{error}</p> : null}
                     </div>
+                  ) : (
+                    <CapContractNegotiation
+                      row={selected}
+                      capSnapshot={cap}
+                      nextYearProjection={payload?.nextYearProjection || payload?.next_year_projection || {}}
+                      signingBonusElig={resignBonusRules}
+                      seasonLabel={seasonLabel(franchiseState)}
+                      contractTypes={safeArray(selected.legal_contract_types)}
+                      backLabel="Back to contract details"
+                      busy={busy}
+                      onBusy={(v) => setBusy(Boolean(v))}
+                      onBack={() => setPanelMode("detail")}
+                      onResult={(result, meta) => {
+                        if (!result || meta?.preview) return;
+                        if (result.re_sign || result.contracts?.contracts) {
+                          applyOfficeOrResign(result.office, result.re_sign || result.contracts);
+                        } else if (result.office) {
+                          applyOfficeOrResign(result.office, null);
+                        }
+                        setResponse(result);
+                        const st = String(result.status || result.player_response?.status || "").toLowerCase();
+                        if (["accepted", "countered", "rejected"].includes(st) || meta?.signed) {
+                          const popup = buildDealOutcome(
+                            { ...result, status: st || (meta?.signed ? "accepted" : result.status) },
+                            { playerName: getPlayerName(selected), contextLabel: "Player re-sign" }
+                          );
+                          if (popup) setDealPopup(popup);
+                        }
+                        if (st === "accepted" || meta?.signed) {
+                          setPanelMode("detail");
+                          if (selected?.player_id) setSelectedId(String(selected.player_id));
+                        }
+                      }}
+                    />
                   )}
                 </>
               )}
@@ -2563,86 +2057,87 @@ export function FreeAgencyEventMenu({
         <div className={`${prefix}-workspace`}>
           <div className={`${prefix}-fa-bar`}>
             <div className={`${prefix}-fa-phase`}>
-              <span>Free agency</span>
-              <strong>{market.market_phase_label || "Open market"}</strong>
+              <h2>{market.market_phase_label || "Open market"}</h2>
+              <p>
+                Day {market.fa_market_day ?? 0} · {market.available_count ?? rows.length} available
+              </p>
             </div>
-            <div className={`${prefix}-fa-stat`}>
-              <span>Day</span>
-              <strong>{market.fa_market_day ?? 0}</strong>
-            </div>
-            <div className={`${prefix}-fa-stat`}>
-              <span>Available</span>
-              <strong>{market.available_count ?? rows.length}</strong>
-            </div>
-            <div className={`${prefix}-fa-stat is-cap`}>
-              <span>Cap space</span>
+            <div className={`${prefix}-fa-cap`}>
               <strong>{formatMoney(capSpace)}</strong>
-            </div>
-            <div className={`${prefix}-fa-stat`}>
-              <span>Contracts</span>
-              <strong>
-                {slotUsed != null && slots.limit != null ? `${slotUsed}/${slots.limit}` : `${slots.open ?? "—"} open`}
-              </strong>
-            </div>
-            <div className={`${prefix}-fa-stat ${bonusAllowed ? "is-ok" : "is-bad"}`}>
-              <span>Signing bonus</span>
-              <strong>{bonusAllowed ? "Allowed" : `Locked`}</strong>
+              <span>
+                cap space · {slotUsed != null && slots.limit != null ? `${slotUsed}/${slots.limit}` : `${slots.open ?? "—"} open`} contracts
+                {bonusAllowed ? " · bonuses allowed" : ""}
+              </span>
             </div>
             <div className={`${prefix}-fa-sim`}>
               <button type="button" className={`${prefix}-sim-btn is-primary`} disabled={busy} onClick={() => advanceDay(1)}>
-                {busy ? "Simming…" : "Sim day"}
+                {busy ? "Simming…" : "Sim a day"}
               </button>
               <button type="button" className={`${prefix}-sim-btn`} disabled={busy} onClick={() => advanceDay(7)}>
-                Sim week
+                Sim a week
               </button>
             </div>
           </div>
           {market.cap_release?.text ? (
-            <p className={`${prefix}-fa-notice`}>{market.cap_release.text}</p>
+            <details className={`${prefix}-fa-notice`}>
+              <summary>{String(market.cap_release.text).split(":")[0]}</summary>
+              <p>{market.cap_release.text}</p>
+            </details>
           ) : null}
 
           <div className={`${prefix}-fa-tools`}>
             <input
               className={`${prefix}-fa-search`}
-              placeholder="Search name, team, country…"
+              type="search"
+              aria-label="Search free agents"
+              placeholder="Search name, team, country"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
-            <div className={`${prefix}-fa-filters`}>
+            <div className={`${prefix}-fa-filters`} role="tablist" aria-label="Filter free agents">
               {[
                 ["all", "All"],
-                ["elite", "Elite"],
-                ["top6", "Top 6"],
                 ["F", "Forwards"],
                 ["D", "Defense"],
                 ["G", "Goalies"],
+                null,
+                ["elite", "Elite"],
+                ["top6", "Top 6"],
                 ["young", "Young"],
                 ["vet", "Veterans"],
-                ["ufa", "UFA"],
-                ["offersheet", `RFAs · offer sheet (${sheetTargets.length})`],
                 ["cheap", "Cheap"],
-                ["hot", "Bidding"],
-                ["watch", "Watch"],
-              ].map(([id, label]) => (
-                <button
-                  key={id}
-                  type="button"
-                  className={`${prefix}-fa-chip${filter === id ? " is-active" : ""}`}
-                  onClick={() => setFilter(id)}
-                >
-                  {label}
-                </button>
-              ))}
+                null,
+                ["ufa", "UFAs"],
+                ["offersheet", `Offer-sheet RFAs ${sheetTargets.length}`],
+                ["hot", "Bidding wars"],
+                ["watch", "Watchlist"],
+              ].map((item, i) =>
+                item ? (
+                  <button
+                    key={item[0]}
+                    type="button"
+                    role="tab"
+                    aria-selected={filter === item[0]}
+                    className={`${prefix}-fa-chip${filter === item[0] ? " is-active" : ""}`}
+                    onClick={() => setFilter(item[0])}
+                  >
+                    {item[1]}
+                  </button>
+                ) : (
+                  <i key={`sep-${i}`} className={`${prefix}-fa-sep`} aria-hidden="true" />
+                )
+              )}
             </div>
             <select
               className={`${prefix}-fa-sort`}
+              aria-label="Sort free agents"
               value={sortKey}
               onChange={(e) => setSortKey(e.target.value)}
             >
-              <option value="overall">Sort: OVR</option>
-              <option value="ask">Sort: Ask</option>
-              <option value="age">Sort: Age</option>
-              <option value="interest">Sort: Interest in you</option>
+              <option value="overall">Sort by OVR</option>
+              <option value="ask">Sort by ask</option>
+              <option value="age">Sort by age</option>
+              <option value="interest">Sort by interest in you</option>
             </select>
           </div>
 
@@ -2804,26 +2299,6 @@ export function FreeAgencyEventMenu({
                     </div>
                   </div>
 
-                  <div className={`${prefix}-fa-capbar`}>
-                    <div>
-                      <span>Cap before</span>
-                      <strong>{formatMoney(capSpace)}</strong>
-                    </div>
-                    <div>
-                      <span>After offer</span>
-                      <strong className={projectedSpace != null && projectedSpace < 0 ? "is-red" : "is-green"}>
-                        {projectedSpace != null ? formatMoney(projectedSpace) : "—"}
-                      </strong>
-                    </div>
-                    <div className={`${prefix}-fa-captrack`}>
-                      <span
-                        style={{
-                          width: `${Math.max(0, Math.min(100, capProj.capBarPct ?? 0))}%`,
-                        }}
-                      />
-                    </div>
-                  </div>
-
                   {isOfferSheet ? (
                     <div className={`${prefix}-nego-meter`}>
                       <div className={`${prefix}-nego-meter-head`}>
@@ -2877,6 +2352,203 @@ export function FreeAgencyEventMenu({
                   </div>
                   )}
 
+                  {competing.length ? (
+                    <div className={`${prefix}-fa-offers`}>
+                      <span className={`${prefix}-mini-label`}>Offers received</span>
+                      {competing.slice(0, 5).map((o) => (
+                        <div key={`${o.team_id}-${o.aav_m}`} className={`${prefix}-fa-offer`}>
+                          <TeamLogoBadge
+                            teamLogo={resolveFranchiseTeamLogo(
+                              {
+                                abbrev: o.team_abbrev,
+                                team_abbrev: o.team_abbrev,
+                                name: o.team_name,
+                              },
+                              o.team_name || o.team_abbrev
+                            )}
+                            teamName={o.team_name || o.team_abbrev}
+                            size={22}
+                            variant="circle"
+                          />
+                          <strong>{o.team_abbrev || o.team_name}</strong>
+                          <em>
+                            {formatMoney(o.aav_m)} · {o.years}y
+                            {o.is_user ? " · YOU" : ""}
+                          </em>
+                        </div>
+                      ))}
+                    </div>
+                  ) : interested.length ? (
+                    <div className={`${prefix}-fa-offers`}>
+                      <span className={`${prefix}-mini-label`}>Clubs circling</span>
+                      <div className={`${prefix}-fa-logos is-large`}>
+                        {interested.map((t) => (
+                          <TeamLogoBadge
+                            key={t.team_id || t.team_abbrev}
+                            teamLogo={resolveFranchiseTeamLogo(
+                              {
+                                abbrev: t.team_abbrev,
+                                team_abbrev: t.team_abbrev,
+                                name: t.team_name,
+                              },
+                              t.team_name || t.team_abbrev
+                            )}
+                            teamName={t.team_name || t.team_abbrev}
+                            size={26}
+                            variant="circle"
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <div className={`${prefix}-fa-controls`}>
+                    {isOfferSheet ? null : (
+                      <div className="nd-field">
+                        <div className="nd-field__head"><span>Contract type</span></div>
+                        <div className="nd-seg" role="group" aria-label="Contract type">
+                          {[
+                            ["nhl_one_way", "One-way"],
+                            ["nhl_two_way", "Two-way"],
+                            ["ahl", "AHL"],
+                            ["pto", "PTO"],
+                          ].map(([id, label]) => (
+                            <button
+                              key={id}
+                              type="button"
+                              className={contractCategory === id ? "is-active" : ""}
+                              aria-pressed={contractCategory === id}
+                              disabled={busy}
+                              onClick={() => setContractCategory(id)}
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    <div className="nd-field">
+                      <div className="nd-field__head">
+                        <span>Cap hit per year</span>
+                        <strong>{formatMoney(offerAavNum)}</strong>
+                      </div>
+                      <div className="nd-range">
+                        <input
+                          type="range"
+                          aria-label="Offer cap hit"
+                          min={minSalaryM}
+                          max={Math.min(Number(bonus.max_salary_m || 99), Math.max(12, offerAavNum * 1.35, Number(selected.ask_aav_m || selected.askingAav || 4) * 1.4))}
+                          step="0.025"
+                          value={Math.min(
+                            Math.min(Number(bonus.max_salary_m || 99), Math.max(12, offerAavNum * 1.35, Number(selected.ask_aav_m || selected.askingAav || 4) * 1.4)),
+                            Math.max(minSalaryM, offerAavNum || minSalaryM)
+                          )}
+                          disabled={busy}
+                          onChange={(e) => setOfferAav(Number(e.target.value).toFixed(3))}
+                        />
+                      </div>
+                    </div>
+                    <div className="nd-field">
+                      <div className="nd-field__head"><span>Years</span></div>
+                      <div className="nd-seg" role="group" aria-label="Contract years">
+                        {termOptionsUfa.map((y) => (
+                          <button
+                            key={y}
+                            type="button"
+                            className={offerYearsNum === y ? "is-active" : ""}
+                            aria-pressed={offerYearsNum === y}
+                            disabled={busy}
+                            onClick={() => setOfferYears(String(y))}
+                          >
+                            {y}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    {isOfferSheet ? null : (
+                      <div className="nd-field">
+                        <div className="nd-field__head"><span>Protection</span></div>
+                        <div className="nd-seg" role="group" aria-label="Contract clauses">
+                          {[
+                            ["none", "None", !offerNtc && !offerNmc],
+                            ["ntc", "NTC", offerNtc && !offerNtcModified && !offerNmc],
+                            ["mntc", "M-NTC", offerNtc && offerNtcModified && !offerNmc],
+                            ["nmc", "NMC", offerNmc],
+                          ].map(([id, label, on]) => (
+                            <button
+                              key={id}
+                              type="button"
+                              className={on ? "is-active" : ""}
+                              aria-pressed={on}
+                              disabled={busy}
+                              onClick={() => {
+                                setOfferNmc(id === "nmc");
+                                setOfferNtc(id === "ntc" || id === "mntc" || id === "nmc");
+                                setOfferNtcModified(id === "mntc");
+                              }}
+                            >
+                              {label}
+                              {label !== "None" && deskPlayer.wants_clause === label ? <em>asked</em> : null}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    <div className="nd-field">
+                      <div className="nd-field__head">
+                        <span>Signing bonus</span>
+                        <strong>{bonusAllowed ? formatMoney(offerBonusNum) : "Not available"}</strong>
+                      </div>
+                      {bonusAllowed ? (
+                        <div className="nd-range">
+                          <input
+                            type="range"
+                            aria-label="Signing bonus"
+                            min={0}
+                            max={bonusCapM}
+                            step="0.025"
+                            value={offerBonusNum}
+                            disabled={busy}
+                            onChange={(e) => setOfferBonus(Number(e.target.value).toFixed(3))}
+                          />
+                        </div>
+                      ) : (
+                        <p className="nd-note">
+                          {bonus.label || `Signing bonuses need club revenue of $${Math.round(Number(bonus.floor_m) || 155)}M or more.`}
+                        </p>
+                      )}
+                    </div>
+                  <div className={`${prefix}-fa-capbar`}>
+                    <div>
+                      <span>Cap before</span>
+                      <strong>{formatMoney(capSpace)}</strong>
+                    </div>
+                    <div>
+                      <span>After offer</span>
+                      <strong className={projectedSpace != null && projectedSpace < 0 ? "is-red" : "is-green"}>
+                        {projectedSpace != null ? formatMoney(projectedSpace) : "—"}
+                      </strong>
+                    </div>
+                    <div className={`${prefix}-fa-captrack`}>
+                      <span
+                        style={{
+                          width: `${Math.max(0, Math.min(100, capProj.capBarPct ?? 0))}%`,
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                    <div className="nd-actions">
+                      <button
+                        type="button"
+                        className="nd-btn nd-btn--primary"
+                        disabled={busy || (isOfferSheet && selected.offer_sheet_pending)}
+                        onClick={isOfferSheet ? submitSheet : submitSign}
+                      >
+                        {busy ? "Working…" : isOfferSheet ? "Tender offer sheet" : "Submit offer"}
+                      </button>
+                    </div>
+                  </div>
                   <InterestFactors
                     factors={response?.evaluation?.interest_factors || selected.interest_factors}
                     fit={{
@@ -2885,6 +2557,15 @@ export function FreeAgencyEventMenu({
                     }}
                   />
 
+                  {isOfferSheet ? null : (
+                    <NegotiationMeetingPanel
+                      playerId={selected.player_id || selected.id}
+                      onChanged={() => setFaMeetingRev((v) => v + 1)}
+                    />
+                  )}
+
+                  <details className={`${prefix}-fa-scout`}>
+                    <summary>Scouting report</summary>
                   {faDetailLoading ? (
                     <p className={`${prefix}-context`}>Loading Stats Central…</p>
                   ) : null}
@@ -2947,189 +2628,7 @@ export function FreeAgencyEventMenu({
                     </div>
                   ) : null}
 
-                  {competing.length ? (
-                    <div className={`${prefix}-fa-offers`}>
-                      <span className={`${prefix}-mini-label`}>Offers received</span>
-                      {competing.slice(0, 5).map((o) => (
-                        <div key={`${o.team_id}-${o.aav_m}`} className={`${prefix}-fa-offer`}>
-                          <TeamLogoBadge
-                            teamLogo={resolveFranchiseTeamLogo(
-                              {
-                                abbrev: o.team_abbrev,
-                                team_abbrev: o.team_abbrev,
-                                name: o.team_name,
-                              },
-                              o.team_name || o.team_abbrev
-                            )}
-                            teamName={o.team_name || o.team_abbrev}
-                            size={22}
-                            variant="circle"
-                          />
-                          <strong>{o.team_abbrev || o.team_name}</strong>
-                          <em>
-                            {formatMoney(o.aav_m)} · {o.years}y
-                            {o.is_user ? " · YOU" : ""}
-                          </em>
-                        </div>
-                      ))}
-                    </div>
-                  ) : interested.length ? (
-                    <div className={`${prefix}-fa-offers`}>
-                      <span className={`${prefix}-mini-label`}>Clubs circling</span>
-                      <div className={`${prefix}-fa-logos is-large`}>
-                        {interested.map((t) => (
-                          <TeamLogoBadge
-                            key={t.team_id || t.team_abbrev}
-                            teamLogo={resolveFranchiseTeamLogo(
-                              {
-                                abbrev: t.team_abbrev,
-                                team_abbrev: t.team_abbrev,
-                                name: t.team_name,
-                              },
-                              t.team_name || t.team_abbrev
-                            )}
-                            teamName={t.team_name || t.team_abbrev}
-                            size={26}
-                            variant="circle"
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-
-                  {isOfferSheet ? null : (
-                    <NegotiationMeetingPanel
-                      playerId={selected.player_id || selected.id}
-                      onChanged={() => setFaMeetingRev((v) => v + 1)}
-                    />
-                  )}
-
-                  <div className={`${prefix}-fa-controls`}>
-                    {isOfferSheet ? null : (
-                    <label className={`${prefix}-field`}>
-                      Type
-                      <div className={`${prefix}-select-wrap`}>
-                        <select
-                          value={contractCategory}
-                          disabled={busy}
-                          onChange={(e) => setContractCategory(e.target.value)}
-                        >
-                          <option value="nhl_one_way">NHL one-way</option>
-                          <option value="nhl_two_way">NHL two-way</option>
-                          <option value="ahl">AHL</option>
-                          <option value="pto">PTO</option>
-                        </select>
-                      </div>
-                    </label>
-                    )}
-                    <div className={`${prefix}-slider-block`}>
-                      <div className={`${prefix}-slider-head`}>
-                        <span>Annual salary</span>
-                        <strong>{formatMoney(offerAavNum)}</strong>
-                      </div>
-                      <input
-                        type="range"
-                        className={`${prefix}-salary-slider`}
-                        min={minSalaryM}
-                        max={Math.min(Number(bonus.max_salary_m || 99), Math.max(12, offerAavNum * 1.35, Number(selected.ask_aav_m || selected.askingAav || 4) * 1.4))}
-                        step="0.025"
-                        value={Math.min(
-                          Math.min(Number(bonus.max_salary_m || 99), Math.max(12, offerAavNum * 1.35, Number(selected.ask_aav_m || selected.askingAav || 4) * 1.4)),
-                          Math.max(minSalaryM, offerAavNum || minSalaryM)
-                        )}
-                        disabled={busy}
-                        onChange={(e) => setOfferAav(Number(e.target.value).toFixed(3))}
-                      />
-                    </div>
-                    <div className={`${prefix}-term-block`}>
-                      <span className={`${prefix}-mini-label`}>Term</span>
-                      <div className={`${prefix}-term-seg`}>
-                        {termOptionsUfa.map((y) => (
-                          <button
-                            key={y}
-                            type="button"
-                            className={offerYearsNum === y ? "is-active" : ""}
-                            disabled={busy}
-                            onClick={() => setOfferYears(String(y))}
-                          >
-                            {y}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                    {isOfferSheet ? null : (
-                    <div className={`${prefix}-check-row is-clauses`}>
-                      <label className={offerNtc ? "is-on" : ""}>
-                        <input
-                          type="checkbox"
-                          checked={offerNtc}
-                          disabled={busy || offerNmc}
-                          onChange={(e) => {
-                            setOfferNtc(e.target.checked);
-                            if (!e.target.checked) setOfferNtcModified(false);
-                          }}
-                        />
-                        NTC
-                      </label>
-                      <label className={offerNtc && offerNtcModified ? "is-on" : ""}>
-                        <input
-                          type="checkbox"
-                          checked={offerNtc && offerNtcModified}
-                          disabled={busy || offerNmc}
-                          onChange={(e) => {
-                            setOfferNtcModified(e.target.checked);
-                            if (e.target.checked) setOfferNtc(true);
-                          }}
-                        />
-                        M-NTC
-                      </label>
-                      <label className={offerNmc ? "is-on" : ""}>
-                        <input
-                          type="checkbox"
-                          checked={offerNmc}
-                          disabled={busy}
-                          onChange={(e) => {
-                            setOfferNmc(e.target.checked);
-                            if (e.target.checked) setOfferNtc(true);
-                          }}
-                        />
-                        NMC
-                      </label>
-                    </div>
-                    )}
-                    <div className={`${prefix}-slider-block`}>
-                      <div className={`${prefix}-slider-head`}>
-                        <span>Signing bonus</span>
-                        <strong>{bonusAllowed ? formatMoney(offerBonusNum) : "Locked"}</strong>
-                      </div>
-                      {bonusAllowed ? (
-                        <input
-                          type="range"
-                          className={`${prefix}-salary-slider`}
-                          min={0}
-                          max={bonusCapM}
-                          step="0.025"
-                          value={offerBonusNum}
-                          disabled={busy}
-                          onChange={(e) => setOfferBonus(Number(e.target.value).toFixed(3))}
-                        />
-                      ) : (
-                        <p className={`${prefix}-context`}>
-                          {bonus.label || `Signing bonuses require NHL revenue ≥ $${Math.round(Number(bonus.floor_m) || 155)}M`}
-                        </p>
-                      )}
-                    </div>
-                    <div className={`${prefix}-negotiate-actions`}>
-                      <button
-                        type="button"
-                        className={`${prefix}-cta-btn ${prefix}-submit-btn`}
-                        disabled={busy || (isOfferSheet && selected.offer_sheet_pending)}
-                        onClick={isOfferSheet ? submitSheet : submitSign}
-                      >
-                        {busy ? "Working…" : isOfferSheet ? "Tender Offer Sheet" : "Submit Offer"}
-                      </button>
-                    </div>
-                  </div>
+                  </details>
                 </>
               )}
             </aside>

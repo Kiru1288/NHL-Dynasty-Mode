@@ -16,7 +16,7 @@ import {
   PerformanceStrip,
   LeagueBadge,
 } from "../components/franchise/commandVisuals";
-import { BOARD_SOURCES, WORKSPACE_TABS, confMeaning, enrichProspectsForWarRoom, groupByPyramid, overageStockNote, rankProspectsForSource, skillDevelopmentNotes, sourceCaption, weeklyStockMovers, weeklyTrajectoryPoints } from "./draftWarRoom";
+import { BOARD_SOURCES, WORKSPACE_TABS, confMeaning, enrichProspectsForWarRoom, groupByPyramid, overageStockNote, rankProspectsForSource, skillDevelopmentNotes, weeklyStockMovers, weeklyTrajectoryPoints } from "./draftWarRoom";
 import {
   OutcomeDonut,
   PercentileBars,
@@ -73,10 +73,10 @@ function formatNhlEta(value, fallback = "TBD") {
 
 
 const BOARD_NAV_ITEMS = [
-  { key: "rank", label: "RANK", title: "Rank", icon: "rank" },
-  { key: "forwards", label: "FWD", title: "Forwards", icon: "fwd" },
-  { key: "defensemen", label: "D-MEN", title: "Defensemen", icon: "dmen" },
-  { key: "goalies", label: "G", title: "Goalies", icon: "goalie" },
+  { key: "rank", label: "All", title: "All prospects", icon: "rank" },
+  { key: "forwards", label: "Forwards", title: "Forwards", icon: "fwd" },
+  { key: "defensemen", label: "Defense", title: "Defensemen", icon: "dmen" },
+  { key: "goalies", label: "Goalies", title: "Goalies", icon: "goalie" },
 ];
 
 function normalizeProspectPosition(pos) {
@@ -2459,17 +2459,12 @@ function CommandStatStrip({ franchiseState, onOpenWjc }) {
     eventKey: "draft_lottery",
     hudRow: events?.lottery,
   });
-  const draftValue = resolveHudEventDisplay(franchiseState, hud, {
-    eventKey: "draft",
-    hudRow: events?.draft,
-    draftLive: isDraftLive(franchiseState),
-  });
 
+  // The draft countdown lives in the header; this strip carries the other dates.
   const items = [
-    { key: "status", icon: statusIconForKey(teamStatus?.key), label: "TEAM STATUS", value: teamStatus?.label || "Middling", clickable: false },
-    { key: "wjc", icon: "◎", label: "WJC", value: wjcValue || "—", clickable: wjcClickable },
-    { key: "lottery", icon: "◌", label: "LOTTERY", value: lotValue || "—", clickable: false },
-    { key: "draft", icon: "▣", label: "DRAFT", value: draftValue || "—", clickable: false },
+    { key: "status", icon: statusIconForKey(teamStatus?.key), label: "Team status", value: teamStatus?.label || "Middling", clickable: false },
+    { key: "lottery", icon: "◌", label: "Draft lottery", value: lotValue || "—", clickable: false },
+    { key: "wjc", icon: "◎", label: "World Juniors", value: wjcValue || "—", clickable: wjcClickable },
   ];
 
   return (
@@ -2823,12 +2818,9 @@ function ProspectBoardPanel({
   return (
     <section className={`dc-prospect-board${showConsensus ? " is-consensus" : ""}`}>
       <header className="dc-prospect-board__head">
-        <div>
-          <h2>{sourceCaption(boardSource)}</h2>
-          <p className="dc-public-intel-note" title="Dedicated YOU file reopens ceiling fog on later picks">
-            Public ceiling intel clear through pick ~45 · later picks need Deploy coverage or assigned scouts
-          </p>
-        </div>
+        <p className="dc-public-intel-note" title="Dedicated YOU file reopens ceiling fog on later picks">
+          Public ceiling intel clear through pick ~45 · later picks need Deploy coverage or assigned scouts
+        </p>
         <span>
           {prospects.length} prospect{prospects.length === 1 ? "" : "s"}
           {filterLabel ? ` · ${filterLabel}` : ""}
@@ -2859,17 +2851,19 @@ function ProspectBoardPanel({
             type="button"
             className={`dc-consensus-chip${pyramidMode ? " is-on" : ""}`}
             onClick={() => setPyramidMode((v) => !v)}
+            aria-pressed={pyramidMode}
             title="Group the board into pyramid tiers. Off = strict rank order."
           >
-            Pyramid {pyramidMode ? "on" : "off"}
+            Pyramid tiers
           </button>
           <button
             type="button"
             className={`dc-consensus-chip${showConsensus ? " is-on" : ""}`}
             onClick={() => setShowConsensus((v) => !v)}
+            aria-pressed={showConsensus}
             title="Public consensus is a reference filter, not the GM board"
           >
-            Consensus {showConsensus ? "on" : "ref"}
+            Public consensus
           </button>
         </div>
       </div>

@@ -2,11 +2,10 @@ import { gameConfirm } from "../components/common/gameConfirm";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useGameUI } from "../game/GameUIContext";
 import { SCREENS } from "../game/constants";
-import { getContractOffice, qualifyRfa, releaseRfaRights, buyoutContract, waiveContract, buryContract, getFreeAgentDetail, submitOfferSheet, matchOfferSheet, declineOfferSheet, fileArbitration, settleArbitration, getRosterMoves, moveRosterPlayer } from "../services/franchiseService";
+import { getContractOffice, qualifyRfa, releaseRfaRights, buyoutContract, waiveContract, buryContract, submitOfferSheet, matchOfferSheet, declineOfferSheet, fileArbitration, settleArbitration, getRosterMoves, moveRosterPlayer } from "../services/franchiseService";
 import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
 import PlayerHeadshot from "../components/PlayerHeadshot";
 import { ensurePlayerHeadshotFields } from "../utils/playerHeadshots";
-import { StatusSeal } from "../components/franchise/commandVisuals";
 import CapContractNegotiation from "../components/contracts/CapContractNegotiation";
 
 const NHL_ROSTER_LIMIT = 23;
@@ -60,20 +59,19 @@ function buildRosterSlotSummary(franchiseState, snap, teamId) {
 }
 
 const TABS = [
-  { id: "ledger", label: "Board" },
-  { id: "freeAgents", label: "Free Agents" },
-  { id: "rfa", label: "RFA / Sheets" },
-  { id: "cap", label: "Cap" },
+  { id: "ledger", label: "Contracts" },
+  { id: "rfa", label: "RFAs & offer sheets" },
+  { id: "cap", label: "Cap breakdown" },
 ];
 
 const FILTERS = [
   { id: "all", label: "All" },
-  { id: "expiring", label: "Exp" },
+  { id: "expiring", label: "Expiring" },
   { id: "rfa", label: "RFA" },
-  { id: "core", label: "Core" },
-  { id: "bad", label: "Risk" },
-  { id: "bargain", label: "Deal" },
-  { id: "clause", label: "NTC" },
+  { id: "core", label: "Core 85+" },
+  { id: "bargain", label: "Bargains" },
+  { id: "bad", label: "Overpaid" },
+  { id: "clause", label: "Clauses" },
 ];
 
 function safeArray(v) {
@@ -94,13 +92,7 @@ function formatMoneyM(v) {
   const n = safeNum(v, NaN);
   if (!Number.isFinite(n)) return "—";
   if (n === 0) return "$0";
-  return `$${n.toFixed(1)}M`;
-}
-
-function formatPct(used, limit) {
-  const capLimit = safeNum(limit, 0);
-  if (!capLimit) return "—";
-  return `${((safeNum(used) / capLimit) * 100).toFixed(1)}%`;
+  return `$${n.toFixed(2)}M`;
 }
 
 function getCapSnap(data) {
@@ -131,24 +123,6 @@ function valueKey(value, tags = []) {
   }
 
   return "neutral";
-}
-
-function chipClass(label) {
-  const t = String(label || "").toLowerCase();
-
-  if (t.includes("bad") || t.includes("over") || t.includes("risk") || t.includes("casualty") || t.includes("buyout")) {
-    return "cap-chip cap-chip-danger";
-  }
-
-  if (t.includes("bargain") || t.includes("deal") || t.includes("core") || t.includes("elc")) {
-    return "cap-chip cap-chip-good";
-  }
-
-  if (t.includes("clause") || t.includes("ntc") || t.includes("nmc") || t.includes("heavy") || t.includes("expiring") || t.includes("rfa")) {
-    return "cap-chip cap-chip-warning";
-  }
-
-  return "cap-chip";
 }
 
 function getStatusLabel(row) {
@@ -196,197 +170,185 @@ function ovrPopTone(ovr) {
   return "muted";
 }
 
+function contractEndLabel(row) {
+  const yrs = safeNum(row?.years_remaining ?? row?.yearsRemaining, 0);
+  const endYear = row?.expiry_year ?? row?.expiryYear;
+  if (yrs <= 0) return "—";
+  return endYear ? `${yrs} yr${yrs === 1 ? "" : "s"} · thru ${endYear}` : `${yrs} yr${yrs === 1 ? "" : "s"}`;
+}
+
+function contractStatusTone(row) {
+  const status = getStatusLabel(row);
+  const expiry = String(row?.expiry_status || "").toUpperCase();
+  const tags = safeArray(row?.tags);
+  if (/UFA/.test(expiry) || /UFA/.test(status)) return "ufa";
+  if (/RFA/.test(expiry) || /RFA/.test(status)) return "rfa";
+  if (/ELC|ENTRY/.test(status) || tags.some((t) => /elc/i.test(String(t)))) return "elc";
+  if (/NTC|NMC/.test(status)) return "ntc";
+  return "neutral";
+}
+
+function isExpiringRow(row) {
+  const yrs = safeNum(row?.years_remaining ?? row?.yearsRemaining, 99);
+  return !row?.extension_signed && (yrs <= 1 || row?.contract_status === "expiring" || row?.pending_july1_expiry);
+}
+
+function clauseOf(row) {
+  const c = safeText(row?.clause_label, "");
+  return c && c !== "None" && c !== "—" ? c : "";
+}
+
 function ContractBoardRow({ row, onSelect, isSelected = false }) {
   const ovr = safeNum(row.overall ?? row.ovr);
   const aav = safeNum(row.aav_m ?? row.aav);
-  const yrs = safeNum(row.years_remaining ?? row.yearsRemaining);
-  const tags = safeArray(row.tags);
-  const status = getStatusLabel(row);
   const value = getValueLabel(row);
-  const stripe = valueKey(value, tags);
+  // Tone follows the label shown, not the raw tag soup (which can say "Bad Deal" and "Bargain" at once).
+  const valueTone = valueKey(value);
   const player = buildHeadshotPlayer(row);
+  const expiring = isExpiringRow(row);
   const expiry = String(row?.expiry_status || "").toUpperCase();
   const daysLeft = Number(row?.days_to_expiry ?? row?.daysToExpiry ?? row?.ufa_days);
-  const isExpiring =
-    !row?.extension_signed &&
-    (yrs <= 1 ||
-      row?.contract_status === "expiring" ||
-      row?.pending_july1_expiry ||
-      /^exp$/i.test(status));
-  const sealTone = /UFA/.test(expiry) || /UFA/.test(status)
-    ? "ufa"
-    : /RFA/.test(expiry) || /RFA/.test(status)
-      ? "rfa"
-      : /ELC|ENTRY/.test(status) || tags.some((t) => /elc/i.test(String(t)))
-        ? "elc"
-        : /NTC|NMC/.test(status)
-          ? "ntc"
-          : "neutral";
+  const clause = clauseOf(row);
+  const tone = contractStatusTone(row);
 
+  // One row, no boxes: who · rating · money · how long · what happens next.
   return (
     <button
       type="button"
-      className={`cap-contract-card cap-contract-row cap-stripe-${stripe}${isSelected ? " is-selected" : ""}${isExpiring ? " is-expiring" : ""}`}
+      className={`cl-row${isSelected ? " is-selected" : ""}${expiring ? " is-expiring" : ""}`}
       onClick={() => onSelect(row)}
+      aria-pressed={isSelected}
     >
-      <span className="cap-contract-player">
-        <span className="cap-photo-well" aria-hidden="true">
-          <PlayerHeadshot player={player} size="sm" className="cap-card-headshot" />
-        </span>
-
-        <span className="cap-contract-meta cap-contract-row__identity">
-          <strong className="cap-contract-row__name">{safeText(row.name, "Unnamed Player")}</strong>
-          <em className="cap-contract-row__sub">
-            {safeText(row.position)} · {row.age ? `${row.age}` : "—"}
-          </em>
+      <span className="cl-row__who">
+        <PlayerHeadshot player={player} size="sm" className="cl-row__face" />
+        <span className="cl-row__name">
+          <strong>{safeText(row.name, "Unnamed Player")}</strong>
+          <em>{safeText(row.position)} · {row.age ? `${row.age}` : "—"}</em>
         </span>
       </span>
-
-      <span className="cap-contract-row__cell cap-contract-row__pos">
-        <span className="cap-icon-well tone-cyan">{safeText(row.position, "—").slice(0, 2)}</span>
-      </span>
-
-      <span className="cap-contract-row__cell cap-contract-row__ovr">
-        <span className={`cap-stat-well tone-${ovrPopTone(ovr)}`}>
-          <span className={`cap-num-pop tone-${ovrPopTone(ovr)}`}>{ovr || "—"}</span>
-        </span>
-      </span>
-
-      <span className="cap-contract-row__cell cap-contract-row__aav">
-        <span className="cap-stat-well tone-gold">
-          <span className="cap-num-pop tone-gold">{formatMoneyM(aav)}</span>
-        </span>
-      </span>
-
-      <span className="cap-contract-row__cell cap-contract-row__term">
-        <span className="cap-stat-well tone-cyan">
-          <span className="cap-num-pop tone-cyan">{yrs > 0 ? yrs : "—"}</span>
-          {yrs > 0 ? <em className="cap-stat-well__unit">YR</em> : null}
-        </span>
+      <span className={`cl-row__ovr tone-${ovrPopTone(ovr)}`}>{ovr || "—"}</span>
+      <span className="cl-row__aav">{formatMoneyM(aav)}</span>
+      <span className="cl-row__term">
         {row.extension_signed && row.extension_aav_m ? (
-          <span className="cap-contract-row__ext">
-            Next {formatMoneyM(row.extension_aav_m)}
-            {row.extension_years ? ` × ${row.extension_years}y` : ""}
-          </span>
-        ) : null}
+          <>
+            <b>{contractEndLabel(row)}</b>
+            <small>Ext. {formatMoneyM(row.extension_aav_m)}{row.extension_years ? ` × ${row.extension_years}` : ""}</small>
+          </>
+        ) : (
+          <b>{contractEndLabel(row)}</b>
+        )}
       </span>
-
-      <span className="cap-contract-row__tags">
-        <StatusSeal label={status} tone={sealTone} />
-        <span className={chipClass(value)}>{value}</span>
-        {isExpiring && Number.isFinite(daysLeft) ? (
-          <span className="cap-ufa-count">{expiry || "UFA"} IN {Math.max(0, Math.round(daysLeft))} DAYS</span>
+      <span className="cl-row__status">
+        {expiring ? (
+          <span className={`cl-tag is-${tone}`}>
+            {expiry || "UFA"}{Number.isFinite(daysLeft) ? ` in ${Math.max(0, Math.round(daysLeft))}d` : ""}
+          </span>
+        ) : tone === "elc" ? (
+          <span className="cl-tag is-elc">ELC</span>
         ) : null}
+        {clause ? <span className="cl-tag is-ntc">{clause}</span> : null}
+        {valueTone !== "neutral" ? <span className={`cl-tag is-${valueTone}`}>{value}</span> : null}
       </span>
     </button>
   );
 }
 
-function ContractBoardHeader() {
+const SORTS = {
+  aav: { label: "Cap hit", fn: (a, b) => safeNum(b.aav_m ?? b.aav) - safeNum(a.aav_m ?? a.aav) },
+  ovr: { label: "OVR", fn: (a, b) => safeNum(b.overall ?? b.ovr) - safeNum(a.overall ?? a.ovr) },
+  term: { label: "Term", fn: (a, b) => safeNum(a.years_remaining ?? a.yearsRemaining, 99) - safeNum(b.years_remaining ?? b.yearsRemaining, 99) },
+  name: { label: "Player", fn: (a, b) => safeText(a.name, "").localeCompare(safeText(b.name, "")) },
+};
+
+function ContractBoardHeader({ sort, onSort }) {
+  const col = (key, className) => (
+    <button
+      type="button"
+      className={`cl-head__col ${className}${sort === key ? " is-sorted" : ""}`}
+      onClick={() => onSort(key)}
+      aria-pressed={sort === key}
+    >
+      {SORTS[key].label}
+    </button>
+  );
   return (
-    <div className="cap-board-head">
-      <span>Player</span>
-      <span>Pos</span>
-      <span>OVR</span>
-      <span>AAV</span>
-      <span>Term</span>
-      <span>Status</span>
+    <div className="cl-head" role="row">
+      {col("name", "cl-head__who")}
+      {col("ovr", "cl-head__ovr")}
+      {col("aav", "cl-head__aav")}
+      {col("term", "cl-head__term")}
+      <span className="cl-head__col cl-head__status">Flags</span>
     </div>
   );
+}
+
+function matchesFilter(r, filter) {
+  const text = `${r.contract_value_score || ""} ${safeArray(r.tags).join(" ")}`.toLowerCase();
+  if (filter === "expiring") return !r.extension_signed && safeNum(r.years_remaining ?? r.yearsRemaining, 99) <= 1;
+  if (filter === "rfa") return String(r.expiry_status || "").toUpperCase().includes("RFA");
+  if (filter === "bad") return /bad|casualty|heavy|overpaid|risk/.test(text);
+  if (filter === "bargain") return /bargain|deal|elc/.test(text);
+  if (filter === "clause") return Boolean(r.clause_label && r.clause_label !== "None");
+  if (filter === "core") return safeNum(r.overall ?? r.ovr) >= 85;
+  return true;
 }
 
 function LedgerTab({ data, onSelect, selectedId }) {
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
+  const [sort, setSort] = useState("aav");
+  const all = safeArray(data.contracts);
+
+  const counts = useMemo(
+    () => Object.fromEntries(FILTERS.map((f) => [f.id, all.filter((r) => matchesFilter(r, f.id)).length])),
+    [all],
+  );
 
   const rows = useMemo(() => {
-    let list = [...safeArray(data.contracts)];
-
-    if (search.trim()) {
-      const q = search.trim().toLowerCase();
-
-      list = list.filter((r) => {
-        const haystack = [
-          r.name,
-          r.position,
-          r.expiry_status,
-          r.contract_value_score,
-          r.clause_label,
-          ...safeArray(r.tags),
-        ]
+    const q = search.trim().toLowerCase();
+    return all
+      .filter((r) => matchesFilter(r, filter))
+      .filter((r) => {
+        if (!q) return true;
+        return [r.name, r.position, r.expiry_status, r.contract_value_score, r.clause_label, ...safeArray(r.tags)]
           .map((v) => safeText(v, "").toLowerCase())
-          .join(" ");
-
-        return haystack.includes(q);
-      });
-    }
-
-    if (filter === "expiring") {
-      list = list.filter(
-        (r) => !r.extension_signed && safeNum(r.years_remaining ?? r.yearsRemaining, 99) <= 1,
-      );
-    }
-
-    if (filter === "rfa") {
-      list = list.filter((r) => String(r.expiry_status || "").toUpperCase().includes("RFA"));
-    }
-
-    if (filter === "bad") {
-      list = list.filter((r) => {
-        const text = `${r.contract_value_score || ""} ${safeArray(r.tags).join(" ")}`.toLowerCase();
-        return /bad|casualty|heavy|overpaid|risk/.test(text);
-      });
-    }
-
-    if (filter === "bargain") {
-      list = list.filter((r) => {
-        const text = `${r.contract_value_score || ""} ${safeArray(r.tags).join(" ")}`.toLowerCase();
-        return /bargain|deal|elc/.test(text);
-      });
-    }
-
-    if (filter === "clause") {
-      list = list.filter((r) => r.clause_label && r.clause_label !== "None");
-    }
-
-    if (filter === "core") {
-      list = list.filter((r) => safeNum(r.overall ?? r.ovr) >= 85);
-    }
-
-    return list.sort((a, b) => {
-      const aavDiff = safeNum(b.aav_m ?? b.aav) - safeNum(a.aav_m ?? a.aav);
-      if (aavDiff !== 0) return aavDiff;
-      return safeNum(b.overall ?? b.ovr) - safeNum(a.overall ?? a.ovr);
-    });
-  }, [data.contracts, filter, search]);
+          .join(" ")
+          .includes(q);
+      })
+      .sort((a, b) => SORTS[sort].fn(a, b) || SORTS.ovr.fn(a, b));
+  }, [all, filter, search, sort]);
 
   return (
-    <section className="cap-office-panel cap-board-panel">
-      <div className="cap-ledger-toolbar cap-board-toolbar">
-        <input
-          className="cap-search"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search player"
-        />
-
-        <div className="cap-filter-pills">
+    <section className="cl-board" aria-label="Contracts">
+      <div className="cl-board__toolbar">
+        <div className="cl-filters" role="tablist" aria-label="Filter contracts">
           {FILTERS.map((item) => (
             <button
               key={item.id}
               type="button"
-              className={`cap-filter-pill ${filter === item.id ? "is-active" : ""}`}
+              role="tab"
+              aria-selected={filter === item.id}
+              className={`cl-filter${filter === item.id ? " is-active" : ""}`}
               onClick={() => setFilter(item.id)}
+              disabled={item.id !== "all" && !counts[item.id]}
             >
-              {item.label}
+              {item.label} <span>{counts[item.id] ?? 0}</span>
             </button>
           ))}
         </div>
+        <input
+          className="cl-search"
+          type="search"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search players"
+          aria-label="Search players"
+        />
       </div>
 
-      <ContractBoardHeader />
+      <ContractBoardHeader sort={sort} onSort={setSort} />
 
-      <div className="cap-contract-list cap-board-list">
+      <div className="cl-board__list">
         {rows.length ? (
           rows.map((row) => (
             <ContractBoardRow
@@ -397,7 +359,7 @@ function LedgerTab({ data, onSelect, selectedId }) {
             />
           ))
         ) : (
-          <div className="cap-empty-state">No matches.</div>
+          <p className="cl-empty">No contracts match{search ? ` “${search}”` : " this filter"}.</p>
         )}
       </div>
     </section>
@@ -475,20 +437,20 @@ function ContractRosterMoves({ row, onMoved }) {
   };
 
   return (
-    <div className="cap-action-panel__moves">
-      <h4>Call up / Send down</h4>
-      <p className="cap-action-panel__moves-meta">
+    <div className="cl-moves">
+      <h4>Assignment</h4>
+      <p className="cl-moves__meta">
         Location: {meta.location || "—"}
         {meta.nhl_gp != null ? ` · NHL GP ${meta.nhl_gp}` : ""}
         {meta.waiver_exempt ? " · Waiver exempt" : ""}
       </p>
-      <div className="cap-action-panel__actions">
+      <div className="cl-panel__actions">
         {moves.length ? (
           moves.map((m) => (
             <button
               key={m.id}
               type="button"
-              className="cap-action-btn"
+              className="cl-btn"
               disabled={Boolean(busy) || m.enabled === false}
               title={m.reason || m.note || ""}
               onClick={() => runMove(m.id)}
@@ -498,11 +460,11 @@ function ContractRosterMoves({ row, onMoved }) {
             </button>
           ))
         ) : (
-          <span className="cap-chip">{error || "No assignment moves for this player"}</span>
+          <p className="cl-panel__note">{error || "No assignment moves for this player."}</p>
         )}
       </div>
-      {note ? <p className="cap-action-panel__moves-note">{note}</p> : null}
-      {error && moves.length ? <p className="cap-action-panel__moves-error">{error}</p> : null}
+      {note ? <p className="cl-moves__note">{note}</p> : null}
+      {error && moves.length ? <p className="cl-moves__error">{error}</p> : null}
     </div>
   );
 }
@@ -564,165 +526,6 @@ function buildContractPanelActions(row) {
   return actions;
 }
 
-function ContractActionPanel({
-  row,
-  onClose,
-  onAction,
-  busy,
-  onRosterMoved,
-  onOpenNegotiate,
-}) {
-  if (!row) {
-    return (
-      <section className="cap-action-panel cap-action-panel--empty">
-        <p>Select a player to re-sign, buy out, call up / send down, or manage their contract.</p>
-      </section>
-    );
-  }
-
-  const ext = row.extension_estimate || {};
-  const buy = row.buyout_estimate || {};
-  const ovr = safeNum(row.overall ?? row.ovr);
-  const pot = safeNum(row.potential ?? row.pot);
-  const aav = safeNum(row.aav_m ?? row.aav);
-  const yrs = safeNum(row.years_remaining ?? row.yearsRemaining);
-  const expiryYear = row.expiry_year ?? row.expiryYear;
-  const valueScore = safeText(row.contract_value_score, "—");
-  const player = buildHeadshotPlayer(row);
-  const displayTags = safeArray(row.tags).filter(
-    (tag) => !/casualty|cap casualty|trade pressure/i.test(String(tag)),
-  );
-  const actions = buildContractPanelActions(row);
-  const ineligible = safeText(row.ineligible_reason, "");
-
-  const dossierTiles = [
-    { label: "AAV", value: formatMoneyM(aav), tone: "gold" },
-    { label: "Term", value: yrs ? `${yrs} yr` : "—", tone: "cyan" },
-    { label: "Status", value: getStatusLabel(row), tone: "blue" },
-    { label: "OVR", value: ovr || "—", tone: ovrPopTone(ovr) },
-    { label: "POT", value: pot || "—", tone: pot >= 88 ? "gold" : "cyan" },
-    { label: "Expiry", value: expiryYear ? String(expiryYear) : "—", tone: "muted" },
-    { label: "Value", value: valueScore, tone: /bargain|deal/i.test(valueScore) ? "green" : /risk|bad/i.test(valueScore) ? "danger" : "muted" },
-    { label: "Clause", value: row.clause_label && row.clause_label !== "None" ? row.clause_label : "—", tone: row.nmc || row.no_move_clause ? "gold" : "muted" },
-  ];
-
-  if (ext.likelyAav) {
-    dossierTiles.push({
-      label: "Proj. deal",
-      value: `${formatMoneyM(ext.likelyAav)} × ${ext.likelyTerm}yr`,
-      tone: "green",
-    });
-  }
-  if (row.extension_aav_m) {
-    dossierTiles.push({
-      label: "Future ext.",
-      value: `${formatMoneyM(row.extension_aav_m)}${row.extension_years_remaining ? ` × ${row.extension_years_remaining}yr` : ""}`,
-      tone: "orange",
-    });
-  }
-  if (buy.totalCost != null) {
-    dossierTiles.push({ label: "Buyout", value: formatMoneyM(buy.totalCost), tone: "danger" });
-  }
-
-  return (
-    <section className="cap-action-panel">
-      <button type="button" className="cap-action-panel__close" onClick={onClose} aria-label="Clear selection">
-        ×
-      </button>
-
-      <div className="cap-action-panel__player">
-        <span className="cap-photo-well cap-photo-well--lg" aria-hidden="true">
-          <PlayerHeadshot player={player} size="md" className="cap-action-panel__headshot" />
-        </span>
-        <div className="cap-action-panel__identity">
-          <h3>{safeText(row.name, "Unnamed Player")}</h3>
-          <p className="cap-action-panel__role">
-            {safeText(row.position)} · Age {row.age || "—"} · #{row.sweater_number || row.jersey || "—"}
-          </p>
-          <p className="cap-action-panel__ratings">
-            <span className={`cap-num-pop tone-${ovrPopTone(ovr)}`}>OVR {ovr || "—"}</span>
-            {pot ? (
-              <>
-                <span className="cap-action-panel__dot">·</span>
-                <span className={`cap-num-pop tone-${pot >= 88 ? "gold" : "cyan"}`}>POT {pot}</span>
-              </>
-            ) : null}
-          </p>
-        </div>
-      </div>
-
-      <div className="cap-action-panel__dossier">
-        {dossierTiles.map((tile) => (
-          <div key={tile.label} className="cap-dossier-tile">
-            <span className="cap-dossier-tile__label">{tile.label}</span>
-            <strong className={`cap-num-pop tone-${tile.tone}`}>{tile.value}</strong>
-          </div>
-        ))}
-      </div>
-
-      {(displayTags.length || (row.clause_label && row.clause_label !== "None")) ? (
-        <div className="cap-action-panel__tags">
-          {row.clause_label && row.clause_label !== "None" ? (
-            <span className={chipClass(row.clause_label)}>{row.clause_label}</span>
-          ) : null}
-          {displayTags.map((tag) => (
-            <span key={tag} className={chipClass(tag)}>{tag}</span>
-          ))}
-        </div>
-      ) : null}
-
-      <div className="cap-action-panel__actions">
-        {actions.length ? (
-          actions.map((a) => (
-            <button
-              key={a.id}
-              type="button"
-              className={`cap-action-btn cap-edraft-action-btn${a.id === "buyout" ? " cap-action-btn--danger" : ""}`}
-              disabled={busy}
-              onClick={(e) => {
-                e.stopPropagation();
-                if (isNegotiateAction(a.id)) {
-                  onOpenNegotiate?.(row);
-                  return;
-                }
-                onAction(a.id, row);
-              }}
-            >
-              {a.label}
-            </button>
-          ))
-        ) : (
-          <span className="cap-action-panel__ineligible">
-            {ineligible || "No contract actions for this player right now."}
-          </span>
-        )}
-      </div>
-
-      <ContractRosterMoves row={row} onMoved={onRosterMoved} />
-    </section>
-  );
-}
-
-
-
-
-
-
-
-
-
-
-
-
-function CapTile({ label, value, danger = false }) {
-  return (
-    <article className={`cap-ledger-stat-card cap-tile ${danger ? "is-danger" : ""}`}>
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </article>
-  );
-}
-
 function RfaSheetsTab({
   data,
   onSelect,
@@ -742,31 +545,22 @@ function RfaSheetsTab({
     null;
 
   return (
-    <section className="cap-board-panel">
-      <div className="cap-board-toolbar">
-        <h2>RFA desk</h2>
-        <p className="cap-empty-state" style={{ margin: 0, padding: 0 }}>
-          Qualify your RFAs, settle arbitration, match sheets against you, or file sheets on other clubs.
-        </p>
-      </div>
-
+    <section className="cl-board cl-rfa" aria-label="RFAs and offer sheets">
       {pending.length ? (
-        <div className="cap-contract-list" style={{ marginBottom: "0.75rem" }}>
-          <h3 style={{ fontSize: "0.75rem", margin: "0 0 0.35rem" }}>Pending offer sheets</h3>
+        <div className="cl-rfa__group is-urgent">
+          <h3>Offer sheets on your players <span>{pending.length}</span></h3>
           {pending.map((sheet) => (
-            <div key={`${sheet.player_id}-${sheet.offering_team_id}`} className="cap-fa-row" style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+            <div key={`${sheet.player_id}-${sheet.offering_team_id}`} className="cl-rfa__sheet">
               <strong>{safeText(sheet.name || sheet.player_id)}</strong>
-              <span>{formatMoneyM(sheet.aav_m)} × {sheet.years || 1}yr</span>
+              <span>{formatMoneyM(sheet.aav_m)} × {sheet.years || 1} yrs</span>
               <span>{safeText(sheet.compensation_label || sheet.compensation_tier)}</span>
               {sheet.days_remaining != null || sheet.expires_day != null ? (
-                <span className="cap-chip cap-chip--warn">
-                  Match in {Math.max(0, Number(sheet.days_remaining ?? 0))}d
-                </span>
+                <span className="cl-tag is-rfa">Match in {Math.max(0, Number(sheet.days_remaining ?? 0))}d</span>
               ) : null}
-              <button type="button" className="cap-action-btn" disabled={busy} onClick={() => onResolveSheet("match", sheet)}>
+              <button type="button" className="cl-btn cl-btn--primary" disabled={busy} onClick={() => onResolveSheet("match", sheet)}>
                 Match
               </button>
-              <button type="button" className="cap-action-btn cap-action-btn--danger" disabled={busy} onClick={() => onResolveSheet("decline", sheet)}>
+              <button type="button" className="cl-btn cl-btn--danger" disabled={busy} onClick={() => onResolveSheet("decline", sheet)}>
                 Decline
               </button>
             </div>
@@ -774,172 +568,276 @@ function RfaSheetsTab({
         </div>
       ) : null}
 
-      <div className="cap-board-head" style={{ gridTemplateColumns: "2fr 0.5fr 0.5fr 0.8fr 1fr" }}>
-        <span>Your RFA rights</span>
-        <span>Pos</span>
-        <span>OVR</span>
-        <span>QO</span>
-        <span>Status</span>
-      </div>
-      <div className="cap-contract-list cap-board-list" style={{ maxHeight: "28vh", marginBottom: "0.85rem" }}>
-        {ownRfa.length ? (
-          ownRfa.map((row) => (
-            <button
-              key={row.player_id}
-              type="button"
-              className={`cap-fa-row ${selectedId === row.player_id ? "is-selected" : ""}`}
-              style={{ display: "grid", gridTemplateColumns: "2fr 0.5fr 0.5fr 0.8fr 1fr", width: "100%", textAlign: "left" }}
-              onClick={() => onSelect(row)}
-            >
-              <span>{safeText(row.name)}</span>
-              <span>{safeText(row.position)}</span>
-              <span>{safeNum(row.overall)}</span>
-              <span>{formatMoneyM(row.qualifying_offer_aav_m)}</span>
-              <span>
-                {row.arbitration_filed ? "Arb filed" : row.offer_sheet_pending ? "Sheet pending" : "Rights"}
-              </span>
-            </button>
-          ))
-        ) : (
-          <div className="cap-empty-state">No RFA rights on file.</div>
-        )}
+      <div className="cl-rfa__group">
+        <h3>Your RFA rights <span>{ownRfa.length}</span></h3>
+        <div className="cl-rfa__head"><span>Player</span><span>OVR</span><span>Qualifying offer</span><span>Status</span></div>
+        <div className="cl-rfa__list">
+          {ownRfa.length ? (
+            ownRfa.map((row) => (
+              <button
+                key={row.player_id}
+                type="button"
+                className={`cl-rfa__row${selectedId === row.player_id ? " is-selected" : ""}`}
+                aria-pressed={selectedId === row.player_id}
+                onClick={() => onSelect(row)}
+              >
+                <span className="cl-rfa__name"><strong>{safeText(row.name)}</strong><em>{safeText(row.position)}</em></span>
+                <span>{safeNum(row.overall) || "—"}</span>
+                <span>{formatMoneyM(row.qualifying_offer_aav_m)}</span>
+                <span>{row.arbitration_filed ? "Arbitration filed" : row.offer_sheet_pending ? "Sheet pending" : "Rights held"}</span>
+              </button>
+            ))
+          ) : (
+            <p className="cl-empty">No RFA rights on file.</p>
+          )}
+        </div>
       </div>
 
-      <div className="cap-board-head" style={{ gridTemplateColumns: "2fr 0.5fr 0.5fr 0.8fr 1.2fr" }}>
-        <span>Offer-sheet targets</span>
-        <span>Pos</span>
-        <span>OVR</span>
-        <span>QO</span>
-        <span>Comp @ suggest</span>
-      </div>
-      <div className="cap-contract-list cap-board-list" style={{ maxHeight: "28vh" }}>
-        {targets.length ? (
-          targets.map((row) => (
-            <button
-              key={`${row.rights_team_id}-${row.player_id}`}
-              type="button"
-              className={`cap-fa-row ${selectedId === row.player_id ? "is-selected" : ""}`}
-              style={{ display: "grid", gridTemplateColumns: "2fr 0.5fr 0.5fr 0.8fr 1.2fr", width: "100%", textAlign: "left" }}
-              onClick={() => {
-                onSelect(row);
-                setSheetDraft({
-                  aav_m: String(row.suggested_aav_m || row.qualifying_offer_aav_m || 1),
-                  years: "4",
-                });
-              }}
-            >
-              <span>{safeText(row.name)} <em style={{ opacity: 0.65 }}>{safeText(row.rights_team_id)}</em></span>
-              <span>{safeText(row.position)}</span>
-              <span>{safeNum(row.overall)}</span>
-              <span>{formatMoneyM(row.qualifying_offer_aav_m)}</span>
-              <span>{safeText(row.compensation_preview?.label)}</span>
-            </button>
-          ))
-        ) : (
-          <div className="cap-empty-state">No other-club RFAs available for offer sheets.</div>
-        )}
+      <div className="cl-rfa__group">
+        <h3>Offer-sheet targets <span>{targets.length}</span></h3>
+        <div className="cl-rfa__head"><span>Player</span><span>OVR</span><span>Qualifying offer</span><span>Compensation</span></div>
+        <div className="cl-rfa__list">
+          {targets.length ? (
+            targets.map((row) => (
+              <button
+                key={`${row.rights_team_id}-${row.player_id}`}
+                type="button"
+                className={`cl-rfa__row${selectedId === row.player_id ? " is-selected" : ""}`}
+                aria-pressed={selectedId === row.player_id}
+                onClick={() => {
+                  onSelect(row);
+                  setSheetDraft({
+                    aav_m: String(row.suggested_aav_m || row.qualifying_offer_aav_m || 1),
+                    years: "4",
+                  });
+                }}
+              >
+                <span className="cl-rfa__name"><strong>{safeText(row.name)}</strong><em>{safeText(row.position)} · {safeText(row.rights_team_id)}</em></span>
+                <span>{safeNum(row.overall) || "—"}</span>
+                <span>{formatMoneyM(row.qualifying_offer_aav_m)}</span>
+                <span>{safeText(row.compensation_preview?.label)}</span>
+              </button>
+            ))
+          ) : (
+            <p className="cl-empty">No other-club RFAs are open to offer sheets.</p>
+          )}
+        </div>
       </div>
 
       {selected?.offer_sheet_eligible && selected?.rights_team_id ? (
-        <div className="cap-action-panel" style={{ marginTop: "0.75rem" }}>
-          <h3>File offer sheet — {safeText(selected.name)}</h3>
-          <div className="cap-action-panel__stats">
-            <label>
-              <span>AAV ($M)</span>
-              <input
-                type="number"
-                step="0.025"
-                value={sheetDraft.aav_m}
-                onChange={(e) => setSheetDraft((d) => ({ ...d, aav_m: e.target.value }))}
-              />
-            </label>
-            <label>
-              <span>Years</span>
-              <input
-                type="number"
-                min="1"
-                max={Math.max(1, Number(data?.signing_bonus?.max_term_ufa || 6))}
-                value={sheetDraft.years}
-                onChange={(e) => setSheetDraft((d) => ({ ...d, years: e.target.value }))}
-              />
-            </label>
-          </div>
-          <button
-            type="button"
-            className="cap-action-btn"
-            disabled={busy}
-            onClick={() => onFileSheet(selected, sheetDraft)}
-          >
+        <form
+          className="cl-rfa__form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            onFileSheet(selected, sheetDraft);
+          }}
+        >
+          <h3>Offer sheet · {safeText(selected.name)}</h3>
+          <label>
+            <span>Cap hit ($M)</span>
+            <input
+              type="number"
+              step="0.025"
+              min="0"
+              value={sheetDraft.aav_m}
+              onChange={(e) => setSheetDraft((d) => ({ ...d, aav_m: e.target.value }))}
+            />
+          </label>
+          <label>
+            <span>Years</span>
+            <input
+              type="number"
+              min="1"
+              max={Math.max(1, Number(data?.signing_bonus?.max_term_ufa || 6))}
+              value={sheetDraft.years}
+              onChange={(e) => setSheetDraft((d) => ({ ...d, years: e.target.value }))}
+            />
+          </label>
+          <button type="submit" className="cl-btn cl-btn--primary" disabled={busy}>
             Submit offer sheet
           </button>
-        </div>
+        </form>
       ) : null}
     </section>
   );
 }
 
-function CapTab({ data, slotSummary }) {
-  const snap = getCapSnap(data);
-  const used = safeNum(snap.total_cap_hit_m);
-  const limit = safeNum(snap.upper_limit_m);
-  const space = safeNum(snap.usable_cap_space_m, limit - used);
-  const pct = limit > 0 ? (used / limit) * 100 : 0;
-  const slots = slotSummary || buildRosterSlotSummary(null, snap, data?.team_id);
+function ContractActionPanel({
+  row,
+  onClose,
+  onAction,
+  busy,
+  onRosterMoved,
+  onOpenNegotiate,
+  summary = null,
+}) {
+  if (!row) {
+    return (
+      <aside className="cl-panel cl-panel--empty">
+        <h3>Pick a contract</h3>
+        <p>Select a player to re-sign, buy out, waive, or call up / send down.</p>
+        {summary ? (
+          <dl className="cl-facts">
+            <div><dt>Expiring this year</dt><dd>{summary.expiring}</dd></div>
+            <div><dt>Pending RFAs</dt><dd>{summary.rfa}</dd></div>
+            <div><dt>With a clause</dt><dd>{summary.clause}</dd></div>
+          </dl>
+        ) : null}
+      </aside>
+    );
+  }
 
-  const meterClass =
-    pct >= 100 ? "is-danger" :
-    pct >= 95 ? "is-tight" :
-    pct >= 85 ? "is-warning" :
-    "is-comfortable";
+  const ext = row.extension_estimate || {};
+  const buy = row.buyout_estimate || {};
+  const ovr = safeNum(row.overall ?? row.ovr);
+  const pot = safeNum(row.potential ?? row.pot);
+  const aav = safeNum(row.aav_m ?? row.aav);
+  const valueScore = safeText(row.contract_value_score, "—");
+  const player = buildHeadshotPlayer(row);
+  const clause = clauseOf(row);
+  const displayTags = safeArray(row.tags).filter(
+    (tag) => !/casualty|cap casualty|trade pressure/i.test(String(tag)) && String(tag) !== clause,
+  );
+  const actions = buildContractPanelActions(row);
+  const primary = actions.find((a) => isNegotiateAction(a.id)) || null;
+  const secondary = actions.filter((a) => a !== primary);
+  const ineligible = safeText(row.ineligible_reason, "");
 
-  const tiles = [
-    ["Buyout", formatMoneyM(snap.buyout_cap_hit_m)],
-    ["Dead", formatMoneyM(snap.other_dead_cap_m || 0)],
-    ["Buried", formatMoneyM(snap.buried_cap_hit_m)],
-    ["Retained", formatMoneyM(snap.retained_salary_m)],
-    ["NHL SPCs", slots.spc ? `${slots.spc.used}/${slots.spc.limit}` : "—"],
-    ["NHL", `${slots.nhl.used}/${slots.nhl.limit}`],
-    ["AHL", `${slots.ahl.used}/${slots.ahl.limit}`],
-    ["ECHL", `${slots.echl.used}/${slots.echl.limit}`],
-    ["Next Yr", formatMoneyM(snap.projected_next_year_upper_limit_m)],
-  ];
+  const facts = [
+    ["Status", getStatusLabel(row)],
+    ["Value", valueScore],
+    clause ? ["Clause", clause] : null,
+    ext.likelyAav ? ["Projected deal", `${formatMoneyM(ext.likelyAav)} × ${ext.likelyTerm} yrs`] : null,
+    row.extension_aav_m
+      ? ["Extension", `${formatMoneyM(row.extension_aav_m)}${row.extension_years_remaining ? ` × ${row.extension_years_remaining} yrs` : ""}`]
+      : null,
+    buy.totalCost != null ? ["Buyout cost", formatMoneyM(buy.totalCost)] : null,
+  ].filter(Boolean);
+
+  const runAction = (a) => {
+    if (isNegotiateAction(a.id)) {
+      onOpenNegotiate?.(row);
+      return;
+    }
+    onAction(a.id, row);
+  };
 
   return (
-    <section className="cap-office-panel cap-pressure-panel">
-      <div className={`cap-meter-board ${space < 0 ? "is-over" : ""}`}>
-        <div className="cap-meter-board__main">
-          <p className="cap-meter-label">{space < 0 ? "OVER" : "SPACE"}</p>
-          <h2>{formatMoneyM(Math.abs(space))}</h2>
-          <p className="cap-meter-pct">
-            {formatMoneyM(used)} / {formatMoneyM(limit)} · {formatPct(used, limit)}
+    <aside className="cl-panel" aria-label={`${safeText(row.name, "Player")} contract`}>
+      <button type="button" className="cl-panel__close" onClick={onClose} aria-label="Clear selection">×</button>
+
+      <header className="cl-panel__who">
+        <PlayerHeadshot player={player} size="md" className="cl-panel__face" />
+        <div>
+          <h3>{safeText(row.name, "Unnamed Player")}</h3>
+          <p>
+            {safeText(row.position)} · Age {row.age || "—"}
+            {row.sweater_number || row.jersey ? ` · #${row.sweater_number || row.jersey}` : ""}
+          </p>
+          <p className="cl-panel__ratings">
+            <span className={`tone-${ovrPopTone(ovr)}`}>{ovr || "—"} <small>OVR</small></span>
+            {pot ? <span className={pot >= 88 ? "tone-gold" : ""}>{pot} <small>POT</small></span> : null}
           </p>
         </div>
+      </header>
 
-        <div className="cap-bar cap-bar-hero">
-          <div
-            className={`cap-bar-fill ${meterClass}`}
-            style={{ width: `${Math.min(100, Math.max(0, pct))}%` }}
-          />
-        </div>
+      <div className="cl-panel__deal">
+        <strong>{formatMoneyM(aav)}</strong>
+        <span>{contractEndLabel(row)}</span>
       </div>
 
-      <div className="cap-ledger-grid cap-cap-grid">
-        {tiles.map(([label, value]) => (
-          <CapTile key={label} label={label} value={value} />
+      <dl className="cl-facts">
+        {facts.map(([k, v]) => (
+          <div key={k}><dt>{k}</dt><dd>{v}</dd></div>
         ))}
-      </div>
+      </dl>
 
-      {safeArray(snap.warnings).length ? (
-        <div className="cap-ledger-attention cap-warning-strip">
-          {safeArray(snap.warnings).slice(0, 5).map((w) => (
-            <span key={w} className={chipClass(w)}>{w}</span>
+      {displayTags.length ? (
+        <div className="cl-panel__tags">
+          {displayTags.map((tag) => (
+            <span key={tag} className={`cl-tag is-${valueKey(tag, [tag])}`}>{tag}</span>
           ))}
         </div>
-      ) : (
-        <div className="cap-ledger-attention cap-warning-strip">
-          <span className="cap-chip cap-chip-good">Clean</span>
+      ) : null}
+
+      <div className="cl-panel__actions">
+        {primary ? (
+          <button type="button" className="cl-btn cl-btn--primary" disabled={busy} onClick={() => runAction(primary)}>
+            {primary.label}
+          </button>
+        ) : null}
+        {secondary.map((a) => (
+          <button
+            key={a.id}
+            type="button"
+            className={`cl-btn${a.id === "buyout" || a.id === "release-rights" ? " cl-btn--danger" : ""}`}
+            disabled={busy}
+            onClick={() => runAction(a)}
+          >
+            {a.label}
+          </button>
+        ))}
+        {!actions.length ? (
+          <p className="cl-panel__note">{ineligible || "No contract actions for this player right now."}</p>
+        ) : null}
+      </div>
+
+      <ContractRosterMoves row={row} onMoved={onRosterMoved} />
+    </aside>
+  );
+}
+
+function CapTab({ data, slotSummary }) {
+  const snap = getCapSnap(data);
+  const slots = slotSummary || buildRosterSlotSummary(null, snap, data?.team_id);
+  const groups = [
+    {
+      title: "Dead money",
+      rows: [
+        ["Buyouts", formatMoneyM(snap.buyout_cap_hit_m)],
+        ["Other dead cap", formatMoneyM(snap.other_dead_cap_m || 0)],
+        ["Buried in minors", formatMoneyM(snap.buried_cap_hit_m)],
+        ["Retained salary", formatMoneyM(snap.retained_salary_m)],
+      ],
+    },
+    {
+      title: "Roster limits",
+      rows: [
+        ["NHL contracts", slots.spc ? `${slots.spc.used} / ${slots.spc.limit}` : "—"],
+        ["NHL roster", `${slots.nhl.used} / ${slots.nhl.limit}`],
+        ["AHL roster", `${slots.ahl.used} / ${slots.ahl.limit}`],
+        ["ECHL roster", `${slots.echl.used} / ${slots.echl.limit}`],
+      ],
+    },
+    {
+      title: "Next season",
+      rows: [["Projected ceiling", formatMoneyM(snap.projected_next_year_upper_limit_m)]],
+    },
+  ];
+  const warnings = safeArray(snap.warnings).slice(0, 5);
+
+  return (
+    <section className="cl-cap" aria-label="Cap breakdown">
+      {groups.map((g) => (
+        <div key={g.title} className="cl-cap__group">
+          <h3>{g.title}</h3>
+          <dl className="cl-facts">
+            {g.rows.map(([k, v]) => (
+              <div key={k}><dt>{k}</dt><dd>{v}</dd></div>
+            ))}
+          </dl>
         </div>
-      )}
+      ))}
+      <div className="cl-cap__group">
+        <h3>Warnings</h3>
+        {warnings.length ? (
+          <div className="cl-panel__tags">
+            {warnings.map((w) => <span key={w} className="cl-tag is-bad">{w}</span>)}
+          </div>
+        ) : (
+          <p className="cl-panel__note">No cap warnings. The books are clean.</p>
+        )}
+      </div>
     </section>
   );
 }
@@ -947,67 +845,49 @@ function CapTab({ data, slotSummary }) {
 function OfficeTopBar({ team, snap, slotSummary, teamLogo, onBack }) {
   const space = safeNum(snap.usable_cap_space_m ?? team.cap_space);
   const hit = safeNum(snap.total_cap_hit_m ?? team.cap_hit);
-  const slots = slotSummary || { compact: "—", subline: "" };
+  const limit = safeNum(snap.upper_limit_m, hit + Math.max(space, 0));
+  const pct = limit > 0 ? Math.min(100, Math.max(0, (hit / limit) * 100)) : 0;
+  const tone = space < 0 ? "over" : pct >= 97 ? "tight" : pct >= 90 ? "warm" : "ok";
+  const slots = slotSummary || null;
 
+  // The page's one hero number is cap space; hit and ceiling explain it.
   return (
-    <header
-      className={`cap-ledger-hero cap-office-topbar ${teamLogo ? "has-logo" : ""}`}
-      style={teamLogo ? { "--team-logo-url": `url("${teamLogo}")` } : undefined}
-    >
-      <div className="cap-office-team">
-        <button type="button" className="cap-office-back cap-edraft-ghost-btn" onClick={onBack} aria-label="Back">
-          ←
-        </button>
-
-        <span className="cap-insignia" aria-hidden="true">
-          <span>CAP</span>
-        </span>
-
+    <header className="cl-top">
+      <div className="cl-top__team">
+        <button type="button" className="cl-back" onClick={onBack} aria-label="Back to hub">←</button>
         {teamLogo ? (
-          <img className="cap-office-logo" src={teamLogo} alt="" />
+          <img className="cl-top__logo" src={teamLogo} alt="" />
         ) : (
-          <span className="cap-office-logo cap-office-logo-fallback">
-            {safeText(team.abbr || team.abbreviation || team.name, "TM").slice(0, 3)}
-          </span>
+          <span className="cl-top__logo cl-top__logo--text">{safeText(team.abbr || team.abbreviation || team.name, "TM").slice(0, 3)}</span>
         )}
-
-        <div className="cap-ledger-hero-main cap-office-titles">
-          <p className="cap-office-kicker">Contract Office</p>
-          <h1>{team.name || "Franchise"}</h1>
-        </div>
-      </div>
-
-      <div className="cap-ledger-hero-stats cap-hero-trio cap-office-metrics">
-        <div className={space < 0 ? "is-danger" : ""}>
-          <span className="cap-metric-label">
-            <span className="cap-icon-well tone-green">$</span>
-            {space < 0 ? "Over" : "Space"}
-          </span>
-          <strong className={`cap-num-pop ${space < 0 ? "tone-danger" : "tone-green"}`}>
-            {formatMoneyM(Math.abs(space))}
-          </strong>
-        </div>
-
         <div>
-          <span className="cap-metric-label">
-            <span className="cap-icon-well tone-gold">H</span>
-            Hit
-          </span>
-          <strong className="cap-num-pop tone-gold">{formatMoneyM(hit)}</strong>
-          <div className="cap-payroll-meter" aria-hidden="true">
-            <i style={{ width: `${Math.max(4, Math.min(100, (hit / Math.max(hit + Math.max(space, 0), 1)) * 100))}%` }} />
-          </div>
-        </div>
-
-        <div className="cap-metric-roster">
-          <span className="cap-metric-label">
-            <span className="cap-icon-well tone-cyan">R</span>
-            Roster
-          </span>
-          <strong className="cap-num-pop tone-cyan">{slots.compact}</strong>
-          {slots.subline ? <em>{slots.subline}</em> : null}
+          <h1>Contracts</h1>
+          <p>{team.name || "Franchise"}</p>
         </div>
       </div>
+
+      <div className={`cl-meter is-${tone}`}>
+        <div className="cl-meter__space">
+          <strong>{formatMoneyM(Math.abs(space))}</strong>
+          <span>{space < 0 ? "over the cap" : "cap space"}</span>
+        </div>
+        <div className="cl-meter__bar" role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(pct)} aria-label="Cap used">
+          <i style={{ width: `${pct}%` }} />
+        </div>
+        <div className="cl-meter__scale">
+          <span>Hit <b>{formatMoneyM(hit)}</b></span>
+          <span>Ceiling <b>{formatMoneyM(limit)}</b></span>
+        </div>
+      </div>
+
+      {slots ? (
+        <dl className="cl-top__slots">
+          {slots.spc ? <div><dt>Contracts</dt><dd>{slots.spc.used}/{slots.spc.limit}</dd></div> : null}
+          <div><dt>NHL</dt><dd>{slots.nhl.used}/{slots.nhl.limit}</dd></div>
+          <div><dt>AHL</dt><dd>{slots.ahl.used}/{slots.ahl.limit}</dd></div>
+          <div><dt>ECHL</dt><dd>{slots.echl.used}/{slots.echl.limit}</dd></div>
+        </dl>
+      ) : null}
     </header>
   );
 }
@@ -1031,8 +911,6 @@ export default function CapLedger() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
-  const [, setFaDetail] = useState(null);
-  const [, setFaDetailLoading] = useState(false);
   const [sheetDraft, setSheetDraft] = useState({ aav_m: "2.000", years: "4" });
   const [negotiateRow, setNegotiateRow] = useState(null);
 
@@ -1089,32 +967,10 @@ export default function CapLedger() {
     loadData();
   }, [loadData]);
 
-  // Lazily load the heavy free-agent detail only for the selected player (the list payload
-  // stays light). Cancels stale responses when the selection changes.
-  const selectedFaId = tab === "freeAgents" ? (selected?.player_id || selected?.id) : null;
+  // Free agency lives on the wire screen; old deep links to the tab go there.
   useEffect(() => {
-    if (!selectedFaId) {
-      setFaDetail(null);
-      setFaDetailLoading(false);
-      return undefined;
-    }
-    let cancelled = false;
-    setFaDetail(null);
-    setFaDetailLoading(true);
-    getFreeAgentDetail(selectedFaId)
-      .then((res) => {
-        if (!cancelled) setFaDetail(res && res.ok ? res : null);
-      })
-      .catch(() => {
-        if (!cancelled) setFaDetail(null);
-      })
-      .finally(() => {
-        if (!cancelled) setFaDetailLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedFaId]);
+    if (tab === "freeAgents" && typeof setScreen === "function") setScreen(SCREENS.FREE_AGENCY);
+  }, [tab, setScreen]);
 
   const snap = getCapSnap(data || {});
   const team = data?.team || franchiseState?.team || {};
@@ -1131,6 +987,15 @@ export default function CapLedger() {
     () => buildRosterSlotSummary(franchiseState, snap, data?.team_id || team?.id),
     [franchiseState, snap, data?.team_id, team?.id],
   );
+
+  const boardSummary = useMemo(() => {
+    const list = safeArray(data?.contracts);
+    return {
+      expiring: list.filter(isExpiringRow).length,
+      rfa: list.filter((r) => String(r.expiry_status || "").toUpperCase().includes("RFA")).length,
+      clause: list.filter((r) => clauseOf(r)).length,
+    };
+  }, [data?.contracts]);
 
   const handleAction = async (action, row) => {
     const pid = row.player_id || row.id;
@@ -1253,7 +1118,7 @@ export default function CapLedger() {
   };
 
   return (
-    <div className="game-screen cap-ledger-screen cap-office-screen cap-office-edraft">
+    <div className="game-screen cap-ledger-screen cap-office-screen cl-screen">
       <OfficeTopBar
         team={team}
         snap={snap}
@@ -1263,52 +1128,56 @@ export default function CapLedger() {
       />
 
       {pendingPromiseNav?.screen === "cap_ledger" ? (
-        <p className="cap-ledger-attention cap-warning-strip">
+        <p className="cl-banner is-promise">
           {pendingPromiseNav.label || "The contract talk is waiting on this desk."}
           <button type="button" onClick={() => setPendingPromiseNav?.(null)}>Dismiss</button>
         </p>
       ) : null}
 
       {note ? (
-        <div className="cap-empty-state" role="status">
+        <p className="cl-banner is-note" role="status">
           {note}
-        </div>
+          <button type="button" onClick={() => setNote("")} aria-label="Dismiss">×</button>
+        </p>
       ) : null}
 
       {error ? (
-        <div className="cap-empty-state cap-error">
+        <p className="cl-banner is-error" role="alert">
           {error}
-        </div>
+          <button type="button" onClick={() => setError("")} aria-label="Dismiss">×</button>
+        </p>
       ) : null}
 
-      <nav className="cap-ledger-tabs cap-office-tabs cap-office-seg" aria-label="Contract office sections">
+      <nav className="cl-tabs" aria-label="Contract office sections">
         {TABS.map((t) => (
           <button
             key={t.id}
             type="button"
-            className={`cap-ledger-tab ${tab === t.id ? "cap-ledger-tab-active is-active" : ""}`}
-            onClick={() => {
-              // Free agency lives on one screen — the wire — so the tab goes straight there.
-              if (t.id === "freeAgents" && typeof setScreen === "function") {
-                setScreen(SCREENS.FREE_AGENCY);
-                return;
-              }
-              selectTab(t.id);
-            }}
+            className={tab === t.id ? "is-active" : ""}
+            aria-current={tab === t.id ? "page" : undefined}
+            onClick={() => selectTab(t.id)}
           >
             {t.label}
           </button>
         ))}
+        {/* Free agency is its own screen (the wire); say so instead of posing as a tab. */}
+        <button
+          type="button"
+          className="cl-tabs__link"
+          onClick={() => typeof setScreen === "function" && setScreen(SCREENS.FREE_AGENCY)}
+        >
+          Free agency wire →
+        </button>
       </nav>
 
       {loading && !negotiateRow ? (
-        <div className="cap-empty-state">Loading…</div>
+        <p className="cl-empty">Loading contracts…</p>
       ) : null}
 
       {data && (!loading || negotiateRow) ? (
-        <main className="cap-ledger-main cap-office-main">
+        <main className="cl-main">
           {tab === "ledger" ? (
-            <div className={`cap-board-layout${negotiateRow ? " cap-board-layout--desk" : ""}`}>
+            <div className={`cl-split${negotiateRow ? " is-negotiating" : ""}`}>
               <LedgerTab
                 data={data}
                 onSelect={(row) => {
@@ -1318,7 +1187,7 @@ export default function CapLedger() {
                 selectedId={selected?.player_id || selected?.id}
               />
               {negotiateRow ? (
-                <section className="cap-nego-dock" aria-label="Contract negotiation">
+                <section className="cl-nego" aria-label="Contract negotiation">
                   <CapContractNegotiation
                     row={negotiateRow}
                     capSnapshot={snap}
@@ -1393,35 +1262,14 @@ export default function CapLedger() {
                   busy={busy}
                   onOpenNegotiate={setNegotiateRow}
                   onRosterMoved={() => loadData()}
+                  summary={boardSummary}
                 />
               )}
             </div>
           ) : null}
 
-          {tab === "freeAgents" ? (
-            <div className="cap-board-layout">
-              <div className="cap-ledger-empty" style={{ padding: "2rem", maxWidth: 520 }}>
-                <h3 style={{ marginTop: 0 }}>Free Agency Wire</h3>
-                <p>
-                  Free agency runs on the same offseason Free Agency Wire used in the
-                  timeline — bids, Sim Day, and the signing desk.
-                </p>
-                <button
-                  type="button"
-                  className="cap-ledger-primary-btn"
-                  disabled={busy}
-                  onClick={() => {
-                    if (typeof setScreen === "function") setScreen(SCREENS.FREE_AGENCY);
-                  }}
-                >
-                  Open Free Agency Wire
-                </button>
-              </div>
-            </div>
-          ) : null}
-
           {tab === "rfa" ? (
-            <div className="cap-board-layout">
+            <div className="cl-split">
               <RfaSheetsTab
                 data={data}
                 onSelect={setSelected}

@@ -18,6 +18,7 @@ export default function CinematicEventShell({
   railTitle = "Details",
   railContent = null,
   railHint = null,
+  hideRail = false,
   tickerItems = [],
   tickerInteractive = false,
   activeTicker = null,
@@ -114,17 +115,19 @@ export default function CinematicEventShell({
         <div className={`${p}-season`}>{seasonLabel || ""}</div>
       </header>
 
-      <main className={`${p}-stage`}>
+      <main className={`${p}-stage${hideRail ? " is-full" : ""}`}>
         <section className={`${p}-reveal`}>
           {!hideEyebrow && eyebrow ? <p className={`${p}-eyebrow`}>{eyebrow}</p> : null}
           {!hideTitle ? <h1 className={titleClasses}>{title}</h1> : null}
           {heroContent}
         </section>
-        <aside className={`${p}-panel`}>
-          <h2>{railTitle}</h2>
-          <div className={`${p}-rail`}>{railContent}</div>
-          {railHint ? <p className={`${p}-rail-hint`}>{railHint}</p> : null}
-        </aside>
+        {hideRail ? null : (
+          <aside className={`${p}-panel`}>
+            <h2>{railTitle}</h2>
+            <div className={`${p}-rail`}>{railContent}</div>
+            {railHint ? <p className={`${p}-rail-hint`}>{railHint}</p> : null}
+          </aside>
+        )}
       </main>
 
       <footer className={`${p}-footer${hideTicker ? " is-compact" : ""}`}>
