@@ -13,7 +13,8 @@ import { lookupHumanDossier, playerRoomLine } from "../utils/lockerRoomPulse";
 import { nationalityCode, ensurePlayerHeadshotFields } from "../utils/playerHeadshots";
 import { nearestFlagApiSize } from "../utils/countryFlags";
 import { getBaseOverall, getOverallDrop, getUniversalOverall } from "../utils/playerOverall";
-import { getRosterMoves, moveRosterPlayer, getStatsCentral, previewElcOffer, submitElcOffer } from "../services/franchiseService";
+import { getRosterMoves, moveRosterPlayer, getStatsCentral, previewElcOffer, submitElcOffer, getBoxScore, getPlayerGameLog } from "../services/franchiseService";
+import { BoxScoreModal, PlayerPerformanceLog } from "../components/dossier/ProspectVisuals";
 import { resolveWjcDossierBlock } from "./prospectDossierHelpers";
 import "../components/dossier/PlayerDossier.css";
 
@@ -3289,6 +3290,32 @@ function MiniBadge({ text, tone = "neutral", title = "" }) {
   );
 }
 
+/** NBA-Jam style streak badge: ON FIRE (hot streak) or ICE COLD (slump). */
+function StreakBadge({ player }) {
+  const s = player?.streak_badge;
+  if (s !== "on_fire" && s !== "ice_cold") return null;
+  const fire = s === "on_fire";
+  return (
+    <span
+      title={fire ? "ON FIRE: red-hot scoring streak (small scoring boost)" : "ICE COLD: in a scoring slump"}
+      style={{
+        marginLeft: 6,
+        padding: "1px 6px",
+        borderRadius: 4,
+        fontSize: "0.62rem",
+        fontWeight: 900,
+        letterSpacing: "0.08em",
+        color: fire ? "#fff4e0" : "#e6f7ff",
+        background: fire ? "linear-gradient(90deg,#ff4d00,#ffb300)" : "linear-gradient(90deg,#2a7fff,#7fe3ff)",
+        boxShadow: fire ? "0 0 8px rgba(255,90,0,0.7)" : "0 0 8px rgba(80,180,255,0.6)",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {fire ? "ON FIRE" : "ICE COLD"}
+    </span>
+  );
+}
+
 function TradeStabilityConcernBadge({ player, franchiseState, compact = false }) {
   const concern = player?.tradeStabilityConcern || resolvePlayerTradeStabilityConcern(player, franchiseState);
   if (!concern) return null;
@@ -3488,6 +3515,7 @@ function PremiumPlayerRow({ player, selected, onSelect, showTeam = false }) {
           <span className="nhlrost-board-row__name-line">
             <RosterPlayerFlag player={player} />
             <strong>{player.name}</strong>
+            <StreakBadge player={player} />
             {player.tradeStabilityConcern ? (
               <TradeStabilityConcernBadge player={player} compact />
             ) : null}
@@ -4212,6 +4240,36 @@ function mergeCareerSeasonsWithCurrent(player, stats, options) {
   return [...filtered, currentRow];
 }
 
+/** Game log + season splits + WJC from the stored box scores (Performance tab). */
+function ProductionGameLogSection({ player, franchiseState }) {
+  const playerId = String(player?.id || player?.player_id || "");
+  const [log, setLog] = useState(null);
+  const [loadError, setLoadError] = useState("");
+  const [openGameId, setOpenGameId] = useState("");
+  const revision = franchiseState?.stats_revision;
+  useEffect(() => {
+    let live = true;
+    setLog(null);
+    setLoadError("");
+    if (!playerId) return undefined;
+    getPlayerGameLog(playerId)
+      .then((data) => live && setLog(data))
+      .catch(() => live && setLoadError("Game log unavailable for this save."));
+    return () => {
+      live = false;
+    };
+  }, [playerId, revision]);
+  if (!playerId) return null;
+  return (
+    <DossierCard eyebrow="Performance" title={log?.season ? `Season ${log.season} · game by game` : "Game by game"}>
+      {loadError ? <DossierNote>{loadError}</DossierNote> : null}
+      {!log && !loadError ? <DossierNote>Loading game log…</DossierNote> : null}
+      {log ? <PlayerPerformanceLog log={log} onOpenGame={setOpenGameId} /> : null}
+      {openGameId ? <BoxScoreModal gameId={openGameId} fetchBox={getBoxScore} onClose={() => setOpenGameId("")} /> : null}
+    </DossierCard>
+  );
+}
+
 function ProductionPanel({ player, franchiseState }) {
   if (!player) {
     return <DossierEmpty title="No player selected" body="Select a player to view stats." />;
@@ -4317,6 +4375,8 @@ function ProductionPanel({ player, franchiseState }) {
           )}
         </DossierCard>
       ) : null}
+
+      <ProductionGameLogSection player={player} franchiseState={franchiseState} />
 
       {!hasSeasonGames && !minor ? (
         <DossierCard eyebrow="Current season" title="No games played yet">
@@ -5824,6 +5884,7 @@ export function PlayerProfileModal({
                   <PlayerFlagBadge player={player} size="sm" />
                 </span>
                 <h2 id="pdx-modal-title">{player.name}</h2>
+                <StreakBadge player={player} />
                 {jerseyNumber != null ? (
                   <span className="pdx-hero__jersey" title="Jersey number">
                     #{jerseyNumber}

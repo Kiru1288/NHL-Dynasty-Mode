@@ -3,6 +3,7 @@ import { resolveFranchiseTeamLogo, toLogoUrl } from "../../utils/teamLogos";
 import { enterPlayoffs, playoffAction } from "../../services/franchiseService";
 import { isNetworkError, formatFranchiseApiError, isTimeoutError } from "../../services/api";
 import { useGameUI } from "../../game/GameUIContext";
+import TeamLogoBadge from "../../components/ui/TeamLogoBadge";
 import "../../styles/nhlcalShell.css";
 
 /**
@@ -20,6 +21,54 @@ const SERIES_PER_CONF = { 1: 4, 2: 2, 3: 1 };
 const MAX_FF_DAYS = 150; // hard cap on sequential advance_day calls
 const FF_PAINT_MS = 60; // let React paint the bracket between days
 const STALL_LIMIT = 3; // consecutive responses with no day change → stop
+// Sim speeds: slow/medium play one night per request with a pause so every round
+// (Round 1 included) visibly plays out; fast batches many nights per request.
+const SIM_SPEEDS = {
+  slow: { label: "Slow", daysPerCall: 1, pauseMs: 1100, popupMs: 0 },
+  medium: { label: "Medium", daysPerCall: 1, pauseMs: 380, popupMs: 0 },
+  fast: { label: "Fast", daysPerCall: 30, pauseMs: 0, popupMs: 2600 },
+};
+const SPEED_KEY = "po_sim_speed";
+const MAX_POPUPS = 5;
+
+function readSpeed() {
+  try {
+    const v = window.localStorage.getItem(SPEED_KEY);
+    return SIM_SPEEDS[v] ? v : "medium";
+  } catch {
+    return "medium";
+  }
+}
+
+/** Popup copy for a backend playoff event (franchise_playoffs._detect_playoff_events). */
+function describePlayoffEvent(ev, teamFor) {
+  const w = teamFor(ev.team_id)?.abbrev || "TBD";
+  const l = teamFor(ev.opp_id)?.abbrev || "TBD";
+  const g = `Game ${ev.game}`;
+  const otLabel = (n) => (n >= 2 ? `${n}OT` : "OT");
+  switch (ev.kind) {
+    case "user_eliminated":
+      return { tone: "loss", tag: "Eliminated", title: `${l} eliminated`, body: `${w} close it out ${ev.series_score}. Season over.` };
+    case "series_choke":
+      return { tone: "alert", tag: "Collapse", title: `${l} blow a ${ev.blown} lead`, body: `${w} storm back to win the series ${ev.series_score}.` };
+    case "upset_series":
+      return { tone: "alert", tag: "Upset", title: `${w} topple ${l}`, body: `Lower seed advances ${ev.series_score}.` };
+    case "sweep":
+      return { tone: "info", tag: "Sweep", title: `${w} sweep ${l}`, body: `Four straight. ${g} final ${ev.score}.` };
+    case "game7_result":
+      return { tone: "gold", tag: "Game 7", title: `${w} win Game 7`, body: `${w} ${ev.score} over ${l}${ev.ot_periods ? " in OT" : ""}.` };
+    case "game7_set":
+      return { tone: "gold", tag: "Game 7", title: `${w} vs ${l} going the distance`, body: "Series tied 3-3. Winner takes all." };
+    case "marathon_ot":
+      return { tone: "gold", tag: otLabel(ev.ot_periods), title: `${w} win a ${otLabel(ev.ot_periods)} marathon`, body: `${g} vs ${l}, final ${ev.score}.` };
+    case "ot_elimination":
+      return { tone: "gold", tag: "OT Winner", title: `${w} end it in overtime`, body: `Series-clinching OT winner vs ${l}, ${ev.score}.` };
+    case "upset_game":
+      return { tone: "info", tag: "Stunner", title: `${w} stun ${l}`, body: `${g}, ${ev.score}. Series ${ev.series_score}.` };
+    default:
+      return null;
+  }
+}
 
 /* ───────────────────────── pure helpers ───────────────────────── */
 
@@ -328,17 +377,101 @@ function TrophyGlyph({ size = 34 }) {
   );
 }
 
+function CupCenterpiece({ size = 86, lit }) {
+  return (
+    <svg width={size} height={size * 1.25} viewBox="0 0 64 80" aria-hidden="true" className={cx("po-cup-svg", lit && "is-lit")}>
+      <defs>
+        <linearGradient id="poCupMetal" x1="0" x2="1" y1="0" y2="0">
+          <stop offset="0" stopColor="#7d8a94" />
+          <stop offset="0.45" stopColor="#f4f7f9" />
+          <stop offset="0.6" stopColor="#c9d3da" />
+          <stop offset="1" stopColor="#6c7a85" />
+        </linearGradient>
+      </defs>
+      <path d="M18 4h28l-2 10c0 7-5 12-12 12s-12-5-12-12L18 4Z" fill="url(#poCupMetal)" />
+      <rect x="28" y="26" width="8" height="8" fill="url(#poCupMetal)" />
+      <path d="M22 34h20l3 8H19l3-8Z" fill="url(#poCupMetal)" />
+      <path d="M18 42h28v9H18z" fill="url(#poCupMetal)" opacity="0.92" />
+      <path d="M15 51h34v11H15z" fill="url(#poCupMetal)" opacity="0.85" />
+      <path d="M12 62h40v14H12z" fill="url(#poCupMetal)" opacity="0.78" />
+      <path d="M12 66h40M12 70h40M15 55h34M18 46h28" stroke="rgba(20,30,40,0.35)" strokeWidth="0.8" />
+    </svg>
+  );
+}
+
+function WinPips({ wins = 0, dim }) {
+  const n = Math.max(0, Math.min(4, Number(wins) || 0));
+  return (
+    <span className={cx("po-pips", dim && "is-dim")} aria-label={`${n} wins`}>
+      {[0, 1, 2, 3].map((i) => (
+        <i key={i} className={i < n ? "is-on" : ""} />
+      ))}
+    </span>
+  );
+}
+
+/** Game-by-game strip: one cell per game, tinted for the winning side, OT flagged. */
+function GameStrip({ series }) {
+  const log = Array.isArray(series.game_log) ? series.game_log : [];
+  if (!log.length) return null;
+  const hi = String(series.team_high_id || "");
+  return (
+    <div className="po-strip" aria-label="Game results">
+      {Array.from({ length: 7 }, (_, i) => {
+        const g = log.find((x) => Number(x.game) === i + 1);
+        if (!g) return <span key={i} className="po-strip-cell is-empty" />;
+        const hs = Number(g.home_score);
+        const as = Number(g.away_score);
+        const win = String(g.winner_id || (hs > as ? g.home_id : g.away_id));
+        return (
+          <span
+            key={i}
+            className={cx("po-strip-cell", win === hi ? "is-high" : "is-low", g.ot && "is-ot")}
+            title={`G${i + 1}: ${as}-${hs}${g.ot ? " OT" : ""}`}
+          >
+            {Math.max(hs, as)}-{Math.min(hs, as)}
+            {g.ot ? <sup>OT</sup> : null}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Series leaders (points from per-game stars) and goalie lines (per-game saves) from the game log. */
+function seriesPlayerSummary(series) {
+  const log = Array.isArray(series?.game_log) ? series.game_log : [];
+  const pts = new Map();
+  const gk = new Map();
+  for (const g of log) {
+    for (const st of Array.isArray(g.stars) ? g.stars : []) {
+      const k = String(st.player_id || st.name);
+      const r = pts.get(k) || { name: st.name, team_id: String(st.team_id || ""), pts: 0 };
+      r.pts += Number(st.points) || 0;
+      pts.set(k, r);
+    }
+    for (const gl of Array.isArray(g.goalies) ? g.goalies : []) {
+      const k = String(gl.player_id || gl.name);
+      const r = gk.get(k) || { name: gl.name, team_id: String(gl.team_id || ""), gp: 0, sv: 0, sa: 0, ga: 0 };
+      r.gp += 1;
+      r.sv += Number(gl.saves) || 0;
+      r.sa += Number(gl.shots) || 0;
+      r.ga += Number(gl.ga) || 0;
+      gk.set(k, r);
+    }
+  }
+  const leaders = [...pts.values()].sort((a, b) => b.pts - a.pts).slice(0, 4);
+  const goalies = [...gk.values()].sort((a, b) => b.gp - a.gp).slice(0, 2);
+  return { leaders, goalies };
+}
+
 function TeamMark({ team, size = 22, dimmed }) {
   if (!team?.team_id) {
     return <span className="po-mark is-empty" style={{ width: size, height: size }} />;
   }
   return (
     <span className={cx("po-mark", dimmed && "is-dimmed")} style={{ width: size, height: size }}>
-      {team.logo ? (
-        <img src={team.logo} alt="" />
-      ) : (
-        <span className="po-mark-fallback">{String(team.abbrev || "?").slice(0, 3)}</span>
-      )}
+      <TeamLogoBadge teamLogo={team.logo || ""} teamName={team.name || team.abbrev || "Team"} size={size} variant="badge" />
     </span>
   );
 }
@@ -361,6 +494,7 @@ function TeamRow({ team, seed, wins, showWins, placeholder, isWinner, isLoser, i
         <strong>{empty ? placeholder : team.abbrev}</strong>
         {!empty && team.record ? <small>{team.record}</small> : null}
       </span>
+      {showWins ? <WinPips wins={wins} dim={isLoser} /> : <span />}
       <em className="po-row-wins">{showWins ? wins : ""}</em>
     </div>
   );
@@ -436,6 +570,7 @@ function SeriesCard({ series, high, low, state, feeders, teamFor, selected, just
         isLoser={Boolean(winner) && winner !== series.team_low_id}
         isLeader={state === "live" && wl > wh}
       />
+      <GameStrip series={series} />
       {footer ? <div className="po-card-foot">{footer}</div> : null}
     </button>
   );
@@ -471,6 +606,7 @@ function SeriesDesk({ series, high, low, state, canAct, busy, playoffDay, onClea
     return s.slice(0, 3).toUpperCase() || "—";
   };
   const scheduleDates = Array.isArray(series.schedule_dates) ? series.schedule_dates : [];
+  const summary = seriesPlayerSummary(series);
 
   let nextLine = null;
   if (state === "pending") nextLine = "Waiting on the previous round.";
@@ -480,7 +616,8 @@ function SeriesDesk({ series, high, low, state, canAct, busy, playoffDay, onClea
   else nextLine = `Next · Game ${next} at ${home?.abbrev}${day !== null ? ` · Day ${day + 1}` : ""}`;
 
   return (
-    <aside className="po-desk">
+    <aside className={cx("po-desk", series.is_user_series && "is-user")}>
+      {series.is_user_series ? <span className="po-desk-ribbon">Your series</span> : null}
       <div className="po-desk-head">
         <div>
           <p className="po-eyebrow">
@@ -500,7 +637,8 @@ function SeriesDesk({ series, high, low, state, canAct, busy, playoffDay, onClea
         {[{ team: high, wins: wh, lead: wh > wl }, null, { team: low, wins: wl, lead: wl > wh }].map((side, i) =>
           side ? (
             <div key={i} className="po-desk-team">
-              <TeamMark team={side.team} size={40} />
+              <TeamMark team={side.team} size={48} />
+              <WinPips wins={side.wins} />
               <strong>{side.team?.abbrev || "TBD"}</strong>
               <small>
                 {side.team?.record || "—"}
@@ -578,6 +716,38 @@ function SeriesDesk({ series, high, low, state, canAct, busy, playoffDay, onClea
         })}
       </div>
 
+      {summary.leaders.length || summary.goalies.length ? (
+        <div className="po-leaders">
+          {summary.leaders.length ? (
+            <>
+              <p className="po-eyebrow">Series leaders · Pts</p>
+              {summary.leaders.map((r) => (
+                <div key={r.name + r.team_id} className="po-leader">
+                  <span className="po-leader-team">{abbrFor(r.team_id)}</span>
+                  <span className="po-leader-name">{r.name}</span>
+                  <b>{r.pts}</b>
+                </div>
+              ))}
+            </>
+          ) : null}
+          {summary.goalies.length ? (
+            <>
+              <p className="po-eyebrow">Goaltending · SV% / GAA</p>
+              {summary.goalies.map((r) => (
+                <div key={r.name + r.team_id} className="po-leader">
+                  <span className="po-leader-team">{abbrFor(r.team_id)}</span>
+                  <span className="po-leader-name">{r.name}</span>
+                  <b>
+                    {r.sa ? (r.sv / r.sa).toFixed(3).replace(/^0/, "") : "—"}
+                    <small> {(r.ga / Math.max(1, r.gp)).toFixed(2)}</small>
+                  </b>
+                </div>
+              ))}
+            </>
+          ) : null}
+        </div>
+      ) : null}
+
       {canAct && state === "live" ? (
         <div className="po-desk-actions">
           {series.is_user_series ? (
@@ -620,6 +790,10 @@ export default function PlayoffStartMenu({
   const [fastForwarding, setFastForwarding] = useState(false);
   const [selectedId, setSelectedId] = useState(null);
   const [justSetIds, setJustSetIds] = useState(() => new Set());
+  const [speed, setSpeedState] = useState(readSpeed);
+  const [popups, setPopups] = useState([]);
+  const speedRef = useRef(speed);
+  const popupTimersRef = useRef(new Map());
 
   const busyRef = useRef(false);
   const abortRef = useRef(false);
@@ -793,6 +967,52 @@ export default function PlayoffStartMenu({
     }
   }, [isLive, live?.intro_seen]);
 
+  /* ── sim speed + event popups ── */
+
+  const setSpeed = useCallback((v) => {
+    speedRef.current = v;
+    setSpeedState(v);
+    try {
+      window.localStorage.setItem(SPEED_KEY, v);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const dismissPopup = useCallback((id) => {
+    const t = popupTimersRef.current.get(id);
+    if (t) window.clearTimeout(t);
+    popupTimersRef.current.delete(id);
+    setPopups((cur) => cur.filter((p) => p.id !== id));
+  }, []);
+
+  useEffect(() => {
+    const timers = popupTimersRef.current;
+    return () => timers.forEach((t) => window.clearTimeout(t));
+  }, []);
+
+  /** Queue popups from res.result.events; never blocks the sim loop. */
+  const enqueueEvents = useCallback(
+    (res) => {
+      const events = res?.result?.events;
+      if (!Array.isArray(events) || !events.length || !mountedRef.current) return;
+      const ttl = SIM_SPEEDS[speedRef.current]?.popupMs || 0;
+      const fresh = [];
+      for (const ev of events) {
+        const copy = describePlayoffEvent(ev, teamFor);
+        if (!copy) continue;
+        const id = `${ev.id || ev.kind}-${Math.random().toString(36).slice(2, 7)}`;
+        fresh.push({ id, user: Boolean(ev.involves_user), ...copy });
+        // User elimination always waits for a click; everything else auto-dismisses in fast mode.
+        if (ttl && ev.kind !== "user_eliminated") {
+          popupTimersRef.current.set(id, window.setTimeout(() => dismissPopup(id), ttl));
+        }
+      }
+      if (fresh.length) setPopups((cur) => [...cur, ...fresh].slice(-MAX_POPUPS));
+    },
+    [teamFor, dismissPopup]
+  );
+
   /* ── actions ── */
 
   const applyState = useCallback(
@@ -846,6 +1066,7 @@ export default function PlayoffStartMenu({
       withBusy(label, async () => {
         const res = await playoffAction(action, body);
         applyState(res);
+        enqueueEvents(res);
         if (isBlockedResponse(res)) {
           surfaceBlocked(res);
           return res;
@@ -854,7 +1075,7 @@ export default function PlayoffStartMenu({
         if (sid) setSelectedId(String(sid));
         return res;
       }),
-    [withBusy, applyState, surfaceBlocked]
+    [withBusy, applyState, surfaceBlocked, enqueueEvents]
   );
 
   const simSeriesTarget = useMemo(() => {
@@ -878,57 +1099,69 @@ export default function PlayoffStartMenu({
   }, [simSeriesTarget, runAction]);
 
   /**
-   * Day-by-day sim. Stops on: finish, blocked (user's game tonight), stall, or Stop.
-   * With the user alive this is "Sim to My Next Game"; eliminated/out it runs to the Cup.
+   * Day-by-day sim at the chosen speed. Every round (Round 1 included) plays out
+   * the same way. stopAt: "user_game" (next game of the user's club), "round_end", or "cup".
+   * Fast mode batches many nights per request (backend advance_days).
    */
-  const handleFastForward = useCallback(() => {
-    const allowSimRest = !userAlive;
-    return withBusy("Simming playoffs…", async () => {
-      abortRef.current = false;
-      setFastForwarding(true);
-      try {
-        if (!isLive && !cupComplete) await enterRaw();
-        let lastDay = null;
-        let stalls = 0;
-        for (let i = 0; i < MAX_FF_DAYS; i += 1) {
-          if (abortRef.current) {
-            if (mountedRef.current) setNotice({ tone: "info", text: "Sim stopped." });
-            return null;
-          }
-          const res = await playoffAction("advance_day");
-          applyState(res);
-          if (isBlockedResponse(res)) {
-            surfaceBlocked(res);
-            return res;
-          }
-          if (isFinishedResponse(res)) return res;
-          const day = numOrNull(res?.state?.playoff_live?.playoff_day);
-          if (day !== null && mountedRef.current) setBusyLabel(`Simming playoffs · Day ${day + 1}`);
-          if (day !== null && day === lastDay) {
-            stalls += 1;
-            if (stalls >= STALL_LIMIT) {
-              setNotice({ tone: "error", text: `Playoff day stopped advancing at Day ${day + 1}. Sim halted.` });
+  const runSim = useCallback(
+    (stopAt) =>
+      withBusy("Simming playoffs…", async () => {
+        abortRef.current = false;
+        setFastForwarding(true);
+        try {
+          if (!isLive && !cupComplete) await enterRaw();
+          let lastDay = null;
+          let stalls = 0;
+          for (let i = 0; i < MAX_FF_DAYS; i += 1) {
+            if (abortRef.current) {
+              if (mountedRef.current) setNotice({ tone: "info", text: "Sim stopped." });
+              return null;
+            }
+            const cfg = SIM_SPEEDS[speedRef.current] || SIM_SPEEDS.medium;
+            const res = await playoffAction("advance_days", {
+              count: cfg.daysPerCall,
+              stop_at: stopAt === "cup" ? "" : stopAt,
+            });
+            applyState(res);
+            enqueueEvents(res);
+            if (isBlockedResponse(res)) {
+              surfaceBlocked(res);
               return res;
             }
-          } else {
-            stalls = 0;
+            if (isFinishedResponse(res)) return res;
+            const reason = res?.result?.stop_reason;
+            if (reason === "user_game" || reason === "round_end" || reason === "user_eliminated") {
+              if (reason === "user_game") surfaceBlocked(res);
+              return res;
+            }
+            const day = numOrNull(res?.state?.playoff_live?.playoff_day);
+            if (day !== null && mountedRef.current) setBusyLabel(`Simming playoffs · Day ${day + 1}`);
+            if (day !== null && day === lastDay) {
+              stalls += 1;
+              if (stalls >= STALL_LIMIT) {
+                setNotice({ tone: "error", text: `Playoff day stopped advancing at Day ${day + 1}. Sim halted.` });
+                return res;
+              }
+            } else {
+              stalls = 0;
+            }
+            lastDay = day;
+            await sleep(cfg.pauseMs || FF_PAINT_MS);
           }
-          lastDay = day;
-          await sleep(FF_PAINT_MS);
+          setNotice({ tone: "error", text: `Stopped after ${MAX_FF_DAYS} sim steps.` });
+          return null;
+        } finally {
+          if (mountedRef.current) setFastForwarding(false);
         }
-        if (allowSimRest) {
-          setBusyLabel("Finishing Cup run…");
-          const res = await playoffAction("sim_rest");
-          applyState(res);
-          return res;
-        }
-        setNotice({ tone: "error", text: `Stopped after ${MAX_FF_DAYS} days without reaching your next game.` });
-        return null;
-      } finally {
-        if (mountedRef.current) setFastForwarding(false);
-      }
-    });
-  }, [userAlive, withBusy, isLive, cupComplete, enterRaw, applyState, surfaceBlocked]);
+      }),
+    [withBusy, isLive, cupComplete, enterRaw, applyState, surfaceBlocked, enqueueEvents]
+  );
+
+  const handleFastForward = useCallback(
+    () => runSim(userAlive ? "user_game" : "cup"),
+    [runSim, userAlive]
+  );
+  const handleSimRound = useCallback(() => runSim("round_end"), [runSim]);
 
   const handleContinue = useCallback(
     () =>
@@ -1044,8 +1277,8 @@ export default function PlayoffStartMenu({
       <div className="po-col-body">
         <div className="po-slot has-in">
           <div className="po-cup-wrap">
-            <div className="po-cup-crest">
-              <TrophyGlyph />
+            <div className={cx("po-cup-crest", champion && "is-won")}>
+              <CupCenterpiece size={champion ? 64 : 52} lit={Boolean(champion)} />
             </div>
             {renderCard(bracket.cup, getFeeders(4))}
             {champion ? <div className="po-cup-champ">{champion.name}</div> : null}
@@ -1061,6 +1294,11 @@ export default function PlayoffStartMenu({
     return "upcoming";
   };
 
+  // Desk falls back to the user's own series so "your series" is always on screen.
+  const deskSeries =
+    selected ||
+    (userCurrent ? { ...userCurrent, game_log: Array.isArray(userCurrent.game_log) ? userCurrent.game_log : [] } : null);
+
   const pair = simSeriesTarget
     ? `${teamFor(simSeriesTarget.team_high_id)?.abbrev}–${teamFor(simSeriesTarget.team_low_id)?.abbrev}`
     : "";
@@ -1068,6 +1306,28 @@ export default function PlayoffStartMenu({
   return (
     <div className="nhlcal-root po-hub-root register-ops" data-register="ops">
       <style>{PO_HUB_CSS}</style>
+
+      {popups.length ? (
+        <div className="po-pop-stack" aria-live="polite">
+          {popups.map((p) => (
+            <div key={p.id} className={cx("po-pop", `is-${p.tone}`, p.user && "is-user")} role="status">
+              <div className="po-pop-head">
+                <span className="po-pop-tag">{p.tag}</span>
+                <button
+                  type="button"
+                  className="po-pop-x"
+                  aria-label="Dismiss"
+                  onClick={() => dismissPopup(p.id)}
+                >
+                  ×
+                </button>
+              </div>
+              <strong className="po-pop-title">{p.title}</strong>
+              <span className="po-pop-body">{p.body}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
 
       <aside className="nhlcal-sidebar">
         <button type="button" className="nhlcal-brand-button po-brand" onClick={onBack} aria-label="Return to hub">
@@ -1134,9 +1394,18 @@ export default function PlayoffStartMenu({
         ) : null}
 
         <section className="po-body">
+          <div className="po-bracket-wrap">
+          <div className="po-banner">
+            <span className="po-banner-kicker">{cupComplete ? "Season complete" : isLive ? `Day ${playoffDay + 1}` : "Preview"}</span>
+            <strong className="po-banner-title">{cupComplete ? "Stanley Cup Champions" : roundName(currentRound || 1)}</strong>
+            <span className="po-banner-rule" aria-hidden="true" />
+          </div>
           <div className="po-bracket-panel">
             {bracket.structured ? (
               <div className="po-bracket">
+                <div className="po-conf is-west">Western Conference</div>
+                <div className="po-conf is-mid" />
+                <div className="po-conf is-east">Eastern Conference</div>
                 {renderSideColumns("West")}
                 {renderCupColumn()}
                 {renderSideColumns("East")}
@@ -1158,12 +1427,13 @@ export default function PlayoffStartMenu({
               </div>
             )}
           </div>
+          </div>
 
           <SeriesDesk
-            series={selected}
-            high={teamFor(selected?.team_high_id)}
-            low={teamFor(selected?.team_low_id)}
-            state={seriesState(selected, isLive)}
+            series={deskSeries}
+            high={teamFor(deskSeries?.team_high_id)}
+            low={teamFor(deskSeries?.team_low_id)}
+            state={seriesState(deskSeries, isLive)}
             canAct={canAct}
             busy={busy}
             playoffDay={playoffDay}
@@ -1233,8 +1503,32 @@ export default function PlayoffStartMenu({
               >
                 {userAlive ? "Sim to My Next Game" : "Sim to Cup"}
               </button>
+              <button
+                type="button"
+                className="po-btn po-btn--secondary"
+                disabled={busy || (userAlive && userGameTonight)}
+                title="Sim night by night until the current round is over"
+                onClick={handleSimRound}
+              >
+                Sim Round
+              </button>
             </>
           )}
+
+          <div className="po-speed" role="group" aria-label="Sim speed">
+            <span className="po-speed-label">Sim speed</span>
+            {Object.entries(SIM_SPEEDS).map(([key, cfg]) => (
+              <button
+                key={key}
+                type="button"
+                className={cx("po-speed-btn", speed === key && "is-on")}
+                aria-pressed={speed === key}
+                onClick={() => setSpeed(key)}
+              >
+                {cfg.label}
+              </button>
+            ))}
+          </div>
 
           {busy ? (
             <span className="po-foot-status" role="status">
@@ -1262,21 +1556,102 @@ export default function PlayoffStartMenu({
 /* ───────────────────────── styles (scoped) ───────────────────────── */
 
 const PO_HUB_CSS = `
+.po-hub-root .po-speed { display: inline-flex; border: 1px solid var(--po-line-2); border-radius: var(--po-radius-sm); overflow: hidden; margin-left: auto; }
+.po-hub-root .po-speed-btn { background: transparent; color: var(--po-muted); border: 0; padding: 6px 10px; font: 800 11px/1 var(--po-ui); letter-spacing: 0.08em; text-transform: uppercase; cursor: pointer; }
+.po-hub-root .po-speed-btn.is-on { background: rgba(19, 216, 231, 0.16); color: var(--po-cyan); }
+.po-hub-root .po-pop-stack { position: fixed; right: 18px; top: 72px; z-index: 60; display: grid; gap: 8px; width: min(320px, calc(100vw - 32px)); pointer-events: none; }
+.po-hub-root .po-pop { pointer-events: auto; display: grid; gap: 4px; padding: 10px 12px; background: var(--po-panel); border: 1px solid var(--po-line-2); border-left: 3px solid var(--po-cyan); border-radius: var(--po-radius); box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45); animation: poPopIn 220ms ease-out; }
+.po-hub-root .po-pop.is-gold { border-left-color: var(--po-gold); }
+.po-hub-root .po-pop.is-alert { border-left-color: #ff7a45; }
+.po-hub-root .po-pop.is-loss { border-left-color: #ff4d5e; }
+.po-hub-root .po-pop.is-user { box-shadow: 0 0 0 1px var(--po-gold), 0 10px 28px rgba(0, 0, 0, 0.45); }
+.po-hub-root .po-pop-head { display: flex; align-items: center; justify-content: space-between; }
+.po-hub-root .po-pop-tag { font: 800 10px/1.2 var(--po-ui); letter-spacing: 0.16em; text-transform: uppercase; color: var(--po-gold); }
+.po-hub-root .po-pop-x { background: transparent; border: 0; color: var(--po-muted); font-size: 16px; cursor: pointer; line-height: 1; }
+.po-hub-root .po-pop-title { font: 400 15px/1.2 var(--po-display); color: var(--po-text); }
+.po-hub-root .po-pop-body { font-size: 12px; color: var(--po-muted); }
+@keyframes poPopIn { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .po-hub-root .po-pop { animation: none; } }
+/* ── polish layer: banner, conference split, pips, game strip, leaders, cup, control bar ── */
+.po-hub-root .po-title { font-weight: 800; letter-spacing: 0.05em; font-size: clamp(22px, 2vw, 30px); }
+.po-hub-root .po-bracket-wrap { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; }
+.po-hub-root .po-banner { position: relative; display: flex; align-items: baseline; gap: 12px; padding: 8px 14px; border: 1px solid var(--po-line); border-left: 3px solid var(--po-gold); border-radius: var(--po-radius); background: linear-gradient(90deg, var(--po-gold-soft), transparent 70%); flex-shrink: 0; overflow: hidden; }
+.po-hub-root .po-banner-kicker { font: 800 10px/1 var(--po-ui); letter-spacing: 0.18em; text-transform: uppercase; color: var(--po-gold); }
+.po-hub-root .po-banner-title { font: 800 clamp(18px, 1.7vw, 24px)/1 var(--po-display); letter-spacing: 0.06em; text-transform: uppercase; color: var(--po-text); }
+.po-hub-root .po-banner-rule { flex: 1; align-self: center; height: 1px; background: linear-gradient(90deg, rgba(233, 168, 60, 0.5), transparent); }
+.po-hub-root .po-bracket { grid-template-rows: auto 1fr; }
+.po-hub-root .po-conf { font: 800 12px/1 var(--po-display); letter-spacing: 0.22em; text-transform: uppercase; padding: 4px 0 8px; color: var(--po-muted); }
+.po-hub-root .po-conf.is-west { grid-column: 1 / span 3; text-align: left; border-bottom: 2px solid rgba(19, 216, 231, 0.35); }
+.po-hub-root .po-conf.is-east { grid-column: 5 / span 3; text-align: right; border-bottom: 2px solid rgba(233, 168, 60, 0.35); }
+.po-hub-root .po-conf.is-mid { grid-column: 4; }
+.po-hub-root .po-bracket.is-flat { grid-template-rows: none; }
+.po-hub-root .po-col-head { font-family: var(--po-display); font-size: 11.5px; }
+.po-hub-root .po-card { background: linear-gradient(180deg, rgba(14, 38, 56, 0.96), rgba(8, 24, 36, 0.96)); box-shadow: 0 6px 16px rgba(0, 0, 0, 0.28); }
+.po-hub-root .po-card.is-user { box-shadow: 0 0 0 1px rgba(233, 168, 60, 0.35), 0 8px 22px rgba(233, 168, 60, 0.12); }
+.po-hub-root .po-row-wins { font-family: var(--po-mono); font-size: 13px; }
+.po-hub-root .po-row.is-out strong { text-decoration: line-through; text-decoration-color: rgba(255, 255, 255, 0.35); }
+.po-hub-root .po-row.is-out { opacity: 0.38; filter: grayscale(1); }
+.po-hub-root .po-row.is-winner { background: linear-gradient(90deg, var(--po-gold-soft), transparent); border-radius: 4px; }
+.po-hub-root .po-pips { display: inline-flex; gap: 3px; }
+.po-hub-root .po-pips i { width: 6px; height: 6px; border-radius: 50%; border: 1px solid rgba(138, 163, 179, 0.5); }
+.po-hub-root .po-pips i.is-on { background: var(--po-cyan); border-color: var(--po-cyan); box-shadow: 0 0 5px rgba(19, 216, 231, 0.55); }
+.po-hub-root .po-row.is-winner .po-pips i.is-on { background: var(--po-gold); border-color: var(--po-gold); box-shadow: 0 0 5px rgba(233, 168, 60, 0.6); }
+.po-hub-root .po-pips.is-dim i.is-on { background: var(--po-muted); border-color: var(--po-muted); box-shadow: none; }
+.po-hub-root .po-desk-team .po-pips i { width: 8px; height: 8px; }
+.po-hub-root .po-strip { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 2px; margin-top: 4px; }
+.po-hub-root .po-strip-cell { position: relative; height: 14px; display: grid; place-items: center; border-radius: 2px; font: 700 8.5px/1 var(--po-mono); color: var(--po-text); background: rgba(255, 255, 255, 0.04); }
+.po-hub-root .po-strip-cell.is-high { background: rgba(19, 216, 231, 0.2); box-shadow: inset 0 -2px 0 var(--po-cyan); }
+.po-hub-root .po-strip-cell.is-low { background: rgba(233, 168, 60, 0.16); box-shadow: inset 0 2px 0 var(--po-gold); }
+.po-hub-root .po-strip-cell.is-empty { background: transparent; border: 1px dashed rgba(120, 180, 210, 0.14); }
+.po-hub-root .po-strip-cell sup { position: absolute; top: -5px; right: -1px; font: 900 6.5px/1 var(--po-ui); color: #1a1204; background: var(--po-gold); padding: 1px 2px; border-radius: 2px; }
+.po-hub-root .po-desk { position: relative; background: linear-gradient(180deg, var(--po-panel-2), var(--po-panel)); }
+.po-hub-root .po-desk.is-user { border-color: rgba(233, 168, 60, 0.55); box-shadow: 0 0 0 1px rgba(233, 168, 60, 0.2), 0 12px 30px rgba(233, 168, 60, 0.1); }
+.po-hub-root .po-desk-ribbon { align-self: flex-start; padding: 3px 8px; border-radius: 3px; background: var(--po-gold); color: #1a1204; font: 900 9.5px/1 var(--po-ui); letter-spacing: 0.16em; text-transform: uppercase; }
+.po-hub-root .po-desk-title { font-weight: 800; font-size: 20px; }
+.po-hub-root .po-desk-wins { font-family: var(--po-display); font-size: 36px; }
+.po-hub-root .po-leaders { display: grid; gap: 4px; padding: 8px 10px; border: 1px solid var(--po-line); border-radius: var(--po-radius); background: rgba(0, 0, 0, 0.2); }
+.po-hub-root .po-leaders .po-eyebrow + .po-leader { margin-top: 2px; }
+.po-hub-root .po-leader + .po-eyebrow { margin-top: 6px; }
+.po-hub-root .po-leader { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; gap: 6px; align-items: center; font: 700 11.5px/1.3 var(--po-ui); }
+.po-hub-root .po-leader-team { font: 800 9.5px/1 var(--po-ui); letter-spacing: 0.08em; color: var(--po-muted); }
+.po-hub-root .po-leader-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.po-hub-root .po-leader b { font: 700 11.5px/1 var(--po-mono); color: var(--po-cyan); }
+.po-hub-root .po-leader b small { color: var(--po-muted); font-size: 10px; }
+.po-hub-root .po-cup-svg { display: block; filter: drop-shadow(0 0 10px rgba(233, 168, 60, 0.25)); }
+.po-hub-root .po-cup-svg.is-lit { filter: drop-shadow(0 0 18px rgba(233, 168, 60, 0.7)); }
+.po-hub-root .po-cup-crest::before { content: ""; position: absolute; inset: -14px -24px; z-index: -1; background: radial-gradient(circle, rgba(233, 168, 60, 0.22), transparent 65%); }
+.po-hub-root .po-cup-champ { font-size: 15px; font-weight: 800; text-shadow: 0 0 12px rgba(233, 168, 60, 0.5); }
+.po-hub-root .po-foot { background: linear-gradient(180deg, rgba(6, 20, 32, 0.96), rgba(2, 8, 14, 0.98)); box-shadow: 0 -8px 20px rgba(0, 0, 0, 0.3); }
+.po-hub-root .po-speed { align-items: center; background: rgba(0, 0, 0, 0.3); border-radius: 999px; padding: 3px; gap: 2px; }
+.po-hub-root .po-speed-label { padding: 0 8px 0 10px; font: 800 9.5px/1 var(--po-ui); letter-spacing: 0.16em; text-transform: uppercase; color: var(--po-muted); }
+.po-hub-root .po-speed-btn { border-radius: 999px; transition: background-color 0.15s ease, color 0.15s ease; }
+.po-hub-root .po-speed-btn:not(.is-on):hover { color: var(--po-text); }
+.po-hub-root .po-speed-btn.is-on { background: var(--po-cyan); color: #021018; box-shadow: 0 0 10px rgba(19, 216, 231, 0.45); }
+@media (max-width: 1100px) {
+  .po-hub-root .po-conf.is-west, .po-hub-root .po-conf.is-east { font-size: 10px; letter-spacing: 0.14em; }
+  .po-hub-root .po-banner-rule { display: none; }
+}
 .po-start-menu-host { height: 100%; min-height: 0; width: 100%; overflow: hidden; }
 
 .po-hub-root {
-  --po-display: var(--font-broadcast-display, "Archivo Black", "Arial Black", sans-serif);
-  --po-ui: var(--font-broadcast-ui, var(--font-ui, "Barlow Semi Condensed", "Inter", "Segoe UI", system-ui, sans-serif));
-  --po-gold: var(--gold, #e9a83c);
-  --po-cyan: var(--cyan, #13d8e7);
-  --po-text: var(--text, #e8f1f6);
-  --po-muted: var(--muted, #8aa3b3);
-  --po-line: var(--line, rgba(120, 180, 210, 0.16));
-  --po-line-2: var(--line-2, rgba(120, 180, 210, 0.3));
+  --po-display: "Barlow Condensed", var(--font-broadcast-display, "Archivo Black"), "Arial Narrow", sans-serif;
+  --po-ui: var(--font-ops-ui, var(--font-broadcast-ui, "Barlow Semi Condensed", "Inter", "Segoe UI", system-ui, sans-serif));
+  --po-mono: var(--font-mono-data, "IBM Plex Mono", Consolas, monospace);
+  --po-gold: var(--ops-gold, #e9a83c);
+  --po-gold-soft: var(--ops-gold-soft, rgba(233, 168, 60, 0.16));
+  --po-cyan: var(--ops-cyan, #13d8e7);
+  --po-text: var(--ops-text, #e8f1f6);
+  --po-muted: var(--ops-text-secondary, #8aa3b3);
+  --po-line: var(--ops-grid, rgba(120, 180, 210, 0.16));
+  --po-line-2: rgba(120, 180, 210, 0.3);
   --po-wire: rgba(19, 216, 231, 0.34);
-  --po-radius: var(--radius-card, 8px);
-  --po-radius-sm: var(--radius-control, 6px);
-  --po-panel: var(--panel, rgba(6, 20, 32, 0.96));
+  --po-radius: var(--radius-ops, 8px);
+  --po-radius-sm: 6px;
+  --po-panel: var(--ops-panel, rgba(6, 20, 32, 0.96));
+  --po-panel-2: var(--ops-panel-2, rgba(10, 30, 45, 0.96));
+  background: radial-gradient(circle at 20% 0%, rgba(19, 216, 231, 0.1), transparent 32%),
+    radial-gradient(circle at 50% 30%, rgba(233, 168, 60, 0.07), transparent 34%),
+    linear-gradient(180deg, var(--ops-black, #02070c) 0%, var(--ops-navy-deep, #04101a) 100%);
   height: 100%;
   min-height: 0;
   max-height: 100%;
@@ -1566,7 +1941,7 @@ const PO_HUB_CSS = `
 .po-hub-root .po-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--po-gold); flex-shrink: 0; }
 .po-hub-root .po-row {
   display: grid;
-  grid-template-columns: 14px 22px minmax(0, 1fr) auto;
+  grid-template-columns: 14px 22px minmax(0, 1fr) auto auto;
   gap: 6px;
   align-items: center;
   min-height: 26px;

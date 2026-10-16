@@ -616,6 +616,13 @@ def _expansion_candidate(
     profits = [t["profit"] for t in traits.values()]
     losing = sum(1 for p in profits if p < 0)
     chance = _clamp(0.18 + pressure / 100.0 + (0.08 if losing <= 6 else -0.08), 0.02, 0.85)
+    # League option: put an expansion bid on the agenda every N seasons.
+    every = int(exp.get("schedule_every") or 0)
+    if every > 0:
+        anchor = last or int(exp.get("schedule_anchor") or _season(session))
+        exp.setdefault("schedule_anchor", anchor)
+        if _season(session) - anchor >= every:
+            chance = 1.0
     if _unit(_salt(session), "expansion", _season(session)) > chance:
         return None
     used = set(gov.get("used_markets") or []) | set(exclude_markets or ())
@@ -1818,13 +1825,64 @@ def _has_contract(p: Any) -> bool:
 EXPANSION_PROTECT = {"F": 7, "D": 3, "G": 1}
 
 
+# NHL expansion rules: either 7F / 3D / 1G, or any 8 skaters + 1G.
+EXPANSION_SCHEMES: Dict[str, Dict[str, int]] = {"7-3-1": {"F": 7, "D": 3, "G": 1}, "8-1": {"S": 8, "G": 1}}
+# Exposure: 2F + 1D under contract who meet the games-played bar, plus one signed goalie.
+EXPANSION_EXPOSE = {"F": 2, "D": 1, "G": 1}
+EXPOSE_GP_SEASON = 40
+EXPOSE_GP_TWO_YEAR = 70
+
+
 def _has_nmc(p: Any) -> bool:
+    try:
+        from services import contract_economy as _ce
+
+        fn = getattr(_ce, "is_nmc", None) or getattr(_ce, "has_nmc", None)
+        if fn is not None and fn(p):
+            return True
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         from app.sim_engine.trades.trade_rules import _clause_summary
 
         return bool((_clause_summary(p) or {}).get("nmc"))
     except Exception:
         return False
+
+
+def _slot(group: str, scheme: str) -> str:
+    return group if group == "G" or scheme == "7-3-1" else "S"
+
+
+def _scheme_limits(scheme: str) -> Dict[str, int]:
+    return dict(EXPANSION_SCHEMES.get(scheme) or EXPANSION_SCHEMES["7-3-1"])
+
+
+def _season_gp(p: Any, session: Any) -> int:
+    pid = str(getattr(p, "id", "") or "")
+    row = (getattr(session, "player_season_stats", None) or {}).get(pid) if session is not None else None
+    try:
+        return int((row or {}).get("gp") or 0)
+    except (TypeError, ValueError, AttributeError):
+        return 0
+
+
+def _career_gp(p: Any) -> int:
+    try:
+        from services.contract_economy import _player_nhl_games
+
+        return int(_player_nhl_games(p) or 0)
+    except Exception:
+        return 0
+
+
+def _exposure_eligible(p: Any, session: Any) -> bool:
+    """Signed player who can count toward the exposure minimum (GP bar for skaters)."""
+    if not _has_contract(p) or _exempt_young_pro(p):
+        return False
+    if _pos_group(p) == "G":
+        return True
+    return _season_gp(p, session) >= EXPOSE_GP_SEASON or _career_gp(p) >= EXPOSE_GP_TWO_YEAR
 
 
 def _exempt_young_pro(p: Any) -> bool:
@@ -1845,40 +1903,95 @@ def _org_players(team: Any) -> List[Any]:
     return [p for p in list(getattr(team, "roster", None) or []) + list(getattr(team, "ahl_roster", None) or []) if not getattr(p, "retired", False)]
 
 
-def _protected_ids(team: Any, chosen: Optional[List[str]] = None) -> set:
-    """7F / 3D / 1G. No-move-clause players must be protected and use a slot; first- and
-    second-year pros are exempt. ``chosen`` = the user's own list (validated here)."""
+def _protect_value(p: Any) -> float:
+    """CPU protection priority: rating, with a lean toward players in their prime."""
+    age = _age(p)
+    return _ovr(p) + (2.0 if age <= 26 else 0.0) - max(0, age - 31) * 1.2
+
+
+def _protected_ids(
+    team: Any,
+    chosen: Optional[List[str]] = None,
+    *,
+    scheme: str = "7-3-1",
+    session: Any = None,
+    autofill: bool = True,
+) -> set:
+    """7F / 3D / 1G or 8 skaters + 1G. No-move-clause players must be protected and use a
+    slot; first- and second-year pros are exempt. ``chosen`` = the user's own list
+    (validated here). Exposure minimums are enforced afterwards by unprotecting the
+    weakest protected (non-NMC) player of a short position group."""
     org = _org_players(team)
+    limits = _scheme_limits(scheme)
     keep: set = set()
-    used = {"F": 0, "D": 0, "G": 0}
+    used = {k: 0 for k in limits}
     by_id = {str(getattr(p, "id", "")): p for p in org}
+    nmc_ids: set = set()
     for p in org:
         if _exempt_young_pro(p):
             keep.add(str(getattr(p, "id", "")))
     for p in sorted([p for p in org if _has_nmc(p)], key=_ovr, reverse=True):
-        g = _pos_group(p)
+        s = _slot(_pos_group(p), scheme)
         pid = str(getattr(p, "id", ""))
-        if pid not in keep and used[g] < EXPANSION_PROTECT[g]:
+        if pid not in keep and used[s] < limits[s]:
             keep.add(pid)
-            used[g] += 1
+            nmc_ids.add(pid)
+            used[s] += 1
     for pid in [str(x) for x in (chosen or [])]:
         p = by_id.get(pid)
         if p is None or pid in keep:
             continue
-        g = _pos_group(p)
-        if used[g] < EXPANSION_PROTECT[g]:
+        s = _slot(_pos_group(p), scheme)
+        if used[s] < limits[s]:
             keep.add(pid)
-            used[g] += 1
-    for grp, n in EXPANSION_PROTECT.items():
-        for p in sorted([p for p in org if _pos_group(p) == grp], key=_ovr, reverse=True):
-            if used[grp] >= n:
-                break
+            used[s] += 1
+    if autofill:
+        for p in sorted(org, key=_protect_value, reverse=True):
             pid = str(getattr(p, "id", ""))
-            if pid in keep:
+            s = _slot(_pos_group(p), scheme)
+            if pid in keep or used[s] >= limits[s]:
                 continue
             keep.add(pid)
-            used[grp] += 1
+            used[s] += 1
+    # Exposure requirements.
+    for grp, need in EXPANSION_EXPOSE.items():
+        while True:
+            exposed = [p for p in org if _pos_group(p) == grp and str(getattr(p, "id", "")) not in keep and _exposure_eligible(p, session)]
+            if len(exposed) >= need:
+                break
+            cands = [
+                p for p in org
+                if _pos_group(p) == grp and str(getattr(p, "id", "")) in keep
+                and str(getattr(p, "id", "")) not in nmc_ids and _exposure_eligible(p, session)
+            ]
+            if not cands:
+                break
+            keep.discard(str(getattr(min(cands, key=_ovr), "id", "")))
     return keep
+
+
+def exposure_report(team: Any, keep: set, session: Any = None) -> Dict[str, Any]:
+    org = _org_players(team)
+    have = {g: 0 for g in EXPANSION_EXPOSE}
+    for p in org:
+        if str(getattr(p, "id", "")) not in keep and _exposure_eligible(p, session):
+            have[_pos_group(p)] += 1
+    return {"need": dict(EXPANSION_EXPOSE), "have": have, "ok": all(have[g] >= n for g, n in EXPANSION_EXPOSE.items())}
+
+
+def cpu_protection(team: Any, session: Any = None) -> Tuple[str, set]:
+    """CPU clubs pick whichever scheme leaves the weakest best-available player exposed
+    (you only lose one), breaking ties on total protected value."""
+    best: Optional[Tuple[Tuple[float, float], str, set]] = None
+    for scheme in EXPANSION_SCHEMES:
+        keep = _protected_ids(team, None, scheme=scheme, session=session)
+        org = _org_players(team)
+        exposed = [_protect_value(p) for p in org if str(getattr(p, "id", "")) not in keep and _has_contract(p)]
+        kept = sum(_protect_value(p) for p in org if str(getattr(p, "id", "")) in keep and not _exempt_young_pro(p))
+        val = (-(max(exposed) if exposed else 0.0), kept)
+        if best is None or val > best[0]:
+            best = (val, scheme, keep)
+    return best[1], best[2]
 
 
 def expansion_protection_payload(session: Any) -> Dict[str, Any]:
@@ -1891,6 +2004,7 @@ def expansion_protection_payload(session: Any) -> Dict[str, Any]:
     out: Dict[str, Any] = {
         "due": bool(due),
         "limits": dict(EXPANSION_PROTECT),
+        "schedule_every": int(exp.get("schedule_every") or 0),
         "upcoming": [
             {"cities": [c.get("city") for c in e.get("cities") or []], "draft_offseason": int(e.get("start_season") or 0) - 1,
              "start_season": int(e.get("start_season") or 0)}
@@ -1902,7 +2016,14 @@ def expansion_protection_payload(session: Any) -> Dict[str, Any]:
     uid = str(getattr(session, "user_team_id", "") or "")
     team = (getattr(session, "team_by_id", None) or {}).get(uid)
     chosen = list(exp.get("user_protected") or [])
-    protected = _protected_ids(team, chosen) if team is not None else set()
+    scheme = str(exp.get("user_scheme") or "7-3-1")
+    if scheme not in EXPANSION_SCHEMES:
+        scheme = "7-3-1"
+    protected = _protected_ids(team, chosen, scheme=scheme, session=session) if team is not None else set()
+    out["limits"] = _scheme_limits(scheme)
+    out["scheme"] = scheme
+    out["schemes"] = list(EXPANSION_SCHEMES.keys())
+    out["exposure"] = exposure_report(team, protected, session) if team is not None else {}
     rows = []
     for p in _org_players(team) if team is not None else []:
         pid = str(getattr(p, "id", ""))
@@ -1916,6 +2037,7 @@ def expansion_protection_payload(session: Any) -> Dict[str, Any]:
             "nmc": _has_nmc(p),
             "protected": pid in protected,
             "contract": _has_contract(p),
+            "exposable": _exposure_eligible(p, session),
         })
     rows.sort(key=lambda r: ({"F": 0, "D": 1, "G": 2}[r["pos"]], -r["ovr"]))
     out.update({
@@ -1928,27 +2050,80 @@ def expansion_protection_payload(session: Any) -> Dict[str, Any]:
     return out
 
 
-def set_expansion_protection(session: Any, player_ids: List[str]) -> Dict[str, Any]:
+def set_expansion_protection(session: Any, player_ids: List[str], scheme: Optional[str] = None) -> Dict[str, Any]:
     gov = ensure_governance(session)
     exp = gov.setdefault("expansion", {"pending": [], "joined": []})
     uid = str(getattr(session, "user_team_id", "") or "")
     team = (getattr(session, "team_by_id", None) or {}).get(uid)
     if team is None:
         raise ValueError("No club")
+    scheme = str(scheme or exp.get("user_scheme") or "7-3-1")
+    if scheme not in EXPANSION_SCHEMES:
+        raise ValueError("Protection scheme must be 7-3-1 or 8-1")
+    limits = _scheme_limits(scheme)
     by_id = {str(getattr(p, "id", "")): p for p in _org_players(team)}
-    counts = {"F": 0, "D": 0, "G": 0}
+    counts = {k: 0 for k in limits}
     clean: List[str] = []
+    names = {"F": "forwards", "D": "defensemen", "G": "goalie", "S": "skaters"}
     for pid in [str(x) for x in player_ids or []]:
         p = by_id.get(pid)
         if p is None or pid in clean or _exempt_young_pro(p):
             continue
-        g = _pos_group(p)
-        counts[g] += 1
-        if counts[g] > EXPANSION_PROTECT[g]:
-            raise ValueError(f"You can protect at most {EXPANSION_PROTECT[g]} {dict(F='forwards', D='defensemen', G='goalie')[g]}")
+        s = _slot(_pos_group(p), scheme)
+        counts[s] += 1
+        if counts[s] > limits[s]:
+            raise ValueError(f"You can protect at most {limits[s]} {names[s]}")
         clean.append(pid)
+    # No-move clauses must be protected.
+    for p in by_id.values():
+        pid = str(getattr(p, "id", ""))
+        if _has_nmc(p) and not _exempt_young_pro(p) and pid not in clean:
+            s = _slot(_pos_group(p), scheme)
+            if counts[s] >= limits[s]:
+                nm = str(getattr(getattr(p, "identity", None), "name", "") or pid)
+                raise ValueError(f"{nm} has a no-move clause and must be protected")
+            counts[s] += 1
+            clean.append(pid)
     exp["user_protected"] = clean
+    exp["user_scheme"] = scheme
     return expansion_protection_payload(session)
+
+
+def set_expansion_schedule(session: Any, every_n_seasons: int) -> Dict[str, Any]:
+    """League option: 0 = expansion only when the market produces a bid; N = a bid every N seasons."""
+    gov = ensure_governance(session)
+    exp = gov.setdefault("expansion", {"pending": [], "joined": []})
+    n = max(0, min(20, int(every_n_seasons or 0)))
+    exp["schedule_every"] = n
+    exp["schedule_anchor"] = _season(session)
+    return expansion_protection_payload(session)
+
+
+def _cap_hit_m(p: Any) -> float:
+    try:
+        from services.contract_economy import _contract_cap_hit_m
+
+        return float(_contract_cap_hit_m(p) or 0.0)
+    except Exception:
+        return 0.0
+
+
+def _fair_cap_m(p: Any) -> float:
+    """Rough market AAV for a rating, so the new club avoids dead-weight contracts."""
+    return max(0.8, (_ovr(p) - 62.0) * 0.45)
+
+
+def _side_deal_pick(league: Any, team_id: str, rnd: int, season_year: int, exclude: Optional[set] = None) -> Optional[str]:
+    """The club's own pick of the given round in the nearest draft it still owns."""
+    try:
+        from app.sim_engine.trades.trade_pick_registry import get_team_owned_picks
+
+        for row in get_team_owned_picks(league, str(team_id), min_year=int(season_year)):
+            if int(row.get("round") or 0) == int(rnd) and str(row.get("pick_id") or "") not in (exclude or set()):
+                return str(row.get("pick_id") or "") or None
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    return None
 
 
 def run_pending_expansion(session: Any, next_season_year: int) -> List[Dict[str, Any]]:
@@ -1975,7 +2150,14 @@ def run_pending_expansion(session: Any, next_season_year: int) -> List[Dict[str,
         for c in entry["cities"]:
             new_id = next_id
             next_id += 1
-            conf = c.get("conference") or "Western"
+            conf = c.get("conference") or ""
+            if not conf:
+                confs: Dict[str, int] = {}
+                for t in list(league.teams) + new_teams:
+                    k = str(getattr(t, "conference", "") or "")
+                    if k:
+                        confs[k] = confs.get(k, 0) + 1
+                conf = min(confs, key=lambda k: confs[k]) if confs else "Western"
             divs: Dict[str, int] = {}
             for t in list(league.teams) + new_teams:
                 if str(getattr(t, "conference", "")) == conf:
@@ -1998,13 +2180,22 @@ def run_pending_expansion(session: Any, next_season_year: int) -> List[Dict[str,
         needs = {t: {"F": 14, "D": 9, "G": 3} for t in new_teams}
         uid = str(getattr(session, "user_team_id", "") or "")
         user_chosen = list(exp.get("user_protected") or [])
+        user_scheme = str(exp.get("user_scheme") or "7-3-1")
         pools: Dict[str, List[Any]] = {}
+        protection_log: Dict[str, Dict[str, Any]] = {}
         for src in existing:
-            protected = _protected_ids(src, user_chosen if str(getattr(src, "team_id", "")) == uid else None)
-            pools[str(getattr(src, "team_id", ""))] = [
+            sid = str(getattr(src, "team_id", ""))
+            if sid == uid:
+                scheme = user_scheme if user_scheme in EXPANSION_SCHEMES else "7-3-1"
+                protected = _protected_ids(src, user_chosen, scheme=scheme, session=session)
+            else:
+                scheme, protected = cpu_protection(src, session)
+            pools[sid] = [
                 p for p in _org_players(src)
                 if str(getattr(p, "id", "")) not in protected and _has_contract(p)
             ]
+            protection_log[sid] = {"scheme": scheme, "protected": sorted(protected), "exposure": exposure_report(src, protected, session)}
+        side_deals: List[Dict[str, Any]] = []
         claimed: set = set()  # (source club, new club) pairs already used
 
         def _take(src: Any, nt: Any, p: Any) -> None:
@@ -2051,10 +2242,27 @@ def run_pending_expansion(session: Any, next_season_year: int) -> List[Dict[str,
 
                 def _score(p: Any) -> float:
                     g = _pos_group(p)
-                    return _ovr(p) + (6.0 if need.get(g, 0) > 0 else -4.0) - max(0, _age(p) - 31) * 1.5
+                    return (
+                        _ovr(p) + (6.0 if need.get(g, 0) > 0 else -4.0) - max(0, _age(p) - 31) * 1.5
+                        + (2.0 if _age(p) <= 26 else 0.0) - max(0.0, _cap_hit_m(p) - _fair_cap_m(p)) * 1.5
+                    )
 
                 pool.sort(key=_score, reverse=True)
-                _take(src, nt, pool[0])
+                choice = pool[0]
+                # Side deal: a CPU club pays a pick to steer the new club off a prized player.
+                if sid != uid and len(pool) > 1:
+                    gap = _score(pool[0]) - _score(pool[1])
+                    if gap >= 4.0 and _ovr(pool[0]) >= 74.0:
+                        rnd = 2 if gap >= 8.0 else 3
+                        pick_id = _side_deal_pick(league, sid, rnd, int(next_season_year) + 1, {d["pick_id"] for d in side_deals})
+                        if pick_id:
+                            choice = pool[1]
+                            side_deals.append({
+                                "from_team_id": sid, "to_team_id": str(nt.team_id), "pick_id": pick_id, "round": rnd,
+                                "kept": str(getattr(getattr(pool[0], "identity", None), "name", "") or ""),
+                                "from": _team_abbr(src), "team": c_abbr(nt),
+                            })
+                _take(src, nt, choice)
         for nt in new_teams:
             org = sorted(nt.roster, key=_ovr, reverse=True)
             nhl: List[Any] = []
@@ -2085,7 +2293,26 @@ def run_pending_expansion(session: Any, next_season_year: int) -> List[Dict[str,
             gov["honeymoon"][tid] = {str(next_season_year): 18.0, str(next_season_year + 1): 9.0}
             joined.append({"team_id": tid, "city": nt.city, "name": nt.name, "abbr": c_abbr(nt), "season": int(next_season_year), "players": len(nhl) + len(ahl)})
             _news(session, f"The {nt.city} {nt.name} are here", f"{nt.city} joins the league for {next_season_year}-{(next_season_year + 1) % 100:02d} with {len(nhl) + len(ahl)} players from the expansion draft.", team_id=tid, kind="expansion")
-        exp.setdefault("drafts", []).append({"season": int(next_season_year), "picks": picks_log})
+        done_deals: List[Dict[str, Any]] = []
+        if side_deals:
+            from app.sim_engine.trades.trade_pick_registry import transfer_pick
+
+            for d in side_deals:
+                try:
+                    transfer_pick(league, d["pick_id"], d["to_team_id"])
+                    done_deals.append(d)
+                    _news(
+                        session,
+                        f"{d['from']} send a round-{d['round']} pick to {d['team']} in expansion side deal",
+                        f"{d['team']} agreed to pass on {d['kept'] or 'a prized player'} in the expansion draft in exchange for the pick.",
+                        team_id=d["from_team_id"], kind="expansion",
+                    )
+                except Exception:
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
+        exp.setdefault("drafts", []).append({
+            "season": int(next_season_year), "picks": picks_log, "side_deals": done_deals,
+            "protection": {sid: {"scheme": row["scheme"], "exposure_ok": row["exposure"]["ok"]} for sid, row in protection_log.items()},
+        })
     exp["pending"] = [e for e in exp.get("pending") or [] if e not in due]
     exp["joined"] = list(exp.get("joined") or []) + joined
     exp["user_protected"] = []
@@ -2100,6 +2327,150 @@ def run_pending_expansion(session: Any, next_season_year: int) -> List[Dict[str,
 
 def c_abbr(team: Any) -> str:
     return str(getattr(team, "abbr", "") or "").upper()
+
+
+# ---------------------------------------------------------------------------
+# Europe / KHL: departures, returns and undrafted European breakouts
+# ---------------------------------------------------------------------------
+
+EUROPE_MAX_DEPARTURES = 8
+EUROPE_BREAKOUTS = (2, 4)
+_EURO_LEAGUE_TEAMS = {"KHL": "KHL_TEAMS", "SHL": "SHL_TEAMS", "Liiga": "LIIGA_TEAMS", "NL": "SWISS_TEAMS", "DEL": "DEL_TEAMS", "Czech Extraliga": "CZECH_TEAMS"}
+
+
+def _euro_club(rng: random.Random, league_code: str) -> str:
+    try:
+        from app.sim_engine.generation import prospect_league_teams as plt
+
+        rows = getattr(plt, _EURO_LEAGUE_TEAMS.get(league_code, "SHL_TEAMS"), None) or []
+        if rows:
+            return str(rng.choice(rows).get("name") or "")
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    return ""
+
+
+def _player_name(p: Any) -> str:
+    return str(getattr(getattr(p, "identity", None), "name", "") or getattr(p, "name", "") or "")
+
+
+def _morale(session: Any, pid: str) -> float:
+    try:
+        ent = (getattr(session, "universe_players", None) or {}).get(pid) or {}
+        return float((ent.get("state") or {}).get("morale", 60) or 60)
+    except Exception:
+        return 60.0
+
+
+def _set_overseas(p: Any, league_code: str, club: str, **extra: Any) -> None:
+    meta = dict(getattr(p, "_franchise_assignment", None) or {})
+    meta.update({"level": "ufa", "overseas": True, "overseas_league": league_code, "club": club or None}, **extra)
+    try:
+        p._franchise_assignment = meta
+        p.context.current_team_id = "OVERSEAS"
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+
+
+def run_europe_moves(session: Any) -> Dict[str, Any]:
+    """Once per summer (FA opening): depth vets / unqualified RFAs / squeezed-out players
+    leave for Europe or the KHL; earlier departures can come back as overseas free agents;
+    a few undrafted 20-25 year-old European breakouts hit the overseas wire with real
+    stat lines (the FA board projects their season from ``overseas_league``/``club``)."""
+    league = _league(session)
+    if league is None:
+        return {}
+    gov = ensure_governance(session)
+    eu = gov.setdefault("europe", {"done": [], "log": []})
+    sy = _season(session)
+    if sy in eu["done"]:
+        return {}
+    eu["done"].append(sy)
+    rng = random.Random(_salt(session) * 7919 + sy * 31 + 5)
+    abroad: List[Any] = list(getattr(session, "europe_abroad_players", None) or [])
+    report: Dict[str, Any] = {"season": sy, "departed": [], "returned": [], "breakouts": []}
+
+    # 1) Departures from the domestic UFA pool.
+    fa = list(getattr(league, "free_agents", None) or [])
+    cands: List[Tuple[float, Any, str]] = []
+    for p in fa:
+        meta = getattr(p, "_franchise_assignment", None) or {}
+        if meta.get("overseas") or getattr(p, "retired", False):
+            continue
+        ovr, age, pid = _ovr(p), _age(p), str(getattr(p, "id", "") or "")
+        gp = _season_gp(p, session)
+        reason = ""
+        chance = 0.0
+        if age <= 25 and 60 <= ovr <= 72:
+            reason, chance = "unsigned RFA", 0.10
+        elif 27 <= age <= 33 and 60 <= ovr <= 74:
+            reason, chance = "depth veteran", 0.08
+            if _morale(session, pid) < 45:
+                reason, chance = "unhappy depth veteran", 0.20
+            elif gp and gp < 25:
+                reason, chance = "squeezed out of a role", 0.16
+        if chance and rng.random() < chance:
+            cands.append((ovr, p, reason))
+    cands.sort(key=lambda x: -x[0])
+    for ovr, p, reason in cands[:EUROPE_MAX_DEPARTURES]:
+        code = "KHL" if (ovr >= 68 or rng.random() < 0.45) else rng.choice(["SHL", "Liiga", "NL", "DEL", "Czech Extraliga"])
+        club = _euro_club(rng, code)
+        _set_overseas(p, code, club, europe_departed=sy)
+        try:
+            fa.remove(p)
+        except ValueError:
+            pass
+        abroad.append(p)
+        row = {"player_id": str(getattr(p, "id", "")), "name": _player_name(p), "league": code, "club": club, "reason": reason, "ovr": round(ovr, 1), "age": _age(p)}
+        report["departed"].append(row)
+        _news(session, f"{row['name']} signs with {club or code}", f"The {row['age']}-year-old ({reason}) heads to the {code} after finding no NHL fit.", kind="europe")
+    league.free_agents = fa
+
+    # 2) Returns: players who spent at least one season abroad.
+    overseas = list(getattr(league, "overseas_free_agents", None) or [])
+    keep_abroad: List[Any] = []
+    for p in abroad:
+        meta = getattr(p, "_franchise_assignment", None) or {}
+        left = int(meta.get("europe_departed") or sy)
+        age = _age(p)
+        if age >= 37:
+            continue  # finishes his career overseas
+        if left < sy and rng.random() < (0.30 + 0.10 * min(3, sy - left - 1)) and _ovr(p) >= 62:
+            meta = dict(meta)
+            meta.update({"returning_from_europe": True})
+            p._franchise_assignment = meta
+            overseas.append(p)
+            row = {"player_id": str(getattr(p, "id", "")), "name": _player_name(p), "league": meta.get("overseas_league"), "club": meta.get("club"), "ovr": round(_ovr(p), 1), "age": age}
+            report["returned"].append(row)
+            _news(session, f"{row['name']} eyes an NHL return", f"After time with {row['club'] or row['league']}, the {age}-year-old is an overseas free agent again.", kind="europe")
+        else:
+            keep_abroad.append(p)
+    session.europe_abroad_players = keep_abroad
+
+    # 3) Undrafted European breakouts, aged 20-25.
+    try:
+        from app.sim_engine.entities.player import Position
+        from app.sim_engine.league_hierarchy_bootstrap import _spawn_player
+
+        used = {_player_name(p) for p in list(getattr(league, "players", None) or []) + overseas}
+        for _ in range(rng.randint(*EUROPE_BREAKOUTS)):
+            code = rng.choice(["SHL", "SHL", "Liiga", "Liiga", "KHL"])
+            pos = rng.choice([Position.C, Position.LW, Position.RW, Position.D, Position.D, Position.G])
+            p = _spawn_player(
+                rng, pos=pos, ovr_lo=0.64, ovr_hi=0.76, age_lo=20, age_hi=25, used_names=used,
+                league_players=list(getattr(league, "players", None) or []), pool_context="overseas",
+            )
+            club = _euro_club(rng, code)
+            _set_overseas(p, code, club, europe_breakout=sy, undrafted=True)
+            overseas.append(p)
+            row = {"player_id": str(getattr(p, "id", "")), "name": _player_name(p), "league": code, "club": club, "ovr": round(_ovr(p), 1), "age": _age(p)}
+            report["breakouts"].append(row)
+            _news(session, f"Undrafted {code} breakout {row['name']} draws NHL interest", f"The {row['age']}-year-old from {club or code} is an overseas free agent after a breakout season.", kind="europe")
+    except Exception:
+        _swallowed_log.debug("europe breakouts failed", exc_info=True)
+    league.overseas_free_agents = overseas
+    eu["log"] = (list(eu.get("log") or []) + [report])[-6:]
+    return report
 
 
 # ---------------------------------------------------------------------------

@@ -519,6 +519,7 @@ def normalize_contract_dict(raw: Any) -> Dict[str, Any]:
         "minor_salary_by_year_m",
         "signing_bonus_by_year_m",
         "performance_bonus_by_year_m",
+        "cap_advantage_m",
         "bonus_conditions",
         "development_promise",
         "assignment_plan",
@@ -882,6 +883,20 @@ def advance_dict_contract_one_season(c: Dict[str, Any], season_year: int) -> Non
     if not isinstance(c, dict):
         return
     hits = [float(h) for h in (c.get("season_cap_hits") or []) if float(h or 0) > 0.05]
+    # Bank this season's cap advantage (cash paid above the cap hit) for
+    # CBA recapture if the deal later ends early by retirement or buyout.
+    try:
+        yrs_now = int(c.get("years_remaining") or 0)
+        if yrs_now > 0:
+            sal = _tail_floats(c.get("nhl_salary_by_year_m"), yrs_now)
+            bon = _tail_floats(c.get("signing_bonus_by_year_m"), yrs_now)
+            if sal is not None or bon is not None:
+                paid = (sal[0] if sal else 0.0) + (bon[0] if bon else 0.0)
+                hit_now = hits[0] if hits else float(c.get("cap_hit_m") or c.get("aav_m") or 0.0)
+                if paid > 0 and hit_now > 0:
+                    c["cap_advantage_m"] = round(float(c.get("cap_advantage_m") or 0.0) + (paid - hit_now), 3)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     sched = c.get("clause_by_year")
     if isinstance(sched, list) and sched:
         c["clause_by_year"] = list(sched[1:])
@@ -2243,21 +2258,30 @@ def compute_market_value(player: Any, league: Any = None) -> float:
     pos = _player_pos(player)
     pot = _player_potential(player)
 
-    # Depth / replacement players hug the league minimum; mid-tier ramps faster,
-    # stars pay the premium. Old flat (ovr-58)*0.14 put OVR 74 at ~$3M.
-    if ovr < 70:
-        base = LEAGUE_MINIMUM_AAV_M + max(0.0, ovr - 55.0) * 0.035
-    elif ovr < 78:
-        base = 1.15 + max(0.0, ovr - 70.0) * 0.18
-    else:
+    def _star_curve(o: float) -> float:
         # Star premium is convex: an 88 is a first-liner (~$8M), 92+ franchise money
         # ($13M+), 95+ near the 20% max. The old linear 0.42 slope priced a 90 at ~$8M.
-        base = (
+        return (
             LEAGUE_MINIMUM_AAV_M
-            + max(0.0, ovr - 58.0) * 0.12
-            + max(0.0, ovr - 82.0) * 0.62
-            + max(0.0, ovr - 88.0) * 0.22
+            + max(0.0, o - 58.0) * 0.12
+            + max(0.0, o - 82.0) * 0.62
+            + max(0.0, o - 88.0) * 0.22
         )
+
+    # Depth / replacement players hug the league minimum; mid-tier ramps faster,
+    # stars pay the premium. On this rating scale a 4th-liner / 3rd-pair D is ~76-78
+    # and a replacement call-up is low 70s: those asked $1.7M-$2.5M (1.15 + 0.18/pt
+    # from 70), so the market had almost no league-minimum depth.
+    if ovr < 72:
+        base = LEAGUE_MINIMUM_AAV_M + max(0.0, ovr - 64.0) * 0.006
+    elif ovr < 78:
+        base = 0.90 + (ovr - 72.0) * 0.15
+    elif ovr < 81:
+        # Bridge bottom-six money into the third-line / second-pair curve.
+        lo = 0.90 + 6.0 * 0.15
+        base = lo + (ovr - 78.0) * (_star_curve(81.0) - lo) / 3.0
+    else:
+        base = _star_curve(ovr)
     # Production shifts value +/-~18%: a contract year well above his rating raises
     # the ask; a dud season lowers it. Rating still sets the band.
     base *= 0.82 + 0.36 * _player_production_score(player)
@@ -2282,7 +2306,10 @@ def compute_market_value(player: Any, league: Any = None) -> float:
     # cheaper each season. Never deflates below today's prices.
     cap = _league_salary_cap_upper_limit(league) if league is not None else MARKET_VALUE_CAP_ANCHOR_M
     cap = max(MARKET_VALUE_CAP_ANCHOR_M, float(cap or MARKET_VALUE_CAP_ANCHOR_M))
-    base *= cap / MARKET_VALUE_CAP_ANCHOR_M
+    # Only money above the minimum rides the cap: the league minimum has its own
+    # schedule, and scaling it put replacement players at ~$930K, not the minimum.
+    _floor = league_minimum_aav(league)
+    base = _floor + max(0.0, base - _floor) * (cap / MARKET_VALUE_CAP_ANCHOR_M) if base > _floor else base
     base = min(base, max_salary_share_of_cap(league) * cap)  # CBA: max salary = 20% of the upper limit
     return round(max(league_minimum_aav(league), base), 3)
 
@@ -2794,6 +2821,28 @@ def find_prospect_on_team(team: Any, player_id: str) -> Optional[Any]:
     return None
 
 
+def _elc_offer_from_body(player: Any, body: Dict[str, Any], season_year: int) -> Optional[Dict[str, Any]]:
+    """A full offer dict, or a template with the GM's negotiated bonus amounts."""
+    if isinstance(body.get("offer"), dict):
+        return body.get("offer")
+    keys = ("signing_bonus_total_m", "schedule_a_bonus_m", "schedule_b_bonus_m")
+    if not any(body.get(k) is not None for k in keys):
+        return None
+    from services.elc_offer_engine import build_offer_from_template
+
+    return build_offer_from_template(
+        player,
+        season_year=season_year,
+        template_id=str(body.get("template_id") or "standard_elc"),
+        assignment_plan=body.get("assignment_plan"),
+        development_promise=body.get("development_promise"),
+        term_years=body.get("term_years"),
+        signing_bonus_total_m=body.get("signing_bonus_total_m"),
+        schedule_a_bonus_m=body.get("schedule_a_bonus_m"),
+        schedule_b_bonus_m=body.get("schedule_b_bonus_m"),
+    )
+
+
 def assign_elc_contract(
     player: Any,
     team: Any,
@@ -2881,14 +2930,36 @@ def assign_elc_contract(
         or contract.get("performance_bonus_m")
         or 0
     )
+    # The ELC cap hit is pinned at ELC_AAV_M (that is how a true ELC is
+    # recognised), so this year's slice of the signing bonus rides the same hold.
+    try:
+        _sb_years = list(contract.get("signing_bonus_by_year_m") or [])
+        bonus_exposure_m += float(_sb_years[0]) if _sb_years else 0.0
+    except (TypeError, ValueError, IndexError):
+        pass
+    # Stamp the hold with the cap season the books are on. Summer signings were
+    # stamped with the season just played, and opening-day books drop any
+    # reserve not stamped for next season, so the bonus never hit the cap.
+    reserve_season = int(season_year)
+    _books = getattr(league, "_session_cap_books", None)
+    if isinstance(_books, dict) and _books.get("opening_day") and _books.get("season_year"):
+        try:
+            reserve_season = max(reserve_season, int(_books["season_year"]))
+        except (TypeError, ValueError):
+            pass
     if bonus_exposure_m > 0:
         try:
             current_reserve = float(getattr(team, "performance_bonus_reserve_m", 0) or 0)
+            try:
+                if int(getattr(team, "performance_bonus_reserve_season", 0) or 0) != reserve_season:
+                    current_reserve = 0.0  # last season's hold was already released
+            except (TypeError, ValueError):
+                pass
             new_reserve = round(current_reserve + bonus_exposure_m, 4)
             team.performance_bonus_reserve_m = new_reserve
             team.performance_bonus_reserve = new_reserve
             team.bonus_reserve_m = new_reserve
-            team.performance_bonus_reserve_season = int(season_year)
+            team.performance_bonus_reserve_season = reserve_season
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
 
@@ -3385,7 +3456,7 @@ def create_rfa_rights_entry(
         "rights_team_id": tid,
         "qualifying_offer_required": True,
         "qualified": False,
-        "arbitration_eligible": _player_age(player) >= 20,
+        "arbitration_eligible": arbitration_eligible(player),
         "offer_sheet_eligible": rfa_offer_sheet_eligible(player, {"previous_aav_m": prev}),
         "status": "RFA_RIGHTS",
         "expiry_year": int(season_year) + 1,
@@ -3584,23 +3655,132 @@ def can_buyout_player(player: Any) -> Tuple[bool, str]:
 # Buyout / waive / bury estimates
 # ---------------------------------------------------------------------------
 
-def estimate_buyout(player: Any) -> Dict[str, Any]:
-    aav = player_cap_hit_millions(player)
+# Cap-advantage recapture (CBA 50.5(d)): long front-loaded deals that end early
+# (retirement / buyout) charge back the cap benefit banked in earlier seasons.
+RECAPTURE_MIN_TERM_YEARS = 7
+
+
+def _season_label(yr: int) -> str:
+    return f"{int(yr)}-{(int(yr) + 1) % 100:02d}"
+
+
+def _tail_floats(arr: Any, n: int) -> Optional[List[float]]:
+    """Last ``n`` entries of a by-year array (arrays end at the contract's end)."""
+    if not isinstance(arr, (list, tuple)) or n <= 0:
+        return None
+    try:
+        vals = [max(0.0, float(x or 0.0)) for x in arr]
+    except (TypeError, ValueError):
+        return None
+    if len(vals) < n:
+        return None
+    return vals[-n:]
+
+
+def buyout_remaining_years(player: Any, team: Any = None, league: Any = None) -> int:
+    """Contract seasons a buyout would actually cancel.
+
+    Before the salary-cap stage burns a year, ``years_remaining`` still counts
+    the season that just ended; that salary is already paid.
+    """
     yrs = _contract_years_remaining(player)
+    books = _get(league, "_session_cap_books", None) if league is not None else None
+    if (
+        isinstance(books, dict)
+        and books.get("opening_day")
+        and team is not None
+        and not bool(_get(team, "_contract_year_burned", False))
+    ):
+        yrs -= 1
+    return max(0, yrs)
+
+
+def buyout_start_year(league: Any, season_year: int) -> int:
+    start_year = int(season_year)
+    books = _get(league, "_session_cap_books", None) if league is not None else None
+    if isinstance(books, dict) and books.get("opening_day") and books.get("season_year"):
+        # Summer buyouts hit the coming season first.
+        start_year = max(start_year, int(books["season_year"]))
+    return start_year
+
+
+def cap_recapture_amount_m(player: Any) -> float:
+    """Banked cap advantage (salary+bonus paid above the cap hit) on a long deal."""
+    c = normalize_contract_payload(player) or {}
+    try:
+        term = int(c.get("years") or c.get("term") or 0)
+    except (TypeError, ValueError):
+        term = 0
+    if term < RECAPTURE_MIN_TERM_YEARS:
+        return 0.0
+    try:
+        adv = float(c.get("cap_advantage_m") or 0.0)
+    except (TypeError, ValueError):
+        adv = 0.0
+    return round(max(0.0, adv), 3)
+
+
+def estimate_buyout(
+    player: Any,
+    *,
+    team: Any = None,
+    league: Any = None,
+    season_year: Optional[int] = None,
+) -> Dict[str, Any]:
+    """NHL CBA buyout: 2/3 of remaining base salary (1/3 under 26) paid over
+    twice the remaining term. Signing bonuses are owed regardless, so during the
+    original term the cap charge is (cap hit - salary saved + buyout payment);
+    afterwards only the payment remains. Recapture is spread over the original
+    remaining term."""
+    aav = player_cap_hit_millions(player)
+    yrs = buyout_remaining_years(player, team, league) if (team is not None or league is not None) else _contract_years_remaining(player)
     if aav <= 0 or yrs <= 0:
-        return {"total_cost_m": 0, "years": 0, "annual_penalty_m": 0, "cap_savings_m": 0, "warning": "No contract"}
+        return {"total_cost_m": 0, "years": 0, "annual_penalty_m": 0, "cap_savings_m": 0,
+                "warning": "No contract", "schedule": [], "recapture_m": 0.0}
+    c = normalize_contract_payload(player) or {}
     age = _player_age(player)
-    # NHL CBA: 2/3 of the remaining salary (1/3 if under 26) paid over twice the
-    # remaining term. The old version charged only two years for anyone 26+.
     share = (1.0 / 3.0) if age < 26 else (2.0 / 3.0)
+    hits = _tail_floats([h for h in (c.get("season_cap_hits") or []) if float(h or 0) > 0.05], yrs) or [aav] * yrs
+    bonuses = _tail_floats(c.get("signing_bonus_by_year_m"), yrs) or [0.0] * yrs
+    salaries = _tail_floats(c.get("nhl_salary_by_year_m"), yrs)
+    if salaries is None:
+        salaries = [max(0.0, h - b) for h, b in zip(hits, bonuses)]
     penalty_years = 2 * yrs
-    total_penalty = aav * yrs * share
-    annual = round(total_penalty / max(1, penalty_years), 3)
+    total_penalty = sum(salaries) * share
+    payment = round(total_penalty / max(1, penalty_years), 3)
+    recapture = cap_recapture_amount_m(player)
+    recap_per = round(recapture / yrs, 3) if recapture > 0 else 0.0
+    start = buyout_start_year(league, int(season_year if season_year is not None else _get(league, "season_year", 2025) or 2025))
+    schedule: List[Dict[str, Any]] = []
+    for i in range(penalty_years):
+        if i < yrs:
+            old_hit = hits[i]
+            charge = max(0.0, old_hit - salaries[i] + payment)
+            savings = old_hit - charge
+            recap = recap_per
+        else:
+            old_hit = 0.0
+            charge = payment
+            savings = -payment
+            recap = 0.0
+        schedule.append({
+            "season": _season_label(start + i),
+            "old_cap_hit_m": round(old_hit, 3),
+            "buyout_cap_hit_m": round(charge, 3),
+            "recapture_m": round(recap, 3),
+            "cap_savings_m": round(savings - recap, 3),
+            "signing_bonus_m": round(bonuses[i], 3) if i < yrs else 0.0,
+        })
+    first_charge = schedule[0]["buyout_cap_hit_m"] + schedule[0]["recapture_m"] if schedule else payment
     return {
         "total_cost_m": round(total_penalty, 3),
         "years": penalty_years,
-        "annual_penalty_m": annual,
-        "cap_savings_m": round(max(0.0, aav - annual), 3),
+        "contract_years": yrs,
+        "share": round(share, 4),
+        "annual_penalty_m": payment,
+        "cap_savings_m": round(max(0.0, hits[0] - first_charge), 3),
+        "recapture_m": recapture,
+        "schedule": schedule,
         "warning": "NMC may block" if has_nmc(player) else "",
     }
 
@@ -4175,7 +4355,9 @@ def identify_buyout_candidates(
         ok, _ = can_buyout_player(p)
         if not ok:
             continue
-        est = estimate_buyout(p)
+        est = estimate_buyout(p, team=team, league=league, season_year=season_year)
+        if int(est.get("years") or 0) <= 0:
+            continue
         out.append({
             "player_id": _player_id(p),
             "name": _player_name(p),
@@ -4202,6 +4384,11 @@ def run_cpu_buyout_pass(session: Any, *, max_buyouts: int = 8) -> Dict[str, Any]
     season_year = int(getattr(session, "season_calendar_year", 2025) or 2025)
     user_tid = str(getattr(session, "user_team_id", "") or "")
     executed: List[Dict[str, Any]] = []
+    # CBA: no in-season buyouts. CPU clubs use the summer window (and, at the
+    # opening-day compliance pass, the arbitration-style late window).
+    phase = str(getattr(session, "phase", "") or "").lower()
+    if phase not in ("offseason", "post_cup"):
+        return {"buyouts": executed, "count": 0, "skipped": "outside_buyout_window"}
 
     for team in _get(league, "teams", None) or []:
         if len(executed) >= max_buyouts:
@@ -4232,6 +4419,56 @@ def run_cpu_buyout_pass(session: Any, *, max_buyouts: int = 8) -> Dict[str, Any]
                 snap = get_team_cap_snapshot_full(team, league, sim, season_year=season_year)
                 if snap["usable_cap_space_m"] >= -0.01:
                     break
+    return {"buyouts": executed, "count": len(executed)}
+
+
+def run_cpu_discretionary_buyouts(session: Any, *, max_league: int = 4) -> Dict[str, Any]:
+    """Summer buyouts of clearly bad deals by CPU clubs that are not over the cap.
+
+    Real clubs buy out a handful of contracts every June; only the worst fits
+    with real savings go, and only some clubs pull the trigger. Once per summer.
+    """
+    league = getattr(session.sim, "league", None)
+    season_year = int(getattr(session, "season_calendar_year", 2025) or 2025)
+    if int(getattr(session, "_cpu_discretionary_buyouts_season", 0) or 0) == season_year:
+        return {"buyouts": [], "count": 0, "skipped": "already_ran"}
+    ok, _ = buyout_window_status(session, None)
+    if not ok:
+        return {"buyouts": [], "count": 0, "skipped": "outside_buyout_window"}
+    try:
+        session._cpu_discretionary_buyouts_season = season_year
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    import random as _random
+
+    rng = _random.Random(f"cpu-buyouts-{season_year}-{getattr(session, 'user_team_id', '')}")
+    user_tid = str(getattr(session, "user_team_id", "") or "")
+    executed: List[Dict[str, Any]] = []
+    teams = list(_get(league, "teams", None) or [])
+    rng.shuffle(teams)
+    for team in teams:
+        if len(executed) >= max_league:
+            break
+        tid = str(_get(team, "team_id", "") or _get(team, "id", ""))
+        if tid == user_tid:
+            continue
+        for cand in identify_buyout_candidates(team, league, session.sim, season_year=season_year)[:1]:
+            # Only the ugly ones: well over fair value with real first-year relief.
+            if float(cand.get("buyout_score") or 0) < 0.7 or float(cand.get("cap_savings_m") or 0) < 1.5:
+                continue
+            if rng.random() > 0.35:
+                continue
+            player = cand.get("player_ref")
+            res = execute_buyout(team, player, league, season_year) if player is not None else {}
+            if res.get("ok"):
+                executed.append({
+                    "team_id": tid,
+                    "player_id": cand.get("player_id"),
+                    "name": cand.get("name"),
+                    "aav_m": cand.get("aav_m"),
+                    "cap_savings_m": cand.get("cap_savings_m"),
+                    "buyout": res.get("buyout"),
+                })
     return {"buyouts": executed, "count": len(executed)}
 
 
@@ -4528,9 +4765,26 @@ def compute_player_demand(
         want *= 0.98
     elif loyalty_now <= 0.38:
         want *= 1.08
+    ovr = _player_ovr(player)
+    # Replacement-level depth has no leverage: he signs for about his market
+    # number (league minimum), not +5% open-market and +8% attitude on top.
+    if ovr < 74:
+        want = min(want, market * 1.03)
+    # Open-market steals: every summer a few useful players are overlooked and
+    # take well under value (late to market, wants a fresh start, agent misread
+    # the room). Stable per player and season so the ask does not flicker.
+    market_steal = False
+    if str(context or "").lower() in ("ufa", "free_agency", "free_agent", "fa", "") and ovr >= 72:
+        try:
+            _sy = int(_get(league, "season_year", 0) or 0) if league is not None else 0
+        except (TypeError, ValueError):
+            _sy = 0
+        _srng = random.Random(_stable_seed(("fa_steal", _player_id(player), _sy)) & 0xFFFFFFFF)
+        if _srng.random() < 0.14:
+            market_steal = True
+            want *= 0.55 + 0.25 * _srng.random()
     want = max(LEAGUE_MINIMUM_AAV_M, round(want, 3))
 
-    ovr = _player_ovr(player)
     age = _player_age(player)
     pot = _player_potential(player)
     term_rng = random.Random(_stable_seed(("term", _player_id(player))) & 0xFFFFFFFF)
@@ -4631,6 +4885,7 @@ def compute_player_demand(
         "profile": prof,
         "days_on_market": days,
         "offer_count": offers,
+        "market_steal": market_steal,
     }
 
 
@@ -7114,7 +7369,11 @@ def sign_player_to_team(
             from services.trade_demand_engine import seed_mntc_destinations
 
             seed_mntc_destinations(
-                SimpleNamespace(id=_player_id(player), contract=contract),
+                SimpleNamespace(
+                    id=_player_id(player), contract=contract, age=_player_age(player),
+                    identity=_get(player, "identity", None),
+                    nationality=_get(player, "nationality", ""),
+                ),
                 league,
                 list_size=int(contract.get("modified_no_trade_teams") or 10),
             )
@@ -7455,31 +7714,68 @@ def release_rfa_rights(team: Any, player_id: str, league: Any, session: Any = No
     return {"ok": True, "player_id": player_id, "status": "released"}
 
 
+_BUYOUT_PRE_JULY1_STAGES = frozenset({
+    "awards", "retirements", "board_of_governors", "salary_cap", "development_report",
+    "draft_lottery", "draft_combine", "draft", "draft_review", "prospect_rights", "re_sign",
+})
+
+
+def _team_had_arbitration_award(team: Any) -> bool:
+    for p in _all_rostered(team):
+        c = normalize_contract_payload(p) or {}
+        if str(c.get("source") or "").lower() == "arbitration":
+            return True
+    return False
+
+
+def buyout_window_status(session: Any, team: Any = None) -> Tuple[bool, str]:
+    """CBA buyout periods: end of the playoffs through June 30, plus the second
+    window that opens for a club after an RFA arbitration award."""
+    if session is None:
+        return True, "ok"
+    phase = str(getattr(session, "phase", "") or "").lower()
+    if phase == "post_cup":
+        return True, "ok"
+    if phase == "offseason":
+        stage = str(getattr(session, "offseason_stage", "") or "awards")
+        if stage in _BUYOUT_PRE_JULY1_STAGES:
+            return True, "ok"
+        if stage == "free_agency" and team is not None and _team_had_arbitration_award(team):
+            return True, "arbitration_window"
+        return False, "Buyout window closed: buyouts run from the end of the playoffs to June 30 (or after an arbitration award)"
+    return False, "Buyouts are only allowed in the offseason buyout window (after the playoffs through June 30)"
+
+
 def execute_buyout(team: Any, player: Any, league: Any, season_year: int) -> Dict[str, Any]:
     ok, reason = can_buyout_player(player)
     if not ok:
         return {"ok": False, "reason": reason}
-    est = estimate_buyout(player)
+    est = estimate_buyout(player, team=team, league=league, season_year=season_year)
+    if int(est.get("years") or 0) <= 0:
+        return {"ok": False, "reason": "No contract years left to buy out"}
     aav = player_cap_hit_millions(player)
 
     buyouts = _get(team, "buyout_cap_hits", None)
     if not isinstance(buyouts, list):
         buyouts = []
-    start_year = int(season_year)
-    books = _get(league, "_session_cap_books", None)
-    if isinstance(books, dict) and books.get("opening_day") and books.get("season_year"):
-        # Summer buyouts hit the coming season first. Starting at the season that
-        # just ended threw away the first year of the penalty.
-        start_year = max(start_year, int(books["season_year"]))
-    for i in range(int(est["years"])):
-        yr = start_year + i
-        label = f"{yr}-{(yr + 1) % 100:02d}"
+    # Per-season charges from the CBA schedule (signing bonuses stay on the
+    # books during the original term). Summer buyouts hit the coming season.
+    for row in est.get("schedule") or []:
         buyouts.append({
-            "season": label,
-            "amount_m": est["annual_penalty_m"],
+            "season": row["season"],
+            "amount_m": row["buyout_cap_hit_m"],
             "player_id": _player_id(player),
             "player_name": _player_name(player),
+            "source": "buyout",
         })
+        if float(row.get("recapture_m") or 0) > 0:
+            buyouts.append({
+                "season": row["season"],
+                "amount_m": row["recapture_m"],
+                "player_id": _player_id(player),
+                "player_name": _player_name(player),
+                "source": "recapture",
+            })
     _set(team, "buyout_cap_hits", buyouts)
 
     # Minor-leaguers can be bought out too: clear him off every list.
@@ -7560,6 +7856,71 @@ def sign_elc(
     return {"ok": True, "contract": result.get("contract")}
 
 
+def offer_sheet_missing_own_picks(
+    league: Any, team: Any, rounds: List[Any], season_year: int
+) -> List[int]:
+    """Rounds the tendering club cannot pay with its OWN picks (CBA 10.4: no acquired picks).
+
+    Returns [] when the pick registry is unavailable so a missing registry never blocks play.
+    """
+    need: Dict[int, int] = {}
+    for r in rounds or []:
+        try:
+            need[int(r)] = need.get(int(r), 0) + 1
+        except (TypeError, ValueError):
+            continue
+    if not need or league is None:
+        return []
+    tid = str(_get(team, "team_id", "") or _get(team, "id", "") or "")
+    try:
+        from app.sim_engine.trades.trade_pick_registry import get_team_owned_picks
+
+        owned = get_team_owned_picks(league, tid, min_year=int(season_year))
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+        return []
+    if not owned:
+        return []
+    have: Dict[int, int] = {}
+    for p in owned:
+        if str(p.get("original_team_id") or tid) != tid:
+            continue
+        rnd = int(p.get("round") or 0)
+        have[rnd] = have.get(rnd, 0) + 1
+    missing: List[int] = []
+    for rnd, cnt in sorted(need.items()):
+        if have.get(rnd, 0) < cnt:
+            missing.append(rnd)
+    return missing
+
+
+def cpu_should_match_offer_sheet(
+    rights_team: Any, player: Any, sheet: Dict[str, Any], league: Any
+) -> Tuple[bool, str]:
+    """CPU match call: weigh the player's worth against the contract and the picks, then cap."""
+    aav_m = float(sheet.get("aav_m") or 0)
+    years = max(1, int(sheet.get("years") or 1))
+    if not can_sign_player(rights_team, aav_m, league=league, player=player).get("ok"):
+        return False, "cap"
+    if not validate_contract_slots(rights_team, league, additional=1).get("ok"):
+        return False, "contract_slots"
+    market = float(compute_market_value(player, league) or 0.0)
+    age = _player_age(player)
+    ovr = _player_ovr(player)
+    # Surplus per year of control; youth and ceiling make a pricey match tolerable.
+    youth = 1.0 + max(0.0, (25 - age)) * 0.04
+    surplus = (market * youth - aav_m) * min(years, 5)
+    # Picks the club would collect instead (rough $M-equivalent value per round).
+    pick_val = {1: 6.0, 2: 2.5, 3: 1.2}
+    comp_val = sum(pick_val.get(int(r), 0.0) for r in (sheet.get("compensation_rounds") or []))
+    star = ovr >= 84 and age <= 26
+    if star and aav_m <= market * 1.35:
+        return True, "core_player"
+    if surplus + comp_val * 0.25 >= -0.5 * years and aav_m <= market * 1.2:
+        return True, "value"
+    return False, "overpay"
+
+
 def execute_offer_sheet(
     offering_team: Any,
     rights_team: Any,
@@ -7592,6 +7953,15 @@ def execute_offer_sheet(
         return {"ok": False, "reason": check.get("reason")}
 
     tier_info = offer_sheet_compensation_tier(cap_hit, league)
+    missing = offer_sheet_missing_own_picks(league, offering_team, tier_info.get("rounds") or [], season_year)
+    if missing:
+        return {
+            "ok": False,
+            "reason": "Offer sheet compensation must be your own picks: missing "
+            + ", ".join(f"round {r}" for r in missing),
+            "missing_rounds": missing,
+            "compensation_label": tier_info.get("label"),
+        }
     filed_day = int(
         offer.get("filed_day")
         or getattr(session, "fa_market_day", None)
@@ -7631,6 +8001,94 @@ def execute_offer_sheet(
     return {"ok": True, "offer_sheet": pending}
 
 
+#: Club walk-away right applies to awards at or above this share of the cap
+#: (CBA 12.10 threshold, indexed: ~$4.54M on an $83.5M cap).
+ARBITRATION_WALK_AWAY_CAP_PCT = 0.0544
+#: A club-elected award may not fall below this share of the prior salary.
+CLUB_ELECTED_FLOOR_PCT = 0.85
+
+
+def _arbitration_years_of_service(player: Any) -> Tuple[int, int]:
+    """(age at first SPC, professional seasons) with sensible fallbacks."""
+    age = _player_age(player)
+    signed_age = _get(player, "age_at_signing", None) or _get(player, "elc_signed_age", None)
+    if signed_age is None:
+        c = _get(player, "contract", None)
+        signed_age = _get(c, "age_at_signing", None) if c is not None else None
+    try:
+        signed_age = int(signed_age) if signed_age is not None else None
+    except (TypeError, ValueError):
+        signed_age = None
+    pro = _get(player, "pro_seasons", None) or _get(player, "nhl_seasons", None) or _get(player, "seasons_pro", None)
+    try:
+        pro = int(pro) if pro is not None else None
+    except (TypeError, ValueError):
+        pro = None
+    if signed_age is None:
+        signed_age = max(18, min(age, 19 if pro is None else age - pro))
+    if pro is None:
+        pro = max(0, age - signed_age)
+    return signed_age, pro
+
+
+def arbitration_eligible(player: Any) -> bool:
+    """CBA 12.1(a): service needed by age at first SPC: 18-20 -> 4 yrs, 21 -> 3, 22-23 -> 2, 24+ -> 1."""
+    if player is None:
+        return False
+    signed_age, pro = _arbitration_years_of_service(player)
+    if signed_age <= 20:
+        need = 4
+    elif signed_age == 21:
+        need = 3
+    elif signed_age <= 23:
+        need = 2
+    else:
+        need = 1
+    return pro >= need
+
+
+def arbitration_walk_away_threshold_m(league: Any = None) -> float:
+    return round(ARBITRATION_WALK_AWAY_CAP_PCT * _league_salary_cap_upper_limit(league), 3)
+
+
+def arbitration_comparables(player: Any, league: Any, *, limit: int = 5) -> List[Dict[str, Any]]:
+    """Comparable non-UFA contracts: same position group, similar age and rating."""
+    if league is None:
+        return []
+    pid = _player_id(player)
+    pos = _position_bucket(player)
+    age = _player_age(player)
+    ovr = _player_ovr(player)
+    rows: List[Tuple[float, Dict[str, Any]]] = []
+    for team in _get(league, "teams", None) or []:
+        for p in _get(team, "roster", None) or []:
+            if _player_id(p) == pid or _position_bucket(p) != pos:
+                continue
+            p_age = _player_age(p)
+            p_ovr = _player_ovr(p)
+            if abs(p_age - age) > 3 or abs(p_ovr - ovr) > 4:
+                continue
+            c = _get(p, "contract", None)
+            src = str(_get(c, "source", "") or "").lower() if c is not None else ""
+            if src in ("ufa", "free_agent", "fa"):
+                continue  # CBA: UFA deals are not admissible comps
+            aav = float(player_cap_hit_millions(p) or 0.0)
+            if aav <= LEAGUE_MINIMUM_AAV_M:
+                continue
+            dist = abs(p_ovr - ovr) * 1.0 + abs(p_age - age) * 0.5
+            rows.append((dist, {
+                "player_id": _player_id(p),
+                "name": _player_name(p),
+                "position": _player_pos(p),
+                "age": p_age,
+                "overall": round(p_ovr),
+                "aav_m": round(aav, 3),
+                "team_abbrev": _team_abbrev(team),
+            }))
+    rows.sort(key=lambda r: r[0])
+    return [r[1] for r in rows[:limit]]
+
+
 def compute_arbitration_award(
     player: Any,
     team: Any,
@@ -7639,16 +8097,22 @@ def compute_arbitration_award(
     team_offer_m: float,
     player_ask_m: float,
     season_year: int,
+    comps: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[float, int]:
-    """Arbitration award: production×0.35 + market×0.30 + age_fit×0.20 + cap_situation×0.15.
+    """Arbitration award: production 0.30 + comps 0.30 + market 0.20 + age_fit 0.10 + cap 0.10.
 
-    Result is clamped between team_offer and player_ask. Younger players on reasonable
+    Result is clamped between the two submissions. Younger players on reasonable
     awards may receive two-year deals; older / rich awards stay one year.
     """
     team_offer = float(team_offer_m or LEAGUE_MINIMUM_AAV_M)
     player_ask = float(player_ask_m or team_offer)
     lo, hi = (team_offer, player_ask) if player_ask >= team_offer else (player_ask, team_offer)
     market = compute_market_value(player, league)
+    if comps is None:
+        comps = arbitration_comparables(player, league)
+    comp_avg = (
+        sum(float(c.get("aav_m") or 0) for c in comps) / len(comps) if comps else market
+    )
     prod = _player_production_score(player)
     age = _player_age(player)
     age_fit = max(0.0, min(1.0, 1.0 - abs(age - 26) / 12.0))
@@ -7659,10 +8123,11 @@ def compute_arbitration_award(
     except Exception:
         cap_situation = 0.5
     base = (
-        0.35 * (lo + (hi - lo) * prod)
-        + 0.30 * max(lo, min(hi, market))
-        + 0.20 * (lo + (hi - lo) * age_fit)
-        + 0.15 * (lo + (hi - lo) * cap_situation)
+        0.30 * (lo + (hi - lo) * prod)
+        + 0.30 * max(lo, min(hi, comp_avg))
+        + 0.20 * max(lo, min(hi, market))
+        + 0.10 * (lo + (hi - lo) * age_fit)
+        + 0.10 * (lo + (hi - lo) * cap_situation)
     )
     var = random.Random(
         _stable_seed(("arb", _player_id(player), int(season_year))) & 0xFFFFFFFF
@@ -7672,17 +8137,110 @@ def compute_arbitration_award(
     return award, years
 
 
-def execute_arbitration_file(team: Any, player_id: str, player_ask_m: float) -> Dict[str, Any]:
+def execute_arbitration_file(
+    team: Any,
+    player_id: str,
+    player_ask_m: float,
+    *,
+    elected_by: str = "player",
+    term_years: Optional[int] = None,
+    league: Any = None,
+) -> Dict[str, Any]:
+    """File for salary arbitration. ``elected_by``: "player" (player-elected) or "club"."""
     entry = find_rfa_rights(team, player_id)
-    if not entry or not entry.get("arbitration_eligible"):
-        return {"ok": False, "reason": "Not arbitration eligible"}
+    if not entry:
+        return {"ok": False, "reason": "RFA rights not found"}
+    player = resolve_rfa_player(entry, league)
+    eligible = arbitration_eligible(player) if player is not None else bool(entry.get("arbitration_eligible"))
+    entry["arbitration_eligible"] = eligible
+    if not eligible:
+        return {"ok": False, "reason": "Not arbitration eligible (not enough pro service for his signing age)"}
+    if entry.get("arbitration_filed"):
+        return {"ok": False, "reason": "Arbitration already filed"}
+    side = "club" if str(elected_by or "").lower() == "club" else "player"
+    prev = float(entry.get("previous_aav_m") or LEAGUE_MINIMUM_AAV_M)
+    market = compute_market_value(player, league) if player is not None else prev
+    qo = float(entry.get("qualifying_offer_aav_m") or LEAGUE_MINIMUM_AAV_M)
+    ask = normalize_money_m(player_ask_m) if player_ask_m else 0.0
+    if ask <= 0:
+        ask = max(qo, market * 1.12)
+    team_offer = qo
+    if side == "club":
+        # Club-elected: the club submits ~90% of market but never under 85% of last salary.
+        team_offer = max(min(qo, market * 0.9), prev * CLUB_ELECTED_FLOOR_PCT, LEAGUE_MINIMUM_AAV_M)
+        ask = max(qo, market * 1.12)
+    # The non-electing side picks the term (CBA 12.9); 0 = arbitrator decides.
+    years = int(term_years or 0)
+    if years not in (1, 2):
+        years = 0
     entry["arbitration_filed"] = True
-    entry["player_ask_m"] = round(normalize_money_m(player_ask_m), 3)
-    entry["team_offer_m"] = round(float(entry.get("qualifying_offer_aav_m") or LEAGUE_MINIMUM_AAV_M), 3)
-    return {"ok": True, "arbitration": {k: entry.get(k) for k in ("player_id", "team_offer_m", "player_ask_m", "arbitration_filed")}}
+    entry["arbitration_elected_by"] = side
+    entry["arbitration_term_years"] = years or None
+    entry["player_ask_m"] = round(max(ask, team_offer), 3)
+    entry["team_offer_m"] = round(team_offer, 3)
+    entry.pop("arbitration_hearing", None)
+    return {"ok": True, "arbitration": {k: entry.get(k) for k in (
+        "player_id", "team_offer_m", "player_ask_m", "arbitration_filed",
+        "arbitration_elected_by", "arbitration_term_years",
+    )}}
 
 
-def execute_arbitration_settle(team: Any, player_id: str, league: Any, season_year: int) -> Dict[str, Any]:
+def execute_arbitration_hearing(team: Any, player_id: str, league: Any, season_year: int) -> Dict[str, Any]:
+    """Run (or return) the hearing: comps, the award between the submissions, walk-away right."""
+    entry = find_rfa_rights(team, player_id)
+    if not entry or not entry.get("arbitration_filed"):
+        return {"ok": False, "reason": "Arbitration not filed"}
+    cached = entry.get("arbitration_hearing")
+    if isinstance(cached, dict) and cached.get("award_aav_m"):
+        return {"ok": True, "hearing": dict(cached)}
+    player = resolve_rfa_player(entry, league)
+    if player is None:
+        return {"ok": False, "reason": "Player missing"}
+    team_offer = float(entry.get("team_offer_m") or LEAGUE_MINIMUM_AAV_M)
+    player_ask = float(entry.get("player_ask_m") or team_offer)
+    comps = arbitration_comparables(player, league)
+    award, years = compute_arbitration_award(
+        player, team, league,
+        team_offer_m=team_offer, player_ask_m=player_ask,
+        season_year=season_year, comps=comps,
+    )
+    side = str(entry.get("arbitration_elected_by") or "player")
+    if side == "club":
+        award = max(award, round(float(entry.get("previous_aav_m") or 0) * CLUB_ELECTED_FLOOR_PCT, 3))
+    chosen = entry.get("arbitration_term_years")
+    if chosen in (1, 2):
+        years = int(chosen)
+    threshold = arbitration_walk_away_threshold_m(league)
+    hearing = {
+        "player_id": str(player_id),
+        "name": _player_name(player),
+        "elected_by": side,
+        "team_offer_m": round(team_offer, 3),
+        "player_ask_m": round(player_ask, 3),
+        "award_aav_m": award,
+        "award_years": years,
+        "comparables": comps,
+        "comparable_avg_m": round(sum(c["aav_m"] for c in comps) / len(comps), 3) if comps else None,
+        "walk_away_threshold_m": threshold,
+        # Only player-elected awards can be walked away from (CBA 12.10).
+        "walk_away_allowed": side == "player" and award >= threshold,
+        "season_year": int(season_year),
+    }
+    entry["arbitration_hearing"] = hearing
+    entry["award_aav_m"] = award
+    entry["award_years"] = years
+    return {"ok": True, "hearing": dict(hearing)}
+
+
+def execute_arbitration_settle(
+    team: Any,
+    player_id: str,
+    league: Any,
+    season_year: int,
+    *,
+    walk_away: bool = False,
+    session: Any = None,
+) -> Dict[str, Any]:
     entry = find_rfa_rights(team, player_id)
     if not entry or not entry.get("arbitration_filed"):
         return {"ok": False, "reason": "Arbitration not filed"}
@@ -7690,16 +8248,23 @@ def execute_arbitration_settle(team: Any, player_id: str, league: Any, season_ye
     if player is None:
         return {"ok": False, "reason": "Player missing"}
 
-    team_offer = float(entry.get("team_offer_m") or LEAGUE_MINIMUM_AAV_M)
-    player_ask = float(entry.get("player_ask_m") or team_offer)
-    award, years = compute_arbitration_award(
-        player, team, league,
-        team_offer_m=team_offer,
-        player_ask_m=player_ask,
-        season_year=season_year,
-    )
-    entry["award_aav_m"] = award
-    entry["award_years"] = years
+    heard = execute_arbitration_hearing(team, player_id, league, season_year)
+    if not heard.get("ok"):
+        return heard
+    hearing = heard["hearing"]
+    award = float(hearing["award_aav_m"])
+    years = int(hearing["award_years"])
+    if walk_away:
+        if not hearing.get("walk_away_allowed"):
+            return {
+                "ok": False,
+                "reason": f"Walk-away only applies to player-elected awards of ${hearing['walk_away_threshold_m']:.2f}M or more",
+                "hearing": hearing,
+            }
+        rel = release_rfa_rights(team, player_id, league, session)
+        if not rel.get("ok"):
+            return rel
+        return {"ok": True, "outcome": "walked_away", "hearing": hearing}
 
     contract = normalize_contract_dict({
         "type": "STANDARD", "years": years, "years_remaining": years,
@@ -7713,7 +8278,39 @@ def execute_arbitration_settle(team: Any, player_id: str, league: Any, season_ye
         roster.append(player)
         team.roster = roster
     sync_team_cap_fields(team, league)
-    return {"ok": True, "award_aav_m": award, "award_years": years}
+    return {"ok": True, "outcome": "awarded", "award_aav_m": award, "award_years": years, "hearing": hearing}
+
+
+def run_player_arbitration_elections(session: Any) -> List[Dict[str, Any]]:
+    """Unsigned, qualified, eligible RFAs of the user's club file player-elected arbitration.
+
+    Cheap: only walks the user's rights list, and never re-files.
+    """
+    league = getattr(getattr(session, "sim", None), "league", None)
+    team = (getattr(session, "team_by_id", None) or {}).get(str(getattr(session, "user_team_id", "") or ""))
+    if league is None or team is None:
+        return []
+    filed: List[Dict[str, Any]] = []
+    for entry in list(_ensure_rfa_rights_list(team)):
+        if entry.get("arbitration_filed") or not entry.get("qualified") or entry.get("offer_sheet_pending"):
+            continue
+        player = resolve_rfa_player(entry, league)
+        if player is None or not arbitration_eligible(player):
+            continue
+        # Players who see real upside over the QO take it to a hearing.
+        market = compute_market_value(player, league)
+        if market < float(entry.get("qualifying_offer_aav_m") or 0) * 1.15:
+            continue
+        res = execute_arbitration_file(team, entry.get("player_id"), market * 1.15, elected_by="player", league=league)
+        if res.get("ok"):
+            filed.append(res["arbitration"])
+            _emit_contract_storyline(
+                session,
+                f"{_player_name(player)} files for salary arbitration (asking ${market * 1.15:.2f}M)",
+                kind="arbitration",
+                severity="high",
+            )
+    return filed
 
 
 # ---------------------------------------------------------------------------
@@ -8029,10 +8626,13 @@ def _has_pending_extension(player: Any) -> bool:
 
 def _contract_expiry_year(player: Any) -> int:
     c = _get(player, "contract", None)
-    if not isinstance(c, dict):
+    if c is None:
         return 0
+    # Bootstrap deals are _GeneratedContract objects, not dicts. Reading 0 here
+    # made every 1-year-left object deal look like this July's UFA (the FA note
+    # said the club let a player go whose deal ran another season).
     try:
-        return int(c.get("expiry_year") or 0)
+        return int(_get(c, "expiry_year", 0) or 0)
     except (TypeError, ValueError):
         return 0
 
@@ -8108,6 +8708,15 @@ def _park_unsigned_player(player: Any, team: Any, league: Any) -> None:
         player.pending_july1_expiry = False
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
+    # Same former-club tag the normal expiry path sets. Without it the CPU
+    # own-UFA re-sign pass cannot see the player and every star hits the market.
+    tid = str(_get(team, "team_id", "") or _get(team, "id", "") or "")
+    if tid and not getattr(player, "ufa_from_team_id", None):
+        try:
+            player.ufa_from_team_id = tid
+            player.previous_nhl_team_id = tid
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _resign_phase_status(session: Any, player_id: str) -> str:
@@ -8666,8 +9275,15 @@ def run_cpu_prospect_rights_pass(session: Any) -> Dict[str, Any]:
             except Exception:
                 return 0.0
 
-        # Best prospects first, so limited slots go to the ones who matter.
-        rights_kids.sort(key=lambda pl: (-_pot(pl), -_player_ovr(pl)))
+        # Rights about to lapse first (use them or lose them), then best prospects,
+        # so limited slots go to the ones who matter.
+        def _lapsing(pl: Any) -> int:
+            try:
+                return 0 if int(getattr(pl, "rights_expiry_year", None) or 9999) <= season_year + 1 else 1
+            except (TypeError, ValueError):
+                return 1
+
+        rights_kids.sort(key=lambda pl: (_lapsing(pl), -_pot(pl), -_player_ovr(pl)))
         for p in rights_kids:
             if str(getattr(p, "signed_status", "unsigned") or "").lower() == "signed":
                 continue
@@ -8681,7 +9297,9 @@ def run_cpu_prospect_rights_pass(session: Any) -> Dict[str, Any]:
             # Sign the kids who are ready or who'd otherwise walk; leave 18-year-olds
             # in junior unless they're special.
             should_sign = False
-            if open_slots <= 0 or signed_here >= 3:
+            # Real clubs sign 4-6 of their picks a summer; three a year left
+            # hundreds of drafted 20-year-olds unsigned until their rights lapsed.
+            if open_slots <= 0 or signed_here >= 6:
                 should_sign = False
             elif urgent and (ovr >= 58 or pot >= 68):
                 should_sign = True  # use it or lose it
@@ -9408,6 +10026,25 @@ def run_cpu_own_ufa_resign(session: Any) -> Dict[str, Any]:
                 })
                 continue
 
+            # A star on a non-rebuilding club usually stays, but some choose to
+            # test the market (low loyalty, a club that is not winning). ~10%.
+            if ovr >= 84:
+                walk_p = 0.12 - (loyalty - 0.5) * 0.20
+                if window in ("contender", "contend", "win_now", "win-now", "cup_contender"):
+                    walk_p *= 0.6
+                walk_p = max(0.03, min(0.25, walk_p))
+                roll = random.Random(_stable_seed("own_ufa_walk", pid, tid, season_year) & 0xFFFFFFFF).random()
+                if roll < walk_p:
+                    try:
+                        setattr(player, "ufa_exclusive", False)
+                    except Exception:
+                        _swallowed_log.debug("suppressed exception", exc_info=True)
+                    walked.append({
+                        "team_id": tid, "player_id": pid, "overall": round(ovr),
+                        "position": pos, "reason": "tests_market",
+                    })
+                    continue
+
             agreed, final_aav, final_years = _cpu_negotiate_offer(
                 team, player, league, start_aav, years, ctx, context="re_sign",
                 ceiling=max(retain_ceiling, start_aav),
@@ -9461,6 +10098,41 @@ def run_cpu_own_ufa_resign(session: Any) -> Dict[str, Any]:
 
     try:
         league.free_agents = fa_pool
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+
+    # League news when a CPU star leaves his club for the open market.
+    walk_reason_text = {
+        "tests_market": "chose to test free agency",
+        "wants_contender": "wants to join a contender rather than rebuild",
+        "no_room": "could not fit under the cap",
+        "no_agreement": "could not agree on terms",
+        "surplus": "was not part of the club's plans",
+    }
+    try:
+        from services.franchise_sim import _record_storyline
+
+        for row in walked:
+            if int(row.get("overall") or 0) < 84:
+                continue
+            team = _resolve_team(row.get("team_id"))
+            p_obj = next((p for p in fa_pool if _player_id(p) == row.get("player_id")), None)
+            name = _player_name(p_obj) if p_obj is not None else str(row.get("player_id"))
+            row["name"] = name
+            club = str(_get(team, "name", "") or _team_abbrev(team) or "his club") if team is not None else "his club"
+            why = walk_reason_text.get(str(row.get("reason")), "did not re-sign")
+            _record_storyline(session, {
+                "id": f"story:own_ufa_walk:{season_year}:{row.get('player_id')}",
+                "type": "free_agency",
+                "kind": "star_walks",
+                "headline": f"{name} will hit free agency",
+                "details": f"{name} ({row.get('overall')} OVR, {row.get('position')}) is leaving the {club}: he {why}.",
+                "team": row.get("team_id"),
+                "team_id": row.get("team_id"),
+                "player_id": row.get("player_id"),
+                "priority": 4 if int(row.get("overall") or 0) >= 88 else 3,
+                "date": str(season_year),
+            })
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
 
@@ -9767,11 +10439,9 @@ def tick_offer_sheets(
                     kind="offer_sheet",
                 )
                 sheet["pressure_emitted"] = True
-            market = compute_market_value(player, league)
-            cap_ok = can_sign_player(rights_team, aav_m, league=league, player=player).get("ok")
-            slot_ok = validate_contract_slots(rights_team, league, additional=1).get("ok")
-            worth_matching = aav_m <= market * 1.15
-            decision = "match" if (cap_ok and slot_ok and worth_matching) else "decline"
+            _match, _why = cpu_should_match_offer_sheet(rights_team, player, sheet, league)
+            sheet["cpu_match_reason"] = _why
+            decision = "match" if _match else "decline"
 
         if decision == "match":
             if is_user_rights:
@@ -9962,7 +10632,7 @@ def _record_offer_sheet_compensation(
                 # Prefer the offering team's own earliest future pick in that round.
                 match = next(
                     (
-                        p for p in owned
+                        p for p in sorted(owned, key=lambda r: str(r.get("original_team_id") or "") != off_tid)
                         if int(p.get("round", 0)) == rnd
                         and int(p.get("year", 0)) >= int(season_year)
                         and str(p.get("pick_id", "")) not in {t["pick_id"] for t in comp["transferred"]}
@@ -11073,7 +11743,7 @@ def build_contract_row(player: Any, team: Any, season_year: int, league: Any = N
     bad_score = compute_bad_contract_score(player, team)
     importance = compute_team_importance_score(player, team)
     gap = compute_peer_gap_score(player, team)
-    buyout = estimate_buyout(player)
+    buyout = estimate_buyout(player, team=team, league=league, season_year=season_year)
     waive_ok, _ = can_waive_or_bury(player)
     trade_ok, _ = can_trade_player(player)
     buyout_ok, _ = can_buyout_player(player)
@@ -11190,6 +11860,9 @@ def build_contract_row(player: Any, team: Any, season_year: int, league: Any = N
             "annualPenalty": buyout["annual_penalty_m"],
             "capSavings": buyout["cap_savings_m"],
             "warning": buyout.get("warning", ""),
+            "recapture": buyout.get("recapture_m", 0.0),
+            "share": buyout.get("share"),
+            "schedule": buyout.get("schedule") or [],
         },
         "waiver_eligible": waive_ok,
         "bury_savings_m": estimate_bury_savings(player) if not _get(player, "is_buried", False) else 0,
@@ -11210,7 +11883,7 @@ def build_contract_row(player: Any, team: Any, season_year: int, league: Any = N
             "extended" if extension_signed else ("expiring" if in_re_sign_class else ("signed" if yrs > 0 else "expiring"))
         ),
         "can_negotiate": in_re_sign_class,
-        "can_buyout": buyout_ok and yrs > 0,
+        "can_buyout": buyout_ok and int(buyout.get("years") or 0) > 0,
         "can_waive": waive_ok,
         "can_trade": trade_ok,
         "can_qualify": False,
@@ -11289,6 +11962,11 @@ def build_rfa_rights_row(entry: Dict[str, Any], season_year: int, league: Any = 
         "player_ask_m": entry.get("player_ask_m"),
         "team_offer_m": entry.get("team_offer_m"),
         "award_aav_m": entry.get("award_aav_m"),
+        "award_years": entry.get("award_years"),
+        "arbitration_elected_by": entry.get("arbitration_elected_by"),
+        "arbitration_term_years": entry.get("arbitration_term_years"),
+        "arbitration_hearing": entry.get("arbitration_hearing"),
+        "arbitration_walk_away_threshold_m": arbitration_walk_away_threshold_m(league),
         "can_qualify": not entry.get("qualified"),
         "can_file_arbitration": bool(entry.get("arbitration_eligible")) and not entry.get("arbitration_filed"),
         "can_release_rights": True,
@@ -11797,6 +12475,8 @@ def build_contract_office(session: Any) -> Dict[str, Any]:
         "own_expired_ufas": own_expired_ufas,
         "rfa_rights": rfa_rows,
         "buyout_candidates": buyout_candidates,
+        "buyout_window": dict(zip(("open", "reason"), buyout_window_status(session, user_team))),
+        "ltir": ltir_overview(user_team, league) if user_team is not None else {},
         "cap_casualty_candidates": cap_casualty,
         "pending_offer_sheets": pending_sheets,
         "offer_sheet_targets": offer_sheet_targets,
@@ -12271,6 +12951,20 @@ def handle_contract_action(session: Any, action: str, body: Dict[str, Any]) -> D
             if p is None:
                 return {"ok": False, "reason": "Player not found on roster"}
             player = p
+        win_ok, win_reason = buyout_window_status(session, user_team)
+        if bool(body.get("preview") or body.get("evaluate_only")):
+            est = estimate_buyout(player, team=user_team, league=league, season_year=season_year)
+            ok_b, why_b = can_buyout_player(player)
+            return {
+                "ok": True,
+                "status": "evaluated",
+                "preview": est,
+                "window_open": win_ok,
+                "allowed": bool(win_ok and ok_b and int(est.get("years") or 0) > 0),
+                "reason": "" if (win_ok and ok_b) else (why_b if not ok_b else win_reason),
+            }
+        if not win_ok:
+            return {"ok": False, "reason": win_reason}
         result = execute_buyout(user_team, player, league, season_year)
     elif action == "waive":
         p = player if owner_team == user_team else next(
@@ -12328,7 +13022,7 @@ def handle_contract_action(session: Any, action: str, body: Dict[str, Any]) -> D
             user_team,
             season_year=season_year,
             template_id=str(body.get("template_id") or "standard_elc"),
-            offer=body.get("offer") if isinstance(body.get("offer"), dict) else None,
+            offer=_elc_offer_from_body(p, body, season_year),
             assignment_plan=body.get("assignment_plan"),
             development_promise=body.get("development_promise"),
             term_years=body.get("term_years"),
@@ -12345,7 +13039,7 @@ def handle_contract_action(session: Any, action: str, body: Dict[str, Any]) -> D
             user_team,
             season_year=season_year,
             template_id=str(body.get("template_id") or "standard_elc"),
-            offer=body.get("offer") if isinstance(body.get("offer"), dict) else None,
+            offer=_elc_offer_from_body(p, body, season_year),
             assignment_plan=body.get("assignment_plan"),
             development_promise=body.get("development_promise"),
             term_years=body.get("term_years"),
@@ -12396,7 +13090,7 @@ def handle_contract_action(session: Any, action: str, body: Dict[str, Any]) -> D
             user_team,
             season_year=season_year,
             template_id=str(body.get("template_id") or "standard_elc"),
-            offer=body.get("offer") if isinstance(body.get("offer"), dict) else None,
+            offer=_elc_offer_from_body(p, body, season_year),
             assignment_plan=body.get("assignment_plan"),
             development_promise=body.get("development_promise"),
             term_years=body.get("term_years"),
@@ -12418,9 +13112,20 @@ def handle_contract_action(session: Any, action: str, body: Dict[str, Any]) -> D
             decision="match" if action == "match-offer-sheet" else "decline",
         )
     elif action == "arbitration-file":
-        result = execute_arbitration_file(user_team, player_id, float(body.get("player_ask_m") or 0))
+        result = execute_arbitration_file(
+            user_team, player_id, float(body.get("player_ask_m") or 0),
+            elected_by=str(body.get("elected_by") or "player"),
+            term_years=body.get("term_years"),
+            league=league,
+        )
     elif action == "arbitration-settle":
-        result = execute_arbitration_settle(user_team, player_id, league, season_year)
+        if body.get("hearing_only"):
+            result = execute_arbitration_hearing(user_team, player_id, league, season_year)
+        else:
+            result = execute_arbitration_settle(
+                user_team, player_id, league, season_year,
+                walk_away=bool(body.get("walk_away")), session=session,
+            )
     else:
         return {"ok": False, "reason": f"Unknown contract action: {action}"}
 

@@ -824,6 +824,35 @@ def public_stock_boost(result: Mapping[str, Any], consensus_z: float, *, goalie:
     return boost, reason
 
 
+def stock_driver_test(result: Mapping[str, Any], boost: float) -> Optional[Dict[str, Any]]:
+    """The single fitness test that best explains a stock move (best pct when
+    rising, worst pct when falling). None when untested or flat."""
+    tests = result.get("tests") or {}
+    if not tests or not boost:
+        return None
+    meta = {t["id"]: t for t in COMBINE_TESTS}
+    rows = [(tid, r.get("pct")) for tid, r in tests.items() if tid in meta and r.get("pct") is not None]
+    if not rows:
+        return None
+    tid, pct = (max if boost > 0 else min)(rows, key=lambda r: float(r[1]))
+    t = meta[tid]
+    return {"id": tid, "label": t["label"], "short": t["short"], "pct": int(pct),
+            "value": format_test_value(tid, tests[tid].get("value"))}
+
+
+def annotate_rank_movement(before: Mapping[str, int], adjusted: List[Dict[str, Any]]) -> None:
+    """Stamp pre/post combine rank on each re-ranked board row (computed once
+    when the combine runs). ``before`` maps prospect key -> pre-combine rank."""
+    for row in adjusted:
+        pid = str(row.get("key") or "")
+        if pid not in before:
+            continue
+        pre, post = int(before[pid] or 0), int(row.get("rank") or 0)
+        row["pre_combine_rank"] = pre
+        row["post_combine_rank"] = post
+        row["combine_rank_change"] = pre - post
+
+
 # --------------------------------------------------------------------------- teams
 def team_impression(
     *,

@@ -271,12 +271,78 @@ def meeting_options(session: Any, player_id: str) -> Dict[str, Any]:
             "active_discount_pct": (disc or {}).get("pct") if isinstance(disc, dict) and str((disc or {}).get("team_id")) == _uid(session) else None,
             "active_discount_m": (disc or {}).get("amount_m") if isinstance(disc, dict) and str((disc or {}).get("team_id")) == _uid(session) else None,
         }
+    goofy = _goofy_demand_for(session, player)
+    if goofy:
+        out["goofy_demand"] = {**goofy, "used": bool(led.get("goofy")), "result": led.get("goofy")}
     return out
+
+
+# --------------------------------------------------------------------------- goofy agent asks
+
+#: (id, ask text, reward kind). "morale" = +5 morale when granted; "discount" = 3% off his ask.
+GOOFY_AGENT_ASKS: Tuple[Tuple[str, str, str], ...] = (
+    ("pony", "a pony. A real one. Named after his mom", "morale"),
+    ("poutine", "a lifetime supply of poutine, delivered to the rink", "morale"),
+    ("jersey_99", "his own number, and he's very clear the number is 99", "discount"),
+    ("parking", "the parking spot closest to the door, with his name painted on it", "discount"),
+    ("mascot", "to be allowed to ride with the mascot during the intermission t-shirt toss", "morale"),
+    ("chef", "the team chef to learn his grandmother's pierogi recipe", "morale"),
+)
+#: Chance (per player, per negotiation window) that his agent tacks on a goofy ask.
+GOOFY_AGENT_ASK_CHANCE = 0.10
+GOOFY_DISCOUNT_PCT = -3.0
+GOOFY_MORALE_BOOST = 5.0
+
+
+def _goofy_demand_for(session: Any, player: Any) -> Optional[Dict[str, Any]]:
+    if not getattr(session, "goofy_events_enabled", True):
+        return None
+    from services.contract_economy import _player_id
+
+    rng = _rng("goofy_ask", _player_id(player), _window(session))
+    if rng.random() >= GOOFY_AGENT_ASK_CHANCE:
+        return None
+    gid, text, kind = rng.choice(GOOFY_AGENT_ASKS)
+    reward = (
+        f"Granting it is worth about {abs(GOOFY_DISCOUNT_PCT):.0f}% off his ask (no cap cost)."
+        if kind == "discount" else "Granting it gives him a morale boost (no cap cost)."
+    )
+    return {"id": gid, "text": f"His agent says the deal also needs {text}.", "reward_kind": kind, "reward": reward}
+
+
+def _do_goofy_demand(session: Any, player: Any, where: str, option: str) -> Dict[str, Any]:
+    from services.contract_economy import _player_id, _player_name
+
+    goofy = _goofy_demand_for(session, player)
+    if not goofy:
+        return {"ok": False, "reason": "His agent has no unusual requests."}
+    pid = _player_id(player)
+    led = _ledger(session, pid)
+    if led.get("goofy"):
+        return {"ok": False, "reason": "You've already answered that request."}
+    name = _player_name(player)
+    if option == "accept":
+        if goofy["reward_kind"] == "discount":
+            try:
+                setattr(player, "_goofy_ask_shift", {"team_id": _uid(session), "pct": GOOFY_DISCOUNT_PCT, "window": _window(session), "expiry": _contract_expiry(player)})
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+            line = f"Done. {name}'s camp is delighted and shaved about {abs(GOOFY_DISCOUNT_PCT):.0f}% off the ask."
+        else:
+            _bump_entity(session, pid, {"state.morale": GOOFY_MORALE_BOOST})
+            line = f"Done. {name} is thrilled (morale +{GOOFY_MORALE_BOOST:.0f}). The equipment staff have questions."
+        di = 1.0
+    else:
+        line = f"You said no. {name}'s agent sighed audibly."
+        di = -1.0
+    led["goofy"] = {"id": goofy["id"], "accepted": option == "accept", "interest_delta": di, "line": line}
+    _log(led, f"Odd request ({goofy['id']}): {'granted' if option == 'accept' else 'refused'}")
+    return {"ok": True, "kind": "goofy_demand", "interest_delta": di, "message": line}
 
 
 def _interest_bonus_from_ledger(led: Dict[str, Any]) -> float:
     total = 0.0
-    for key in ("pitch", "agent"):
+    for key in ("pitch", "agent", "goofy"):
         row = led.get(key)
         if isinstance(row, dict):
             total += float(row.get("interest_delta") or 0.0)
@@ -297,6 +363,8 @@ def run_meeting(session: Any, player_id: str, kind: str, option: str) -> Dict[st
         res = _do_agent(session, player, where, str(option))
     elif kind == "hometown":
         res = ask_hometown_discount(session, player_id)
+    elif kind == "goofy_demand":
+        res = _do_goofy_demand(session, player, where, str(option))
     else:
         return {"ok": False, "reason": f"Unknown meeting: {kind}"}
     if res.get("ok"):
@@ -718,7 +786,7 @@ def demand_multiplier(player: Any, team: Any, context: str) -> float:
     # Agent framing, a refused hometown ask, and lowballs all stack.
     # One hostile meeting plus a cheap offer can push the ask up about half.
     # A friendly meeting can take it down to about 55% before the dollar discount.
-    for attr in ("_agent_demand_shift", "_hometown_refusal_shift", "_lowball_ask_shift"):
+    for attr in ("_agent_demand_shift", "_hometown_refusal_shift", "_lowball_ask_shift", "_goofy_ask_shift"):
         shift = getattr(player, attr, None)
         if isinstance(shift, dict) and str(shift.get("team_id")) == tid and shift.get("expiry") == exp_now:
             mult *= 1.0 + float(shift.get("pct") or 0.0) / 100.0

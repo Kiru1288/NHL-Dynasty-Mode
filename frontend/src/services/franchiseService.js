@@ -201,9 +201,17 @@ export async function lobbyGovernance(body) {
   return data;
 }
 
-/** Expansion draft protection list (7F / 3D / 1G). @param {string[]} playerIds */
-export async function setExpansionProtection(playerIds) {
-  const { data } = await api.post("/api/franchise/governance/expansion-protection", { player_ids: playerIds || [] });
+/** Expansion draft protection list (7F / 3D / 1G or 8 skaters + 1G). @param {string[]} playerIds */
+export async function setExpansionProtection(playerIds, scheme) {
+  const body = { player_ids: playerIds || [] };
+  if (scheme) body.scheme = scheme;
+  const { data } = await api.post("/api/franchise/governance/expansion-protection", body);
+  return data;
+}
+
+/** League option: hold an expansion vote every N seasons (0 = market-driven only). */
+export async function setExpansionSchedule(everyNSeasons) {
+  const { data } = await api.post("/api/franchise/governance/expansion-protection", { schedule_every: Number(everyNSeasons) || 0 });
   return data;
 }
 
@@ -544,6 +552,20 @@ export async function getFranchiseLines() {
 /** @param {{unit_type: string, lines: any}} payload */
 export async function saveFranchiseLines(payload) {
   const { data } = await api.post("/api/franchise/lines", payload);
+  return data;
+}
+
+/** Stored box score for one finished game. @param {string} gameId */
+export async function getBoxScore(gameId) {
+  const { data } = await api.get(`/api/franchise/box-score/${encodeURIComponent(gameId)}`);
+  return data.box_score;
+}
+
+/** Per-game log + season totals + WJC history. @param {string} playerId @param {number=} season */
+export async function getPlayerGameLog(playerId, season) {
+  const { data } = await api.get(`/api/franchise/player/${encodeURIComponent(playerId)}/game-log`, {
+    params: season ? { season } : undefined,
+  });
   return data;
 }
 

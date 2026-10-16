@@ -138,11 +138,20 @@ class FranchiseSession:
     game_results: List[Dict[str, Any]] = field(default_factory=list)
     player_season_stats: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     processed_game_ids: Set[str] = field(default_factory=set)
+    # Compact box scores + per-player game index, current + previous season
+    # (serialization.store_compact_box_score). Records are incremental max-compares.
+    box_score_book: Dict[str, Any] = field(default_factory=dict)
+    box_score_records: Dict[str, Any] = field(default_factory=dict)
+    # Every WJC line a player has posted, keyed by player id and draft prospect id.
+    wjc_player_history: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
 
     # One-off UI recaps (WJC, outdoor games, All-Star) — shown until dismissed
     pending_ui_popups: List[Dict[str, Any]] = field(default_factory=list)
     shown_event_keys: Set[str] = field(default_factory=set)
     showcase_archive: List[Dict[str, Any]] = field(default_factory=list)
+    # Master switch for the cartoony "goofy" layer (fluke goals, hat-trick rain, mascot
+    # races, ON FIRE streaks, ...). Read everywhere via getattr(session, "goofy_events_enabled", True).
+    goofy_events_enabled: bool = True
     # CPU franchise cognition/state (optional; safe for older saves)
     cpu_franchise_profiles: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     cpu_scheduler_state: Dict[str, Any] = field(default_factory=dict)

@@ -425,7 +425,7 @@ export function resolveCreaseZoneGrades(player, profile, tools) {
 
 export function zoneGradeWord(n) {
   if (n == null || !Number.isFinite(n)) return "Unknown";
-  if (n >= 92) return "Generational";
+  if (n >= 92) return "World-Class";
   if (n >= 86) return "Elite";
   if (n >= 80) return "Great";
   if (n >= 74) return "Very Good";

@@ -33,6 +33,8 @@ class PlayoffSeries:
     wins_low: int = 0
     best_of: int = 7
     upset: bool = False
+    bracket_slot: int = -1  # position in the conference bracket (R1: 0-3)
+    division: Optional[str] = None
 
     def winner_id(self) -> str:
         return self.team_high_id if self.wins_high > self.wins_low else self.team_low_id
@@ -257,8 +259,7 @@ def _augment_strength_with_results(
 
 
 def _sort_team_ids_by_standings(standings: StandingsTable, team_ids: List[str]) -> List[str]:
-    recs = [standings.records[tid] for tid in team_ids if tid in standings.records]
-    recs.sort(key=standings._sort_key, reverse=True)
+    recs = standings.sort_records(standings.records[tid] for tid in team_ids if tid in standings.records)
     return [r.team_id for r in recs]
 
 
@@ -278,28 +279,26 @@ def _simulate_nhl_conference_bracket(
 
     current = [_simulate_series(rng, s, strength_map) for s in r1]
     series_all.extend(current)
-    wids = _sort_team_ids_by_standings(standings, [s.winner_id() for s in current])
-    if len(wids) < 4:
-        return series_all, wids[0] if wids else ""
-
-    r2: List[PlayoffSeries] = [
-        PlayoffSeries(
-            round_index=2,
-            conference=conference,
-            seed_high=1,
-            seed_low=4,
-            team_high_id=wids[0],
-            team_low_id=wids[3],
-        ),
-        PlayoffSeries(
-            round_index=2,
-            conference=conference,
-            seed_high=2,
-            seed_low=3,
-            team_high_id=wids[1],
-            team_low_id=wids[2],
-        ),
-    ]
+    # Fixed NHL bracket: R1 slots 0+1 meet, slots 2+3 meet (home ice by record).
+    current.sort(key=lambda s: s.bracket_slot)
+    r2: List[PlayoffSeries] = []
+    for half in range(2):
+        pair = _sort_team_ids_by_standings(
+            standings, [current[2 * half].winner_id(), current[2 * half + 1].winner_id()]
+        )
+        if len(pair) < 2:
+            return series_all, ""
+        r2.append(
+            PlayoffSeries(
+                round_index=2,
+                conference=conference,
+                seed_high=half + 1,
+                seed_low=4 - half,
+                team_high_id=pair[0],
+                team_low_id=pair[1],
+                bracket_slot=half,
+            )
+        )
     cur2 = [_simulate_series(rng, s, strength_map) for s in r2]
     series_all.extend(cur2)
     w2 = _sort_team_ids_by_standings(standings, [s.winner_id() for s in cur2])

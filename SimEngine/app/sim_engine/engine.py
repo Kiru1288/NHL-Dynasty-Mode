@@ -94,6 +94,49 @@ _SKATER_LEDGER_ANALYTICS_KEYS = (
     "xgf_pct_gp",
 )
 
+# Per-game box score lines: each dressed player's ledger delta for one game.
+# Order is the wire format of ``player_lines`` rows (after team_id) — append only.
+_BOX_LINE_KEYS = (
+    "gp", "g", "a", "plus_minus", "pim", "sog", "hit", "blk", "toi_sec",
+    "ppg", "ppa", "shg", "sha", "pp_toi_sec", "pk_toi_sec", "cf", "ca", "ixg",
+    "saves", "shots_against", "ga", "w", "l", "otl", "so",
+)
+
+
+def _box_line_snapshot(ledger: Dict[str, Dict[str, Any]], teams: Tuple[Any, ...]) -> Dict[str, Optional[Dict[str, Any]]]:
+    """Pre-game ledger rows for every rostered player (C-level dict copy per player)."""
+    snap: Dict[str, Optional[Dict[str, Any]]] = {}
+    for team in teams:
+        for p in getattr(team, "roster", None) or ():
+            pid = _id_str(p, "id")
+            if pid:
+                row = ledger.get(pid)
+                snap[pid] = row.copy() if row else None
+    return snap
+
+
+_BOX_FLOAT_IDX = tuple(i for i, k in enumerate(_BOX_LINE_KEYS) if k in ("cf", "ca", "ixg"))
+
+
+def _box_player_lines(ledger: Dict[str, Dict[str, Any]], snap: Dict[str, Optional[Dict[str, Any]]]) -> Dict[str, List[Any]]:
+    """{pid: [team_id, *deltas in _BOX_LINE_KEYS order]} for players who dressed this game."""
+    out: Dict[str, List[Any]] = {}
+    empty: Dict[str, Any] = {}
+    for pid, pre in snap.items():
+        row = ledger.get(pid)
+        if not row:
+            continue
+        pre = pre or empty
+        if (row.get("gp") or 0) <= (pre.get("gp") or 0):
+            continue
+        vals = [(row.get(k) or 0) - (pre.get(k) or 0) for k in _BOX_LINE_KEYS]
+        for i in _BOX_FLOAT_IDX:
+            vals[i] = round(vals[i], 2)
+        vals.insert(0, str(row.get("team_id") or ""))
+        out[pid] = vals
+    return out
+
+
 # League-wide goals/points lift (game scores + finish rate). Does not touch TOI allocation.
 _GM_LEAGUE_SCORING_PACE_MULT = 1.08
 
@@ -12929,16 +12972,27 @@ class SimEngine:
 
         if len(pp1) < 4 or len(pp2) < 3:
             if use_saved and lines and any(lines[0]):
-                l0 = list(lines[0])
+                # Specialists, not just "line 1 + pair 1": shooters and passers from the
+                # whole dressed group, with a nudge for the top unit's chemistry, and
+                # never more than two D on a unit.
+                l0_ids = {_id_str(p, "id") for p in lines[0]}
+                _fw_dressed = [p for ln in lines for p in ln]
                 pp_seed = sorted(
-                    l0 + list(defs[:2]),
+                    _fw_dressed + list(defs[:4]),
                     key=lambda p: (
-                        (self._gm_ovr_norm(p) * 0.50)
+                        (self._gm_ovr_norm(p) * 0.46)
                         + (self._gm_production_balance_score(p) * 0.20)
-                        + (self._gm_primary_assist_weight(p) * 0.18)
+                        + (self._gm_shot_quality_weight(p) * 0.15)
+                        + (self._gm_primary_assist_weight(p) * 0.15)
+                        + (0.03 if _id_str(p, "id") in l0_ids else 0.0)
                     ),
                     reverse=True,
                 )
+                _pp_d = [p for p in pp_seed if str(self._gm_pos_str(p)).upper() == "D"]
+                _pp_f = [p for p in pp_seed if str(self._gm_pos_str(p)).upper() != "D"]
+                if len(_pp_f) >= 8 and len(_pp_d) >= 2:
+                    # PP1: top four forwards + best D; PP2: next four + next D (4F-1D).
+                    pp_seed = _pp_f[:4] + _pp_d[:1] + _pp_f[4:8] + _pp_d[1:2]
             else:
                 pp_seed = sorted(
                     fw + defs[:2],
@@ -13029,6 +13083,9 @@ class SimEngine:
     def _gm_allocate_conserved_toi(
         self, rng: random.Random, dressed_sk: List[Any], team: Any = None
     ) -> Dict[str, int]:
+        # Goalies ride along in `dressed`; they took a forward-line share of the
+        # 180 skater minutes (top line ~19 min) and forced a unit rebuild every call.
+        dressed_sk = [p for p in (dressed_sk or []) if self._gm_pos_str(p).upper() != "G"]
         if dressed_sk and any(
             (self._gm_is_defense(p) and getattr(p, "_gm_game_pair_idx", None) is None)
             or ((not self._gm_is_defense(p)) and getattr(p, "_gm_game_line_idx", None) is None)
@@ -13041,6 +13098,12 @@ class SimEngine:
         def_budget = 7200
         fw_w = [self._gm_toi_usage_weight(p, is_d=False) for p in fw]
         d_w = [self._gm_toi_usage_weight(p, is_d=True) for p in defs]
+        # Line matching: heavier matching rides the top line / pair harder.
+        _prof = getattr(team, "_tactic_profile_cache", None) if team is not None else None
+        _top = float(_prof[1].get("top_toi", 1.0)) if isinstance(_prof, tuple) else 1.0
+        if _top != 1.0:
+            fw_w = [w * _top if getattr(p, "_gm_game_line_idx", None) == 0 else w for p, w in zip(fw, fw_w)]
+            d_w = [w * _top if getattr(p, "_gm_game_pair_idx", None) == 0 else w for p, w in zip(defs, d_w)]
         fw_sec = self._gm_distribute_integer_shares(rng, fw_w, fwd_budget) if fw else []
         d_sec = self._gm_distribute_integer_shares(rng, d_w, def_budget) if defs else []
         out: Dict[str, int] = {}
@@ -13052,7 +13115,7 @@ class SimEngine:
         for p, sec in zip(defs, d_sec):
             pid = _id_str(p, "id")
             if pid:
-                out[pid] = int(min(int(sec), 26 * 60))
+                out[pid] = int(min(int(sec), 28 * 60 + 30))
         return out
 
     def _gm_toi_usage_weight(self, p: Any, *, is_d: bool) -> float:
@@ -13082,10 +13145,10 @@ class SimEngine:
             pair_idx = _slot("_gm_game_pair_idx", 1, 2)
             # 3rd pair plays real NHL minutes (~16 of 24) — burying it punished depth.
             pair_weights = {
-                "rolling_four": (1.20, 1.08, 0.92),
-                "balanced": (1.38, 1.12, 0.78),
-                "top_heavy": (1.52, 1.12, 0.58),
-            }.get(style, (1.38, 1.12, 0.78))
+                "rolling_four": (1.30, 1.10, 0.92),
+                "balanced": (1.48, 1.14, 0.80),
+                "top_heavy": (1.60, 1.14, 0.66),
+            }.get(style, (1.48, 1.14, 0.80))
             base = pair_weights[pair_idx]
             ovr_n = self._gm_ovr_norm(p)
             talent = 0.98 + 0.04 * ovr_n if stamped_pair else 0.88 + 0.18 * ovr_n
@@ -13447,6 +13510,21 @@ class SimEngine:
 
         # Hard rest triggers — hierarchy first, lottery never decides the starter.
         if is_b2b:
+            # Coach's back-to-back goalie plan (user pick or CPU auto) wins when set.
+            plan = getattr(team, "_tactic_b2b_goalie_choice", None)
+            if plan is None and isinstance(getattr(team, "_tactics", None), dict):
+                try:
+                    from app.sim_engine.economy.coaching_ai import b2b_goalie_choice
+
+                    plan = b2b_goalie_choice(
+                        team, self._gm_goalie_ovr_0_100(preferred), self._gm_goalie_ovr_0_100(backup)
+                    )
+                except Exception:
+                    plan = None
+            if plan == "backup":
+                return True
+            if plan == "starter":
+                return False
             if strategy in ("WORKHORSE", "STARTER_HEAVY"):
                 return consec >= 3 or recent5 >= 4
             if strategy == "NORMAL_STARTER":
@@ -14108,6 +14186,10 @@ class SimEngine:
                 # cancelling attack, so each moves the chance on its own terms.
                 raw_xg *= max(0.88, min(1.14, 0.99 + (atk_off - 0.55) * 0.30))
                 raw_xg *= max(0.86, min(1.06, 1.0 - (def_sup - 0.07) * 0.90))
+                # Staff (league_operations.refresh_staff_team_effects): PP coach of the
+                # attackers vs PK coach of the defenders nudge special-teams chances.
+                if strength == "PP":
+                    raw_xg *= float(getattr(atk_team, "_staff_pp_mult", 1.0) or 1.0) * float(getattr(def_team, "_staff_pk_mult", 1.0) or 1.0)
                 ctx = self._gm_chance_context(
                     rng, chance, shooter, atk_unit, def_unit,
                     away_starter if side == "home" else home_starter,
@@ -14172,6 +14254,7 @@ class SimEngine:
                             situational_adj=float(ctx.get("situational_adj", 1.0)),
                         )
                         prob = min(0.94, float(prob) * _GM_LEAGUE_SCORING_PACE_MULT * float(self._board_game_rules().get("scoring_mult", 1.0)))
+                        prob *= float(getattr(def_team, "_staff_goalie_form_mult", 1.0) or 1.0)  # goalie coach
                         outcome = "GOAL" if rng.random() < prob else "SAVED"
                     else:
                         outcome = "MISSED"
@@ -14674,6 +14757,9 @@ class SimEngine:
 
     def _injury_sidelined(self, player: Any) -> bool:
         """True when player should not dress / produce counting stats this game."""
+        rd = getattr(player, "_rest_day", None)
+        if rd is not None and rd == getattr(self, "_tactic_calendar_day", None):
+            return True  # coach rest day (load management)
         if int(getattr(player, "_world_injury_games_remaining", 0) or 0) > 0:
             return True
         h = getattr(player, "health", None)
@@ -14769,6 +14855,16 @@ class SimEngine:
         home_share_n = max(0.34, min(0.66, home_share_n))
         home_cf_n = max(36, int(round(total_cf * home_share_n)))
         away_cf_n = max(36, total_cf - home_cf_n)
+        # Coach tactics: forecheck / pace / shot priority move attempt volume (not share).
+        if getattr(home, "_tactics", None) is not None or getattr(away, "_tactics", None) is not None:
+            try:
+                from app.sim_engine.economy.coaching_ai import game_tactic_mods
+
+                _tm = game_tactic_mods(home, away)
+                home_cf_n = max(36, int(round(home_cf_n * float(_tm["home_cf"]))))
+                away_cf_n = max(36, int(round(away_cf_n * float(_tm["away_cf"]))))
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
 
         # Prime hub multipliers once so goal weight math doesn't re-sort rosters.
         for tm in (home, away):
@@ -14939,6 +15035,8 @@ class SimEngine:
                 for p, i in zip(pool, ids):
                     w = float(base_weights.get(i, 0.05))
                     w *= self._gm_goal_assist_balance_mult(p, ledger, tid, role=balance_role)
+                    # Goofy ON FIRE / ICE COLD streak nudge (1.0 when off or disabled).
+                    w *= float(getattr(p, "_goofy_fire_mult", 1.0) or 1.0)
                     raw.append(max(0.05, w) ** temp)
                 return rng.choices(list(pool), weights=raw, k=1)[0]
 
@@ -15439,16 +15537,19 @@ class SimEngine:
             game_xgf_pct = (float(team_xgf) / _xden) if _xden > 0 else 0.5
             cf_weights: List[float] = []
             ca_weights: List[float] = []
-            for p in skaters:
+            _ovrs = [max(0.35, self._gm_ovr_norm(p)) for p in skaters]
+            _ovr_mean = sum(_ovrs) / float(len(_ovrs))
+            for p, ovr_n in zip(skaters, _ovrs):
                 pid = _id_str(p, "id")
                 toi = max(1, int(toi_map.get(pid, 0) or 0))
-                ovr_n = max(0.35, self._gm_ovr_norm(p))
                 # On-ice Corsi is a 5-man share: CF and CA use the same ice time.
                 # A blanket "D absorb CA" dump invented 30% CF% for 85-OVR pairs.
                 ice = toi * (0.42 + 0.58 * ovr_n)
-                deploy = max(-0.10, min(0.14, (ovr_n - 0.76) * 0.48))
+                # Relative-to-teammates term gives each club a real on-ice CF% spread
+                # (drivers ~+5-7%, anchors ~-5%), not a near-clone of team CF%.
+                deploy = max(-0.16, min(0.20, (ovr_n - _ovr_mean) * 1.6 + (ovr_n - 0.76) * 0.22))
                 cf_weights.append(max(0.05, ice * (1.0 + deploy)))
-                ca_weights.append(max(0.05, ice * (1.0 - deploy * 0.55)))
+                ca_weights.append(max(0.05, ice * (1.0 - deploy * 0.80)))
             cf_total = sum(cf_weights) or 1.0
             ca_total = sum(ca_weights) or 1.0
             for p, cf_w, ca_w in zip(skaters, cf_weights, ca_weights):
@@ -15590,6 +15691,8 @@ class SimEngine:
                         _row = ledger.get(_pid) or {}
                         _pre_game[_pid] = tuple(int(_row.get(k, 0) or 0) for k in _box_keys)
 
+        _line_pre = _box_line_snapshot(ledger, (home, away))
+
         if light_mode:
             setattr(self, "_pending_event_game", None)
             result = self._accumulate_light_strength_game_stats(
@@ -15642,6 +15745,7 @@ class SimEngine:
                     "away_pim": int(result.get("away_pim", 0) or 0),
                     "light_box": True,
                     "stat_source": "light_strength",
+                    "player_lines": _box_player_lines(ledger, _line_pre),
                 }
             # Fall through with forced result for rare heavy+light callers.
         else:
@@ -15709,6 +15813,7 @@ class SimEngine:
             }
             if result.get("pp_event_ownership"):
                 light_out["pp_event_ownership"] = dict(result["pp_event_ownership"])
+            light_out["player_lines"] = _box_player_lines(ledger, _line_pre)
             return light_out
 
         home_dressed = result.get("home_dressed") or []
@@ -15810,6 +15915,7 @@ class SimEngine:
             "home_pp_seconds": float(result.get("home_pp_seconds", 0) or 0),
             "away_pp_seconds": float(result.get("away_pp_seconds", 0) or 0),
             "pp_event_ownership": dict(result.get("pp_event_ownership") or {}),
+            "player_lines": _box_player_lines(ledger, _line_pre),
         }
 
     def _season_stat_line_from_ledger_row(self, row: Dict[str, Any], season_year: int) -> Dict[str, Any]:
@@ -16191,6 +16297,40 @@ class SimEngine:
         except Exception:
             return {}
 
+    def _tactic_game_goal_mults(
+        self, home: Any, away: Any, *, home_b2b: bool = False, away_b2b: bool = False
+    ) -> Optional[Tuple[float, float]]:
+        """Coach tactics + back-to-back multipliers on each side's goal rate (once per game).
+
+        None when neither club carries franchise tactics (keeps non-franchise sims identical).
+        """
+        if getattr(home, "_tactics", None) is None and getattr(away, "_tactics", None) is None:
+            return None
+        try:
+            from app.sim_engine.economy.coaching_ai import b2b_mu_mods, game_tactic_mods
+
+            mods = game_tactic_mods(home, away)
+            h_mu = float(mods["home_mu"])
+            a_mu = float(mods["away_mu"])
+            for tm, b2b, is_home in ((home, home_b2b, True), (away, away_b2b, False)):
+                if not b2b:
+                    continue
+                gl = [g for g in self._gm_goalies(tm) if not self._injury_sidelined(g)]
+                ovrs = sorted((float(self._gm_goalie_ovr_0_100(g)) for g in gl), reverse=True)
+                st = ovrs[0] if ovrs else 0.0
+                bk = ovrs[1] if len(ovrs) > 1 else st
+                own, opp = b2b_mu_mods(tm, b2b=True, starter_ovr=st, backup_ovr=bk)
+                if is_home:
+                    h_mu *= own
+                    a_mu *= opp
+                else:
+                    a_mu *= own
+                    h_mu *= opp
+            return h_mu, a_mu
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+            return None
+
     def _simulate_game_strength(
         self,
         rng: random.Random,
@@ -16200,6 +16340,9 @@ class SimEngine:
         home_strength_scale: float = 1.0,
         away_strength_scale: float = 1.0,
         noise_scale: float = 1.0,
+        *,
+        home_b2b: bool = False,
+        away_b2b: bool = False,
     ) -> Tuple[int, int, bool]:
         """Fast franchise/bulk score path — strength + variance (not event loop)."""
         hid = str(getattr(home, "team_id", getattr(home, "id", "H")))
@@ -16232,6 +16375,10 @@ class SimEngine:
 
         home_mu -= max(0.0, (0.52 - self._team_strength(home)) * 1.35)
         away_mu -= max(0.0, (0.52 - self._team_strength(away)) * 1.35)
+        _tac = self._tactic_game_goal_mults(home, away, home_b2b=home_b2b, away_b2b=away_b2b)
+        if _tac is not None:
+            home_mu *= _tac[0]
+            away_mu *= _tac[1]
         home_mu = max(1.15, min(4.4, home_mu))
         away_mu = max(1.05, min(4.2, away_mu))
 
@@ -16262,6 +16409,15 @@ class SimEngine:
                 else:
                     away_goals += 1
 
+        if _tac is not None:
+            try:
+                from app.sim_engine.economy.coaching_ai import apply_goalie_pull
+
+                home_goals, away_goals, overtime = apply_goalie_pull(
+                    rng, home_goals, away_goals, overtime, home, away
+                )
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         return home_goals, away_goals, overtime
 
     def _simulate_game(
@@ -16297,6 +16453,8 @@ class SimEngine:
                 home_strength_scale=home_strength_scale,
                 away_strength_scale=away_strength_scale,
                 noise_scale=noise_scale,
+                home_b2b=bool(home_b2b),
+                away_b2b=bool(away_b2b),
             )
             # Remember fast-path finals so stat accumulation uses the same (light) model
             # instead of re-simulating a different event game for the box score.
@@ -16317,6 +16475,11 @@ class SimEngine:
         hid = str(getattr(home, "team_id", getattr(home, "id", "H")))
         aid = str(getattr(away, "team_id", getattr(away, "id", "A")))
         scratch: Dict[str, Dict[str, Any]] = {}
+        # Event path: tactics/B2B fold into the strength scales (one multiply, no per-event work).
+        _tac = self._tactic_game_goal_mults(home, away, home_b2b=bool(home_b2b), away_b2b=bool(away_b2b))
+        if _tac is not None:
+            home_strength_scale = float(home_strength_scale) * (1.0 + (_tac[0] - _tac[1]) * 0.5)
+            away_strength_scale = float(away_strength_scale) * (1.0 + (_tac[1] - _tac[0]) * 0.5)
         result = self._run_event_driven_game(
             rng, home, away, hid, aid, scratch,
             strength_map=strength_map,

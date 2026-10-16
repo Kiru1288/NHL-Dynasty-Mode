@@ -737,7 +737,7 @@ def _evidence_weaknesses(row: Dict[str, Any]) -> List[Dict[str, Any]]:
 def _score_tier(score: float) -> str:
     """Dramatic skill tiers (matches frontend ProspectVisuals.SKILL_TIERS)."""
     if score >= 92:
-        return "Generational"
+        return "World-Class"
     if score >= 86:
         return "Elite"
     if score >= 80:
@@ -2923,7 +2923,13 @@ def build_prospect_profile(
             "league": league_display,
             "shots": analytics.get("shots") if analytics else row.get("shots"),
             "toi": analytics.get("toi") if analytics else None,
+            "plusMinus": (row.get("stat_line") or {}).get("plus_minus") if isinstance(row.get("stat_line"), dict) else None,
+            "pim": (row.get("stat_line") or {}).get("pim") if isinstance(row.get("stat_line"), dict) else None,
+            "nhle": row.get("nhle"),
         },
+        "classIndicators": row.get("class_indicators") if isinstance(row.get("class_indicators"), dict) else None,
+        "classTier": row.get("class_tier") if isinstance(row.get("class_tier"), dict) else None,
+        "consensusRank": row.get("consensus_rank"),
         "analytics": analytics or None,
         "wjcStats": wjc_stats,
         "wjcPerformance": wjc_stats,
@@ -3009,3 +3015,147 @@ def build_prospect_profiles_by_id(
             row_payload["_prospect_revision"] = int(prospect_revision)
         out[pid] = build_prospect_profile(row_payload, roster_rows=roster_rows, team_status=team_status)
     return out
+
+
+# ---------------------------------------------------------------------------
+# Class-wide indicators: stat line, NHLe, percentiles, consensus, tier ladder.
+# ---------------------------------------------------------------------------
+
+# Rank ladder (class rank -> tier). "generational" / "transcendent" are flag-gated
+# and extremely rare; everything else is earned by where the class consensus has you.
+_CLASS_TIER_LADDER = (
+    (2, "franchise", "Franchise Talent"),
+    (8, "blue_chip", "Blue Chip"),
+    (20, "first_line", "Top-Line Upside"),
+    (32, "first_round", "First-Round Talent"),
+    (64, "second_round", "Second-Round Value"),
+    (128, "mid_round", "Mid-Round Depth"),
+    (10 ** 6, "late_flyer", "Late Flyer"),
+)
+
+
+def _class_tier(rank: int, n: int, row: Dict[str, Any], class_strength: str) -> Dict[str, Any]:
+    pct = int(round(100.0 * (1.0 - (max(1, rank) - 1) / max(1, n))))
+    pot = _f(row.get("potential_score") or row.get("potential"), 0.0)
+    if rank == 1 and (row.get("is_transcendent") or row.get("transcendent_talent")):
+        key, label = "transcendent", "Transcendent"
+    elif rank == 1 and class_strength in ("generational", "elite") and pot >= 94:
+        # Only the very best class headliners — roughly one every several drafts.
+        key, label = "generational", "Generational"
+    else:
+        key, label = "late_flyer", "Late Flyer"
+        for max_rank, k, lab in _CLASS_TIER_LADDER:
+            if rank <= max_rank:
+                key, label = k, lab
+                break
+    return {"key": key, "label": label, "rank": int(rank), "class_size": int(n), "percentile": pct}
+
+
+def _pct_rank(sorted_vals: List[float], v: Optional[float]) -> Optional[int]:
+    if v is None or len(sorted_vals) < 3:
+        return None
+    import bisect
+
+    lo = bisect.bisect_left(sorted_vals, v)
+    hi = bisect.bisect_right(sorted_vals, v)
+    return int(round(100.0 * (lo + (hi - lo) * 0.5) / len(sorted_vals)))
+
+
+def attach_class_indicators(entries: List[Dict[str, Any]], *, class_strength: str = "") -> None:
+    """Annotate board rows in place with clear, common drafting indicators.
+
+    Single pass + a handful of sorts over the class; cheap even for 1,000 rows.
+    """
+    if not entries:
+        return
+    try:
+        from app.sim_engine.generation.prospect_league_scoring import nhle_points_per_82
+    except Exception:
+        nhle_points_per_82 = None  # type: ignore
+
+    n = len(entries)
+    metrics: Dict[str, Dict[str, List[float]]] = {}
+    per_row: List[Dict[str, Optional[float]]] = []
+
+    def _num(v: Any) -> Optional[float]:
+        try:
+            x = float(v)
+        except (TypeError, ValueError):
+            return None
+        return x if x > 0 else None
+
+    for e in entries:
+        actual = e.get("actual_stats") if isinstance(e.get("actual_stats"), dict) else {}
+        gp = _i(actual.get("gp") or e.get("gp") or e.get("games_played"))
+        goals = _i(actual.get("goals") if actual.get("goals") is not None else e.get("goals"))
+        assists = _i(actual.get("assists") if actual.get("assists") is not None else e.get("assists"))
+        points = _i(actual.get("points") if actual.get("points") is not None else e.get("points"))
+        pos = _pos_bucket(str(e.get("position") or ""))
+        league = e.get("league_code") or e.get("league")
+        line: Dict[str, Any] = {
+            "gp": gp,
+            "goals": goals,
+            "assists": assists,
+            "points": points,
+            "plus_minus": actual.get("plus_minus"),
+            "pim": _i(actual.get("pim") if actual.get("pim") is not None else e.get("pim")),
+            "ppg": round(points / gp, 2) if gp > 0 else None,
+            "league": e.get("league") or e.get("league_display"),
+        }
+        if pos == "G":
+            line.update({
+                "wins": _i(actual.get("wins") or e.get("wins")),
+                "save_pct": actual.get("save_pct") or e.get("save_pct") or None,
+                "gaa": actual.get("gaa") or e.get("gaa") or None,
+            })
+        e["stat_line"] = line
+        nhle = nhle_points_per_82(league, points, gp) if (nhle_points_per_82 and pos != "G") else None
+        e["nhle"] = nhle
+        h = _num(e.get("height_cm"))
+        w = _num(e.get("weight"))
+        vals = {
+            "scoring": line["ppg"] if pos != "G" and gp >= 5 else None,
+            "nhle": nhle,
+            "size": (h + w * 0.25) if h and w else h,
+            "skating": _num(e.get("skating_rating") or e.get("skating")),
+            "shooting": _num(e.get("shooting")) if pos != "G" else None,
+            "hockey_iq": _num(e.get("iq_rating") or e.get("hockey_iq")),
+            "defense": _num(e.get("def_rating") or e.get("defense")),
+            "physical": _num(e.get("physical_rating") or e.get("physical")),
+            "save_pct": _num(line.get("save_pct")) if pos == "G" and gp >= 5 else None,
+        }
+        # Scoring and size compare within position group; tools compare across the class.
+        group = pos if pos in ("D", "G") else "F"
+        per_row.append({"_group": group, **vals})  # type: ignore[dict-item]
+        for k, v in vals.items():
+            if v is None:
+                continue
+            bucket = group if k in ("scoring", "nhle", "size", "save_pct") else "ALL"
+            metrics.setdefault(k, {}).setdefault(bucket, []).append(float(v))
+
+    for d in metrics.values():
+        for lst in d.values():
+            lst.sort()
+
+    for idx, e in enumerate(entries):
+        rank = _i(e.get("rank"), idx + 1) or (idx + 1)
+        row_vals = per_row[idx]
+        group = row_vals.get("_group")
+        pct: Dict[str, Optional[int]] = {}
+        for k, v in row_vals.items():
+            if k == "_group":
+                continue
+            bucket = group if k in ("scoring", "nhle", "size", "save_pct") else "ALL"
+            pct[k] = _pct_rank((metrics.get(k) or {}).get(str(bucket), []), v)  # type: ignore[arg-type]
+        e["class_percentiles"] = {k: v for k, v in pct.items() if v is not None}
+        e["consensus_rank"] = int(rank)
+        e["class_tier"] = _class_tier(int(rank), n, e, str(class_strength or "").lower())
+        e["class_indicators"] = {
+            "consensus_rank": int(rank),
+            "class_percentile": e["class_tier"]["percentile"],
+            "tier": e["class_tier"],
+            "percentiles": e["class_percentiles"],
+            "nhle": e["nhle"],
+            "stat_line": e["stat_line"],
+            "position_group": group,
+        }

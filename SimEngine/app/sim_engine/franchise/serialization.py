@@ -658,7 +658,10 @@ def _stats_integrity_payload(rows: List[Dict[str, Any]], game_results: List[Dict
     skaters = [r for r in rows if not r.get("is_goalie")]
     goalies = [r for r in rows if r.get("is_goalie")]
 
-    total_player_goals = sum(int(r.get("g", 0) or 0) for r in skaters)
+    # Goalies count too: the (very rare) goofy empty-net goalie goal is a real goal.
+    total_player_goals = sum(int(r.get("g", 0) or 0) for r in skaters) + sum(
+        int(r.get("g", 0) or 0) for r in goalies
+    )
 
     total_box_goals = 0
     valid_games = 0
@@ -2106,6 +2109,11 @@ def _normalize_storyline_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
         "reason_codes",
         "reason_text",
         "execution",
+        # Rink Oddities section + trade-demand cards (dropped here before).
+        "goofy",
+        "goofy_kind",
+        "trade_demand",
+        "tags",
     ):
         if raw.get(key) is not None:
             out[key] = raw.get(key)
@@ -2237,3 +2245,727 @@ def get_franchise_game_detail(session: FranchiseSession, game_id: str) -> Option
             out["user_team_id"] = str(session.user_team_id)
             return out
     return None
+
+
+
+# ---------------------------------------------------------------------------
+# Box scores + player game logs
+#
+# Each finished NHL game keeps one compact box copied from data the sim already
+# produced (final, period goals, scoring events, per-player ledger deltas).
+# Stored on ``session.box_score_book`` (pickled with the session) and bounded
+# to the current + previous season.
+# ---------------------------------------------------------------------------
+
+# Wire order of each ``lines`` row after team_id — mirrors engine._BOX_LINE_KEYS.
+BOX_LINE_KEYS = (
+    "gp", "g", "a", "plus_minus", "pim", "sog", "hit", "blk", "toi_sec",
+    "ppg", "ppa", "shg", "sha", "pp_toi_sec", "pk_toi_sec", "cf", "ca", "ixg",
+    "saves", "shots_against", "ga", "w", "l", "otl", "so",
+    # Stamped at store time (not tracked by either game sim): faceoff wins/losses, takeaways, giveaways.
+    "fow", "fol", "tk", "gv",
+)
+_BOX_IDX = {k: i + 1 for i, k in enumerate(BOX_LINE_KEYS)}
+_BOX_ENGINE_LEN = 1 + BOX_LINE_KEYS.index("so") + 1  # team_id + engine-produced keys
+_BOX_SEASONS_KEPT = 2
+
+
+def _box_book(session: Any) -> Dict[str, Any]:
+    book = getattr(session, "box_score_book", None)
+    if not isinstance(book, dict):
+        book = {"seasons": {}, "order": []}
+        try:
+            session.box_score_book = book
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    book.setdefault("seasons", {})
+    book.setdefault("order", [])
+    return book
+
+
+def _box_season_bucket(book: Dict[str, Any], season: int) -> Dict[str, Any]:
+    key = str(int(season or 0))
+    bucket = book["seasons"].get(key)
+    if bucket is None:
+        bucket = {"games": {}, "players": {}, "people": {}}
+        book["seasons"][key] = bucket
+        book["order"].append(key)
+        while len(book["order"]) > _BOX_SEASONS_KEPT:
+            old = book["order"].pop(0)
+            book["seasons"].pop(old, None)
+    return bucket
+
+
+def _box_shot_split(gid: str, total: int, periods: int, goals: Optional[List[int]] = None) -> List[int]:
+    """Spread a team's SOG over the periods played (stable per game; no sim).
+
+    Each period gets at least as many shots as goals scored in it (when the total allows).
+    """
+    total = max(0, int(total or 0))
+    if periods <= 0:
+        return []
+    base = [0.32, 0.34, 0.34] + ([0.07] if periods > 3 else [])
+    rng = random.Random(_stable_hash(f"shots|{gid}"))
+    weights = [w * (0.7 + 0.6 * rng.random()) for w in base[:periods]]
+    tot_w = sum(weights) or 1.0
+    out = [int(total * w / tot_w) for w in weights]
+    i = rng.randrange(len(out))
+    while sum(out) < total:
+        out[i % len(out)] += 1
+        i += 1
+    need = [max(0, int(x or 0)) for x in (goals or [])][:periods]
+    need += [0] * (periods - len(need))
+    if sum(need) <= total:
+        for p in range(periods):
+            while out[p] < need[p]:
+                donor = max(range(periods), key=lambda q: out[q] - need[q])
+                if out[donor] - need[donor] <= 0:
+                    break
+                out[donor] -= 1
+                out[p] += 1
+    return out
+
+
+def _box_fmt_clock(sec: int) -> str:
+    return f"{sec // 60}:{sec % 60:02d}"
+
+
+def _box_light_timeline(
+    gid: str,
+    hid: str,
+    aid: str,
+    hp: List[int],
+    ap: List[int],
+    lines: Dict[str, List[Any]],
+    first_tid: str,
+    playoff: bool,
+    shootout: bool,
+) -> List[List[Any]]:
+    """Goal timeline for a bulk-sim game from what it recorded (no sim).
+
+    Period goal counts come from the period line; scorers, PP/SH strength and
+    assisters come from each player's ledger deltas, so the goal list and the
+    player lines agree. Clocks and within-period order are seeded on the game id.
+    """
+    rng = random.Random(_stable_hash(f"timeline|{gid}"))
+    gi, ai = _BOX_IDX["g"], _BOX_IDX["a"]
+    ppgi, shgi, ppai, shai = _BOX_IDX["ppg"], _BOX_IDX["shg"], _BOX_IDX["ppa"], _BOX_IDX["sha"]
+    scorers: Dict[str, List[Tuple[str, str]]] = {hid: [], aid: []}
+    pools: Dict[str, Dict[str, Dict[str, int]]] = {hid: {"PP": {}, "SH": {}, "EV": {}}, aid: {"PP": {}, "SH": {}, "EV": {}}}
+    for pid in sorted(lines):
+        row = lines[pid]
+        tid = str(row[0]) if row else ""
+        if tid not in scorers:
+            continue
+        try:
+            g, a = int(row[gi] or 0), int(row[ai] or 0)
+            ppg, shg = min(g, int(row[ppgi] or 0)), int(row[shgi] or 0)
+            ppa, sha = min(a, int(row[ppai] or 0)), int(row[shai] or 0)
+        except (IndexError, TypeError, ValueError):
+            continue
+        shg = min(shg, g - ppg)
+        sha = min(sha, a - ppa)
+        scorers[tid].extend([(pid, "PP")] * ppg + [(pid, "SH")] * shg + [(pid, "EV")] * (g - ppg - shg))
+        for st, n in (("PP", ppa), ("SH", sha), ("EV", a - ppa - sha)):
+            if n > 0:
+                pools[tid][st][pid] = n
+    for tid in scorers:
+        rng.shuffle(scorers[tid])
+    goals: List[List[Any]] = []
+    nper = len(hp)
+    for p in range(nper):
+        toks = [hid] * int(hp[p] if p < len(hp) else 0) + [aid] * int(ap[p] if p < len(ap) else 0)
+        if not toks:
+            continue
+        rng.shuffle(toks)
+        if p == 0 and first_tid in toks and toks[0] != first_tid:
+            j = toks.index(first_tid)
+            toks[0], toks[j] = toks[j], toks[0]
+        ot = p >= 3
+        span = (1200 if playoff else 300) if ot else 1200
+        if ot:
+            toks = toks[:1]
+        secs = sorted(rng.sample(range(8, span - 2), len(toks)))
+        for tid, sec in zip(toks, secs):
+            if not scorers[tid]:
+                continue  # shootout winner / unrecorded goal: no scorer, not a goal event
+            pid, st = scorers[tid].pop()
+            goals.append([p + 1, _box_fmt_clock(sec), tid, pid, [], st, 0])
+    if shootout:
+        goals = [g for g in goals if g[0] <= 3]
+    # Assists: two passes (primary, then secondary) over each club's goals, drawing
+    # from the matching strength pool of players whose assist deltas went up.
+    for _pass in range(2):
+        for gl in goals:
+            if len(gl[4]) != _pass:
+                continue
+            pool = pools[gl[2]]["EV" if gl[5] == "EV" else gl[5]]
+            cands = [q for q, n in pool.items() if n > 0 and q != gl[3] and q not in gl[4]]
+            if not cands:
+                continue
+            best = max(cands, key=lambda q: (pool[q], rng.random()))
+            pool[best] -= 1
+            gl[4].append(best)
+    # Leftover assists (strength pools that ran dry) go to any open slot on that club.
+    for gl in goals:
+        while len(gl[4]) < 2:
+            left = [(q, st) for st, pool in pools[gl[2]].items() for q, n in pool.items() if n > 0 and q != gl[3] and q not in gl[4]]
+            if not left:
+                break
+            q, st = left[0]
+            pools[gl[2]][st][q] -= 1
+            gl[4].append(q)
+    # A scorer's own leftover assist: swap him onto a teammate's goal and move that
+    # goal's assister here, so every assist delta shows up in the goal list.
+    for gl in goals:
+        if len(gl[4]) >= 2:
+            continue
+        own = [(st, pool) for st, pool in pools[gl[2]].items() if pool.get(gl[3], 0) > 0]
+        if not own:
+            continue
+        st, pool = own[0]
+        for g2 in goals:
+            if g2 is gl or g2[2] != gl[2] or g2[3] == gl[3] or gl[3] in g2[4]:
+                continue
+            xs = [x for x in g2[4] if x != gl[3] and x not in gl[4]]
+            if xs:
+                g2[4][g2[4].index(xs[0])] = gl[3]
+                gl[4].append(xs[0])
+                pool[gl[3]] -= 1
+                break
+    # Empty net: a late, last goal by the winner that doubles a one-goal lead.
+    if goals and not shootout:
+        last = goals[-1]
+        h = sum(1 for g in goals if g[2] == hid)
+        a = sum(1 for g in goals if g[2] == aid)
+        lead_after = (h - a) if last[2] == hid else (a - h)
+        if last[0] == 3 and last[5] == "EV" and lead_after == 2:
+            sec = int(last[1].split(":")[0]) * 60 + int(last[1].split(":")[1])
+            if sec >= 1050 and rng.random() < 0.6:
+                last[6] = 1
+    return goals
+
+
+def _box_stamp_extras(session: Any, gid: str, hid: str, aid: str, lines: Dict[str, List[Any]], people: Dict[str, List[str]]) -> None:
+    """Append faceoff wins/losses, takeaways and giveaways to each skater line (seeded; no sim).
+
+    Draws go to centres by TOI and are won by faceoff rating; the two clubs' totals balance.
+    """
+    rng = random.Random(_stable_hash(f"extras|{gid}"))
+    toi_i = _BOX_IDX["toi_sec"]
+    sa_i = _BOX_IDX["shots_against"]
+    tk_i, gv_i = _BOX_IDX["tk"], _BOX_IDX["gv"]
+    fo_rating: Dict[str, float] = {}
+    team_by_id = getattr(session, "team_by_id", None) or {}
+    for tid in (hid, aid):
+        for p in list(getattr(team_by_id.get(tid), "roster", None) or ()):
+            r = getattr(p, "ratings", None)
+            if isinstance(r, dict) and r.get("def_faceoffs") is not None:
+                fo_rating[str(getattr(p, "id", "") or "")] = float(r.get("def_faceoffs") or 74.0)
+    side_sk: Dict[str, List[Tuple[str, List[Any]]]] = {hid: [], aid: []}
+    for pid in sorted(lines):
+        row = lines[pid]
+        if len(row) < _BOX_ENGINE_LEN:
+            row.extend([0] * (_BOX_ENGINE_LEN - len(row)))
+        del row[_BOX_ENGINE_LEN:]
+        row.extend([0, 0, 0, 0])
+        tid = str(row[0])
+        pos = str((people.get(pid) or ["", ""])[1] or "").upper()
+        if pos == "G" or int(row[sa_i] or 0) > 0 or tid not in side_sk:
+            continue
+        side_sk[tid].append((pid, row))
+        toi_min = float(row[toi_i] or 0) / 60.0
+        u = rng.random()
+        x = toi_min * 0.045 * (0.3 + 1.4 * u)
+        y = toi_min * 0.055 * (1.7 - 1.4 * u)
+        row[tk_i] = int(x + (u * 7.31) % 1.0)
+        row[gv_i] = int(y + (u * 3.17) % 1.0)
+    takers: Dict[str, List[Tuple[str, List[Any], float]]] = {}
+    for tid, sk in side_sk.items():
+        cs = [(pid, row) for pid, row in sk if str((people.get(pid) or ["", ""])[1] or "").upper().startswith("C")]
+        if len(cs) < 2:
+            fw = [(pid, row) for pid, row in sk if str((people.get(pid) or ["", ""])[1] or "").upper() not in ("D", "LD", "RD")]
+            fw.sort(key=lambda t: -float(t[1][toi_i] or 0))
+            cs = (cs + [t for t in fw if t not in cs])[:4]
+        takers[tid] = [(pid, row, fo_rating.get(pid, 74.0)) for pid, row in cs if float(row[toi_i] or 0) > 0]
+    if not takers.get(hid) or not takers.get(aid):
+        return
+    n = 48 + rng.randrange(19)
+
+    def _split(total: int, weights: List[float], caps: Optional[List[int]] = None) -> List[int]:
+        tw = sum(weights) or 1.0
+        raw = [total * w / tw for w in weights]
+        out = [int(x) for x in raw]
+        if caps:
+            out = [min(o, c) for o, c in zip(out, caps)]
+        order = sorted(range(len(raw)), key=lambda i: -(raw[i] - int(raw[i])))
+        k = 0
+        while sum(out) < total and k < 4 * len(out) + total:
+            i = order[k % len(order)]
+            if not caps or out[i] < caps[i]:
+                out[i] += 1
+            k += 1
+        return out
+
+    def _skill(tid: str) -> float:
+        t = takers[tid]
+        tw = sum(float(r[toi_i] or 0) for _p, r, _f in t) or 1.0
+        return sum(f * float(r[toi_i] or 0) for _p, r, f in t) / tw
+
+    p_home = 0.5 + (_skill(hid) - _skill(aid)) * 0.004 + rng.gauss(0.0, 0.05)
+    p_home = min(0.72, max(0.28, p_home))
+    h_wins = int(round(n * p_home))
+    for tid, wins in ((hid, h_wins), (aid, n - h_wins)):
+        t = takers[tid]
+        draws = _split(n, [float(r[toi_i] or 0) for _p, r, _f in t])
+        won = _split(wins, [d * max(5.0, f) ** 2 for d, (_p, _r, f) in zip(draws, t)], caps=draws)
+        for (pid, row, _f), d, w in zip(t, draws, won):
+            row[_BOX_IDX["fow"]] = w
+            row[_BOX_IDX["fol"]] = d - w
+
+
+def _box_three_stars(lines: Dict[str, List[Any]], gwg: str) -> List[str]:
+    gi, ai, pmi, sogi = _BOX_IDX["g"], _BOX_IDX["a"], _BOX_IDX["plus_minus"], _BOX_IDX["sog"]
+    svi, gai, sai, hi, bi = _BOX_IDX["saves"], _BOX_IDX["ga"], _BOX_IDX["shots_against"], _BOX_IDX["hit"], _BOX_IDX["blk"]
+    scored: List[Tuple[float, str]] = []
+    for pid, row in lines.items():
+        try:
+            sa = float(row[sai] or 0)
+            if sa > 0:
+                ga = float(row[gai] or 0)
+                score = float(row[svi] or 0) * 0.16 + (2.2 if ga == 0 else 0.0) - ga * 0.7
+            else:
+                score = (
+                    float(row[gi] or 0) * 3.0 + float(row[ai] or 0) * 1.9 + float(row[pmi] or 0) * 0.35
+                    + float(row[sogi] or 0) * 0.12 + (float(row[hi] or 0) + float(row[bi] or 0)) * 0.05
+                )
+            if pid == gwg:
+                score += 0.8
+        except (IndexError, TypeError, ValueError):
+            continue
+        scored.append((score, pid))
+    scored.sort(key=lambda t: -t[0])
+    return [pid for _s, pid in scored[:3]]
+
+
+def store_compact_box_score(session: Any, box: Dict[str, Any], lines: Optional[Dict[str, List[Any]]]) -> Optional[Dict[str, Any]]:
+    """Copy one finished game into the season box-score book. Returns the compact box."""
+    if not isinstance(box, dict):
+        return None
+    gid = str(box.get("game_id") or box.get("id") or "").strip()
+    if not gid:
+        return None
+    season = int(getattr(session, "season_calendar_year", 0) or box.get("season_calendar_year") or 0)
+    bucket = _box_season_bucket(_box_book(session), season)
+    hid = str(box.get("home_id") or "")
+    aid = str(box.get("away_id") or "")
+    hg = int(box.get("home_goals", box.get("home_score", 0)) or 0)
+    ag = int(box.get("away_goals", box.get("away_score", 0)) or 0)
+    ot = bool(box.get("overtime") or box.get("ot"))
+    so = bool(box.get("shootout"))
+    hp = [int(box.get(f"home_p{i}", 0) or 0) for i in (1, 2, 3)]
+    ap = [int(box.get(f"away_p{i}", 0) or 0) for i in (1, 2, 3)]
+    if ot:
+        hp.append(int(box.get("home_ot_goals", 0) or 0))
+        ap.append(int(box.get("away_ot_goals", 0) or 0))
+    nper = len(hp)
+    hs = int(box.get("home_sog", box.get("home_shots", 0)) or 0)
+    as_ = int(box.get("away_sog", box.get("away_shots", 0)) or 0)
+    goals: List[List[Any]] = []
+    for ev in list(box.get("scoring_events") or []):
+        if not isinstance(ev, dict):
+            continue
+        goals.append([
+            int(ev.get("period") or 0),
+            str(ev.get("clock") or ""),
+            str(ev.get("for_team_id") or ""),
+            str(ev.get("scorer_id") or ""),
+            [str(x) for x in list(ev.get("assist_ids") or []) if x],
+            str(ev.get("strength") or "EV"),
+            1 if ev.get("empty_net") else 0,
+        ])
+    lines = dict(lines or {})
+    people = bucket["people"]
+    ledger = getattr(session, "player_season_stats", None) or {}
+    for pid in lines:
+        if pid not in people:
+            row = ledger.get(pid) or {}
+            people[pid] = [str(row.get("name") or "Player"), str(row.get("position") or "")]
+    scope = str(box.get("stat_scope") or "regular_season")
+    if not goals and lines and (hg or ag):
+        goals = _box_light_timeline(
+            gid, hid, aid, hp, ap, lines, str(box.get("first_goal_team_id") or ""),
+            "playoff" in scope, so,
+        )
+    _box_stamp_extras(session, gid, hid, aid, lines, people)
+    # Game-winning goal: the winner's (loser_goals + 1)th goal in recorded order.
+    gwg = ""
+    if goals and hg != ag and not so:
+        win_tid = hid if hg > ag else aid
+        need = min(hg, ag) + 1
+        n = 0
+        for gl in goals:
+            if gl[2] == win_tid:
+                n += 1
+                if n == need:
+                    gwg = gl[3]
+                    break
+    compact = {
+        "id": gid,
+        "season": season,
+        "day": int(box.get("calendar_day", box.get("day", 0)) or 0),
+        "iso": str(box.get("calendar_iso") or box.get("iso") or ""),
+        "scope": scope,
+        "home": hid,
+        "away": aid,
+        "hn": str(box.get("home_name") or ""),
+        "an": str(box.get("away_name") or ""),
+        "hg": hg,
+        "ag": ag,
+        "ot": ot,
+        "so": so,
+        "light": bool(box.get("light_box")),
+        "periods": [hp, ap],
+        "shots": [_box_shot_split(gid + "h", hs, nper, hp), _box_shot_split(gid + "a", as_, nper, ap)],
+        "pp": [
+            [int(box.get("home_pp_goals", 0) or 0), int(box.get("home_ppo", 0) or 0)],
+            [int(box.get("away_pp_goals", 0) or 0), int(box.get("away_ppo", 0) or 0)],
+        ],
+        "pim": [int(box.get("home_pim", 0) or 0), int(box.get("away_pim", 0) or 0)],
+        "cf": [
+            int(box.get("home_shot_attempts", box.get("home_cf", 0)) or 0),
+            int(box.get("away_shot_attempts", box.get("away_cf", 0)) or 0),
+        ],
+        "xg": [round(float(box.get("home_xgf", 0) or 0), 2), round(float(box.get("away_xgf", 0) or 0), 2)],
+        "goals": goals,
+        "lines": lines,
+        "gwg": gwg,
+        "stars": _box_three_stars(lines, gwg),
+    }
+    bucket["games"][gid] = compact
+    pidx = bucket["players"]
+    for pid in lines:
+        pidx.setdefault(pid, []).append(gid)
+    return compact
+
+
+def _find_compact_box(session: Any, game_id: str) -> Optional[Dict[str, Any]]:
+    book = getattr(session, "box_score_book", None)
+    if not isinstance(book, dict):
+        return None
+    for key in reversed(list(book.get("order") or [])):
+        g = (((book.get("seasons") or {}).get(key) or {}).get("games") or {}).get(str(game_id))
+        if g:
+            return g
+    return None
+
+
+def _box_people(session: Any, season: int) -> Dict[str, List[str]]:
+    book = getattr(session, "box_score_book", None) or {}
+    return ((book.get("seasons") or {}).get(str(int(season or 0))) or {}).get("people") or {}
+
+
+def _box_line_dict(row: List[Any]) -> Dict[str, Any]:
+    out = {k: (row[i] if i < len(row) else 0) for k, i in _BOX_IDX.items()}
+    out["team_id"] = str(row[0]) if row else ""
+    return out
+
+
+def expand_box_score(session: Any, compact: Dict[str, Any]) -> Dict[str, Any]:
+    """Full box-score payload for the UI from a compact stored box."""
+    people = _box_people(session, int(compact.get("season") or 0))
+    team_by_id = getattr(session, "team_by_id", None) or {}
+
+    def _nm(pid: str) -> str:
+        return str((people.get(pid) or ["Player"])[0])
+
+    def _pos(pid: str) -> str:
+        p = people.get(pid) or ["", ""]
+        return str(p[1] if len(p) > 1 else "")
+
+    hid, aid = str(compact.get("home")), str(compact.get("away"))
+    hg, ag = int(compact.get("hg") or 0), int(compact.get("ag") or 0)
+    skaters: Dict[str, List[Dict[str, Any]]] = {"home": [], "away": []}
+    goalies: Dict[str, List[Dict[str, Any]]] = {"home": [], "away": []}
+    team_tot = {side: {"hits": 0, "blocks": 0, "fow": 0, "fol": 0, "tk": 0, "gv": 0} for side in ("home", "away")}
+    for pid, row in (compact.get("lines") or {}).items():
+        d = _box_line_dict(row)
+        side = "home" if d["team_id"] == hid else "away"
+        pos = _pos(pid)
+        if pos.upper() == "G" or int(d.get("shots_against") or 0) > 0:
+            sa = int(d.get("shots_against") or 0)
+            sv = int(d.get("saves") or 0)
+            dec = "W" if d.get("w") else ("OTL" if d.get("otl") else ("L" if d.get("l") else ""))
+            goalies[side].append({
+                "player_id": pid, "name": _nm(pid), "sa": sa, "sv": sv, "ga": int(d.get("ga") or 0),
+                "sv_pct": round(sv / sa, 3) if sa else None, "toi_sec": int(d.get("toi_sec") or 0),
+                "decision": dec, "shutout": bool(d.get("so")),
+            })
+            continue
+        team_tot[side]["hits"] += int(d.get("hit") or 0)
+        team_tot[side]["blocks"] += int(d.get("blk") or 0)
+        fow, fol = int(d.get("fow") or 0), int(d.get("fol") or 0)
+        for k in ("fow", "fol", "tk", "gv"):
+            team_tot[side][k] += int(d.get(k) or 0)
+        cf, ca = float(d.get("cf") or 0), float(d.get("ca") or 0)
+        g, a = int(d["g"] or 0), int(d["a"] or 0)
+        skaters[side].append({
+            "player_id": pid, "name": _nm(pid), "pos": pos,
+            "g": g, "a": a, "pts": g + a,
+            "pm": int(d["plus_minus"] or 0), "pim": int(d["pim"] or 0), "sog": int(d["sog"] or 0),
+            "toi_sec": int(d["toi_sec"] or 0), "pp_toi_sec": int(d["pp_toi_sec"] or 0), "pk_toi_sec": int(d["pk_toi_sec"] or 0),
+            "hit": int(d["hit"] or 0), "blk": int(d["blk"] or 0),
+            "ppg": int(d["ppg"] or 0), "shg": int(d["shg"] or 0),
+            "cf_pct": round(cf / (cf + ca), 3) if (cf + ca) > 0 else None,
+            "ixg": round(float(d.get("ixg") or 0), 2),
+            "fow": fow, "fol": fol, "fo_pct": round(fow / (fow + fol), 3) if (fow + fol) else None,
+            "tk": int(d.get("tk") or 0), "gv": int(d.get("gv") or 0),
+        })
+    for side in ("home", "away"):
+        skaters[side].sort(key=lambda r: (-r["pts"], -r["g"], -r["toi_sec"]))
+        goalies[side].sort(key=lambda r: -r["toi_sec"])
+    goals_out: List[Dict[str, Any]] = []
+    run_h = run_a = 0
+    gwg_tid = (hid if hg > ag else aid) if (hg != ag and not compact.get("so")) else ""
+    gwg_n = min(hg, ag) + 1
+    goal_tags = compact.get("goal_tags") or {}
+    for gi, (per, clock, tid, scorer, assists, strength, en) in enumerate(compact.get("goals") or []):
+        if tid == hid:
+            run_h += 1
+        else:
+            run_a += 1
+        is_gwg = bool(gwg_tid and tid == gwg_tid and (run_h if tid == hid else run_a) == gwg_n)
+        goals_out.append({
+            "period": per, "clock": clock, "team_id": tid,
+            "scorer": {"id": scorer, "name": _nm(scorer)},
+            "assists": [{"id": a, "name": _nm(a)} for a in assists],
+            "strength": strength, "empty_net": bool(en), "overtime": int(per or 0) >= 4,
+            "gwg": is_gwg, "score": f"{run_a}-{run_h}",
+            # Goofy tag: fluke_ref_skate / fluke_broken_stick / fluke_boards / goalie_goal / penalty_shot
+            "tag": str(goal_tags.get(str(gi)) or ""),
+        })
+    if not goals_out:
+        # Light (bulk) games keep who scored but not when: list scorers per club.
+        for side, tid in (("away", aid), ("home", hid)):
+            for r in skaters[side]:
+                for i in range(int(r["g"])):
+                    goals_out.append({
+                        "period": None, "clock": "", "team_id": tid,
+                        "scorer": {"id": r["player_id"], "name": r["name"]}, "assists": [],
+                        "strength": "PP" if i < r["ppg"] else ("SH" if i < r["ppg"] + r["shg"] else "EV"),
+                        "empty_net": False, "overtime": False, "gwg": False, "score": "",
+                    })
+
+    def _team(side: str, tid: str, idx: int) -> Dict[str, Any]:
+        tm = team_by_id.get(tid)
+        shots = list((compact.get("shots") or [[], []])[idx] or [])
+        pp = (compact.get("pp") or [[0, 0], [0, 0]])[idx]
+        return {
+            "id": tid,
+            "name": str(compact.get("hn" if side == "home" else "an") or (_display_team(tm) if tm is not None else tid)),
+            "abbr": _franchise_team_abbrev(tm) if tm is not None else "",
+            "goals": hg if side == "home" else ag,
+            "periods": list((compact.get("periods") or [[], []])[idx] or []),
+            "shots": shots,
+            "sog": sum(shots),
+            "pp_goals": int(pp[0]),
+            "ppo": int(pp[1]),
+            "pim": int((compact.get("pim") or [0, 0])[idx]),
+            "shot_attempts": int((compact.get("cf") or [0, 0])[idx]),
+            "xg": float((compact.get("xg") or [0, 0])[idx]),
+            "hits": team_tot[side]["hits"],
+            "blocks": team_tot[side]["blocks"],
+            "faceoffs": (
+                {"won": team_tot[side]["fow"], "lost": team_tot[side]["fol"],
+                 "pct": round(team_tot[side]["fow"] / (team_tot[side]["fow"] + team_tot[side]["fol"]), 3)}
+                if (team_tot[side]["fow"] + team_tot[side]["fol"]) else None
+            ),
+            "takeaways": team_tot[side]["tk"],
+            "giveaways": team_tot[side]["gv"],
+        }
+
+    nper = len(((compact.get("periods") or [[]])[0]) or [])
+    star_rows = []
+    all_rows = {r["player_id"]: (r, side) for side in ("home", "away") for r in skaters[side] + goalies[side]}
+    for rank, pid in enumerate(compact.get("stars") or [], start=1):
+        r, side = all_rows.get(pid, ({}, ""))
+        if "sa" in r:
+            line = f"{r.get('sv')} saves on {r.get('sa')} shots"
+        else:
+            line = f"{r.get('g', 0)}G {r.get('a', 0)}A, {r.get('sog', 0)} SOG"
+        star_rows.append({
+            "rank": rank, "player_id": pid, "name": _nm(pid),
+            "team_id": hid if side == "home" else aid, "line": line,
+        })
+    return {
+        "game_id": compact.get("id"),
+        "season": compact.get("season"),
+        "date": compact.get("iso"),
+        "day": compact.get("day"),
+        "scope": compact.get("scope"),
+        "overtime": bool(compact.get("ot")),
+        "shootout": bool(compact.get("so")),
+        "event_detail": bool(compact.get("goals")) or not bool(compact.get("light")) or not (hg or ag),
+        "period_labels": ["1st", "2nd", "3rd", "OT"][:nper] if nper else ["1st", "2nd", "3rd"],
+        "home": _team("home", hid, 0),
+        "away": _team("away", aid, 1),
+        "goals": goals_out,
+        "skaters": skaters,
+        "goalies": goalies,
+        "stars": star_rows,
+        # Goofy on-ice moments (hat-trick rain, mascot race, brawl, EBUG, ...).
+        "fun_events": list(compact.get("fun") or []),
+        "user_team_id": str(getattr(session, "user_team_id", "") or ""),
+    }
+
+
+def get_box_score_payload(session: Any, game_id: str) -> Optional[Dict[str, Any]]:
+    compact = _find_compact_box(session, str(game_id or "").strip())
+    return expand_box_score(session, compact) if compact else None
+
+
+def _player_game_row(compact: Dict[str, Any], pid: str) -> Optional[Dict[str, Any]]:
+    row = (compact.get("lines") or {}).get(pid)
+    if not row:
+        return None
+    d = _box_line_dict(row)
+    home = d["team_id"] == str(compact.get("home"))
+    gf = int((compact.get("hg") if home else compact.get("ag")) or 0)
+    ga = int((compact.get("ag") if home else compact.get("hg")) or 0)
+    res = "W" if gf > ga else ("OTL" if (compact.get("ot") or compact.get("so")) else "L")
+    suffix = " (SO)" if compact.get("so") else (" (OT)" if compact.get("ot") else "")
+    cf, ca = float(d.get("cf") or 0), float(d.get("ca") or 0)
+    g, a = int(d["g"] or 0), int(d["a"] or 0)
+    stars = list(compact.get("stars") or [])
+    out = {
+        "game_id": compact.get("id"),
+        "date": compact.get("iso"),
+        "scope": compact.get("scope"),
+        "home": home,
+        "opp_id": str(compact.get("away") if home else compact.get("home")),
+        "opp_name": str(compact.get("an") if home else compact.get("hn")),
+        "result": f"{res} {gf}-{ga}{suffix}",
+        "team_result": res,
+        "g": g, "a": a, "pts": g + a,
+        "pm": int(d["plus_minus"] or 0), "pim": int(d["pim"] or 0), "sog": int(d["sog"] or 0),
+        "hit": int(d["hit"] or 0), "blk": int(d["blk"] or 0), "toi_sec": int(d["toi_sec"] or 0),
+        "pp_toi_sec": int(d["pp_toi_sec"] or 0), "pk_toi_sec": int(d["pk_toi_sec"] or 0),
+        "ppg": int(d["ppg"] or 0), "ppa": int(d["ppa"] or 0), "shg": int(d["shg"] or 0), "sha": int(d["sha"] or 0),
+        "cf": round(cf, 1), "ca": round(ca, 1), "cf_pct": round(cf / (cf + ca), 3) if (cf + ca) > 0 else None,
+        "ixg": round(float(d.get("ixg") or 0), 2),
+        "gwg": bool(pid and pid == compact.get("gwg")),
+        "star": (stars.index(pid) + 1) if pid in stars else 0,
+        "fow": int(d.get("fow") or 0), "fol": int(d.get("fol") or 0),
+        "tk": int(d.get("tk") or 0), "gv": int(d.get("gv") or 0),
+    }
+    sa = int(d.get("shots_against") or 0)
+    if sa > 0 or int(d.get("saves") or 0) + int(d.get("ga") or 0) > 0:
+        sv = int(d.get("saves") or 0)
+        out.update({
+            "goalie": True, "sa": sa, "sv": sv, "ga": int(d.get("ga") or 0),
+            "sv_pct": round(sv / sa, 3) if sa else None,
+            "decision": "W" if d.get("w") else ("OTL" if d.get("otl") else ("L" if d.get("l") else "ND")),
+            "shutout": bool(d.get("so")),
+        })
+    return out
+
+
+def _game_log_totals(rows: List[Dict[str, Any]], goalie: bool) -> Dict[str, Any]:
+    gp = len(rows)
+    if goalie:
+        sa = sum(int(r.get("sa", 0) or 0) for r in rows)
+        sv = sum(int(r.get("sv", 0) or 0) for r in rows)
+        ga = sum(int(r.get("ga", 0) or 0) for r in rows)
+        toi = sum(int(r.get("toi_sec", 0) or 0) for r in rows)
+        starts = [r for r in rows if int(r.get("toi_sec", 0) or 0) >= 1800]
+        # Quality start (Hockey Prospectus): SV% >= .913, or >= .885 on 20 shots or fewer.
+        qs = sum(
+            1 for r in starts
+            if r.get("sa") and ((r.get("sv_pct") or 0) >= 0.913 or ((r.get("sv_pct") or 0) >= 0.885 and r.get("sa", 0) <= 20))
+        )
+        return {
+            "gp": gp, "gs": len(starts),
+            "w": sum(1 for r in rows if r.get("decision") == "W"),
+            "l": sum(1 for r in rows if r.get("decision") == "L"),
+            "otl": sum(1 for r in rows if r.get("decision") == "OTL"),
+            "sa": sa, "sv": sv, "ga": ga, "sv_pct": round(sv / sa, 3) if sa else None,
+            "gaa": round(ga * 3600.0 / toi, 2) if toi else None,
+            "so": sum(1 for r in rows if r.get("shutout")),
+            "qs": qs, "qs_pct": round(qs / len(starts), 3) if starts else None, "toi_sec": toi,
+            "stars": sum(1 for r in rows if r.get("star")),
+        }
+    keys = ("g", "a", "pts", "pm", "pim", "sog", "hit", "blk", "toi_sec", "pp_toi_sec", "pk_toi_sec", "ppg", "ppa", "shg", "sha", "fow", "fol", "tk", "gv")
+    t: Dict[str, Any] = {k: sum(int(r.get(k, 0) or 0) for r in rows) for k in keys}
+    cf = sum(float(r.get("cf") or 0) for r in rows)
+    ca = sum(float(r.get("ca") or 0) for r in rows)
+    longest = cur = 0
+    for r in rows:
+        cur = cur + 1 if r.get("pts") else 0
+        longest = max(longest, cur)
+    t.update({
+        "gp": gp,
+        "ppp": t["ppg"] + t["ppa"], "shp": t["shg"] + t["sha"],
+        "evg": t["g"] - t["ppg"] - t["shg"],
+        "evp": t["pts"] - t["ppg"] - t["ppa"] - t["shg"] - t["sha"],
+        "gwg": sum(1 for r in rows if r.get("gwg")),
+        "sh_pct": round(t["g"] / t["sog"], 3) if t["sog"] else None,
+        "toi_per_gp": round(t["toi_sec"] / gp) if gp else 0,
+        "pp_toi_per_gp": round(t["pp_toi_sec"] / gp) if gp else 0,
+        "pk_toi_per_gp": round(t["pk_toi_sec"] / gp) if gp else 0,
+        "ev_toi_per_gp": round((t["toi_sec"] - t["pp_toi_sec"] - t["pk_toi_sec"]) / gp) if gp else 0,
+        "cf": round(cf, 1), "ca": round(ca, 1), "cf_pct": round(cf / (cf + ca), 3) if (cf + ca) > 0 else None,
+        "ixg": round(sum(float(r.get("ixg") or 0) for r in rows), 2),
+        "multi_point_games": sum(1 for r in rows if int(r.get("pts", 0) or 0) >= 2),
+        "longest_point_streak": longest,
+        "p60": round(t["pts"] * 3600.0 / t["toi_sec"], 2) if t["toi_sec"] else None,
+        "stars": sum(1 for r in rows if r.get("star")),
+        "fo_pct": round(t["fow"] / (t["fow"] + t["fol"]), 3) if (t["fow"] + t["fol"]) else None,
+    })
+    return t
+
+
+def get_player_game_log_payload(session: Any, player_id: str, season: Optional[int] = None) -> Dict[str, Any]:
+    """One player's per-game lines for a stored season, totals by scope, ledger analytics and WJC history."""
+    pid = str(player_id or "").strip()
+    book = getattr(session, "box_score_book", None) or {}
+    seasons = [int(s) for s in (book.get("order") or [])]
+    want = int(season) if season else (seasons[-1] if seasons else int(getattr(session, "season_calendar_year", 0) or 0))
+    bucket = (book.get("seasons") or {}).get(str(want)) or {}
+    games = bucket.get("games") or {}
+    rows: List[Dict[str, Any]] = []
+    for gid in (bucket.get("players") or {}).get(pid) or []:
+        g = games.get(gid)
+        r = _player_game_row(g, pid) if g else None
+        if r:
+            rows.append(r)
+    rows.sort(key=lambda r: (str(r.get("date") or ""), str(r.get("game_id"))))
+    pos = str(((bucket.get("people") or {}).get(pid) or ["", ""])[1]).upper()
+    goalie = pos == "G" or any(r.get("goalie") for r in rows)
+    totals: Dict[str, Dict[str, Any]] = {}
+    for scope in sorted({str(r.get("scope") or "regular_season") for r in rows}):
+        totals[scope] = _game_log_totals([r for r in rows if str(r.get("scope") or "regular_season") == scope], goalie)
+    ledger_row = dict((getattr(session, "player_season_stats", None) or {}).get(pid) or {})
+    ledger_keep = (
+        "gp", "g", "a", "pts", "sog", "pim", "hit", "blk", "toi_sec", "ev_toi_sec", "pp_toi_sec", "pk_toi_sec",
+        "ppg", "ppa", "shg", "sha", "plus_minus", "cf", "ca", "ff", "fa", "xgf", "xga", "ixg", "xa",
+        "gf_on", "ga_on", "primary_assists", "secondary_assists", "missed_shots",
+        "saves", "shots_against", "ga", "w", "l", "otl", "so", "goalie_xga",
+    )
+    ledger_out = {k: ledger_row.get(k) for k in ledger_keep if k in ledger_row}
+    wjc = [dict(w) for w in list(((getattr(session, "wjc_player_history", None) or {}).get(pid)) or []) if isinstance(w, dict)]
+    cur = (getattr(session, "wjc_prospect_tournament_results", None) or {}).get(pid)
+    if isinstance(cur, dict) and isinstance(cur.get("wjc_stats"), dict):
+        year = int(cur["wjc_stats"].get("year") or 0)
+        if not any(int(w.get("year") or 0) == year for w in wjc):
+            wjc.append(dict(cur["wjc_stats"]))
+    wjc.sort(key=lambda w: int(w.get("year") or 0))
+    return {
+        "player_id": pid,
+        "season": want,
+        "seasons": seasons,
+        "is_goalie": goalie,
+        "games": rows,
+        "totals": totals,
+        "season_ledger": ledger_out,
+        "wjc": wjc,
+    }

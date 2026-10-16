@@ -127,9 +127,8 @@ def _close_crises_for_trade_deadline(session: Any) -> int:
         closed += 1
         user_tid = str(getattr(session, "user_team_id", "") or "")
         if str(row.get("team_id") or "") == user_tid:
-            notes = list(getattr(session, "notifications", None) or [])
-            notes.insert(
-                0,
+            _push_notification(
+                session,
                 {
                     "id": f"{row.get('demand_id')}:deadline",
                     "type": "trade_demand_deadline_closed",
@@ -142,8 +141,23 @@ def _close_crises_for_trade_deadline(session: Any) -> int:
                     "player_id": pid,
                 },
             )
-            session.notifications = notes[:120]
     return closed
+
+
+def _push_notification(session: Any, note: Dict[str, Any]) -> None:
+    """Append (newest last) like every other notification writer.
+
+    The client payload reads ``session.notifications[-56:]``; inserting at index 0 and
+    keeping ``[:120]`` hid every demand notice once the inbox passed 56 rows and also
+    deleted the newest notices other systems had appended.
+    """
+    note = dict(note)
+    note.setdefault("title", note.get("headline") or "")
+    note.setdefault("text", note.get("body") or note.get("headline") or "")
+    note.setdefault("source", "trade_demand")
+    notes = list(getattr(session, "notifications", None) or [])
+    notes.append(note)
+    session.notifications = notes[-180:]
 
 REASON_COPY = {
     "role": {
@@ -205,7 +219,84 @@ REASON_COPY = {
         "headline": "{name} wants out of the spotlight",
         "body": "{name} has asked for a trade to a quieter market.",
     },
+    # Goofy demands (rare; see maybe_open_silly_trade_demand).
+    "silly_weather": {
+        "headline": "{name} demands a trade because he hates the weather",
+        "body": "{name}'s agent confirms the request is 'about the clouds, mostly'. He has been seen checking forecasts in other cities between periods.",
+    },
+    "silly_hot_dogs": {
+        "headline": "{name} demands a trade over the arena hot dogs",
+        "body": "{name} called the concourse hot dogs 'a crime against sausages' and has formally asked to be moved to a club with better food.",
+    },
+    "silly_jersey": {
+        "headline": "{name} wants out — he can't stand the jersey colour",
+        "body": "{name} says the team colours 'wash him out' on TV. His agent has a mood board of preferred destinations.",
+    },
+    "silly_goal_horn": {
+        "headline": "{name} requests a trade over the goal horn",
+        "body": "{name} claims the home goal horn is 'a half-step flat' and he can't celebrate properly. The trade request is real.",
+    },
 }
+
+SILLY_DEMAND_REASONS = ("silly_weather", "silly_hot_dogs", "silly_jersey", "silly_goal_horn")
+#: Weekly chance one random 70+ player league-wide files a goofy trade request.
+SILLY_DEMAND_WEEKLY_CHANCE = 0.06
+#: CPU demands at or above this OVR become a league-news notification.
+CPU_DEMAND_NEWS_MIN_OVR = 78
+
+
+def maybe_open_silly_trade_demand(session: Any, calendar_idx: int, *, iso_date: str = "") -> Optional[Dict[str, Any]]:
+    """Weekly, rare: a player formally demands a trade over something silly.
+
+    Uses the normal demand pipeline (crisis timer, value discount, CPU proposer tags),
+    so the effect is real. User's club is picked a quarter of the time at most.
+    """
+    if not getattr(session, "goofy_events_enabled", True):
+        return None
+    import random
+    import zlib
+
+    league = getattr(getattr(session, "sim", None), "league", None)
+    if league is None:
+        return None
+    season = int(getattr(session, "season_calendar_year", 0) or 0)
+    rng = random.Random(zlib.crc32(f"goofy_demand|{season}|{int(calendar_idx) // 7}".encode()))
+    if rng.random() >= SILLY_DEMAND_WEEKLY_CHANCE:
+        return None
+    if not get_trade_deadline_context(session).get("new_demands_allowed"):
+        return None
+    teams = [t for t in list(_get(league, "teams", None) or []) if _get(t, "roster", None)]
+    if not teams:
+        return None
+    user_tid = str(getattr(session, "user_team_id", "") or "")
+    team_open, _recent = _team_demand_load(session, int(calendar_idx))
+    if rng.random() >= 0.25:
+        teams = [t for t in teams if _team_key(t) != user_tid] or teams
+    team = rng.choice(teams)
+    if team_open.get(_team_key(team), 0) >= MAX_OPEN_DEMANDS_PER_TEAM:
+        return None
+    pool = [
+        p for p in list(_get(team, "roster", None) or [])
+        if not _get(p, "retired", False) and _player_id(p)
+        and 70 <= _player_ovr(p) < 84 and not active_demand_for_player(session, _player_id(p))
+    ]
+    if not pool:
+        return None
+    player = rng.choice(pool)
+    reason = rng.choice(SILLY_DEMAND_REASONS)
+    try:
+        row = open_trade_demand(
+            session, player, team, reason=reason, calendar_idx=int(calendar_idx),
+            iso_date=iso_date, rng=rng, force_formal=True,
+        )
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+        return None
+    if isinstance(row, dict) and row.get("status") == "open":
+        row["goofy"] = True
+        row["primary_complaint"] = reason.replace("silly_", "").replace("_", " ")
+        return row
+    return None
 
 
 def _get(obj: Any, key: str, default: Any = None) -> Any:
@@ -261,6 +352,49 @@ def active_demand_for_player(session: Any, player_id: str) -> Optional[Dict[str,
     return None
 
 
+def _rank_mntc_clubs(player: Any, teams: List[Any], clubs: List[Any], rng: Any) -> List[Any]:
+    """Order (team_id, abbr) pairs by how much this player wants to go there."""
+    try:
+        from app.sim_engine.trades.trade_rules import _market_size, _team_strength_proxy
+    except Exception:
+        _market_size = None
+        _team_strength_proxy = None
+    try:
+        age = int(_get(player, "age", 0) or 0)
+    except (TypeError, ValueError):
+        age = 0
+    bc = _birth_country(player) if player is not None else ""
+    canadian = bc in ("canada", "can", "ca")
+    family = age >= 29  # settled veterans weigh home / family more
+    by_key = {}
+    for t in teams:
+        by_key[str(_get(t, "team_id", "") or _get(t, "id", "") or "")] = t
+        by_key[_team_abbr(t)] = t
+    scored = []
+    for tid, ab in clubs:
+        t = by_key.get(tid) or by_key.get(ab)
+        strength = 0.5
+        market = "medium"
+        if t is not None and _team_strength_proxy is not None:
+            try:
+                strength = float(_team_strength_proxy(t))
+                market = _market_size(t)
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+        score = strength * (1.6 if age >= 27 else 1.0)
+        if market == "large":
+            score += 0.15 if age < 29 else -0.05
+        elif market == "small" and family:
+            score += 0.1
+        if family:
+            in_canada = ab in CANADA_ABBRS
+            score += 0.35 if in_canada == canadian else -0.1
+        score += rng.uniform(-0.12, 0.12)
+        scored.append((score, (tid, ab)))
+    scored.sort(key=lambda r: -r[0])
+    return [c for _, c in scored]
+
+
 def seed_mntc_destinations(player: Any, league: Any, *, list_size: int = 8, rng: Any = None) -> List[str]:
     contract = _get(player, "contract", None)
     if contract is None:
@@ -303,13 +437,12 @@ def seed_mntc_destinations(player: Any, league: Any, *, list_size: int = 8, rng:
             clubs.append((tid, ab))
     if not clubs:
         return []
-    if rng is not None and hasattr(rng, "sample"):
-        picked = list(rng.sample(clubs, min(size, len(clubs))))
-    else:
-        import random
+    # The player picks the clubs he'd accept: contenders, a market that suits him,
+    # and (for veterans with families) his home country. Small seeded jitter only.
+    import random
 
-        stable = random.Random(int(__import__("hashlib").sha256(("mntc|" + str(_get(player, "id", ""))).encode()).hexdigest()[:12], 16) & 0xFFFFFFFF)
-        picked = list(stable.sample(clubs, min(size, len(clubs))))
+    stable = random.Random(int(__import__("hashlib").sha256(("mntc|" + str(_get(player, "id", ""))).encode()).hexdigest()[:12], 16) & 0xFFFFFFFF)
+    picked = _rank_mntc_clubs(player, teams, clubs, stable)[: min(size, len(clubs))]
     chosen = []
     for tid, ab in picked:
         for key in (tid, ab):
@@ -1050,7 +1183,7 @@ def process_trade_demand_day(session: Any, calendar_idx: int, day_meta: Optional
                     continue
                 pst = ensure_player_storyline_state(player)
                 last_closed = int(pst.get("last_trade_demand_closed_day") or 0)
-                if last_closed and (int(calendar_idx) - last_closed) < DEMAND_REOPEN_COOLDOWN_DAYS:
+                if last_closed and 0 <= (int(calendar_idx) - last_closed) < DEMAND_REOPEN_COOLDOWN_DAYS:
                     continue
 
                 stability_row = apply_daily_stability_update(session, player, team, int(calendar_idx))
@@ -1362,9 +1495,8 @@ def _maybe_enqueue_stability_warning(
     pending.append(popup)
     session.pending_ui_popups = pending[-80:]
 
-    notes = list(getattr(session, "notifications", None) or [])
-    notes.insert(
-        0,
+    _push_notification(
+        session,
         {
             "id": warn_key,
             "type": "trade_stability_warning",
@@ -1379,7 +1511,6 @@ def _maybe_enqueue_stability_warning(
             "player_id": pid,
         },
     )
-    session.notifications = notes[:120]
 
     roster_flags = dict(getattr(session, "trade_stability_roster_flags", None) or {})
     roster_flags[pid] = {
@@ -1492,19 +1623,18 @@ def _enqueue_crisis_expired(session: Any, row: Dict[str, Any]) -> None:
     user_tid = str(getattr(session, "user_team_id", "") or "")
     if tid != user_tid:
         return
-    notes = list(getattr(session, "notifications", None) or [])
-    notes.insert(
-        0,
+    _push_notification(
+        session,
         {
             "id": f"{row.get('demand_id')}:expired",
             "type": "trade_demand_crisis_expired",
             "headline": f"Crisis expired — {row.get('player_name')} is now a distressed asset",
             "body": "You may need to attach assets just to move him.",
+            "priority": "HIGH",
             "player_id": row.get("player_id"),
             "team_id": tid,
         },
     )
-    session.notifications = notes[:120]
 
 
 def _enqueue_demand_surfaces(session: Any, row: Dict[str, Any], team: Any) -> None:
@@ -1579,6 +1709,11 @@ def _enqueue_demand_surfaces(session: Any, row: Dict[str, Any], team: Any) -> No
                 "cause_type": "TRADE_DEMAND",
                 "priority": "CRITICAL" if is_user else "HIGH",
                 "trade_demand": popup["trade_demand"],
+                "calendar_iso": row.get("opened_iso") or "",
+                "calendar_day": row.get("opened_day"),
+                # Silly-reason demands also belong in the Rink Oddities section.
+                "goofy": str(row.get("reason_code") or "").startswith("silly_") or None,
+                "goofy_kind": "silly_trade_demand" if str(row.get("reason_code") or "").startswith("silly_") else None,
             },
         )
     except Exception:
@@ -1598,21 +1733,39 @@ def _enqueue_demand_surfaces(session: Any, row: Dict[str, Any], team: Any) -> No
         )
         session.storyline_events = events[-200:]
 
-    notes = list(getattr(session, "notifications", None) or [])
     remaining = crisis.get("remaining_seconds")
     timer_label = f"{int(float(remaining or 0) // 60)}:{int(float(remaining or 0) % 60):02d}" if remaining else "6:00"
-    notes.insert(
-        0,
-        {
-            "id": row.get("demand_id"),
-            "type": "trade_demand",
-            "headline": row.get("headline"),
-            "body": f"CRISIS {timer_label} · TV {row.get('value_before')} → {row.get('value_after')} · {dest_label}",
-            "team_id": tid,
-            "player_id": row.get("player_id"),
-        },
-    )
-    session.notifications = notes[:120]
+    if is_user:
+        _push_notification(
+            session,
+            {
+                "id": row.get("demand_id"),
+                "type": "trade_demand",
+                "headline": row.get("headline"),
+                "body": f"CRISIS {timer_label} · TV {row.get('value_before')} → {row.get('value_after')} · {dest_label}",
+                "priority": "CRITICAL",
+                "date": row.get("opened_iso") or "",
+                "team_id": tid,
+                "player_id": row.get("player_id"),
+            },
+        )
+    elif float(row.get("ovr") or 0) >= CPU_DEMAND_NEWS_MIN_OVR:
+        # Notable CPU players asking out is league news, not an inbox crisis.
+        team_name = str(_get(team, "name", "") or _get(team, "abbr", "") or tid)
+        _push_notification(
+            session,
+            {
+                "id": f"{row.get('demand_id')}:news",
+                "type": "league_news",
+                "headline": f"League: {row.get('player_name')} asks out of {team_name}",
+                "body": f"{row.get('player_name')} ({row.get('ovr')} OVR) has requested a trade · {dest_label}",
+                "priority": "MEDIUM",
+                "source": "league_news",
+                "date": row.get("opened_iso") or "",
+                "team_id": tid,
+                "player_id": row.get("player_id"),
+            },
+        )
 
 
 def clear_demands_on_trade(session: Any, player_ids: List[str]) -> None:

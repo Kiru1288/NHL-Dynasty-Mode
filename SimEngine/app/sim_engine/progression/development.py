@@ -1272,12 +1272,18 @@ def prime_development_environment_for_rosters(teams: Optional[List[Any]], rng: A
                 young_contender = 1.02
             # Opportunity proxy from ice-time / role (separate from org environment).
             opp = _clamp(_ice_time_modifier(p), 0.70, 1.20)
+            # Staff (backend league_operations): development coach for <=24, goalie coach for G.
+            staff_mult = 1.0
+            if age_p <= 24:
+                staff_mult *= float(getattr(team, "_staff_dev_mult", 1.0) or 1.0)
+            if pos_key == "G":
+                staff_mult *= float(getattr(team, "_staff_goalie_dev_mult", 1.0) or 1.0)
             setattr(p, "_dev_env_team_window", window)
             setattr(p, "_dev_opportunity_score", round(float(opp), 3))
             setattr(
                 p,
                 "_dev_env_growth_mult",
-                max(0.70, min(1.42, g_mult * pos_mult * teammate_boost * young_contender * (0.92 + 0.10 * (opp - 0.85)))),
+                max(0.70, min(1.42, g_mult * pos_mult * teammate_boost * young_contender * (0.92 + 0.10 * (opp - 0.85)) * staff_mult)),
             )
             setattr(p, "_dev_env_variance_mult", max(0.76, min(1.38, v_mult * (1.0 + (pos_mult - 1.0) * 0.55))))
             setattr(p, "_org_development_profile", org_profile)

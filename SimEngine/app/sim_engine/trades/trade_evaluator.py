@@ -936,6 +936,14 @@ def evaluate_trade_package(
                         threshold = min(threshold, 0.46)
                     if str(tid) == str(intent.get("seller_team_id") or "") and float(intent.get("seller_discount_value") or 0.0) > 0.0:
                         threshold = min(threshold, 0.50)
+            elif user_team_id:
+                # Rubber banding: a runaway user club finds contenders/rivals harder to fleece.
+                try:
+                    from app.sim_engine.trades.trade_market_adaptive import rubber_band_accept_bump
+
+                    threshold += rubber_band_accept_bump(league, team_obj, tid)
+                except Exception:
+                    pass
             if interest_level.get(tid, 0.0) < threshold:
                 accepted = False
                 tname = _team_display(team_obj, tid)

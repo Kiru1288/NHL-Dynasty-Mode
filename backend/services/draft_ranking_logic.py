@@ -2766,8 +2766,9 @@ def backfill_draft_eligible_skaters(league: Any, rng: Any, needed: int) -> int:
         )
         if not isinstance(getattr(p, "ratings", None), dict):
             p.ratings = {}
-        p.ratings["dev_potential"] = int(rng.randint(72, 86))
-        setattr(p, "pipeline_tier", "round5_7" if i % 3 else "round3_4")
+        tier = "round5_7" if i % 3 else "round3_4"
+        p.ratings["dev_potential"] = int(rng.randint(70, 80) if tier == "round5_7" else rng.randint(75, 84))
+        setattr(p, "pipeline_tier", tier)
         p.context.current_team_id = tid
         _set_assignment(p, level="junior", league_code=code, club=club)
         roster.append(p)

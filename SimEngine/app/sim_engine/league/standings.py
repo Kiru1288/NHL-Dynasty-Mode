@@ -224,6 +224,8 @@ class TeamStandingRecord:
     away_otl: int = 0
 
     last_10: List[str] = field(default_factory=list)
+    # Standings points earned against each opponent (NHL head-to-head tiebreaker).
+    h2h_pts: Dict[str, int] = field(default_factory=dict)
 
     def normalize(self) -> None:
         self.gp = max(0, _safe_int(self.gp))
@@ -428,6 +430,7 @@ class StandingsTable:
 
         h = self.records[home_id]
         a = self.records[away_id]
+        h_pts0, a_pts0 = h.points, a.points
 
         home_goals = max(0, _safe_int(home_goals))
         away_goals = max(0, _safe_int(away_goals))
@@ -467,6 +470,7 @@ class StandingsTable:
                 rec.last_10 = rec.last_10[-10:]
             h.normalize()
             a.normalize()
+            self._note_h2h(h, a, h_pts0, a_pts0)
             return
 
         # Caller should avoid unresolved ties.
@@ -498,6 +502,16 @@ class StandingsTable:
 
         h.normalize()
         a.normalize()
+        self._note_h2h(h, a, h_pts0, a_pts0)
+
+    @staticmethod
+    def _note_h2h(h: "TeamStandingRecord", a: "TeamStandingRecord", h_pts0: int, a_pts0: int) -> None:
+        for rec, opp, gained in ((h, a, h.points - h_pts0), (a, h, a.points - a_pts0)):
+            book = getattr(rec, "h2h_pts", None)
+            if not isinstance(book, dict):
+                book = {}
+                rec.h2h_pts = book
+            book[opp.team_id] = book.get(opp.team_id, 0) + max(0, int(gained))
 
     def _points_rules(self) -> Dict[str, int]:
         """Points system (Board of Governors rules can change it; default NHL 2-2-1-0)."""
@@ -591,18 +605,55 @@ class StandingsTable:
             rec.team_id,
         )
 
+    @staticmethod
+    def _primary_key(rec: TeamStandingRecord) -> Tuple:
+        """Criteria before head-to-head: points, points %, RW, ROW, W."""
+        return (rec.points, rec.point_pct(), rec.rw, rec.row, rec.wins)
+
+    def sort_records(self, recs: Iterable[TeamStandingRecord]) -> List[TeamStandingRecord]:
+        """
+        NHL order, best first: points, points %, RW, ROW, W, then head-to-head
+        points among the tied clubs, goal differential, goals for.
+        """
+        out = sorted(recs, key=self._sort_key, reverse=True)
+        i = 0
+        n = len(out)
+        while i < n:
+            j = i + 1
+            pk = self._primary_key(out[i])
+            while j < n and self._primary_key(out[j]) == pk:
+                j += 1
+            if j - i > 1:
+                group = out[i:j]
+                ids = {r.team_id for r in group}
+
+                def _h2h(rec: TeamStandingRecord) -> int:
+                    book = getattr(rec, "h2h_pts", None) or {}
+                    return sum(int(v or 0) for k, v in book.items() if k in ids and k != rec.team_id)
+
+                out[i:j] = sorted(
+                    group,
+                    key=lambda r: (_h2h(r), r.goal_diff(), r.gf, -r.ga, r.team_id),
+                    reverse=True,
+                )
+            i = j
+        return out
+
+    def outranks(self, a: TeamStandingRecord, b: TeamStandingRecord) -> bool:
+        return self.sort_records([a, b])[0] is a
+
     def league_table(self) -> List[TeamStandingRecord]:
-        return sorted(self.records.values(), key=self._sort_key, reverse=True)
+        return self.sort_records(self.records.values())
 
     def conference_table(self, conference: str) -> List[TeamStandingRecord]:
         tids = self._by_conf.get(conference, [])
         recs = [self.records[tid] for tid in tids if tid in self.records]
-        return sorted(recs, key=self._sort_key, reverse=True)
+        return self.sort_records(recs)
 
     def division_table(self, conference: str, division: str) -> List[TeamStandingRecord]:
         tids = self._by_div.get((conference, division), [])
         recs = [self.records[tid] for tid in tids if tid in self.records]
-        return sorted(recs, key=self._sort_key, reverse=True)
+        return self.sort_records(recs)
 
     def divisions_for_conference(self, conference: str) -> List[str]:
         return sorted({d for (c, d) in self._by_div.keys() if c == conference and d})
@@ -742,7 +793,7 @@ class StandingsTable:
             if tid in self.records and tid not in used
         ]
 
-        rest.sort(key=self._sort_key, reverse=True)
+        rest = self.sort_records(rest)
 
         for rec in rest[:wildcards]:
             if rec.team_id not in used:
@@ -774,7 +825,7 @@ class StandingsTable:
             if tid in self.records and tid not in used
         ]
 
-        return sorted(rest, key=self._sort_key, reverse=True)
+        return self.sort_records(rest)
 
     def playoff_status_map(self) -> Dict[str, Dict[str, Any]]:
         """
@@ -1130,23 +1181,27 @@ class StandingsTable:
         if len(wc) != 2:
             return []
 
-        wc.sort(key=self._sort_key, reverse=True)
+        wc = self.sort_records(wc)
 
         wc_better, wc_worse = wc[0], wc[1]
 
-        div_winners = sorted([a1, b1], key=self._sort_key, reverse=True)
-
-        w_hi, w_lo = div_winners[0], div_winners[1]
+        # The better division winner draws the second wild card; the other draws the first.
+        if self.outranks(a1, b1):
+            w_hi, hi_pair = a1, (a2, a3)
+            w_lo, lo_pair = b1, (b2, b3)
+        else:
+            w_hi, hi_pair = b1, (b2, b3)
+            w_lo, lo_pair = a1, (a2, a3)
 
         def _series(
-            r1: TeamStandingRecord,
-            r2: TeamStandingRecord,
+            hi: TeamStandingRecord,
+            lo: TeamStandingRecord,
             hi_seed: int,
             lo_seed: int,
+            slot: int,
         ) -> PlayoffSeries:
-            hi, lo = (r1, r2) if self._sort_key(r1) >= self._sort_key(r2) else (r2, r1)
-
-            return PlayoffSeries(
+            # Division winners and D2 (over D3) always hold home ice in round 1.
+            s = PlayoffSeries(
                 round_index=1,
                 conference=conference,
                 seed_high=hi_seed,
@@ -1154,13 +1209,18 @@ class StandingsTable:
                 team_high_id=hi.team_id,
                 team_low_id=lo.team_id,
             )
+            s.bracket_slot = slot
+            s.division = hi.division
+            return s
 
-        out: List[PlayoffSeries] = []
-
-        out.append(_series(w_hi, wc_worse, 1, 8))
-        out.append(_series(w_lo, wc_better, 2, 7))
-        out.append(_series(a2, a3, 3, 6))
-        out.append(_series(b2, b3, 4, 5))
+        # Bracket order: slots 0+1 feed round-2 slot 0 (top division winner's half),
+        # slots 2+3 feed round-2 slot 1. No re-seeding in later rounds.
+        out: List[PlayoffSeries] = [
+            _series(w_hi, wc_worse, 1, 8, 0),
+            _series(hi_pair[0], hi_pair[1], 3, 6, 1),
+            _series(w_lo, wc_better, 2, 7, 2),
+            _series(lo_pair[0], lo_pair[1], 4, 5, 3),
+        ]
 
         return out
 

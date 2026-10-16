@@ -70,8 +70,32 @@ def _nhl_view(session: Any, team: Any) -> Dict[str, Any]:
     if sim is None:
         return {"ok": False, "reason": "No sim"}
     skaters = sim._gm_skaters(team)
-    units = sim._gm_build_game_units(skaters, team)
-    goalies = sorted(sim._gm_goalies(team), key=player_ovr, reverse=True)
+    stats = getattr(session, "player_season_stats", None)
+    # CPU clubs play the fit-built depth chart (same as game day), not raw OVR order.
+    attached = False
+    if _tid(team) != str(getattr(session, "user_team_id", "") or "") and getattr(team, "_franchise_deployed_lineup", None) is None:
+        try:
+            from services.franchise_sim import _synthetic_even_strength_lines_for_team
+
+            setattr(team, "_franchise_saved_lines", _synthetic_even_strength_lines_for_team(team, stats))
+            deployed = sim._gm_try_resolve_saved_lineup(team)
+            if deployed is not None:
+                setattr(team, "_franchise_deployed_lineup", deployed)
+                attached = True
+        except Exception:
+            attached = False
+    try:
+        units = sim._gm_build_game_units(skaters, team)
+    finally:
+        if attached or getattr(team, "_franchise_saved_lines", None) is not None and _tid(team) != str(getattr(session, "user_team_id", "") or ""):
+            setattr(team, "_franchise_saved_lines", None)
+            setattr(team, "_franchise_deployed_lineup", None)
+    try:
+        from services.franchise_sim import _goalie_form_value
+
+        goalies = sorted(sim._gm_goalies(team), key=lambda g: -_goalie_form_value(g, stats))
+    except Exception:
+        goalies = sorted(sim._gm_goalies(team), key=player_ovr, reverse=True)
     style = str(units.get("deployment_style") or "balanced")
     strength_rank = None
     try:

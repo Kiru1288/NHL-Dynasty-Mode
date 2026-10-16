@@ -328,6 +328,8 @@ def test_repair_clamps_extreme_team_cf_and_reattaches_player_share():
     f_share = session.player_season_stats["f1"]["cf"] / (
         session.player_season_stats["f1"]["cf"] + session.player_season_stats["f1"]["ca"]
     )
-    assert abs(d_share - share) < 0.02
-    assert abs(f_share - share) < 0.02
+    # Club snaps to its box share, but skaters keep a bounded on-ice spread.
+    assert d_share < share < f_share
+    assert abs(d_share - share) <= 0.10
+    assert abs(f_share - share) <= 0.10
     assert _repair_on_ice_share_to_team_box(session) is False

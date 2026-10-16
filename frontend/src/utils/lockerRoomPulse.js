@@ -58,7 +58,7 @@ export function playerRoomLine(dossier) {
   return bits.slice(0, 3).join(" · ");
 }
 
-function rosterNameById(franchiseState) {
+function rosterNameById(franchiseState, rows = null) {
   const map = new Map();
   const orgs = asArray(franchiseState?.roster_browser?.organizations);
   orgs.forEach((org) => {
@@ -66,12 +66,14 @@ function rosterNameById(franchiseState) {
       const id = str(p?.id || p?.player_id);
       const name = str(p?.name || p?.player_name);
       if (id && name) map.set(id, name);
+      if (id && rows && p && typeof p === "object") rows.set(id, p);
     });
   });
   asArray(franchiseState?.roster).forEach((p) => {
     const id = str(p?.id || p?.player_id);
     const name = str(p?.name || p?.player_name);
     if (id && name) map.set(id, name);
+    if (id && rows && p && typeof p === "object") rows.set(id, p);
   });
   return map;
 }
@@ -79,7 +81,9 @@ function rosterNameById(franchiseState) {
 export function collectLockerPulse(franchiseState, { limit = 8 } = {}) {
   const universe = asObject(franchiseState?.narrative_universe);
   const dossiers = asObject(universe.human_dossiers);
-  const names = rosterNameById(franchiseState);
+  // Roster rows carry the NHL headshot fields; dossiers do not.
+  const rosterRows = new Map();
+  const names = rosterNameById(franchiseState, rosterRows);
   const people = Object.entries(dossiers)
     .map(([key, dossier]) => {
       const ident = asObject(dossier?.identity);
@@ -89,6 +93,7 @@ export function collectLockerPulse(franchiseState, { limit = 8 } = {}) {
       return {
         playerId,
         name,
+        portrait: rosterRows.get(playerId) || null,
         position: str(ident.position || dossier?.position),
         line: playerRoomLine(dossier),
         chips: playerCharacterChips(dossier),

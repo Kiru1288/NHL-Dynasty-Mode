@@ -2260,6 +2260,16 @@ function unusualMoods(mood) {
   });
 }
 
+function fanRatingLabel(row) {
+  const r = asObject(row);
+  const raw = r.fan_rating ?? r.fan_sentiment;
+  if (raw === undefined || raw === null || raw === "") return "—";
+  const rating = Math.round(num(raw, 0));
+  const rank = num(r.fan_rank, 0);
+  const of = num(r.fan_rank_of, 0);
+  return rank > 0 ? `${rating} · #${rank}${of ? ` of ${of}` : ""}` : String(rating);
+}
+
 function YourImpactStrip({ user }) {
   const u = asObject(user);
   const risk = String(u.boycott_risk || u.relocation_risk_label || "Low");
@@ -2280,6 +2290,10 @@ function YourImpactStrip({ user }) {
       <div className="lo-impact-pill">
         <span>Influence</span>
         <b>{influence}</b>
+      </div>
+      <div className="lo-impact-pill" title="Fan rating (0-100) and league rank">
+        <span>Fan Rating</span>
+        <b>{fanRatingLabel(u)}</b>
       </div>
       <div className="lo-impact-pill">
         <span>Warning</span>
@@ -2355,6 +2369,7 @@ function TeamDossier({ team }) {
           <span>Attendance</span>
           <b>{attendance > 0 ? `${Math.round(attendance * 100)}%` : "—"}</b>
         </div>
+        <div className="lo-inspector-row"><span>Fan rating</span><b>{fanRatingLabel(t)}</b></div>
         <div className="lo-inspector-row"><span>Arena pressure</span><b>{arena}</b></div>
         <div className="lo-inspector-row"><span>Ownership</span><b>{ownership}</b></div>
         <div className="lo-inspector-row">

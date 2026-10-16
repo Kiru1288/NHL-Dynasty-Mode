@@ -506,12 +506,14 @@ function prospectConfidenceFogClass(pct) {
  * filled chip so a franchise ceiling is unmistakable while scanning 300+ rows.
  */
 const POTENTIAL_TIERS = [
-  { min: 92, key: "generational", label: "Generational" },
-  { min: 88, key: "elite", label: "Elite" },
-  { min: 84, key: "high", label: "High upside" },
-  { min: 80, key: "strong", label: "Strong upside" },
-  { min: 75, key: "moderate", label: "Moderate upside" },
-  { min: 70, key: "depth", label: "Depth upside" },
+  // "generational" key kept for the gold styling; the word itself is reserved for the
+  // backend class tier (one every several drafts), never a raw potential number.
+  { min: 94, key: "generational", label: "Franchise ceiling" },
+  { min: 90, key: "elite", label: "Elite" },
+  { min: 86, key: "high", label: "High upside" },
+  { min: 82, key: "strong", label: "Strong upside" },
+  { min: 77, key: "moderate", label: "Moderate upside" },
+  { min: 72, key: "depth", label: "Depth upside" },
   { min: 0, key: "fringe", label: "Limited upside" },
 ];
 
@@ -1261,6 +1263,8 @@ function mapBackendDraftBoard(entries, dateContext) {
       scoutingConfidence: Number(coalesce(row?.scouting_confidence, row?.scoutingConfidence)) || null,
       intelLabel: coalesce(row?.intel_label, row?.intelLabel),
       isTranscendent: Boolean(row?.is_transcendent ?? row?.isTranscendent ?? row?.transcendent_talent),
+      classTier: row?.class_tier || row?.classTier || null,
+      classIndicators: row?.class_indicators || row?.classIndicators || null,
       hometown: coalesce(row?.hometown, row?.birth_city, row?.birthCity),
       birthday: coalesce(row?.birthday, base.birthday),
       birthCity: coalesce(row?.hometown, row?.birth_city, row?.birthCity, country),

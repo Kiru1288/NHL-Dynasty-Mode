@@ -53,8 +53,13 @@ def active_inbound_offers(session: Any) -> List[Dict[str, Any]]:
                 owners[str(getattr(p, "id", ""))] = tid
     keep: List[Dict[str, Any]] = []
     user_tid = str(getattr(session, "user_team_id", "") or "")
+    season = int(getattr(session, "season_calendar_year", 0) or 0)
     for o in rows:
         if int(o.get("expires_day", -1)) < now or o.get("status") in ("declined", "accepted"):
+            continue
+        # The calendar cursor resets each season, so last year's offers looked "unexpired"
+        # forever and filled every slot — no new calls came in year 2.
+        if int(o.get("season_year", season) or season) != season:
             continue
         ok = True
         for a in list(o.get("user_gives") or []):
@@ -121,7 +126,8 @@ def maybe_generate_inbound_offer(session: Any, calendar_idx: int) -> Optional[Di
     if days_left < 0:
         return None
     chance = DEADLINE_DAILY_CHANCE if 0 <= days_left <= 7 else BASE_DAILY_CHANCE + 0.10 * dphase
-    seed = zlib.crc32(f"inbound|{getattr(session, 'session_id', '')}|{int(calendar_idx)}".encode("utf-8"))
+    _sy = int(getattr(session, "season_calendar_year", 0) or 0)
+    seed = zlib.crc32(f"inbound|{getattr(session, 'session_id', '')}|{_sy}|{int(calendar_idx)}".encode("utf-8"))
     rng = random.Random(seed)
     if rng.random() >= chance:
         return None
@@ -177,7 +183,8 @@ def maybe_generate_inbound_offer(session: Any, calendar_idx: int) -> Optional[Di
     pname = str(getattr(target, "name", None) or "one of your players")
     offer.update(
         {
-            "offer_id": f"inb_{int(calendar_idx)}_{partner_tid}_{getattr(target, 'id', '')}",
+            "offer_id": f"inb_{_sy}_{int(calendar_idx)}_{partner_tid}_{getattr(target, 'id', '')}",
+            "season_year": _sy,
             "inbound": True,
             "created_day": int(calendar_idx),
             "expires_day": int(calendar_idx) + OFFER_LIFETIME_DAYS,

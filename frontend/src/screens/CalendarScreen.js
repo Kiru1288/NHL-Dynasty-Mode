@@ -7,6 +7,9 @@ import { getTeamLogoSrc as getSharedTeamLogoSrc } from "../utils/teamLogos";
 import { formatFranchiseApiError } from "../services/api";
 import WorldJuniorsEvent from "../events/worldJuniors/WorldJuniorsEvent";
 import { resolveWorldJuniorsPayload } from "../events/worldJuniors/wjcPayload";
+import { BoxScoreModal } from "../components/dossier/ProspectVisuals";
+import { getBoxScore } from "../services/franchiseService";
+import "../components/dossier/PlayerDossier.css";
 
 /**
  * CalendarScreen.js
@@ -2995,6 +2998,7 @@ function StatPill({ icon, label, value, sub, tone, tooltip, loading = false }) {
 }
 
 function CalendarGameTile({ game, activeTeam, allTeams, standings = [], compact, expanded, onToggle }) {
+  const [boxScoreOpen, setBoxScoreOpen] = useState(false);
   const opponent = getOpponentFromGame(game, activeTeam, allTeams);
   const isHome = isHomeGame(game, activeTeam);
   const isUserGame = isTeamGame(game, activeTeam);
@@ -3138,6 +3142,28 @@ function CalendarGameTile({ game, activeTeam, allTeams, standings = [], compact,
               <small>{formatTeamRecord(homeTeam, standings)}</small>
             </div>
           </div>
+          {completed && String(game?.id || game?.game_id || "").trim() ? (
+            <button
+              type="button"
+              className="nhlcal-game-boxscore-btn"
+              onClick={(event) => {
+                event.stopPropagation();
+                setBoxScoreOpen(true);
+              }}
+              onKeyDown={(event) => event.stopPropagation()}
+            >
+              Box score
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+      {boxScoreOpen ? (
+        <div onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
+          <BoxScoreModal
+            gameId={String(game?.id || game?.game_id || "").trim()}
+            fetchBox={getBoxScore}
+            onClose={() => setBoxScoreOpen(false)}
+          />
         </div>
       ) : null}
     </div>

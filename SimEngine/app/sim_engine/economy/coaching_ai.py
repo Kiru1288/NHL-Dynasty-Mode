@@ -486,3 +486,282 @@ def process_waiver_claim(
     """
     engine = WaiverEngine()
     return engine.process_player(player, teams, priority_order)
+
+
+
+# =============================================================================
+# Coach tactics / matchup coaching / load management
+# =============================================================================
+#
+# Settings live on the franchise session (``session.team_tactics[tid]``) and are
+# stamped onto the team object (``team._tactics``) before each game. The sim reads
+# them through ``team_tactic_profile`` (cached per settings + identity) and
+# ``game_tactic_mods`` (a handful of multiplications per game), so tactics never
+# add per-event work to the light or full paths.
+
+TACTIC_OPTIONS: Dict[str, Tuple[str, ...]] = {
+    "line_matching": ("off", "light", "heavy"),
+    "goalie_pull": ("conservative", "normal", "aggressive"),
+    "forecheck": ("1-2-2", "2-1-2", "2-3"),
+    "pace": ("slow", "normal", "fast"),
+    "shot_priority": ("quality", "balanced", "volume"),
+    "d_activation": ("conservative", "normal", "active"),
+    "pp_system": ("umbrella", "1-3-1", "overload"),
+    "pk_system": ("box", "diamond", "pressure"),
+    "b2b_goalie": ("auto", "starter", "backup"),
+}
+
+DEFAULT_TACTICS: Dict[str, Any] = {
+    "line_matching": "light",
+    "goalie_pull": "normal",
+    "forecheck": "2-1-2",
+    "pace": "normal",
+    "shot_priority": "balanced",
+    "d_activation": "normal",
+    "pp_system": "1-3-1",
+    "pk_system": "box",
+    "b2b_goalie": "auto",
+    "rest_veterans": False,
+    "rest_next": [],
+}
+
+# (shot volume, xG per shot, opponent chance allowance, penalties taken, fatigue load)
+_TACTIC_EFFECTS: Dict[str, Dict[str, Tuple[float, float, float, float, float]]] = {
+    "forecheck": {
+        "1-2-2": (-0.030, 0.000, -0.035, -0.06, -0.05),
+        "2-1-2": (0.0, 0.0, 0.0, 0.0, 0.0),
+        "2-3": (0.040, 0.005, 0.040, 0.10, 0.08),
+    },
+    "pace": {
+        "slow": (-0.040, 0.010, -0.040, -0.03, -0.06),
+        "normal": (0.0, 0.0, 0.0, 0.0, 0.0),
+        "fast": (0.045, -0.005, 0.045, 0.02, 0.07),
+    },
+    "shot_priority": {
+        "quality": (-0.070, 0.065, 0.0, 0.0, 0.0),
+        "balanced": (0.0, 0.0, 0.0, 0.0, 0.0),
+        "volume": (0.085, -0.070, 0.0, 0.0, 0.01),
+    },
+    "d_activation": {
+        "conservative": (-0.020, -0.010, -0.030, 0.0, -0.02),
+        "normal": (0.0, 0.0, 0.0, 0.0, 0.0),
+        "active": (0.030, 0.015, 0.035, 0.02, 0.03),
+    },
+}
+
+# Which identity profile groups (percentiles 0-100) make each choice work.
+_TACTIC_FIT_GROUPS: Dict[Tuple[str, str], Tuple[str, ...]] = {
+    ("forecheck", "2-3"): ("physical", "pace"),
+    ("forecheck", "1-2-2"): ("defense", "goaltending"),
+    ("pace", "fast"): ("pace", "puck"),
+    ("pace", "slow"): ("defense", "puck"),
+    ("shot_priority", "quality"): ("playmaking", "puck"),
+    ("shot_priority", "volume"): ("shooting", "physical"),
+    ("d_activation", "active"): ("puck", "pace"),
+    ("d_activation", "conservative"): ("defense",),
+    ("pp_system", "umbrella"): ("shooting",),
+    ("pp_system", "1-3-1"): ("playmaking",),
+    ("pp_system", "overload"): ("puck", "physical"),
+    ("pk_system", "box"): ("defense",),
+    ("pk_system", "diamond"): ("defense", "puck"),
+    ("pk_system", "pressure"): ("pace", "physical"),
+}
+
+_MATCH_LEVEL = {"off": 0.0, "light": 0.5, "heavy": 1.0}
+# Late-game pull vs the "normal" baseline: (extra chance the trailing-by-1 club ties it,
+# extra empty-net-goal-against chance). Conservative removes some 2-goal empty-netters.
+_PULL_DELTA = {"conservative": (0.0, -0.06), "normal": (0.0, 0.0), "aggressive": (0.05, 0.08)}
+
+
+def normalize_tactics(raw: Any) -> Dict[str, Any]:
+    """Validated copy of a tactics dict (unknown keys/values fall back to defaults)."""
+    src = raw if isinstance(raw, dict) else {}
+    out: Dict[str, Any] = {}
+    for k, opts in TACTIC_OPTIONS.items():
+        v = str(src.get(k, DEFAULT_TACTICS[k]) or DEFAULT_TACTICS[k])
+        out[k] = v if v in opts else DEFAULT_TACTICS[k]
+    out["rest_veterans"] = bool(src.get("rest_veterans", False))
+    rn = src.get("rest_next") or []
+    out["rest_next"] = [str(x) for x in rn if x is not None][:6] if isinstance(rn, (list, tuple, set)) else []
+    return out
+
+
+def _identity_pct(team: Any) -> Dict[str, float]:
+    ident = getattr(team, "team_identity", None)
+    if isinstance(ident, dict):
+        pct = ident.get("profile_pct")
+        if isinstance(pct, dict):
+            return {str(k): _safe_float(v, 50.0) for k, v in pct.items()}
+    return {}
+
+
+def cpu_tactics_for_team(team: Any) -> Dict[str, Any]:
+    """CPU coach picks a system from the club's identity (falls back to defaults)."""
+    t = dict(DEFAULT_TACTICS)
+    t["rest_next"] = []
+    ident = getattr(team, "team_identity", None)
+    key = ""
+    if isinstance(ident, dict):
+        key = str((ident.get("primary") or {}).get("key") or "")
+    pct = _identity_pct(team)
+    if key == "heavy_forecheck":
+        t.update(forecheck="2-3", shot_priority="volume", pk_system="pressure", pp_system="overload")
+    elif key in ("run_and_gun", "speed_transition"):
+        t.update(pace="fast", d_activation="active", pp_system="1-3-1", pk_system="diamond")
+    elif key in ("defensive_structure", "goaltending_fortress"):
+        t.update(forecheck="1-2-2", pace="slow", d_activation="conservative", shot_priority="quality", goalie_pull="conservative")
+    elif key == "skill_possession":
+        t.update(shot_priority="quality", d_activation="active", pp_system="1-3-1")
+    if pct:
+        if pct.get("shooting", 50) >= 65 and key != "skill_possession":
+            t["pp_system"] = "umbrella"
+        if pct.get("defense", 50) >= 60 and key != "heavy_forecheck":
+            t["pk_system"] = "box"
+    age = _safe_float(ident.get("avg_age"), 27.0) if isinstance(ident, dict) else 27.0
+    t["rest_veterans"] = age >= 28.0
+    t["line_matching"] = "heavy" if _safe_float(getattr(team, "coach_rating", 72), 72) >= 78 else "light"
+    if t["goalie_pull"] != "conservative":
+        # Clubs chasing a playoff spot pull early.
+        t["goalie_pull"] = "aggressive" if _safe_float(getattr(team, "point_pct", 0.5), 0.5) < 0.47 else "normal"
+    return t
+
+
+def _fit_score(pct: Dict[str, float], key: str, val: str) -> float:
+    groups = _TACTIC_FIT_GROUPS.get((key, val))
+    if not groups or not pct:
+        return 0.0
+    avg = sum(pct.get(g, 50.0) for g in groups) / len(groups)
+    return _clamp((avg - 50.0) / 40.0, -1.0, 1.0)
+
+
+def team_tactic_profile(team: Any) -> Dict[str, float]:
+    """Per-team multipliers for its own tactics (cached on the team)."""
+    t = getattr(team, "_tactics", None)
+    if not isinstance(t, dict):
+        t = DEFAULT_TACTICS
+    ident = getattr(team, "team_identity", None)
+    # Coach ratings may be added by the staff layer; read defensively.
+    coach = _safe_float(getattr(team, "coach_tactics_rating", None) or getattr(team, "coach_rating", 72), 72.0)
+    ckey = (tuple(str(t.get(k, "")) for k in TACTIC_OPTIONS), id(ident), round(coach, 1))
+    cached = getattr(team, "_tactic_profile_cache", None)
+    if isinstance(cached, tuple) and cached[0] == ckey:
+        return cached[1]
+    pct = _identity_pct(team)
+    coach_k = _clamp(1.0 + (coach - 72.0) / 60.0, 0.75, 1.35)
+    vol = xg = allow = pen = fat = 1.0
+    fit_total = 0.0
+    n_fit = 0
+    for key, table in _TACTIC_EFFECTS.items():
+        val = str(t.get(key, DEFAULT_TACTICS[key]))
+        dv, dx, da, dp, df = table.get(val, (0.0, 0.0, 0.0, 0.0, 0.0))
+        vol += dv
+        xg += dx
+        allow += da
+        pen += dp
+        fat += df
+        if (key, val) in _TACTIC_FIT_GROUPS:
+            fit_total += _fit_score(pct, key, val)
+            n_fit += 1
+    # Archetype fit: a system the roster suits adds execution, a mismatch costs it.
+    fit = fit_total / n_fit if n_fit else 0.0
+    exec_mult = 1.0 + 0.025 * fit * coach_k
+    pp = 1.0 + 0.06 * _fit_score(pct, "pp_system", str(t.get("pp_system"))) * coach_k
+    pk = 1.0 - 0.05 * _fit_score(pct, "pk_system", str(t.get("pk_system"))) * coach_k
+    if str(t.get("pk_system")) == "pressure":
+        pk *= 1.02
+        pen *= 1.02
+    match = _MATCH_LEVEL.get(str(t.get("line_matching")), 0.5)
+    fat += 0.03 * match
+    prof = {
+        "vol": round(vol, 4),
+        "xg": round(xg * exec_mult, 4),
+        "allow": round(allow, 4),
+        "pen": round(pen, 4),
+        "fatigue": round(fat, 4),
+        "pp": round(pp, 4),
+        "pk": round(pk, 4),
+        "fit": round(fit, 3),
+        "match": match,
+        "top_toi": round(1.0 + 0.06 * match, 4),
+    }
+    try:
+        setattr(team, "_tactic_profile_cache", (ckey, prof))
+    except Exception:
+        pass
+    return prof
+
+
+def game_tactic_mods(home: Any, away: Any) -> Dict[str, float]:
+    """Goal-rate and shot-attempt multipliers for one game (home has the last change)."""
+    ph = team_tactic_profile(home)
+    pa = team_tactic_profile(away)
+    pp_share = 0.19  # ~0.6 of ~3.1 goals per team-game come on the PP
+
+    def _mu(own: Dict[str, float], opp: Dict[str, float], own_lc: float, opp_lc: float) -> float:
+        ev = own["vol"] * own["xg"] * opp["allow"]
+        special = own["pp"] * opp["pk"] * opp["pen"]
+        m = (1.0 - pp_share) * ev + pp_share * special
+        # Opponent's shutdown matching (stronger with the last change) blunts your top line.
+        m *= 1.0 - 0.016 * opp["match"] * opp_lc
+        m *= 1.0 + 0.004 * own["match"] * own_lc
+        return _clamp(m, 0.92, 1.08)
+
+    return {
+        "home_mu": _mu(ph, pa, 1.0, 0.4),
+        "away_mu": _mu(pa, ph, 0.4, 1.0),
+        "home_cf": _clamp(ph["vol"] * pa["allow"], 0.85, 1.15),
+        "away_cf": _clamp(pa["vol"] * ph["allow"], 0.85, 1.15),
+    }
+
+
+def _ot_after_tie(rng: Any, hg: int, ag: int) -> Tuple[int, int, bool]:
+    lo = min(hg, ag)
+    if rng.random() < 0.52:
+        return lo + 1, lo, True
+    return lo, lo + 1, True
+
+
+def apply_goalie_pull(rng: Any, hg: int, ag: int, overtime: bool, home: Any, away: Any) -> Tuple[int, int, bool]:
+    """Late-game pull: shift regulation finals by the trailing coach's pull timing."""
+    if overtime or hg == ag:
+        return hg, ag, overtime
+    trail = away if hg > ag else home
+    pull = str((getattr(trail, "_tactics", None) or {}).get("goalie_pull", "normal"))
+    tie_d, en_d = _PULL_DELTA.get(pull, (0.0, 0.0))
+    if tie_d == 0.0 and en_d == 0.0:
+        return hg, ag, overtime
+    margin = abs(hg - ag)
+    r = rng.random()
+    if margin == 1:
+        if r < tie_d:
+            return _ot_after_tie(rng, hg, ag)  # extra attacker ties it
+        if en_d > 0 and r < tie_d + en_d:
+            return (hg + 1, ag, False) if hg > ag else (hg, ag + 1, False)  # empty-netter
+    elif margin == 2:
+        if en_d < 0 and r < -en_d:
+            return (hg - 1, ag, False) if hg > ag else (hg, ag - 1, False)
+        if en_d > 0 and r < en_d * 0.5:
+            return (hg + 1, ag, False) if hg > ag else (hg, ag + 1, False)
+    return hg, ag, overtime
+
+
+def b2b_goalie_choice(team: Any, starter_ovr: float, backup_ovr: float) -> str:
+    """'starter' or 'backup' for the second night of a back-to-back."""
+    plan = str((getattr(team, "_tactics", None) or {}).get("b2b_goalie", "auto"))
+    if plan in ("starter", "backup"):
+        return plan
+    return "starter" if (starter_ovr - backup_ovr) >= 9.0 else "backup"
+
+
+def b2b_mu_mods(team: Any, *, b2b: bool, starter_ovr: float = 0.0, backup_ovr: float = 0.0) -> Tuple[float, float]:
+    """(own goal-rate mult, opponent goal-rate mult) for the second night of a back-to-back."""
+    if not b2b:
+        return 1.0, 1.0
+    own = 0.975
+    choice = b2b_goalie_choice(team, starter_ovr, backup_ovr)
+    setattr(team, "_tactic_b2b_goalie_choice", choice)
+    if choice == "starter":
+        opp = 1.03  # tired starter
+    else:
+        opp = 1.0 + _clamp((starter_ovr - backup_ovr) * 0.004, 0.0, 0.05)
+    return own, opp

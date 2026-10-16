@@ -561,40 +561,71 @@ function SidePanel({ gov }) {
   );
 }
 
-const PROTECT_LABEL = { F: "Forwards", D: "Defense", G: "Goalies" };
+const PROTECT_LABEL = { F: "Forwards", D: "Defense", G: "Goalies", S: "Skaters" };
+const SCHEME_LIMITS = { "7-3-1": { F: 7, D: 3, G: 1 }, "8-1": { S: 8, G: 1 } };
 
 function ExpansionProtectionPanel({ draft, onSaved }) {
   const players = asArray(draft?.players);
-  const limits = draft?.limits || { F: 7, D: 3, G: 1 };
+  const [scheme, setScheme] = useState(draft?.scheme || "7-3-1");
+  const limits = SCHEME_LIMITS[scheme] || SCHEME_LIMITS["7-3-1"];
+  const slotOf = (pos) => (pos === "G" || scheme === "7-3-1" ? pos : "S");
   const [picked, setPicked] = useState(() =>
     new Set(players.filter((p) => p.protected && !p.exempt).map((p) => p.player_id))
   );
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState("");
-  const counts = { F: 0, D: 0, G: 0 };
+  const counts = Object.fromEntries(Object.keys(limits).map((k) => [k, 0]));
   players.forEach((p) => {
-    if (picked.has(p.player_id) && !p.exempt) counts[p.pos] += 1;
+    if (picked.has(p.player_id) && !p.exempt) counts[slotOf(p.pos)] += 1;
   });
+  const exposure = { F: 0, D: 0, G: 0 };
+  players.forEach((p) => {
+    if (!picked.has(p.player_id) && p.exposable) exposure[p.pos] += 1;
+  });
+  const exposeNeed = draft?.exposure?.need || { F: 2, D: 1, G: 1 };
   const toggle = (p) => {
     if (p.exempt) return;
     setMsg("");
+    const slot = slotOf(p.pos);
     if (picked.has(p.player_id)) {
+      if (p.nmc) {
+        setMsg("No-move clauses must be protected.");
+        return;
+      }
       setPicked((prev) => {
         const next = new Set(prev);
         next.delete(p.player_id);
         return next;
       });
-    } else if (counts[p.pos] < Number(limits[p.pos] || 0)) {
+    } else if (counts[slot] < Number(limits[slot] || 0)) {
       setPicked((prev) => new Set(prev).add(p.player_id));
     } else {
-      setMsg(`You can protect ${limits[p.pos]} ${PROTECT_LABEL[p.pos].toLowerCase()}.`);
+      setMsg(`You can protect ${limits[slot]} ${PROTECT_LABEL[slot].toLowerCase()}.`);
     }
+  };
+  const changeScheme = (next) => {
+    setScheme(next);
+    setMsg("");
+    const lim = SCHEME_LIMITS[next];
+    const used = {};
+    const keep = new Set();
+    players
+      .filter((p) => picked.has(p.player_id) && !p.exempt)
+      .sort((a, b) => Number(b.nmc) - Number(a.nmc) || b.ovr - a.ovr)
+      .forEach((p) => {
+        const s = p.pos === "G" || next === "7-3-1" ? p.pos : "S";
+        if ((used[s] || 0) < lim[s]) {
+          used[s] = (used[s] || 0) + 1;
+          keep.add(p.player_id);
+        }
+      });
+    setPicked(keep);
   };
   const save = async () => {
     setSaving(true);
     setMsg("");
     try {
-      const data = await setExpansionProtection([...picked]);
+      const data = await setExpansionProtection([...picked], scheme);
       if (data?.governance) onSaved?.(data.governance);
       setMsg("Protection list saved.");
     } catch (e) {
@@ -607,13 +638,30 @@ function ExpansionProtectionPanel({ draft, onSaved }) {
     <section className={`${PREFIX}-panel`} style={{ padding: 14, display: "flex", flexDirection: "column", gap: 8 }}>
       <h3 style={{ margin: 0 }}>Expansion draft: {asArray(draft?.cities).join(" & ")}</h3>
       <p className={`${PREFIX}-note`} style={{ margin: 0 }}>
-        {draft?.when}. Protect {limits.F} forwards, {limits.D} defensemen and {limits.G} goalie. You lose{" "}
+        {draft?.when}. Protect 7 forwards, 3 defensemen and 1 goalie, or any 8 skaters and 1 goalie. You lose{" "}
         {Number(draft?.n_new || 1) === 1 ? "one unprotected player" : `${draft.n_new} unprotected players`}. First- and
-        second-year pros are exempt; no-move clauses must be protected.
+        second-year pros are exempt; no-move clauses must be protected. You must expose {exposeNeed.F} forwards and{" "}
+        {exposeNeed.D} defenseman under contract with {"40+"} GP last season (or 70+ career), plus a signed goalie; if
+        you don't, your weakest protected player at that position is exposed.
         {draft?.user_set ? "" : " Until you save, your highest-rated players are protected automatically."}
       </p>
+      <div style={{ display: "flex", gap: 6 }}>
+        {Object.keys(SCHEME_LIMITS).map((k) => (
+          <button
+            key={k}
+            type="button"
+            className="nhlcal-advance-button"
+            style={{ opacity: scheme === k ? 1 : 0.55 }}
+            onClick={() => changeScheme(k)}
+          >
+            {k === "7-3-1" ? "7F / 3D / 1G" : "8 skaters / 1G"}
+          </button>
+        ))}
+      </div>
       <p className={`${PREFIX}-muted`} style={{ margin: 0 }}>
-        {["F", "D", "G"].map((k) => `${PROTECT_LABEL[k]} ${counts[k]}/${limits[k]}`).join(" · ")}
+        {Object.keys(limits).map((k) => `${PROTECT_LABEL[k]} ${counts[k]}/${limits[k]}`).join(" · ")}
+        {" — Exposed and eligible: "}
+        {["F", "D", "G"].map((k) => `${k} ${exposure[k]}/${exposeNeed[k]}`).join(" · ")}
       </p>
       <div style={{ maxHeight: 280, overflow: "auto", display: "grid", gap: 2 }}>
         {players.map((p) => (

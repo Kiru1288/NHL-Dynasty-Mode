@@ -2828,8 +2828,14 @@ def leaders_by(
     limit: int = 20,
     reverse: bool = True,
     goalies: Optional[bool] = None,
+    pre_enriched: bool = False,
 ) -> List[Dict[str, Any]]:
-    enriched = [enrich_player_row(r) for r in rows if isinstance(r, Mapping)]
+    # build_leaderboards already enriched every row once; re-enriching per board
+    # (24 boards) was ~95% of the Stats Central build and scaled with league size.
+    if pre_enriched:
+        enriched = [r for r in rows if isinstance(r, Mapping)]
+    else:
+        enriched = [enrich_player_row(r) for r in rows if isinstance(r, Mapping)]
 
     if goalies is True:
         enriched = [r for r in enriched if is_goalie_row(r)]
@@ -2837,40 +2843,44 @@ def leaders_by(
         enriched = [r for r in enriched if not is_goalie_row(r)]
 
     ordered = sorted(enriched, key=lambda r: safe_float(r.get(key), 0.0), reverse=reverse)
-    return ordered[: max(0, int(limit))]
+    top = ordered[: max(0, int(limit))]
+    return [dict(r) for r in top] if pre_enriched else top
 
 
-def build_leaderboards(rows: Iterable[Mapping[str, Any]], *, limit: int = 10) -> Dict[str, List[Dict[str, Any]]]:
-    enriched = enrich_player_rows(rows)
+def build_leaderboards(
+    rows: Iterable[Mapping[str, Any]], *, limit: int = 10, pre_enriched: bool = False
+) -> Dict[str, List[Dict[str, Any]]]:
+    # pre_enriched: rows already came out of enrich_player_rows (ranks applied).
+    enriched = [r for r in rows if isinstance(r, Mapping)] if pre_enriched else enrich_player_rows(rows)
 
     return {
-        "points": leaders_by(enriched, "pts", limit=limit, goalies=False),
-        "goals": leaders_by(enriched, "g", limit=limit, goalies=False),
-        "assists": leaders_by(enriched, "a", limit=limit, goalies=False),
-        "shots": leaders_by(enriched, "sog", limit=limit, goalies=False),
-        "hits": leaders_by(enriched, "hit", limit=limit, goalies=False),
-        "blocks": leaders_by(enriched, "blk", limit=limit, goalies=False),
+        "points": leaders_by(enriched, "pts", limit=limit, goalies=False, pre_enriched=True),
+        "goals": leaders_by(enriched, "g", limit=limit, goalies=False, pre_enriched=True),
+        "assists": leaders_by(enriched, "a", limit=limit, goalies=False, pre_enriched=True),
+        "shots": leaders_by(enriched, "sog", limit=limit, goalies=False, pre_enriched=True),
+        "hits": leaders_by(enriched, "hit", limit=limit, goalies=False, pre_enriched=True),
+        "blocks": leaders_by(enriched, "blk", limit=limit, goalies=False, pre_enriched=True),
 
-        "analytics_rating": leaders_by(enriched, "analytics_rating", limit=limit, goalies=False),
-        "impact": leaders_by(enriched, "war", limit=limit, goalies=False),
-        "watr": leaders_by(enriched, "war", limit=limit, goalies=False),
-        "war": leaders_by(enriched, "war", limit=limit, goalies=False),
-        "value": leaders_by(enriched, "value_score", limit=limit, goalies=False),
+        "analytics_rating": leaders_by(enriched, "analytics_rating", limit=limit, goalies=False, pre_enriched=True),
+        "impact": leaders_by(enriched, "war", limit=limit, goalies=False, pre_enriched=True),
+        "watr": leaders_by(enriched, "war", limit=limit, goalies=False, pre_enriched=True),
+        "war": leaders_by(enriched, "war", limit=limit, goalies=False, pre_enriched=True),
+        "value": leaders_by(enriched, "value_score", limit=limit, goalies=False, pre_enriched=True),
 
-        "points_per_game": leaders_by(enriched, "pts_per_game", limit=limit, goalies=False),
-        "points_per_60": leaders_by(enriched, "pts_per_60", limit=limit, goalies=False),
-        "goals_per_60": leaders_by(enriched, "goals_per_60", limit=limit, goalies=False),
-        "power_play_points": leaders_by(enriched, "pp_points", limit=limit, goalies=False),
-        "corsi_pct": leaders_by(enriched, "cf_pct", limit=limit, goalies=False),
-        "expected_goals_pct": leaders_by(enriched, "xgf_pct", limit=limit, goalies=False),
-        "defensive_impact": leaders_by(enriched, "defense_score", limit=limit, goalies=False),
+        "points_per_game": leaders_by(enriched, "pts_per_game", limit=limit, goalies=False, pre_enriched=True),
+        "points_per_60": leaders_by(enriched, "pts_per_60", limit=limit, goalies=False, pre_enriched=True),
+        "goals_per_60": leaders_by(enriched, "goals_per_60", limit=limit, goalies=False, pre_enriched=True),
+        "power_play_points": leaders_by(enriched, "pp_points", limit=limit, goalies=False, pre_enriched=True),
+        "corsi_pct": leaders_by(enriched, "cf_pct", limit=limit, goalies=False, pre_enriched=True),
+        "expected_goals_pct": leaders_by(enriched, "xgf_pct", limit=limit, goalies=False, pre_enriched=True),
+        "defensive_impact": leaders_by(enriched, "defense_score", limit=limit, goalies=False, pre_enriched=True),
 
-        "goalie_sv_pct": leaders_by(enriched, "sv_pct", limit=limit, goalies=True),
-        "goalie_gaa": leaders_by(enriched, "gaa", limit=limit, reverse=False, goalies=True),
-        "goalie_wins": leaders_by(enriched, "wins", limit=limit, goalies=True),
-        "goalie_gsax": leaders_by(enriched, "gsax", limit=limit, goalies=True),
-        "goalie_impact": leaders_by(enriched, "war", limit=limit, goalies=True),
-        "goalie_watr": leaders_by(enriched, "war", limit=limit, goalies=True),
+        "goalie_sv_pct": leaders_by(enriched, "sv_pct", limit=limit, goalies=True, pre_enriched=True),
+        "goalie_gaa": leaders_by(enriched, "gaa", limit=limit, reverse=False, goalies=True, pre_enriched=True),
+        "goalie_wins": leaders_by(enriched, "wins", limit=limit, goalies=True, pre_enriched=True),
+        "goalie_gsax": leaders_by(enriched, "gsax", limit=limit, goalies=True, pre_enriched=True),
+        "goalie_impact": leaders_by(enriched, "war", limit=limit, goalies=True, pre_enriched=True),
+        "goalie_watr": leaders_by(enriched, "war", limit=limit, goalies=True, pre_enriched=True),
     }
 
 
@@ -3024,6 +3034,7 @@ def award_watch_scores(
     limit: int = 10,
     rank_by_tid: Optional[Mapping[str, int]] = None,
     standings_table: Any = None,
+    pre_enriched: bool = False,
 ) -> Dict[str, List[Dict[str, Any]]]:
     """
     Formula-driven award watch lists.
@@ -3055,7 +3066,10 @@ def award_watch_scores(
         "jennings",
         "conn_smythe",
     }
-    enriched = enrich_player_rows(rows)
+    if pre_enriched:
+        enriched = [dict(r) for r in rows if isinstance(r, Mapping)]
+    else:
+        enriched = enrich_player_rows(rows)
     skaters = [r for r in enriched if not is_goalie_row(r)]
     forwards = [r for r in skaters if not is_defenseman_row(r)]
     defensemen = [r for r in skaters if is_defenseman_row(r)]
@@ -3801,8 +3815,8 @@ def build_stats_central_player_payload(
         "skaters": skaters_sorted,
         "goalies": goalies_sorted,
 
-        "leaders": build_leaderboards(enriched, limit=10),
-        "awards_watch": award_watch_scores(enriched, limit=10),
+        "leaders": build_leaderboards(enriched, limit=10, pre_enriched=True),
+        "awards_watch": award_watch_scores(enriched, limit=10, pre_enriched=True),
     }
 
 

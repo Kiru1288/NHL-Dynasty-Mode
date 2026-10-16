@@ -658,6 +658,60 @@ def team_ltir_pool_millions(team: Any) -> float:
     return 0.0
 
 
+def team_ltir_books(
+    team: Any,
+    *,
+    season_start_year: Optional[int] = None,
+    opening_day: bool = False,
+) -> Tuple[float, float, List[Dict[str, Any]]]:
+    """LTIR players' cap hits (still on the books) and the relief pool they earned.
+
+    CBA: an LTIR player's cap hit keeps counting; the club may exceed the
+    upper limit by (his cap hit - cap space on the day he was placed). The
+    relief is season-scoped; next season's books carry the hit with no relief.
+    """
+    records = _get(team, "ltir_records", None)
+    if not isinstance(records, list) or not records:
+        return 0.0, 0.0, []
+    by_id: Dict[str, Any] = {}
+    for p in _iter_team_roster(team):
+        pid = str(_get(p, "id", "") or _get(p, "player_id", "") or "")
+        if pid:
+            by_id[pid] = p
+    burned = contract_year_burned(team)
+    charge = 0.0
+    relief = 0.0
+    rows: List[Dict[str, Any]] = []
+    for rec in records:
+        if not isinstance(rec, dict):
+            continue
+        p = by_id.get(str(rec.get("player_id") or ""))
+        if p is None or not bool(_get(p, "on_ltir", False)):
+            continue
+        hit = player_cap_hit_millions(p)
+        if opening_day and _off_next_season_books(p, burned=burned):
+            hit = 0.0
+        rel = 0.0
+        try:
+            same_season = season_start_year is not None and int(rec.get("season") or 0) == int(season_start_year)
+        except (TypeError, ValueError):
+            same_season = False
+        if same_season and not opening_day:
+            rel = max(0.0, min(hit, float(rec.get("relief_m") or 0.0)))
+        charge += hit
+        relief += rel
+        rows.append({
+            "player_id": rec.get("player_id"),
+            "player_name": rec.get("player_name") or _get(p, "name", ""),
+            "cap_hit_m": round(hit, 3),
+            "relief_m": round(rel, 3),
+            "season": rec.get("season"),
+            "placed_day": rec.get("placed_day"),
+            "games_remaining": int(_get(p, "_world_injury_games_remaining", 0) or 0),
+        })
+    return max(0.0, charge), max(0.0, relief), rows
+
+
 def _league_cap_bounds_millions(
     league: Any,
     sim: Any,
@@ -894,6 +948,11 @@ def calculate_team_cap_snapshot(
         except (TypeError, ValueError):
             pass
 
+    ltir_charge_m, ltir_relief_m, ltir_rows = team_ltir_books(
+        team, season_start_year=season_y, opening_day=bool(opening_day)
+    )
+    ltir_pool_m += ltir_relief_m
+
     other_dead_m = max(0.0, normalize_money_to_millions(_get(team, "other_dead_cap_m", _get(team, "other_dead_cap", 0.0))))
     # A bonus ledger that picked up raw dollars, or a reserve funded once per
     # player and never released, was charging a second full payroll. Real clubs
@@ -913,6 +972,7 @@ def calculate_team_cap_snapshot(
         + bonus_overage_m
         + bonus_reserve_m
         + other_dead_m
+        + ltir_charge_m
     )
 
     real_cap_space_m = upper_limit_m - total_m
@@ -969,6 +1029,9 @@ def calculate_team_cap_snapshot(
         "performanceBonusReserve": round(float(bonus_reserve_m), 3),
         "otherDeadCap": round(float(other_dead_m), 3),
         "ltirPool": round(float(ltir_pool_m), 3),
+        "ltirCapHit": round(float(ltir_charge_m), 3),
+        "ltirRelief": round(float(ltir_relief_m), 3),
+        "ltirPlayers": ltir_rows,
         "effectiveCapLimit": round(float(effective_limit_m), 3),
         "totalCapHit": round(float(total_m), 3),
         "realCapSpace": round(float(real_cap_space_m), 3),

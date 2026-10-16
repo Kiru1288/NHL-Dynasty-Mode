@@ -281,7 +281,7 @@ def _tradeable_player(player: Any, acquiring_team_id: str, *, ctx: Optional[Dict
         cursor = int(ctx.get("calendar_cursor", 0) or 0)
         last_day = getattr(player, "last_acquired_day", None)
         try:
-            if last_day is not None and (cursor - int(last_day)) < CPU_REACQUIRE_SOFT_DAYS:
+            if last_day is not None and 0 <= (cursor - int(last_day)) < CPU_REACQUIRE_SOFT_DAYS:
                 return False
         except (TypeError, ValueError):
             pass
@@ -1311,6 +1311,18 @@ def propose_and_execute_cpu_trades(
             if any(_safe_float(interest.get(t), 0.0) < min_interest for t in package.keys()):
                 _funnel(motive, "low_interest")
                 return None
+            # Goofy deadline chaos: the franchise layer arms this on deadline eve; the
+            # first agreed CPU deal after that dies at the buzzer ("the fax machine broke").
+            jam = getattr(league, "_goofy_fax_jam_armed", None)
+            if isinstance(jam, dict) and not jam.get("used"):
+                jam["used"] = True
+                jam["seller_id"] = team_id_of(seller)
+                jam["buyer_id"] = team_id_of(buyer)
+                ident = getattr(s_offer, "identity", None)
+                jam["player_name"] = str(getattr(ident, "name", "") or getattr(s_offer, "name", "") or "a veteran")
+                jam["player_id"] = _player_id(s_offer)
+                _funnel(motive, "fax_machine_broke")
+                return None
 
             try:
                 from app.sim_engine.trades.trade_executor import execute_validated_trade
@@ -1666,6 +1678,19 @@ def propose_and_execute_cpu_trades(
             league, teams=teams, assessments=assessments, ctx=ctx, tools=tools, rng=pair_rng, used_players=used_players,
         )
         telemetry["last_plan_count"] = len(plans)
+        # Rubber banding: when the user's club is running away with the league, the
+        # user's rivals/contenders get first call on upgrades (some days, not every day).
+        try:
+            from app.sim_engine.trades.trade_market_adaptive import is_user_rival, user_dominance
+
+            _dom = user_dominance(league)
+            if _dom > 0.0 and plans and pair_rng.random() < 0.35 + 0.5 * _dom:
+                for _p in plans:
+                    if is_user_rival(league, team_id_of(_p.buyer)):
+                        _p.score = round(_p.score + 0.15 * _dom, 3)
+                plans.sort(key=lambda _p: -_p.score)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         # Fatigue: clubs that already traded a lot this season drop down the list, so one
         # surplus-heavy club isn't the first call for every buyer.
         if season_team_trades:
@@ -1743,7 +1768,7 @@ def propose_and_execute_cpu_trades(
                 _funnel(plan.motive, "pair_season_cap")
                 continue
             if (
-                int(calendar_cursor) - int(recent_pairs.get(pair_mem_key, -999) or -999) < pair_cooldown
+                0 <= int(calendar_cursor) - int(recent_pairs.get(pair_mem_key, -999) or -999) < pair_cooldown
                 and plan.motive != "panic_buy"
             ):
                 _funnel(plan.motive, "pair_cooldown")

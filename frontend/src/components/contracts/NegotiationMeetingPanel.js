@@ -234,6 +234,39 @@ export default function NegotiationMeetingPanel({ playerId, onChanged, compact =
               )}
             </div>
           ) : null}
+
+          {data.goofy_demand ? (
+            <div className="nmp__block">
+              <span className="nmp__label">Unusual request</span>
+              {data.goofy_demand.used ? (
+                <p className="nmp__result">{data.goofy_demand.result?.line}</p>
+              ) : (
+                <>
+                  <p className="nmp__result">{data.goofy_demand.text}</p>
+                  <div className="nmp__grid">
+                    <button
+                      type="button"
+                      className="nmp__opt"
+                      disabled={Boolean(busy)}
+                      onClick={() => run("goofy_demand", "accept")}
+                    >
+                      <strong>Grant it</strong>
+                      <span>{data.goofy_demand.reward}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="nmp__opt"
+                      disabled={Boolean(busy)}
+                      onClick={() => run("goofy_demand", "refuse")}
+                    >
+                      <strong>Absolutely not</strong>
+                      <span>He'll be a little less keen.</span>
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          ) : null}
         </div>
       ) : null}
     </section>

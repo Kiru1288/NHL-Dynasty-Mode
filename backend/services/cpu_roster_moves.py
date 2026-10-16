@@ -331,7 +331,8 @@ def run_cpu_roster_moves(session: Any, *, force: bool = False) -> Dict[str, Any]
     total = 0
     # Weekly: clubs under the salary floor take on contracts capped-out clubs want gone.
     floor_trades = 0
-    if force or day - int(getattr(session, "_cpu_cap_floor_day", -99) or -99) >= 7:
+    _floor_gap = day - int(getattr(session, "_cpu_cap_floor_day", -99) or -99)
+    if force or _floor_gap >= 7 or _floor_gap < 0:  # < 0: last season's stamp
         session._cpu_cap_floor_day = day
         try:
             from services.contract_economy import run_cpu_cap_floor_pass  # noqa: WPS433

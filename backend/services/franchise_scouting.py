@@ -21,6 +21,8 @@ import logging as _logging_swallow
 _swallowed_log = _logging_swallow.getLogger(__name__)
 
 DRAFT_OVR_REVEAL_THRESHOLD = 72.0
+# Auto-managed (staff) files stop here: OVR revealed, ceiling read solid, not a full file.
+AUTO_FILE_CAP = 86.0
 PUBLIC_INTEL_CLEAR_THROUGH_RANK = 45
 
 DEFAULT_SCOUTING_BUDGET = 2_500_000
@@ -231,6 +233,8 @@ def _ensure_scouting_state(session: FranchiseSession) -> Dict[str, Any]:
     raw.setdefault("public_miss_markers", {})
     raw.setdefault("assignment_cap_slots", ASSIGNMENT_CAP_SLOTS_DEFAULT)
     raw.setdefault("discoveries", [])
+    # Staff-managed scouting is on by default; hardcore players can switch it off.
+    raw.setdefault("auto_manage", True)
     return raw
 
 
@@ -747,6 +751,12 @@ def apply_passive_scouting_progress(session: FranchiseSession, *, days: int = 1)
     assigned_count = _count_assigned_prospects(state)
 
     changed = _charge_deployment_salary(session, state, cur_cursor=cur_cursor) or class_changed or expired
+    try:
+        from services.league_operations import staff_user_effect
+
+        director_speed = float(staff_user_effect(session, "scout_speed", 1.0))
+    except Exception:
+        director_speed = 1.0
     for entry in entries:
         pid = str(entry.get("key") or entry.get("id") or "")
         if not pid:
@@ -788,6 +798,7 @@ def apply_passive_scouting_progress(session: FranchiseSession, *, days: int = 1)
             continue
 
         gain *= float(step_days) * offseason_gain_mult
+        gain *= director_speed  # scouting director (league_operations staff)
 
         cap = _passive_cap_for_overlay(
             overlay,
@@ -796,6 +807,9 @@ def apply_passive_scouting_progress(session: FranchiseSession, *, days: int = 1)
             cur_cursor=int(getattr(session, "calendar_cursor", 0) or 0),
         )
 
+        if overlay.get("auto_assigned") and not is_target and not on_watchlist:
+            # Staff-run files reveal OVR + a solid ceiling read; a hand-run file goes deeper.
+            cap = min(cap, AUTO_FILE_CAP)
         new_pct = min(cap, current + gain)
         if new_pct <= current + 0.005:
             continue
@@ -969,6 +983,21 @@ def _normalize_prospect(
                 ovr_range = {"low": round(float(est), 1), "high": round(float(est), 1)}
             else:
                 ovr_range = {"low": 0.0, "high": 0.0}
+    # Scouting director accuracy (league_operations staff): tighten the band toward the truth.
+    if session is not None and true_ovr_raw is not None:
+        try:
+            from services.league_operations import staff_user_effect
+
+            tighten = float(staff_user_effect(session, "scout_accuracy", 0.0))
+            if tighten > 0 and float(ovr_range["high"]) > float(ovr_range["low"]):
+                lo, hi = float(ovr_range["low"]), float(ovr_range["high"])
+                anchor = min(hi, max(lo, true_ovr))
+                ovr_range = {
+                    "low": round(lo + (anchor - lo) * tighten, 1),
+                    "high": round(hi - (hi - anchor) * tighten, 1),
+                }
+        except Exception:
+            pass
     floor = float(ovr_range["low"])
 
     traits = list(overlay.get("traits") or [])
@@ -1741,6 +1770,8 @@ def _apply_scouting_meta_patch(
         patch["assigned_scout"] = str(_best_scout_for(session, entry, load).get("id") or "scout-na")
 
     if patch.get("assigned_scout") and str(patch.get("assigned_scout") or "").strip():
+        # A hand-picked assignment is a full manual file (no auto-staff cap).
+        patch["auto_assigned"] = False
         if not str(overlay_before.get("assigned_scout") or "").strip():
             if _count_assigned_prospects(state) >= _assignment_slot_limit(state):
                 return {
@@ -1909,7 +1940,9 @@ def auto_assign_scouts(
         scout = str(ov.get("assigned_scout") or "").strip()
         if not scout:
             continue
-        if float(ov.get("scouted_percentage") or 0.0) >= 100.0 or pid not in by_key:
+        pct_done = float(ov.get("scouted_percentage") or 0.0)
+        auto_done = bool(ov.get("auto_assigned")) and pct_done >= AUTO_FILE_CAP and not ov.get("target")
+        if pct_done >= 100.0 or auto_done or pid not in by_key:
             _set_prospect_overlay(state, pid, {"assigned_scout": "", "assigned_at_cursor": None})
             freed += 1
             continue
@@ -1939,6 +1972,8 @@ def auto_assign_scouts(
             continue
         if float(ov.get("scouted_percentage") or 0.0) >= 100.0:
             continue
+        if ov.get("auto_assigned") is not False and float(ov.get("scouted_percentage") or 0.0) >= AUTO_FILE_CAP:
+            continue
         if _prio(e)[0] == 2 and int(e.get("rank") or 999) > 160:
             continue
         sc = _best_scout_for(session, e, load)
@@ -1946,6 +1981,7 @@ def auto_assign_scouts(
         current = float(ov.get("scouted_percentage") or 0.0)
         _set_prospect_overlay(state, k, {
             "assigned_scout": sid,
+            "auto_assigned": True,
             "assigned_at_cursor": cur,
             "scouted_percentage": round(min(100.0, current + PASSIVE_ASSIGN_KICKSTART), 1),
         })
@@ -2326,6 +2362,16 @@ def _apply_public_combine_adjustments(
     adjusted.sort(key=lambda x: int(x.get("rank") or 999))
     for i, row in enumerate(adjusted, start=1):
         row["rank"] = i
+    try:
+        from services import draft_combine_engine as CE
+
+        CE.annotate_rank_movement(
+            {str(e.get("key") or ""): int(e.get("rank") or 0) for e in entries
+             if (combine_map.get(str(e.get("key") or "")) or {}).get("combine_invited")},
+            adjusted,
+        )
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return adjusted
 
 
@@ -2373,6 +2419,7 @@ def _apply_attribute_combine(
             "combine_stock_delta": int(round(boost)),
             "combine_stock_boost": boost,
             "combine_stock_reason": reason,
+            "combine_stock_test": CE.stock_driver_test(res, boost),
         })
         # Skating/strength/agility/endurance summaries now come from real tests.
         tests = res.get("tests") or {}
@@ -2481,8 +2528,11 @@ def run_franchise_draft_combine(session: FranchiseSession) -> Dict[str, Any]:
         [combine_results[p] for p in invite_ids if float(combine_results[p].get("interview_score") or 100) < 55],
         key=lambda x: float(x.get("interview_score") or 0),
     )[:4]
-    risers = [r for r in invited_rows if int(r.get("combine_stock_delta") or 0) >= 2][:8]
-    fallers = [r for r in invited_rows if int(r.get("combine_stock_delta") or 0) <= -2][:8]
+    def _move(r: Dict[str, Any]) -> int:
+        return int(r.get("combine_rank_change") if r.get("combine_rank_change") is not None else r.get("combine_stock_delta") or 0)
+
+    risers = sorted([r for r in invited_rows if _move(r) >= 2], key=lambda r: -_move(r))[:8]
+    fallers = sorted([r for r in invited_rows if _move(r) <= -2], key=_move)[:8]
 
     meeting_options = []
     for pid in invite_ids[:12]:

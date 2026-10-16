@@ -629,6 +629,8 @@ def _serialize_playoff_series(series: Any) -> Dict[str, Any]:
         "away_id": low_id,
         "wins_high": int(getattr(series, "wins_high", 0) or 0),
         "wins_low": int(getattr(series, "wins_low", 0) or 0),
+        "bracket_slot": int(getattr(series, "bracket_slot", -1) if getattr(series, "bracket_slot", None) is not None else -1),
+        "division": getattr(series, "division", None),
     }
 
 
@@ -1356,6 +1358,19 @@ def _stage_handler(session: FranchiseSession, stage: str) -> Dict[str, Any]:
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
     out = fn(session)
+    if stage == "re_sign":
+        # Last pre-July-1 stage: some CPU clubs buy out a bad contract even when
+        # they are cap compliant (runs once per summer).
+        try:
+            from services.contract_economy import run_cpu_discretionary_buyouts
+
+            disc = run_cpu_discretionary_buyouts(session)
+            if disc.get("buyouts") and isinstance(out, dict):
+                out.setdefault("cpu_buyouts", [
+                    {k: v for k, v in b.items() if k != "buyout"} for b in disc["buyouts"]
+                ])
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         from services.trade_service import run_offseason_cpu_trade_window
 
@@ -5653,6 +5668,29 @@ def _prepare_resign_payload(session: FranchiseSession, *, force: bool = False) -
 
     existing = getattr(session, "resign_payload", None)
     if not force and isinstance(existing, dict) and existing.get("version") == STAGE_PAYLOAD_VERSION["re_sign"]:
+        # The cached desk can predate the contract-year burn / new cap year (or a
+        # reload), so its cap card showed last year's space until the first Sim
+        # Day rebuilt it. Re-read the one user snapshot from the session books.
+        try:
+            from services.contract_economy import cap_books_for_session, get_team_cap_snapshot_full
+
+            _ut = session.team_by_id.get(session.user_team_id)
+            _lg = getattr(session.sim, "league", None)
+            if _ut is not None and _lg is not None:
+                _bk = cap_books_for_session(session)
+                _snap = get_team_cap_snapshot_full(
+                    _ut, _lg, session.sim,
+                    season_year=_bk["season_year"],
+                    calendar_cursor=_bk["calendar_cursor"],
+                    regular_season_last_index=_bk["regular_season_last_index"],
+                    count_expiring=_bk["count_expiring"],
+                    opening_day=_bk["opening_day"],
+                )
+                if isinstance(_snap, dict) and _snap:
+                    _snap["in_season_cap"] = bool(_bk.get("in_season"))
+                    existing["cap_snapshot"] = _snap
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         return {"contracts": existing, "re_sign": existing}
 
     office = build_contract_office(session)
@@ -6201,6 +6239,12 @@ def _open_free_agency(session: FranchiseSession, *, force: bool = False) -> Dict
 
                 ensure_overseas_fa_pool(league, session.sim.rng, min_count=120)
                 maybe_spawn_overseas_star(league, session.sim.rng, sy)
+                try:
+                    from services.league_governance import run_europe_moves
+
+                    session.europe_moves_report = run_europe_moves(session)
+                except Exception:
+                    _swallowed_log.debug("europe moves failed", exc_info=True)
                 sync_all_team_cap_fields(league, session.sim, season_year=sy)
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
@@ -6718,6 +6762,9 @@ def advance_free_agency_day(session: FranchiseSession, *, days: int = 1) -> Dict
 
         run_cpu_offer_sheet_pass(session, max_sheets=2)
         tick_offer_sheets(session)
+        from services.contract_economy import run_player_arbitration_elections
+
+        run_player_arbitration_elections(session)
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
     tick = tick_free_agency_market(session, days=days)
@@ -7629,6 +7676,14 @@ def generate_next_season(session: FranchiseSession) -> Dict[str, Any]:
     session.player_season_stats = {}
     session.game_results = []
     session.processed_game_ids = set()
+    try:
+        # Stats Central caches (server and client) key on this; without a bump the
+        # year-2 ledger kept serving last season's payload until the first game.
+        from services.franchise_sim import _bump_stats_revision
+
+        _bump_stats_revision(session)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     session._regular_stats_split_done = False
     session.regular_season_complete = False
     session.playoffs_generated = False

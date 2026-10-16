@@ -66,18 +66,124 @@ const CATEGORY_META = {
   business: { glyph: "$", label: "Business", accent: "#52df94" },
   management: { glyph: "▣", label: "Front Office", accent: "#e9a83c" },
   storyline: { glyph: "◉", label: "League", accent: "#8096a8" },
+  goofy: { glyph: "🎪", label: "Rink Oddity", accent: "#ffcf4a" },
 };
 
+// Category chips. Rink Oddities live in their own strip, so the wire stays serious.
 const FILTERS = [
   { id: "all", label: "All" },
-  { id: "breaking", label: "Breaking" },
-  { id: "major", label: "Major" },
-  { id: "team", label: "Your club" },
+  { id: "team", label: "Your Team" },
   { id: "league", label: "League" },
-  { id: "player", label: "Player" },
+  { id: "major", label: "Major" },
+  { id: "records", label: "Records" },
+  { id: "wjc", label: "WJC" },
+  { id: "deals", label: "Contracts/Trades" },
+  { id: "injuries", label: "Injuries" },
   { id: "life", label: "Off ice" },
-  { id: "media_buzz", label: "Buzz" },
+  { id: "goofy", label: "🎪 Goofy/Fun" },
 ];
+
+// One emoji per oddity so the strip reads at a glance.
+const GOOFY_EMOJI = {
+  hat_trick: "🎩",
+  hat_trick_rain: "🎩",
+  mascot: "🦝",
+  mascot_goal: "🦝",
+  ebug: "🧑‍💼",
+  emergency_goalie: "🧑‍💼",
+  brawl: "🥊",
+  line_brawl: "🥊",
+  pizza_marathon: "🍕",
+  bag_of_pucks: "🏒",
+  prank_call: "📞",
+  owner_tweet: "📱",
+  fax_machine: "📠",
+  deadline_fax: "📠",
+  superstition: "🧦",
+  coach_superstition: "🧦",
+  jersey_drama: "👕",
+  jersey_number: "👕",
+  silly_trade_demand: "🙃",
+  empty_net_goalie: "🥅",
+  fluke: "🌀",
+};
+
+function goofyKindOf(story) {
+  const raw = story?.raw || {};
+  return str(raw.goofy_kind || str(raw.cause_type).replace(/^goofy_/i, "") || "").toLowerCase();
+}
+
+function isGoofyStory(story) {
+  if (!story) return false;
+  const raw = story.raw || {};
+  if (raw.goofy || raw.goofy_kind) return true;
+  if (str(raw.kind).toLowerCase() === "goofy" || str(story.type).toLowerCase() === "goofy") return true;
+  if (/^goofy/i.test(str(story.causeType || raw.cause_type))) return true;
+  if (str(story.tone).toLowerCase() === "humor") return true;
+  return hasCategoryToken(`${story.category || ""} ${story.type || ""}`, ["goofy", "oddity", "oddities", "fun"]);
+}
+
+function goofyEmoji(story) {
+  const kind = goofyKindOf(story);
+  if (GOOFY_EMOJI[kind]) return GOOFY_EMOJI[kind];
+  const hit = Object.keys(GOOFY_EMOJI).find((k) => kind.includes(k) || k.includes(kind || "~"));
+  if (hit) return GOOFY_EMOJI[hit];
+  const h = str(story?.headline).toLowerCase();
+  if (/pizza/.test(h)) return "🍕";
+  if (/mascot/.test(h)) return "🦝";
+  if (/hat trick|hats/.test(h)) return "🎩";
+  if (/fax/.test(h)) return "📠";
+  if (/tweet|posted/.test(h)) return "📱";
+  if (/brawl|fight/.test(h)) return "🥊";
+  if (/pucks/.test(h)) return "🏒";
+  if (/dog|cat|pet/.test(h)) return "🐶";
+  return "🎪";
+}
+
+function isRecordStory(story) {
+  const hay = `${story.category || ""} ${story.type || ""} ${story.causeType || ""}`.toLowerCase();
+  if (/record|milestone|career_high|franchise_best/.test(hay)) return true;
+  return /\brecord\b|milestone|\b(500|1,?000)(th)? (goal|point|game)|franchise-best|career-high/i.test(str(story.headline));
+}
+
+function isWjcStory(story) {
+  const hay = `${story.category || ""} ${story.type || ""} ${story.causeType || ""}`.toLowerCase();
+  if (/wjc|world_junior|worldjunior/.test(hay)) return true;
+  return /world junior|\bwjc\b|u20/i.test(`${story.headline} ${story.summary}`);
+}
+
+function isDealStory(story) {
+  const key = story.categoryKey;
+  if (key === "trade" || key === "contract" || key === "business") return true;
+  if (/TRADE|CONTRACT|EXTENSION|SIGN/.test(str(story.causeType).toUpperCase())) return true;
+  return isTradeDeskStory(story) || hasCategoryToken(story.category || story.type, ["contract", "signing", "extension", "free_agent", "fa"]);
+}
+
+/** Monday-of-week label for grouping the wire by week. */
+function storyWeekKey(story) {
+  const d = parseIsoDate(story?.date);
+  if (!d) return { key: "zzzz", label: "Undated" };
+  const monday = new Date(d);
+  monday.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+  const key = `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, "0")}-${String(monday.getDate()).padStart(2, "0")}`;
+  return { key, label: `Week of ${monday.toLocaleDateString(undefined, { month: "short", day: "numeric" })}` };
+}
+
+function groupStoriesByWeek(list) {
+  const groups = [];
+  const byKey = new Map();
+  list.forEach((s) => {
+    const { key, label } = storyWeekKey(s);
+    let g = byKey.get(key);
+    if (!g) {
+      g = { key, label, stories: [] };
+      byKey.set(key, g);
+      groups.push(g);
+    }
+    g.stories.push(s);
+  });
+  return groups;
+}
 
 const TRADE_FILTERS = [
   { id: "all", label: "All" },
@@ -97,6 +203,11 @@ const FILTER_EMPTY = {
   player: "No player-specific beats yet.",
   life: "No off-ice or family beats filed yet.",
   media_buzz: "Media buzz is flat right now.",
+  records: "No records or milestones on file yet.",
+  wjc: "No World Juniors beats yet — the tournament runs over the holidays.",
+  deals: "No contract or trade beats on this desk.",
+  injuries: "Clean bill of health on the wire.",
+  goofy: "The rink is suspiciously normal. Give it a week.",
 };
 
 const DEPARTMENTS = [
@@ -387,6 +498,7 @@ function resolveCategoryKey(story) {
   const cat = str(story?.category || story?.type || "").toLowerCase();
   const cause = String(story?.causeType || story?.raw?.cause_type || "").toUpperCase();
   const causeTokens = categoryTokens(cause);
+  if (story?.raw && isGoofyStory(story)) return "goofy";
   if (hasCategoryToken(cat, ["legal", "conduct"]) || cat === "legal_trouble") return "legal_trouble";
   if (hasCategoryToken(cat, ["injury", "injured"]) || categoryTokens(cat).some((t) => t.startsWith("injur"))) return "injury";
   if (hasCategoryToken(cat, ["draft", "prospect"])) return "draft";
@@ -975,7 +1087,7 @@ function LockerRoomDashboard({ narrativeUniverse, franchiseState, stories = [] }
           <div className="sl-locker-dash__cards">
             {pulse.people.slice(0, 12).map((row) => (
               <article key={row.playerId || row.name} className="sl-locker-card sl-locker-card--person">
-                <PlayerHeadshot player={{ id: row.playerId, player_id: row.playerId }} size={48} />
+                <PlayerHeadshot player={row.portrait ? { ...row.portrait, id: row.playerId, player_id: row.playerId } : { id: row.playerId, player_id: row.playerId, name: row.name }} size={48} />
                 <div className="sl-locker-card__body">
                   <strong>{row.name}</strong>
                   <span className="sl-locker-card__meta">
@@ -1356,6 +1468,11 @@ function matchesFilter(story, filter) {
   if (filter === "player") return Boolean(story.playerName);
   if (filter === "life") return story.categoryKey === "personal_life" || hasCategoryToken(story.category, ["life", "personal"]);
   if (filter === "media_buzz") return Number(story.heat) >= 40;
+  if (filter === "records") return isRecordStory(story);
+  if (filter === "wjc") return isWjcStory(story);
+  if (filter === "deals") return isDealStory(story);
+  if (filter === "injuries") return story.categoryKey === "injury";
+  if (filter === "goofy") return isGoofyStory(story);
   return true;
 }
 
@@ -2335,13 +2452,16 @@ function StoryCard({ story, socialCount, onOpen, index }) {
   return (
     <button
       type="button"
-      className={`sl-card sl-card--${tier}${breaking ? " is-breaking" : ""}${story.isUserTeam ? " is-ours" : ""} ${story.freshness || ""}`}
+      className={`sl-card sl-card--${tier}${breaking ? " is-breaking" : ""}${story.isUserTeam ? " is-ours" : ""}${
+        story.priorityRank >= 4 ? " is-prio-critical" : story.priorityRank >= 3 ? " is-prio-high" : ""
+      }${isGoofyStory(story) ? " is-goofy" : ""} ${story.freshness || ""}`}
       style={{ animationDelay: `${Math.min(index, 12) * 28}ms` }}
       onClick={() => onOpen(story.id)}
     >
       <span className="sl-card__rail" aria-hidden />
       <div className="sl-card__top">
         <CategoryTag story={story} />
+        {story.priorityRank >= 4 ? <span className="sl-card__prio">Critical</span> : null}
         {story.requiresAction ? <span className="sl-card__decision">On your desk</span> : null}
         <StatusPill story={story} />
         <span className="sl-card__age">{story.ageLabel || "—"}</span>
@@ -2371,6 +2491,61 @@ function StoryCard({ story, socialCount, onOpen, index }) {
         </div>
       </div>
     </button>
+  );
+}
+
+/** Dedicated fun strip for goofy beats (on-ice, front office, player life). */
+function RinkOddities({ stories, onOpen, onResolve, busyChoice, onShowAll, limit = 6 }) {
+  if (!stories.length) return null;
+  return (
+    <section className="sl-odd" aria-label="Rink Oddities">
+      <div className="sl-odd__head">
+        <h3>
+          <span aria-hidden>🎪</span> Rink Oddities
+        </h3>
+        <span className="sl-odd__sub">The weird side of the league</span>
+        {onShowAll && stories.length > limit ? (
+          <button type="button" className="sl-odd__all" onClick={onShowAll}>
+            All {stories.length} →
+          </button>
+        ) : null}
+      </div>
+      <div className="sl-odd__list">
+        {stories.slice(0, limit).map((s) => {
+          const opts = s.requiresAction ? asArray(s.actionOptions) : [];
+          return (
+            <article key={s.id} className={`sl-odd__item${s.isUserTeam ? " is-ours" : ""}`}>
+              <button type="button" className="sl-odd__main" onClick={() => onOpen(s.id)}>
+                <span className="sl-odd__emoji" aria-hidden>{goofyEmoji(s)}</span>
+                <span className="sl-odd__text">
+                  <strong>{s.headline}</strong>
+                  {s.summary ? <em>{s.summary}</em> : null}
+                  <small>
+                    {s.teamName || "League"} · {s.ageLabel || "—"}
+                  </small>
+                </span>
+              </button>
+              {opts.length && onResolve ? (
+                <div className="sl-odd__replies">
+                  {opts.map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      className="sl-odd__reply"
+                      title={str(opt.effect_summary)}
+                      disabled={busyChoice === `${s.storylineId}:${opt.id}`}
+                      onClick={() => onResolve(s.storylineId, opt.id)}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </article>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 
@@ -3810,7 +3985,8 @@ export default function StorylinesScreen() {
   const [meetingBusy, setMeetingBusy] = useState(false);
   // Open on your own club — "All" is mostly league-wide wire noise.
   const [filter, setFilter] = useState("team");
-  const [sortId, setSortId] = useState("decisions");
+  // Newest first, grouped by week; open decisions still sit on "On your desk".
+  const [sortId, setSortId] = useState("latest");
   const [search, setSearch] = useState("");
   const [openCaseId, setOpenCaseId] = useState(null);
   const [pinnedCase, setPinnedCase] = useState(null);
@@ -3916,16 +4092,26 @@ export default function StorylinesScreen() {
   const closeStory = useCallback(() => setOpenCaseId(null), []);
 
   const filterCounts = useMemo(() => {
-    const counts = { all: deskStories.length };
+    const counts = { all: deskStories.filter((s) => !isGoofyStory(s)).length };
     deskFilters.forEach((f) => {
       if (f.id === "all") return;
-      counts[f.id] = deskStories.filter((s) => matchesFilter(s, f.id)).length;
+      counts[f.id] = deskStories.filter(
+        (s) => matchesFilter(s, f.id) && (f.id === "goofy" || !isGoofyStory(s))
+      ).length;
     });
     return counts;
   }, [deskStories, deskFilters]);
 
+  // Goofy beats get their own strip; keep them out of the serious wire unless asked for.
+  const goofyStories = useMemo(
+    () => sortStories(stories.filter((s) => isGoofyStory(s) && matchesSearch(s, search)), "latest"),
+    [stories, search]
+  );
+
   const filtered = useMemo(() => {
-    const base = deskStories.filter((s) => matchesFilter(s, filter) && matchesSearch(s, search));
+    const base = deskStories.filter(
+      (s) => matchesFilter(s, filter) && matchesSearch(s, search) && (filter === "goofy" || !isGoofyStory(s))
+    );
     return sortStories(base, sortId);
   }, [deskStories, filter, search, sortId]);
 
@@ -6861,6 +7047,16 @@ export default function StorylinesScreen() {
               </section>
             ) : null}
 
+            {department === "front_page" && filter !== "goofy" ? (
+              <RinkOddities
+                stories={goofyStories}
+                onOpen={openStory}
+                onResolve={handleResolve}
+                busyChoice={busyChoice}
+                onShowAll={() => setFilter("goofy")}
+              />
+            ) : null}
+
             <div className="sl-toolbar">
               <div className="sl-chips">
                 {deskFilters.map((f) => (
@@ -6904,6 +7100,26 @@ export default function StorylinesScreen() {
                 title="Nothing matches"
                 body={filterEmptyMsg || "No stories match this filter or search."}
               />
+            ) : sortId === "latest" ? (
+              groupStoriesByWeek(gridStories).map((g) => (
+                <div key={g.key} className="sl-week">
+                  <div className="sl-week__head">
+                    <h4>{g.label}</h4>
+                    <span>{g.stories.length}</span>
+                  </div>
+                  <div className="sl-grid">
+                    {g.stories.map((s, i) => (
+                      <StoryCard
+                        key={s.id}
+                        story={s}
+                        index={i}
+                        socialCount={socialCountFor(s)}
+                        onOpen={openStory}
+                      />
+                    ))}
+                  </div>
+                </div>
+              ))
             ) : (
               <div className="sl-grid">
                 {gridStories.map((s, i) => (

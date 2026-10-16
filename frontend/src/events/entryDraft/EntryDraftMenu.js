@@ -26,6 +26,7 @@ import "../../styles/nhlcalShell.css";
 import { uiPortalTarget } from "../../utils/fluidUiScale";
 import {
   CertaintyChip,
+  ClassIndicators,
   OutcomeDonut,
   PercentileBars,
   ProspectClassContext,
@@ -3962,6 +3963,8 @@ function StageDossier({
           growth != null && !ceilingHidden ? { label: "Upside", pct: Math.min(100, growth * 4), center: `+${growth}`, sub: "OVR", color: "#ff5fd2", title: "Projected growth to his ceiling" } : null,
         ]}
       />
+
+      <ClassIndicators indicators={prospect.class_indicators || prospect.classIndicators || d.classIndicators} />
 
       {archetype || playStyle || scoutReport ? (
         <section className={`${PREFIX}-sec`}>

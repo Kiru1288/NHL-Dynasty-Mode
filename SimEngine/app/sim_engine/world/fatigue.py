@@ -98,7 +98,16 @@ def _is_sidelined(player: Any) -> bool:
     return False
 
 
-def tick_roster_fatigue_for_game(team: Any, rng: random.Random, b2b_team: bool, schedule: Any, day: int, team_id: str) -> None:
+def tick_roster_fatigue_for_game(
+    team: Any,
+    rng: random.Random,
+    b2b_team: bool,
+    schedule: Any,
+    day: int,
+    team_id: str,
+    load_mult: float = 1.0,
+) -> None:
+    """``load_mult`` scales the game's load (coach tactics: fast pace / heavy forecheck > 1)."""
     from app.sim_engine.world import calendar as world_calendar
     from app.sim_engine.world import durability as world_durability
 
@@ -111,6 +120,8 @@ def tick_roster_fatigue_for_game(team: Any, rng: random.Random, b2b_team: bool, 
     for p in roster:
         if _is_sidelined(p):
             continue
+        if getattr(p, "_rest_day", None) == day:
+            continue  # coach rest day: no load
         if p not in picked:
             add_game_load(
                 p,
@@ -118,7 +129,7 @@ def tick_roster_fatigue_for_game(team: Any, rng: random.Random, b2b_team: bool, 
                 back_to_back=False,
                 travel_bonus=travel * 0.25,
                 ice_time_proxy=0.55,
-                durability_fatigue_mult=world_durability.fatigue_buildup_multiplier(p),
+                durability_fatigue_mult=world_durability.fatigue_buildup_multiplier(p) * float(load_mult),
             )
         else:
             ice = 0.85 + 0.25 * rng.random()
@@ -128,5 +139,5 @@ def tick_roster_fatigue_for_game(team: Any, rng: random.Random, b2b_team: bool, 
                 back_to_back=b2b_team,
                 travel_bonus=travel,
                 ice_time_proxy=ice,
-                durability_fatigue_mult=world_durability.fatigue_buildup_multiplier(p),
+                durability_fatigue_mult=world_durability.fatigue_buildup_multiplier(p) * float(load_mult),
             )

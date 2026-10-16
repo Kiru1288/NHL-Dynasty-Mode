@@ -426,6 +426,32 @@ def get_league_scoring_profile(league: Any) -> Dict[str, Any]:
     return prof
 
 
+# NHL-equivalency factors (NHLe): one point in league X ~= factor points in the NHL.
+NHLE_FACTORS: Dict[str, float] = {
+    "AHL": 0.39,
+    "SHL": 0.57,
+    "LIIGA": 0.43,
+    "NCAA": 0.38,
+    "OHL": 0.30,
+    "WHL": 0.29,
+    "CHL": 0.29,
+    "QMJHL": 0.26,
+    "USHL": 0.16,
+    "ECHL": 0.14,
+    "EUROPE_JUNIOR": 0.12,
+    "JUNIOR": 0.24,
+}
+
+
+def nhle_points_per_82(league: Any, points: Any, gp: Any) -> Optional[float]:
+    """League-adjusted scoring: points pace translated to an 82-game NHL season."""
+    g = _safe_int(gp, 0)
+    if g < 5:
+        return None
+    factor = NHLE_FACTORS.get(normalize_prospect_league_key(league), 0.24)
+    return round(_safe_float(points, 0.0) / g * 82.0 * factor, 1)
+
+
 def _player_position(prospect: Any) -> str:
     pos = getattr(prospect, "position", None)
     if pos is not None:
@@ -952,6 +978,11 @@ def _simulate_skater_games(
         pim_mean, pim_sd = 0.35, 0.6
     stats["pim"] = _safe_int(stats.get("pim"), 0) + max(
         0, int(round(rng.gauss(n * pim_mean, math.sqrt(n) * pim_sd)))
+    )
+    # Plus/minus: on-ice goal differential tracks production and two-way process.
+    pm_mu = 0.28 * (pts / n) + 0.40 * (skills["process"] - 0.5) - 0.06
+    stats["plus_minus"] = _safe_int(stats.get("plus_minus"), 0) + int(
+        round(rng.gauss(n * pm_mu, math.sqrt(n) * 1.05))
     )
     stats["gp"] = _safe_int(stats.get("gp"), 0) + n
     stats["games_played"] = stats["gp"]

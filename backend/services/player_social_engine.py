@@ -521,6 +521,10 @@ def gen_player_voices(F: "sfe._Pass", games: List[Dict[str, Any]], lines: Dict[s
                 fn(F, budget)
         except Exception:
             _log.exception("player social generator %s failed", getattr(fn, "__name__", fn))
+    try:
+        gen_goofy_life(F, games, lines)
+    except Exception:
+        _log.exception("goofy player life failed")
 
 
 def _game_voices(F: "sfe._Pass", g: Dict[str, Any], lines: Dict[str, Dict[str, Any]], budget: Dict[str, int]) -> None:
@@ -1221,3 +1225,547 @@ def apply_social_meeting_choice(session: Any, player_id: str, choice_id: str) ->
     if inc:
         inc["handled_day"] = day
         social["incident"] = inc
+
+
+# ---------------------------------------------------------------------------
+# Goofy player life (rare, cartoony, small real effects)
+# ---------------------------------------------------------------------------
+# Everything here rolls inside the played-day social pass (one pass per sim day,
+# no extra league scans) and gates on ``session.goofy_events_enabled``. Weekly
+# rolls fire once per 7-day bucket, seeded from the feed salt, so results are
+# reproducible and cheap. State lives in ``social_feed_state["ps"]["goofy"]``.
+
+GOOFY_INJURIES = [
+    ("Golden retriever ambush", "got bowled over by the family golden retriever ({dog}) at the front door", 1, 2),
+    ("Gas-station sushi", "trusted a gas-station sushi roll on the drive home. The sushi won", 1, 2),
+    ("Banana peel, team party", "slipped on a banana peel at the team party. Witnesses say it was cinematic", 1, 3),
+    ("Bowling-night back tweak", "tweaked his back throwing a 16-pound ball at team bowling night (he bowled a 71)", 1, 3),
+    ("Inflatable flamingo incident", "lost a battle with a pool flamingo at a teammate's barbecue", 1, 1),
+    ("Garden-rake stepped on", "stepped on a garden rake like a cartoon character. Yes, the handle hit him", 1, 2),
+]
+
+CELEBRITIES = [
+    "pop star Lyric Monroe", "action hero Brick Halloway", "chef Gianni Flambé", "late-night host Denny Quartz",
+    "rapper Lil Zamboni", "Olympic curler Sven Brushwell", "game-show legend Patty Prizewell", "DJ Puckwave",
+]
+
+FAN_SIGNS = [
+    "{last} CAN SCORE ON MY MOM. SHE SAID OK.", "WILL TRADE MY BROTHER FOR {last}'S STICK", "{last} IS MY EMOTIONAL SUPPORT {pos}",
+    "MY DOG IS NAMED {last} AND HE ALSO SHOOTS LEFT", "HONK IF {last} GAVE YOU HOPE", "{last} > SLICED BREAD (BREAD AGREES)",
+    "I SKIPPED MY WEDDING FOR THIS. WORTH IT. GO {last}", "{last} PLEASE SIGN MY FOREHEAD (MOM SAID NO)",
+    "GRANDMA'S 90 AND {last} IS HER FAVOURITE. SHE'S STILL MAD ABOUT 1994",
+]
+
+BAND_KINDS = [
+    ("band", "a garage band called '{name}'", ["The Five-Holes", "Icing the Puck", "Top Shelf Tuna", "Biscuit Basket", "Too Many Men", "The Zamboni Drivers"]),
+    ("podcast", "a podcast called '{name}'", ["Chirp Chat", "Bar Down Pod", "The Pylon Hour", "Tape To Tape Talk", "Beauty League Banter", "Off The Post"]),
+]
+
+MASCOT_FEUD_LINES = [
+    "hey @{mascot} the costume smells like a hockey bag left in a hot car. see you {day} 🫵",
+    "the {opp} mascot just blocked me. over a joke about his tail. grown man in a felt suit 😂",
+    "@{mascot} you can't skate and your dance moves are from 2004. respectfully",
+    "can someone tell the {opp} mascot I am NOT doing a dance-off with him. (I am doing the dance-off)",
+]
+
+SUPERSTITIONS = [
+    "talks to his posts before every period and thanks them by name",
+    "refuses to step on any line on the way to the ice, including the parking lot",
+    "has eaten the exact same peanut-butter-and-pickle sandwich every game day of the streak",
+    "taps both posts, the crossbar, and then, inexplicably, the backup goalie",
+    "won't let anyone say the word 'shutout' within 40 feet of the dressing room",
+]
+
+CELLY_BY_ARCH = {
+    "hype_man": ["the double-knee slide into the glass", "the full-team air-guitar solo", "the stick-as-a-sword knighting"],
+    "meme_lord": ["the 'reeling in a fish' celly", "the fake phone call to his mom", "the bowling-ball roll down the boards"],
+    "loose_cannon": ["the shush-the-crowd at centre ice", "the stick-broken-over-knee bit", "the 'too easy' yawn"],
+    "lifestyle": ["the watch check", "the cool-guy glove toss", "the sunglasses-on-the-bench bit"],
+    "family_man": ["the rock-the-baby celly", "the point-to-the-kids-in-the-stands", "the heart hands"],
+    "corporate": ["the classic one-knee fist pump", "the stoic stick tap"],
+    "grinder": ["the stoic stick tap", "the 'back to work' skate-off"],
+    "cryptic": ["the single finger to the sky", "the no-reaction skate back to the bench"],
+    "lurker": ["the awkward high-five", "the no-reaction skate back to the bench"],
+}
+
+GOOFY_FX_CAP = 100.0
+
+
+def _goofy_on(session: Any) -> bool:
+    return bool(getattr(session, "goofy_events_enabled", True))
+
+
+def _goofy(F: "sfe._Pass") -> Dict[str, Any]:
+    ps = _ps(F.st)
+    g = ps.get("goofy")
+    if not isinstance(g, dict) or g.get("season") != F.season:
+        g = {"season": F.season, "wk": -1, "cellies": {}, "supers": {}, "dinners": {}, "feud": None, "hazed": False, "awards": False}
+        ps["goofy"] = g
+    return g
+
+
+def _goofy_fx(session: Any, pid: str, **deltas: float) -> None:
+    """Nudge a player's universe state (0-100), e.g. morale/confidence/focus."""
+    ent = _entities(session).get(str(pid))
+    if not isinstance(ent, dict):
+        return
+    st = ent.setdefault("state", {})
+    for k, v in deltas.items():
+        if k == "fan":
+            soc = ent.setdefault("social", {})
+            soc["fan_sentiment"] = round(_clip(float(soc.get("fan_sentiment", 55) or 55) + v), 1)
+        else:
+            st[k] = round(_clip(float(st.get(k, 55) or 55) + v), 2)
+
+
+def _goofy_team_bump(session: Any, tid: str, *, chem: float = 1.0, morale: float = 0.0) -> None:
+    """Small locker-room chemistry bump: lifts pair chemistry (feeds culture unity)."""
+    room = (getattr(session, "universe_locker_rooms", None) or {}).get(str(tid))
+    if isinstance(room, dict):
+        for rel in (room.get("relationships") or {}).values():
+            if isinstance(rel, dict):
+                rel["chemistry"] = round(_clip(float(rel.get("chemistry", 50) or 50) + chem), 2)
+    if morale:
+        for pid, ent in _entities(session).items():
+            if isinstance(ent, dict) and str(ent.get("team_id") or "") == str(tid):
+                _goofy_fx(session, pid, morale=morale)
+
+
+def _goofy_story(session: Any, *, pid: str, name: str, tid: str, kind: str, headline: str, summary: str,
+                 tone: str = "positive", tier: str = "minor", heat: int = 46, participants: Optional[List[str]] = None) -> None:
+    """Storyline row via the universe writer (carries player_id -> headshot attach)."""
+    try:
+        from app.sim_engine.franchise.storyline_engine import _u_record_storyline  # noqa: WPS433
+
+        event = {"id": f"uve_goofy_{sfe._h(pid, kind, headline) % 10**8:08d}", "kind": f"goofy_{kind}", "team_id": tid,
+                 "participants": participants or [pid], "player_id": pid, "player_name": name, "event_tier": tier, "tone": tone}
+        _u_record_storyline(session, event=event, headline=headline, summary=summary,
+                            cause_type="POSITIVE_LIFE_EVENT" if tone == "positive" else "OFF_ICE_EVENT",
+                            category="life", heat=heat, public=True)
+    except Exception:
+        _log.debug("goofy storyline failed", exc_info=True)
+
+
+def _goofy_pick(F: "sfe._Pass", rng: random.Random, tid: str, *, pos: str = "", pred=None) -> Optional[Dict[str, Any]]:
+    rows = [e for e in _by_team(F).get(str(tid), []) if (not pos or str(e.get("position") or "").upper().startswith(pos))]
+    if pred is not None:
+        rows = [e for e in rows if pred(e)]
+    if not rows:
+        return None
+    rows.sort(key=lambda e: str(e.get("player_id")))
+    for _ in range(4):
+        pp = persona(F, str(rng.choice(rows).get("player_id")))
+        if pp:
+            return pp
+    return None
+
+
+def _goofy_healthy(F: "sfe._Pass", pid: str) -> bool:
+    p = F.player(pid)
+    if p is None:
+        return False
+    try:
+        from app.sim_engine.world.injuries import injury_games_remaining  # noqa: WPS433
+
+        return injury_games_remaining(p) <= 0
+    except Exception:
+        return False
+
+
+def signature_celly(F: "sfe._Pass", pp: Dict[str, Any]) -> str:
+    """Stable signature celebration from persona archetype + personality."""
+    ent = _entities(F.session).get(pp["pid"]) or {}
+    pers = ent.get("personality") or {}
+    pool = list(CELLY_BY_ARCH.get(pp["arch"]) or CELLY_BY_ARCH["corporate"])
+    if float(pers.get("ego", 50) or 50) >= 70:
+        pool.append("the 'look at the name on the back' thumb point")
+    if float(pers.get("sociability", 50) or 50) >= 70:
+        pool.append("the full-bench glove-tap conga line")
+    return pool[sfe._h(pp["pid"], "celly") % len(pool)]
+
+
+def gen_goofy_life(F: "sfe._Pass", games: List[Dict[str, Any]], lines: Dict[str, Dict[str, Any]]) -> None:
+    """Played-day hook for goofy player-life beats (see section header)."""
+    if not _goofy_on(F.session) or F.phase not in ("regular", "preseason"):
+        return
+    g = _goofy(F)
+    utid = F.utid
+    user_played = any(utid in (str(x.get("home_id")), str(x.get("away_id"))) for x in games)
+    for fn in (_goofy_cellies, _goofy_superstitions, _goofy_feud_game):
+        try:
+            fn(F, g, games, lines)
+        except Exception:
+            _log.exception("goofy generator %s failed", getattr(fn, "__name__", fn))
+    wk = F.day_idx // 7
+    if wk != int(g.get("wk", -1)):
+        g["wk"] = wk
+        rng = F.rand("goofy_week", wk)
+        for fn, p in ((_goofy_injury, 0.07), (_goofy_band, 0.035), (_goofy_mascot_feud, 0.03), (_goofy_dinners, 1.0)):
+            try:
+                if rng.random() < p:
+                    fn(F, g, rng)
+            except Exception:
+                _log.exception("goofy weekly %s failed", getattr(fn, "__name__", fn))
+        if not g.get("hazed") and F.phase == "regular" and wk >= 2 and rng.random() < 0.45:
+            try:
+                _goofy_hazing(F, g, rng)
+            except Exception:
+                _log.exception("goofy hazing failed")
+    if user_played:
+        rng = F.rand("goofy_gameday")
+        try:
+            if rng.random() < 0.10:
+                _goofy_fan_sign(F, rng)
+            elif rng.random() < 0.035:
+                _goofy_celebrity(F, rng)
+        except Exception:
+            _log.exception("goofy game-day beat failed")
+    try:
+        last = int(getattr(F.session, "nhl_regular_season_last_index", -1) or -1)
+        if F.phase == "regular" and last >= 0 and F.day_idx >= last and not g.get("awards"):
+            g["awards"] = True
+            _goofy_awards(F, g)
+    except Exception:
+        _log.exception("goofy awards failed")
+
+
+def _goofy_injury(F: "sfe._Pass", g: Dict[str, Any], rng: random.Random) -> None:
+    """Day-to-day injury from something silly; ~7%/week, user team 70% of the time."""
+    tid = F.utid if rng.random() < 0.7 else rng.choice(sorted(t for t in F.teams if t != F.utid) or [F.utid])
+    if not getattr(F.session, "injuries_enabled", True):
+        return
+    pp = _goofy_pick(F, rng, tid, pred=lambda e: _goofy_healthy(F, str(e.get("player_id"))))
+    if not pp:
+        return
+    label, what, lo, hi = rng.choice(GOOFY_INJURIES)
+    games_out = rng.randint(lo, hi)
+    p = F.player(pp["pid"])
+    try:
+        from app.sim_engine.world.injuries import force_injury  # noqa: WPS433
+
+        force_injury(p, "minor", games_out, source="goofy", label=label)
+    except Exception:
+        return
+    tm = F.team(tid)
+    try:
+        from services.franchise_sim import _franchise_log_injury_and_ui  # noqa: WPS433
+
+        _franchise_log_injury_and_ui(F.session, player_id=pp["pid"], player_name=pp["name"], team_id=tid, team_abbrev=tm.get("abbr") or "",
+                                     tier="minor", games=games_out, injury_type=f"{label} (day-to-day)", calendar_day=F.day_idx, calendar_iso=F.iso)
+    except Exception:
+        _log.debug("goofy injury log failed", exc_info=True)
+    _goofy_fx(F.session, pp["pid"], morale=-1, fan=2)
+    text = f"{pp['name']} {what.format(dog=pp.get('dog') or 'Biscuit')}. Day-to-day, {games_out} game{'s' if games_out != 1 else ''}."
+    sfe._add_post(F, sfe._beat_writer(F, tid), f"Injury update, and I promise this is real: {text}", kind="goofy_injury", cat="players",
+                  when=F.stamp(F.iso, 10 * 60, 13 * 60, rng), team_ids=[tid], player_id=pp["pid"], player_name=pp["name"], mag=1.3, sentiment=0.2)
+    _player_post(F, pp, rng.choice(["I'd like to formally retire from this conversation 🙃", "in my defence it was a really good dog / sushi / banana. back soon",
+                                    "don't look it up. 🫣", "the boys will never let this go 💀"]), kind="player_goofy", when=F.stamp(F.iso, 13 * 60, 18 * 60, rng))
+    _goofy_story(F.session, pid=pp["pid"], name=pp["name"], tid=tid, kind="injury", tone="neutral",
+                 headline=f"{pp['last']} out with a... {label.lower()}", summary=text)
+
+
+def _goofy_band(F: "sfe._Pass", g: Dict[str, Any], rng: random.Random) -> None:
+    """Starts a band or podcast: +morale; 25% chance it becomes a distraction slump."""
+    pp = _goofy_pick(F, rng, F.utid if rng.random() < 0.75 else rng.choice(sorted(F.teams)),
+                     pred=lambda e: float((e.get("personality") or {}).get("sociability", 50) or 50) >= 45)
+    if not pp:
+        return
+    kind, desc, names = rng.choice(BAND_KINDS)
+    title = desc.format(name=rng.choice(names))
+    _goofy_fx(F.session, pp["pid"], morale=5)
+    _player_post(F, pp, f"ok it's official. I started {title}. first {'gig' if kind == 'band' else 'episode'} drops this week. {pp.get('emoji') or '🎙️'}",
+                 kind="player_goofy", when=F.stamp(F.iso, 12 * 60, 21 * 60, rng), mag=1.2)
+    summary = f"{pp['name']} has started {title}. Teammates report the {'drummer' if kind == 'band' else 'audio quality'} is 'a work in progress'."
+    if rng.random() < 0.25:
+        _goofy_fx(F.session, pp["pid"], confidence=-5, focus=-6)
+        summary += " Some in the room think it's become a distraction: his focus has dipped."
+        tone = "neutral"
+    else:
+        tone = "positive"
+    _goofy_story(F.session, pid=pp["pid"], name=pp["name"], tid=pp["team_id"], kind=kind, tone=tone,
+                 headline=f"{pp['last']} launches {title}", summary=summary)
+
+
+def _goofy_mascot_feud(F: "sfe._Pass", g: Dict[str, Any], rng: random.Random) -> None:
+    """User player vs the next opponent's mascot; the matchup gets extra juice."""
+    if g.get("feud") and int((g.get("feud") or {}).get("until", -1)) >= F.day_idx:
+        return
+    nxt = _next_game(F, F.utid, within=6)
+    if not nxt:
+        return
+    day, opp_id = nxt
+    pp = _goofy_pick(F, rng, F.utid, pred=lambda e: float((e.get("personality") or {}).get("ego", 50) or 50) >= 50)
+    if not pp:
+        return
+    opp = F.team(opp_id)
+    mascot = f"{sfe._slug(opp.get('nick') or 'Rival')}Mascot"
+    g["feud"] = {"pid": pp["pid"], "opp": opp_id, "until": day + 1, "day": day}
+    text = _f(rng.choice(MASCOT_FEUD_LINES), {"mascot": mascot, "opp": opp.get("nick"), "day": "Thursday" if day % 2 else "Saturday"})
+    post = _player_post(F, pp, text, kind="player_goofy", when=F.stamp(F.iso, 11 * 60, 22 * 60, rng), extra_teams=[opp_id], controversy=0.4, mag=1.4)
+    _add_replies(post, [{"author_name": f"{opp.get('nick')} Mascot", "handle": f"@{mascot}", "author_type": "official", "verified": True,
+                         "text": rng.choice(["🫵🤡 see you on the ice, buddy", "*does a backflip in your general direction*", "I've blocked people for less"]),
+                         "likes": rng.randint(2000, 9000), "team_id": opp_id}])
+    _goofy_story(F.session, pid=pp["pid"], name=pp["name"], tid=F.utid, kind="mascot_feud", tone="neutral", heat=52,
+                 headline=f"{pp['last']} vs. the {opp.get('nick')} mascot", summary=f"{pp['name']} is feuding with the {opp.get('nick')} mascot online. The next meeting just got a lot spicier.")
+
+
+def _goofy_feud_game(F: "sfe._Pass", g: Dict[str, Any], games: List[Dict[str, Any]], lines: Dict[str, Dict[str, Any]]) -> None:
+    feud = g.get("feud") or {}
+    if not feud or feud.get("done"):
+        return
+    for x in games:
+        ids = {str(x.get("home_id")), str(x.get("away_id"))}
+        if {F.utid, str(feud.get("opp"))} <= ids:
+            feud["done"] = True
+            pid = str(feud.get("pid"))
+            d = lines.get(pid) or {}
+            scored = int(d.get("g") or 0) > 0
+            _goofy_fx(F.session, pid, confidence=4 if scored else 2, fan=4 if scored else 1)
+            pp = persona(F, pid)
+            if pp:
+                rng = F.rand("feudgame", pid)
+                opp = F.team(feud.get("opp"))
+                msg = (f"scored and skated right past the {opp.get('nick')} mascot. no notes. 🫡" if scored
+                       else f"the {opp.get('nick')} mascot and I have agreed to a ceasefire. for now. 🤝")
+                _player_post(F, pp, msg, kind="player_goofy", when=F.stamp(F.iso, 22 * 60, 23 * 60 + 30, rng), extra_teams=[str(feud.get("opp"))], mag=1.5)
+            return
+        if F.day_idx > int(feud.get("until", -1)):
+            feud["done"] = True
+
+
+def _goofy_fan_sign(F: "sfe._Pass", rng: random.Random) -> None:
+    """Fan sign of the week about a user player (~10% of user game days)."""
+    pp = _goofy_pick(F, rng, F.utid)
+    if not pp:
+        return
+    sign = _f(rng.choice(FAN_SIGNS), {"last": pp["last"].upper(), "pos": {"G": "GOALIE", "D": "DEFENCEMAN"}.get(pp["pos"][:1].upper(), "FORWARD")})
+    acct = sfe._fan_account(F, F.utid, rng=rng)
+    post = sfe._add_post(F, acct, f"FAN SIGN OF THE WEEK 🪧 \"{sign}\" (@{pp['handle'].lstrip('@')} saw it during warmups and laughed)", kind="fan_sign",
+                         cat="players", when=F.stamp(F.iso, 19 * 60, 22 * 60, rng), team_ids=[F.utid], player_id=pp["pid"], player_name=pp["name"], mag=1.6, sentiment=0.7)
+    if post is not None:
+        post["author_avatar"] = _avatar(F, pp["pid"], pp)
+    _goofy_fx(F.session, pp["pid"], morale=1.5, fan=1)
+
+
+def _goofy_celebrity(F: "sfe._Pass", rng: random.Random) -> None:
+    """Celebrity at the game cheering for a user player: small confidence boost."""
+    pp = _goofy_pick(F, rng, F.utid)
+    if not pp:
+        return
+    celeb = rng.choice(CELEBRITIES)
+    _goofy_fx(F.session, pp["pid"], confidence=3, morale=1)
+    text = f"Spotted at {F.team(F.utid).get('city')}: {celeb}, wearing a {pp['last']} jersey and screaming his name every shift."
+    sfe._add_post(F, sfe._beat_writer(F, F.utid), text, kind="celebrity_sighting", cat="players", when=F.stamp(F.iso, 20 * 60, 23 * 60, rng),
+                  team_ids=[F.utid], player_id=pp["pid"], player_name=pp["name"], mag=1.8, sentiment=0.8)
+    _goofy_story(F.session, pid=pp["pid"], name=pp["name"], tid=F.utid, kind="celebrity", headline=f"Celebrity sighting: {celeb} is a {pp['last']} fan",
+                 summary=text + " He admitted afterwards it 'kind of got him going'.")
+
+
+def _goofy_hazing(F: "sfe._Pass", g: Dict[str, Any], rng: random.Random) -> None:
+    """Rookie dinner (once per season, user team): giant bill, team chemistry bump."""
+    rooks = sorted([e for e in _by_team(F).get(F.utid, []) if int(e.get("age") or 30) <= 22], key=lambda e: str(e.get("player_id")))
+    if not rooks:
+        return
+    g["hazed"] = True
+    lead = persona(F, str(rooks[0].get("player_id")))
+    if not lead:
+        return
+    bill = rng.randint(18, 64) * 1000 + rng.choice([0, 17, 99, 420, 777])
+    others = [persona(F, str(e.get("player_id"))) for e in rooks[1:3]]
+    names = ", ".join([lead["name"]] + [o["name"] for o in others if o])
+    _goofy_team_bump(F.session, F.utid, chem=1.5, morale=1.0)
+    _goofy_fx(F.session, lead["pid"], belonging=6)
+    summary = (f"The rookie dinner is in the books. {names} picked up the tab: ${bill:,} for 31 steaks, a 4-foot seafood tower and "
+               f"a bottle of something the sommelier 'had to go downstairs for'. The room has never been closer.")
+    _goofy_story(F.session, pid=lead["pid"], name=lead["name"], tid=F.utid, kind="rookie_dinner", headline=f"Rookie dinner bill: ${bill:,}",
+                 summary=summary, participants=[lead["pid"]] + [o["pid"] for o in others if o])
+    post = _player_post(F, lead, f"the receipt was longer than my ELC 😭 ${bill:,}. worth it. love these guys", kind="player_goofy",
+                        when=F.stamp(F.iso, 22 * 60, 23 * 60 + 40, rng), mag=1.5)
+    _add_replies(post, [_reply_row(F, _acct(F, m), rng.choice(["thanks for dinner rook 🥩", "dessert was on you too right?", "same time next year 😂"]), rng, pid=m["pid"])
+                        for m in _teammates(F, F.utid, lead["pid"], rng, n=2)])
+
+
+def _goofy_dinners(F: "sfe._Pass", g: Dict[str, Any], rng: random.Random) -> None:
+    """Weekly team-dinner attendance tally for the user club (feeds 'Iron Stomach')."""
+    rows = _by_team(F).get(F.utid, [])
+    if not rows:
+        return
+    d = g["dinners"]
+    for e in rows:
+        soc = float((e.get("personality") or {}).get("sociability", 50) or 50)
+        if rng.random() < 0.2 + soc / 160.0:
+            pid = str(e.get("player_id"))
+            d[pid] = int(d.get(pid, 0)) + 1
+
+
+def _goofy_cellies(F: "sfe._Pass", g: Dict[str, Any], games: List[Dict[str, Any]], lines: Dict[str, Dict[str, Any]]) -> None:
+    """Signature celebrations: tally goals per celly, occasional post (user club)."""
+    cel = g["cellies"]
+    posted = False
+    for pid, d in lines.items():
+        goals = int(d.get("g") or 0)
+        if goals <= 0 or str(d.get("team_id")) != F.utid:
+            continue
+        pp = persona(F, pid)
+        if not pp:
+            continue
+        name = signature_celly(F, pp)
+        row = cel.setdefault(pid, {"celly": name, "n": 0})
+        row["n"] = int(row.get("n", 0)) + goals
+        rng = F.rand("celly", pid)
+        if not posted and rng.random() < 0.12:
+            posted = True
+            sfe._add_post(F, sfe._meme_account(rng), f"{pp['name']} broke out {name} again tonight and honestly? 10/10. that's {row['n']} this season 🎬",
+                          kind="celly", cat="players", when=F.stamp(F.iso, 21 * 60, 23 * 60 + 30, rng), team_ids=[F.utid], player_id=pid,
+                          player_name=pp["name"], mag=1.3, sentiment=0.8)
+
+
+def _goofy_superstitions(F: "sfe._Pass", g: Dict[str, Any], games: List[Dict[str, Any]], lines: Dict[str, Dict[str, Any]]) -> None:
+    """Goalie win streak (4+, 40%) spawns a superstition: +4 confidence while it lives."""
+    sup = g["supers"]
+    for pid, d in lines.items():
+        if not str(d.get("pos") or "").startswith("G") or str(d.get("team_id")) != F.utid:
+            continue
+        row = sup.setdefault(pid, {"streak": 0, "active": False, "habit": ""})
+        if int(d.get("w") or 0) > 0:
+            row["streak"] = int(row["streak"]) + 1
+            if row["streak"] >= 4 and not row["active"] and not row.get("rolled"):
+                rng = F.rand("super", pid)
+                row["rolled"] = True  # one roll per streak
+                pp = persona(F, pid)
+                ps = _ps(F.st)
+                if not pp or rng.random() >= 0.4 or not _cooldown_ok(ps, f"goofy_super:{pid}", F.day_idx, 30):
+                    continue
+                _touch(ps, f"goofy_super:{pid}", F.day_idx)
+                row["active"], row["habit"] = True, rng.choice(SUPERSTITIONS)
+                _goofy_fx(F.session, pid, confidence=4)
+                _goofy_story(F.session, pid=pid, name=pp["name"], tid=F.utid, kind="superstition",
+                             headline=f"{pp['last']}'s streak has a new ritual",
+                             summary=f"{pp['name']} has won {row['streak']} straight and now {row['habit']}. Nobody in the room is allowed to question it.")
+        else:
+            if row["active"]:
+                _goofy_fx(F.session, pid, confidence=-4)
+                pp = persona(F, pid)
+                if pp:
+                    rng = F.rand("superend", pid)
+                    _player_post(F, pp, rng.choice(["someone stepped on the line. I know it was you. 👀", "the posts and I need to talk.",
+                                                    "streak's over. ritual retired. new ritual pending."]),
+                                 kind="player_goofy", when=F.stamp(F.iso, 22 * 60, 23 * 60 + 40, rng))
+            row["streak"], row["active"], row["rolled"] = 0, False, False
+
+
+def _goofy_awards(F: "sfe._Pass", g: Dict[str, Any]) -> None:
+    """Season-wrap goofy awards for the user club (posted + storylines + session.goofy_awards)."""
+    rows = [e for e in _by_team(F).get(F.utid, [])]
+    if not rows:
+        return
+    rng = F.rand("goofy_awards", F.season)
+    pss = F.pss if isinstance(F.pss, dict) else {}
+    pick = lambda key: max(rows, key=key) if rows else None  # noqa: E731
+    stache = pick(lambda e: (sfe._h(F.season, "stache", e.get("player_id")) % 1000) + float(e.get("age") or 25) * 8)
+    sticks = pick(lambda e: int((pss.get(str(e.get("player_id"))) or {}).get("sog") or 0) * 1.0 + (sfe._h(F.season, "stick", e.get("player_id")) % 40))
+    din = g.get("dinners") or {}
+    stomach = pick(lambda e: (int(din.get(str(e.get("player_id")), 0)), str(e.get("player_id"))))
+    cel = g.get("cellies") or {}
+    celly_pid = max(cel, key=lambda k: int(cel[k].get("n", 0))) if cel else ""
+    out = []
+    for award, e, why in (
+        ("Best Mustache", stache, "a lip caterpillar of genuinely historic thickness"),
+        ("Most Broken Sticks", sticks, f"{12 + rng.randint(4, 30)} twigs snapped (the equipment manager has filed a complaint)"),
+        ("Iron Stomach", stomach, f"{int(din.get(str((stomach or {}).get('player_id')), 0))} team dinners attended without a single complaint"),
+    ):
+        if e:
+            out.append({"award": award, "player_id": str(e.get("player_id")), "player_name": e.get("player_name"), "why": why})
+    if celly_pid:
+        pp = persona(F, celly_pid)
+        if pp:
+            out.append({"award": "Best Celly", "player_id": celly_pid, "player_name": pp["name"],
+                        "why": f"{cel[celly_pid].get('celly')}, deployed {cel[celly_pid].get('n')} times"})
+            _goofy_story(F.session, pid=celly_pid, name=pp["name"], tid=F.utid, kind="celly_of_year", heat=55,
+                         headline=f"Celly of the year: {pp['last']}", summary=f"{pp['name']}'s {cel[celly_pid].get('celly')} wins celly of the year.")
+    if not out:
+        return
+    session = F.session
+    hist = dict(getattr(session, "goofy_awards", None) or {})
+    hist[str(F.season)] = out
+    try:
+        session.goofy_awards = hist
+    except Exception:
+        pass
+    text = "🏆 The unofficial room awards: " + " · ".join(f"{r['award']}: {r['player_name']}" for r in out)
+    sfe._add_post(F, sfe._beat_writer(F, F.utid), text, kind="goofy_awards", cat="players", when=F.stamp(F.iso, 12 * 60, 14 * 60, rng),
+                  team_ids=[F.utid], mag=1.6, sentiment=0.8)
+    top = out[0]
+    _goofy_story(session, pid=top["player_id"], name=top["player_name"], tid=F.utid, kind="awards", heat=50,
+                 headline="The room hands out its (very) unofficial awards",
+                 summary="; ".join(f"{r['award']}: {r['player_name']} ({r['why']})" for r in out),
+                 participants=[r["player_id"] for r in out])
+
+
+def goofy_playoff_beards(session: Any, live: Dict[str, Any]) -> None:
+    """Playoff beard meter for the user club. Called after each bracket update: grows
+    beards once per new round reached (+0.75 chemistry), then a fan vote for Best
+    Playoff Beard when the run ends (+1.5 chemistry, winner +4 morale)."""
+    if not _goofy_on(session) or not isinstance(live, dict):
+        return
+    utid = str(getattr(session, "user_team_id", "") or "")
+    series = [s for s in (live.get("series") or []) if isinstance(s, dict) and utid in (str(s.get("team_high_id")), str(s.get("team_low_id")))]
+    if not series:
+        return
+    bm = live.setdefault("goofy_beards", {"round": 0, "len": {}, "voted": False})
+    if bm.get("voted"):
+        return
+    rnd = max(int(s.get("round_index") or 0) for s in series)
+    latest = [s for s in series if int(s.get("round_index") or 0) == rnd]
+    won_latest = any(_series_done(s) and _series_winner(s) == utid for s in latest)
+    alive = any(not _series_done(s) for s in series) or (won_latest and not live.get("completed"))
+    team = (getattr(session, "team_by_id", None) or {}).get(utid)
+    roster = [p for p in (getattr(team, "roster", None) or []) if str(getattr(p, "id", "") or "")]
+    if alive and rnd > int(bm.get("round") or 0):
+        bm["round"] = rnd
+        for p in roster:
+            pid = str(p.id)
+            gen = 0.6 + (sfe._h("beardgene", pid) % 100) / 100.0
+            rng = random.Random(sfe._h("beard", pid, rnd, getattr(session, "season_calendar_year", 0)))
+            bm["len"][pid] = round(float(bm["len"].get(pid, 0)) + gen * rng.uniform(5, 12), 1)
+        _goofy_team_bump(session, utid, chem=0.75)
+        if bm["len"]:
+            lead = max(bm["len"], key=lambda k: bm["len"][k])
+            name = _goofy_name(session, lead)
+            _goofy_story(session, pid=lead, name=name, tid=utid, kind="beard_meter", heat=44,
+                         headline=f"Beard meter, round {rnd}: {sfe._last(name)} leads at {bm['len'][lead]:.0f}mm",
+                         summary=f"The playoff beards are coming in. {name} leads the room at {bm['len'][lead]:.0f}mm; the rookies are 'trying their best'.")
+    elif not alive and bm["len"]:
+        bm["voted"] = True
+        rng = random.Random(sfe._h("beardvote", utid, getattr(session, "season_calendar_year", 0)))
+        scored = {k: v * rng.uniform(0.8, 1.25) for k, v in bm["len"].items()}
+        win = max(scored, key=lambda k: scored[k])
+        name = _goofy_name(session, win)
+        pct = rng.randint(31, 64)
+        _goofy_team_bump(session, utid, chem=1.5)
+        ent = _entities(session).get(win)
+        if isinstance(ent, dict):
+            st = ent.setdefault("state", {})
+            st["morale"] = round(_clip(float(st.get("morale", 55) or 55) + 4), 2)
+        _goofy_story(session, pid=win, name=name, tid=utid, kind="best_beard", heat=50,
+                     headline=f"Fans vote {sfe._last(name)} Best Playoff Beard",
+                     summary=f"{name} takes the fan vote for Best Playoff Beard with {pct}% ({bm['len'][win]:.0f}mm of pure commitment). The room is closer for it.")
+
+
+def _series_done(s: Dict[str, Any]) -> bool:
+    need = (int(s.get("best_of") or 7) // 2) + 1
+    return int(s.get("wins_high") or 0) >= need or int(s.get("wins_low") or 0) >= need
+
+
+def _series_winner(s: Dict[str, Any]) -> str:
+    need = (int(s.get("best_of") or 7) // 2) + 1
+    if int(s.get("wins_high") or 0) >= need:
+        return str(s.get("team_high_id") or "")
+    if int(s.get("wins_low") or 0) >= need:
+        return str(s.get("team_low_id") or "")
+    return ""
+
+
+def _goofy_name(session: Any, pid: str) -> str:
+    ent = _entities(session).get(str(pid)) or {}
+    return str(ent.get("player_name") or "A player")

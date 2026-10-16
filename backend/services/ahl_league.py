@@ -24,6 +24,7 @@ TARGET_GP = 72
 F_TOI = [18.5, 15.5, 12.5, 8.5]  # minutes per forward by line
 D_TOI = [23.0, 19.5, 15.5]
 LEDGER_VERSION = 1
+AHL_STRENGTH_SLOPE = 30.0  # OVR points of roster edge per e-fold of scoring rate
 
 
 # ----------------------------------------------------------------- helpers
@@ -246,7 +247,9 @@ def _deployment(team: Any, lines: Dict[str, Any]) -> Tuple[List[Tuple[Any, float
 # ----------------------------------------------------------------- game sim
 def _strength(skaters: List[Tuple[Any, float, int]]) -> float:
     tot = sum(t for _, t, _ in skaters) or 1.0
-    return sum(player_ovr(p) * t for p, t, _ in skaters) / tot if skaters else 55.0
+    base = sum(player_ovr(p) * t for p, t, _ in skaters) / tot if skaters else 55.0
+    # A short bench (call-ups) tires the dressed players: small penalty per missing skater.
+    return base - max(0, 18 - len(skaters)) * 0.35
 
 
 def _pick(rng: random.Random, items: List[Tuple[Any, float]]) -> Any:
@@ -298,8 +301,11 @@ def _play_game(session: Any, st: Dict[str, Any], home: Any, away: Any, iso: str)
     h, a = sides
     for me, opp, home_adv in ((h, a, 1.04), (a, h, 1.0)):
         g_ovr = player_ovr(opp["goalie"]) if opp["goalie"] is not None else 55.0
-        lam = 3.05 * math.exp((me["strength"] - opp["strength"]) / 11.0) * math.exp(-(g_ovr - 68.0) / 45.0) * home_adv
-        me["xg"] = min(6.5, max(1.2, lam))
+        # AHL parity is high (best clubs ~.650, worst ~.400). The old /11 slope turned a
+        # 4-OVR roster edge into near-undefeated seasons; nightly form noise matters too.
+        lam = 3.0 * math.exp((me["strength"] - opp["strength"]) / AHL_STRENGTH_SLOPE) * math.exp(-(g_ovr - 74.0) / 90.0) * home_adv
+        lam *= math.exp(rng.gauss(0.0, 0.16))
+        me["xg"] = min(5.5, max(1.5, lam))
         me["goals"] = _poisson(me["xg"], rng)
         me["shots"] = max(me["goals"] + 12, int(rng.gauss(29 + (me["strength"] - opp["strength"]) * 0.6, 4)))
     ot = h["goals"] == a["goals"]
@@ -365,8 +371,10 @@ def _play_game(session: Any, st: Dict[str, Any], home: Any, away: Any, iso: str)
             opp_unit = {player_key(p): (position_bucket(p), i) for p, _, i in opp["skaters"]}
             opp_rows = {player_key(p): (p, opp["team"]) for p, _, _ in opp["skaters"]}
             for k in _on_ice_keys(rng, opp_unit, [], min(unit, 3), min(unit, 2)):
-                op, ot = opp_rows[k]
-                _player_row(st, op, ot)["plus_minus"] -= 1
+                # (named op_team: reusing `ot` here clobbered the overtime flag, so every
+                # later regulation loss in the game was booked as an OT loss)
+                op, op_team = opp_rows[k]
+                _player_row(st, op, op_team)["plus_minus"] -= 1
         for _ in range(_poisson(3.2, rng)):
             who = _pick(rng, [(p, toi) for p, toi, _ in side["skaters"]])
             if who is not None:

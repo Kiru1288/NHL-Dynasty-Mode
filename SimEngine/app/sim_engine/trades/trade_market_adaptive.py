@@ -230,3 +230,78 @@ def build_pool_sampling_weights(
         w /= 1.0 + 0.85 * float(team_trade_counts.get(tid, 0))
         weights.append(max(0.05, w))
     return weights
+
+
+# --- Rubber banding --------------------------------------------------------------
+# When the user's club runs away from the league, the CPU side tightens up a little:
+# contenders/rivals drive harder bargains, rivals get a nudge in CPU-CPU deals and
+# free agents lean CPU. Computed once per strength-map refresh (~every 2 weeks) and
+# cached on the league; every read below is O(1).
+
+#: Strength-map gap (user minus the best three CPU clubs) where banding starts / maxes.
+RUBBER_BAND_GAP_START = 0.0
+RUBBER_BAND_GAP_FULL = 0.12
+
+
+def compute_user_dominance(league: Any, strength_map: Dict[str, Any], user_team_id: str) -> float:
+    """0..1 lead of the user's club over the league's best CPU clubs; caches rivals too."""
+    utid = str(user_team_id or "")
+    if league is None or not utid or not isinstance(strength_map, dict) or utid not in strength_map:
+        return 0.0
+    user_s = _safe_float(strength_map.get(utid), 0.0)
+    others = sorted(
+        ((_safe_float(v, 0.0), str(k)) for k, v in strength_map.items() if str(k) != utid),
+        reverse=True,
+    )
+    if not others:
+        return 0.0
+    top = [s for s, _ in others[:3]]
+    gap = user_s - sum(top) / len(top)
+    dom = (gap - RUBBER_BAND_GAP_START) / max(1e-6, RUBBER_BAND_GAP_FULL - RUBBER_BAND_GAP_START)
+    dom = max(0.0, min(1.0, dom))
+    rivals = {tid for _, tid in others[:5]}
+    try:
+        teams = list(getattr(league, "teams", None) or [])
+        div = ""
+        for t in teams:
+            if str(getattr(t, "team_id", getattr(t, "id", ""))) == utid:
+                div = str(getattr(t, "division", "") or "")
+                break
+        if div:
+            for t in teams:
+                tid = str(getattr(t, "team_id", getattr(t, "id", "")))
+                if tid != utid and str(getattr(t, "division", "") or "") == div:
+                    rivals.add(tid)
+    except Exception:
+        pass
+    try:
+        setattr(league, "_user_dominance", round(dom, 4))
+        setattr(league, "_user_rival_ids", frozenset(rivals))
+    except Exception:
+        pass
+    return dom
+
+
+def user_dominance(league: Any) -> float:
+    return max(0.0, min(1.0, _safe_float(getattr(league, "_user_dominance", 0.0), 0.0)))
+
+
+def is_user_rival(league: Any, team_id: Any) -> bool:
+    return str(team_id) in (getattr(league, "_user_rival_ids", None) or ())
+
+
+def rubber_band_accept_bump(league: Any, team: Any, team_id: Any) -> float:
+    """Extra AI-interest a CPU club needs before taking a deal from a dominant user.
+
+    Subtle: at most +0.04 for anyone, +0.07 for a contender or rival.
+    """
+    dom = user_dominance(league)
+    if dom <= 0.0:
+        return 0.0
+    sharp = is_user_rival(league, team_id)
+    if not sharp and team is not None:
+        for key in ("gm_window", "window", "status"):
+            if "contend" in str(getattr(team, key, "") or "").lower():
+                sharp = True
+                break
+    return dom * (0.07 if sharp else 0.04)

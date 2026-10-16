@@ -946,11 +946,11 @@ def bootstrap_full_league_hierarchy(
 # Current ability is NHL-scale. Top picks should look like near-NHL talents a GM
 # would promote within 1–3 years (~78–86 current), not mid-60s juniors.
 _CLASS_STRENGTH_TIERS = [
-    ("weak", 0.20, 1, 3, 6, (0.76, 0.81)),
-    ("average", 0.40, 1, 4, 8, (0.78, 0.84)),
-    ("strong", 0.24, 2, 5, 9, (0.80, 0.86)),
-    ("elite", 0.12, 2, 6, 10, (0.82, 0.88)),
-    ("generational", 0.04, 3, 6, 12, (0.84, 0.90)),
+    ("weak", 0.20, 1, 3, 6, (0.78, 0.83)),
+    ("average", 0.40, 1, 4, 8, (0.80, 0.86)),
+    ("strong", 0.24, 2, 5, 9, (0.82, 0.87)),
+    ("elite", 0.12, 2, 6, 10, (0.83, 0.88)),
+    ("generational", 0.04, 3, 6, 12, (0.84, 0.89)),
 ]
 
 # Minimum current OVR (0–1) for shaped pipeline stars — used to repair older saves
@@ -1298,7 +1298,7 @@ def _shape_draft_class_pipeline(league: Any, rng: random.Random) -> None:
         sp = _next_skater(0.94)
         if sp is None:
             break
-        chosen.append((sp, "franchise", top_range[0], top_range[1], 88, 97))
+        chosen.append((sp, "franchise", top_range[0], top_range[1], 92, 98))
     if generational_goalie is not None:
         chosen.append((generational_goalie, "franchise", top_range[0], top_range[1], 90, 98))
         setattr(generational_goalie, "generational_goalie", True)
@@ -1316,30 +1316,30 @@ def _shape_draft_class_pipeline(league: Any, rng: random.Random) -> None:
             gp = _next_goalie(0.90)
             if gp is None:
                 break
-            chosen.append((gp, "elite", top_range[0] - 0.03, top_range[1] - 0.02, 84, 92))
+            chosen.append((gp, "elite", top_range[0] - 0.03, top_range[1] - 0.02, 86, 93))
     for _ in range(n_top_g):
         gp = _next_goalie(0.88)
         if gp is None:
             break
-        chosen.append((gp, "top", top_range[0] - 0.08, top_range[0] - 0.02, 76, 88))
+        chosen.append((gp, "top", top_range[0] - 0.08, top_range[0] - 0.02, 80, 89))
 
     for _ in range(n_elite):
         sp = _next_skater(0.92)
         if sp is None:
             break
-        chosen.append((sp, "elite", top_range[0] - 0.05, top_range[1] - 0.05, 82, 92))
+        chosen.append((sp, "elite", top_range[0] - 0.04, top_range[1] - 0.04, 88, 94))
     for _ in range(n_top):
         sp = _next_skater(0.90)
         if sp is None:
             break
-        chosen.append((sp, "top", top_range[0] - 0.09, top_range[1] - 0.09, 76, 86))
+        chosen.append((sp, "top", top_range[0] - 0.07, top_range[1] - 0.07, 85, 91))
 
     n_round1_tail = int(depth_slots.get("round1_tail", 38))
     for _ in range(n_round1_tail):
         sp = _next_skater(0.86)
         if sp is None:
             break
-        chosen.append((sp, "round1_tail", top_range[0] - 0.12, top_range[0] - 0.06, 70, 82))
+        chosen.append((sp, "round1_tail", top_range[0] - 0.10, top_range[0] - 0.04, 82, 88))
 
     n_nhl_floor = int(depth_slots.get("nhl_floor", 16))
     for _ in range(n_nhl_floor):
@@ -1347,21 +1347,21 @@ def _shape_draft_class_pipeline(league: Any, rng: random.Random) -> None:
         if sp is None:
             break
         # Solid NHL-bound depth — below top-of-class current ability.
-        chosen.append((sp, "nhl_floor", 0.58, 0.65, 72, 80))
+        chosen.append((sp, "nhl_floor", 0.64, 0.71, 76, 82))
 
     n_round2 = int(depth_slots.get("round2", 28))
     for _ in range(n_round2):
         sp = _next_skater(0.70)
         if sp is None:
             break
-        chosen.append((sp, "round2", 0.64, 0.74, 80, 90))
+        chosen.append((sp, "round2", 0.66, 0.75, 79, 87))
 
     n_round3_4 = int(depth_slots.get("round3_4", 40))
     for _ in range(n_round3_4):
         sp = _next_skater(0.58)
         if sp is None:
             break
-        chosen.append((sp, "round3_4", 0.60, 0.70, 76, 88))
+        chosen.append((sp, "round3_4", 0.62, 0.71, 75, 84))
 
     n_round5_7 = int(depth_slots.get("round5_7", 48))
     upside_pct = float(depth_slots.get("upside_pct", 0.08))
@@ -1370,11 +1370,11 @@ def _shape_draft_class_pipeline(league: Any, rng: random.Random) -> None:
         if sp is None:
             break
         if rng.random() < upside_pct * 0.70:
-            chosen.append((sp, "hidden_upside", 0.58, 0.68, 82, 94))
+            chosen.append((sp, "hidden_upside", 0.60, 0.69, 82, 92))
         elif rng.random() < 0.45:
-            chosen.append((sp, "round5_7", 0.56, 0.66, 76, 88))
+            chosen.append((sp, "round5_7", 0.58, 0.67, 73, 82))
         else:
-            chosen.append((sp, "round5_7", 0.54, 0.64, 72, 84))
+            chosen.append((sp, "round5_7", 0.56, 0.65, 70, 79))
 
     # Spread real goalie prospects through the class. Non-franchise goalies stay
     # out of round 1 via the board scatter; these bands are rounds 2-7.
@@ -1383,11 +1383,11 @@ def _shape_draft_class_pipeline(league: Any, rng: random.Random) -> None:
         if gp is None:
             break
         if i < 8:
-            chosen.append((gp, "round2", 0.62, 0.72, 78, 90))
+            chosen.append((gp, "round2", 0.64, 0.73, 78, 87))
         elif i < 16:
-            chosen.append((gp, "round3_4", 0.58, 0.68, 74, 86))
+            chosen.append((gp, "round3_4", 0.60, 0.69, 74, 83))
         else:
-            chosen.append((gp, "round5_7", 0.54, 0.64, 70, 82))
+            chosen.append((gp, "round5_7", 0.56, 0.65, 70, 79))
 
     shaped_ids = set()
     for p, tier, lo, hi, pot_lo, pot_hi in chosen:
@@ -1409,6 +1409,130 @@ def _shape_draft_class_pipeline(league: Any, rng: random.Random) -> None:
         if id(p) in shaped_ids:
             continue
         _assign_residual_dev_potential(p, rng, depth_label=depth_label, upside_pct=upside_pct)
+
+    try:
+        _sprinkle_draft_oddballs(league, draft_age)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+
+
+#: Chance a draft class gets one oddball (and a smaller chance of a second).
+DRAFT_ODDBALL_CLASS_CHANCE = 0.35
+#: (key, backstory, dossier label, {rating prefix: delta on the 0-99 scale}, height inches or None)
+_DRAFT_ODDBALLS: Tuple[Tuple[str, str, str, Dict[str, int], Optional[int]], ...] = (
+    ("jamaica_rollerblades", "Learned the game on rollerblades in a Kingston parking lot; first saw real ice at 15.",
+     "Oddball: rollerblade kid from Jamaica", {"skg_": 6, "def_": -3}, None),
+    ("figure_skater", "A former junior figure skating champion who switched sports after 'one too many sequins'.",
+     "Oddball: ex-figure skater", {"skg_": 8, "phy_": -4}, None),
+    ("giant", "Six-foot-nine and still growing. His skates are custom-made by a boat company.",
+     "Oddball: the 6'9\" kid", {"phy_": 7, "skg_": -4}, 81),
+    ("farm_kid", "Built his own rink on the family dairy farm; claims the cows taught him positioning.",
+     "Oddball: dairy-farm rink rat", {"def_": 4, "iqm_": 3, "off_": -3}, None),
+    ("chess_prodigy", "A nationally ranked chess player who reads plays three passes ahead.",
+     "Oddball: chess prodigy", {"iqm_": 6, "pm_": 3, "phy_": -5}, None),
+)
+
+
+def _rating_shift(p: Any, deltas: Dict[str, int]) -> None:
+    ratings = getattr(p, "ratings", None)
+    if not isinstance(ratings, dict):
+        return
+    for key in list(ratings.keys()):
+        for prefix, d in deltas.items():
+            if str(key).startswith(prefix):
+                try:
+                    v = float(ratings[key])
+                    if v <= 1.5:
+                        ratings[key] = max(0.20, min(0.95, v + d / 99.0))
+                    else:
+                        ratings[key] = int(max(20, min(95, round(v + d))))
+                except (TypeError, ValueError):
+                    pass
+    inval = getattr(p, "_invalidate_ovr_memo", None)
+    if callable(inval):
+        inval()
+    try:
+        from app.sim_engine.entities.player import persist_recomputed_ovr
+
+        persist_recomputed_ovr(p)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+
+
+def _tag_oddball(p: Any, key: str, backstory: str, label: str) -> None:
+    try:
+        setattr(p, "goofy_backstory_key", key)
+        setattr(p, "goofy_backstory", backstory)
+        labels = list(getattr(p, "dossier_labels", None) or [])
+        if label not in labels:
+            labels.append(label)
+        setattr(p, "dossier_labels", labels[-8:])
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+
+
+def _sprinkle_draft_oddballs(league: Any, draft_age: List[Any]) -> int:
+    """Goofy: rare draft prospects with wild backstories and real, quirky rating shifts.
+
+    Uses its own crc32-seeded RNG so the main generation stream is untouched.
+    ``league.goofy_events_enabled`` mirrors the franchise session setting.
+    """
+    if not getattr(league, "goofy_events_enabled", True) or len(draft_age) < 20:
+        return 0
+    import zlib
+
+    pool = sorted(
+        (p for p in draft_age if getattr(getattr(p, "identity", None), "position", None) != Position.G
+         and not getattr(p, "goofy_backstory_key", None) and not getattr(p, "is_transcendent", False)),
+        key=lambda p: str(getattr(p, "id", "")),
+    )
+    if len(pool) < 4:
+        return 0
+    seed = "|".join(str(getattr(p, "id", "")) for p in pool[:6])
+    r = random.Random(zlib.crc32(f"goofy_draft|{seed}".encode()))
+    if r.random() >= DRAFT_ODDBALL_CLASS_CHANCE:
+        return 0
+    count = 2 if r.random() < 0.20 else 1
+    made = 0
+    for _ in range(count):
+        if r.random() < 0.20 and len(pool) >= 2:
+            # Twins: same surname, both a touch better at finding each other.
+            a, b = r.sample(pool, 2)
+            pool = [p for p in pool if p is not a and p is not b]
+            ia, ib = getattr(a, "identity", None), getattr(b, "identity", None)
+            surname = str(getattr(ia, "name", "") or "").split(" ")[-1]
+            first_b = str(getattr(ib, "name", "") or "").split(" ")[0]
+            if surname and first_b and ib is not None:
+                try:
+                    ib.name = f"{first_b} {surname}"
+                    ib.age = getattr(ia, "age", getattr(ib, "age", 18))
+                except Exception:
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
+            story = "Twin brothers who insist on being drafted together. They finish each other's passes."
+            for p, other in ((a, b), (b, a)):
+                _rating_shift(p, {"pm_": 3})
+                _tag_oddball(p, "twins", story, "Oddball: one of the twins")
+                try:
+                    setattr(p, "twin_of", str(getattr(other, "id", "")))
+                except Exception:
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
+            made += 2
+            continue
+        p = r.choice(pool)
+        pool.remove(p)
+        key, story, label, deltas, height = r.choice(_DRAFT_ODDBALLS)
+        _rating_shift(p, deltas)
+        _tag_oddball(p, key, story, label)
+        if height:
+            ident = getattr(p, "identity", None)
+            for attr in ("height_in", "height_inches"):
+                if ident is not None and hasattr(ident, attr):
+                    try:
+                        setattr(ident, attr, int(height))
+                    except Exception:
+                        _swallowed_log.debug("suppressed exception", exc_info=True)
+        made += 1
+    return made
 
 
 _LATER_ROUND_LIFT_SKIP = frozenset({
@@ -1451,11 +1575,11 @@ def lift_shallow_draft_depth(league: Any, rng: Optional[random.Random] = None) -
                     continue
                 roll = rng_inst.random()
                 if roll < 0.18:
-                    lo, hi, plo, phi, shaped = 0.62, 0.72, 80, 92, "hidden_upside"
+                    lo, hi, plo, phi, shaped = 0.62, 0.72, 80, 90, "hidden_upside"
                 elif roll < 0.50:
-                    lo, hi, plo, phi, shaped = 0.58, 0.68, 76, 88, "round3_4"
+                    lo, hi, plo, phi, shaped = 0.60, 0.69, 75, 84, "round3_4"
                 else:
-                    lo, hi, plo, phi, shaped = 0.54, 0.66, 72, 84, "round5_7"
+                    lo, hi, plo, phi, shaped = 0.56, 0.66, 70, 80, "round5_7"
                 _apply_shaped_player(
                     p,
                     tier=shaped,
@@ -1509,11 +1633,11 @@ def repair_undervalued_draft_pipeline_stars(league: Any, rng: Optional[random.Ra
                 if tier == "transcendent":
                     pot_lo, pot_hi = 99, 99
                 elif tier == "franchise":
-                    pot_lo, pot_hi = max(88, pot), max(97, pot, 88)
+                    pot_lo, pot_hi = max(91, pot), max(97, pot, 91)
                 elif tier == "elite":
-                    pot_lo, pot_hi = max(82, pot), max(92, pot, 82)
+                    pot_lo, pot_hi = max(88, pot), max(94, pot, 88)
                 else:
-                    pot_lo, pot_hi = max(76, pot), max(86, pot, 76)
+                    pot_lo, pot_hi = max(85, pot), max(91, pot, 85)
                 code_by_id[id(p)] = code
                 _apply_shaped_player(
                     p,
@@ -1545,10 +1669,10 @@ def ensure_board_prospect_ovr_floors(
         return 0
     rng_inst = rng if rng is not None else random.Random(42)
     floors = (
-        (3, "franchise", 0.78, 0.79, 0.86, 90, 98),
-        (10, "elite", 0.74, 0.74, 0.82, 86, 94),
-        (20, "top", 0.70, 0.70, 0.78, 80, 90),
-        (32, "round1_tail", 0.66, 0.66, 0.74, 76, 86),
+        (3, "franchise", 0.79, 0.80, 0.86, 92, 98),
+        (10, "elite", 0.75, 0.76, 0.83, 88, 94),
+        (20, "top", 0.71, 0.73, 0.80, 85, 91),
+        (32, "round1_tail", 0.68, 0.70, 0.77, 82, 88),
     )
     repaired = 0
     lookup = player_by_key or {}

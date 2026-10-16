@@ -4526,6 +4526,12 @@ export function ProspectRightsEventMenu({ franchiseState = {}, eventData = {}, o
   const selectedAction = selectedPackage?.action || null;
   const isSigning = selectedPackage?.kind === "elc";
   const [assignmentPlanOverride, setAssignmentPlanOverride] = React.useState(null);
+  // Negotiated ELC bonus money ($M). null = the package's template amounts.
+  const [elcBonus, setElcBonus] = React.useState({ sb: null, sa: null });
+  const elcLegal = focus?.legal_elc_terms || {};
+  React.useEffect(() => {
+    setElcBonus({ sb: null, sa: null });
+  }, [selectedPackage?.packageId]);
   const assignmentOptions = safeArray(focus?.legal_elc_terms?.assignment_options);
   const defaultAssignmentPlanId = assignmentOptions.find((o) => o.enabled)?.id || null;
   const effectiveAssignmentPlan = assignmentOptions.some(
@@ -4539,6 +4545,7 @@ export function ProspectRightsEventMenu({ franchiseState = {}, eventData = {}, o
     setFeedback("");
     setPreview(null);
     setAssignmentPlanOverride(null);
+    setElcBonus({ sb: null, sa: null });
     if (!focus) {
       setSelectedPackageId(null);
       return;
@@ -4563,6 +4570,8 @@ export function ProspectRightsEventMenu({ franchiseState = {}, eventData = {}, o
           player_id: focus.player_id,
           template_id: selectedPackage.templateId || "standard_elc",
           assignment_plan: effectiveAssignmentPlan,
+          signing_bonus_total_m: elcBonus.sb ?? undefined,
+          schedule_a_bonus_m: elcBonus.sa ?? undefined,
         });
         if (!cancelled) setPreview(result);
       } catch (err) {
@@ -4573,7 +4582,7 @@ export function ProspectRightsEventMenu({ franchiseState = {}, eventData = {}, o
     return () => {
       cancelled = true;
     };
-  }, [focus?.player_id, selectedPackage?.packageId, selectedPackage?.templateId, effectiveAssignmentPlan]);
+  }, [focus?.player_id, selectedPackage?.packageId, selectedPackage?.templateId, effectiveAssignmentPlan, elcBonus.sb, elcBonus.sa]);
 
   const offer = preview?.offer || null;
   const acceptance = preview?.acceptance || focus?.elc_acceptance_summary || null;
@@ -4623,6 +4632,8 @@ export function ProspectRightsEventMenu({ franchiseState = {}, eventData = {}, o
           assignment_plan: offer?.assignment_plan,
           development_promise: offer?.development_promise,
           term_years: offer?.term_years,
+          signing_bonus_total_m: elcBonus.sb ?? undefined,
+          schedule_a_bonus_m: elcBonus.sa ?? undefined,
           idempotency_key: offer?.offer_id,
         });
       } else {
@@ -4668,6 +4679,13 @@ export function ProspectRightsEventMenu({ franchiseState = {}, eventData = {}, o
       } else if (!result?.ok) {
         const declineReasons = safeArray(result?.decision?.reasons || result?.acceptance?.reasons);
         const counter = result?.counter_offer?.message;
+        // The agent's counter names numbers: load them on the desk to accept or haggle.
+        if (result?.counter_offer?.signing_bonus_total_m != null) {
+          setElcBonus({
+            sb: Number(result.counter_offer.signing_bonus_total_m),
+            sa: Number(result.counter_offer.schedule_a_bonus_m ?? elcBonus.sa ?? 0),
+          });
+        }
         const denyBody =
           result?.reason === "prospect_declined"
             ? ["Prospect declined.", counter, ...declineReasons.slice(0, 2)].filter(Boolean).join(" ")
@@ -4933,6 +4951,16 @@ export function ProspectRightsEventMenu({ franchiseState = {}, eventData = {}, o
                       ) : null}
                       <div className={`${prefix}-contract-row`}>
                         <span>Signing bonus</span>
+                        <input
+                          type="range"
+                          min={0}
+                          max={Number(elcLegal.max_signing_bonus_total_m || 0.285) * (Number(offer?.term_years || 3) / 3)}
+                          step={0.005}
+                          value={Number(elcBonus.sb ?? offer?.signing_bonus_total_m ?? 0)}
+                          onChange={(e) => setElcBonus((b) => ({ ...b, sb: Number(e.target.value) }))}
+                          disabled={busy}
+                          aria-label="Signing bonus"
+                        />
                         <strong>
                           {offer?.signing_bonus_display ||
                             selectedPackage?.signingBonusDisplay ||
@@ -4941,7 +4969,25 @@ export function ProspectRightsEventMenu({ franchiseState = {}, eventData = {}, o
                       </div>
                       <div className={`${prefix}-contract-row`}>
                         <span>Schedule A</span>
+                        <input
+                          type="range"
+                          min={0}
+                          max={Number(elcLegal.max_schedule_a_m || 0.2125)}
+                          step={0.005}
+                          value={Number(elcBonus.sa ?? offer?.schedule_a_bonus_m ?? 0)}
+                          onChange={(e) => setElcBonus((b) => ({ ...b, sa: Number(e.target.value) }))}
+                          disabled={busy}
+                          aria-label="Schedule A bonuses"
+                        />
                         <strong>{offer?.schedule_a_display || selectedPackage?.scheduleA || "—"}</strong>
+                      </div>
+                      <div className={`${prefix}-contract-row`}>
+                        <span>Cap charge (bonus hold)</span>
+                        <strong>
+                          {preview?.cap_preview?.bonus_exposure_m != null
+                            ? `+$${Math.round(Number(preview.cap_preview.bonus_exposure_m) * 1000)}K this season`
+                            : "—"}
+                        </strong>
                       </div>
                       <div className={`${prefix}-contract-row`}>
                         <span>Schedule B</span>

@@ -198,6 +198,9 @@ def build_offer_from_template(
     assignment_plan: Optional[str] = None,
     development_promise: Optional[str] = None,
     term_years: Optional[int] = None,
+    signing_bonus_total_m: Optional[float] = None,
+    schedule_a_bonus_m: Optional[float] = None,
+    schedule_b_bonus_m: Optional[float] = None,
 ) -> Dict[str, Any]:
     legal = legal_elc_terms(player, season_year)
     tid = str(template_id or "standard_elc").strip().lower()
@@ -236,6 +239,34 @@ def build_offer_from_template(
 
     if term_years is not None and int(term_years) in years_pool:
         years = int(term_years)
+
+    # Negotiated bonus money (the desk's sliders) replaces the template's, clamped
+    # to the legal maximums so a custom offer can never be an illegal ELC.
+    custom = False
+    if signing_bonus_total_m is not None:
+        try:
+            sb_total = round(max(0.0, min(float(signing_bonus_total_m), ELC_MAX_SIGNING_BONUS_TOTAL_M * (years / 3.0))), 4)
+            custom = True
+        except (TypeError, ValueError):
+            pass
+    if schedule_a_bonus_m is not None:
+        try:
+            schedule_a = round(max(0.0, min(float(schedule_a_bonus_m), ELC_MAX_SCHEDULE_A_M)), 4)
+            custom = True
+        except (TypeError, ValueError):
+            pass
+    if schedule_b_bonus_m is not None:
+        try:
+            schedule_b = round(max(0.0, min(float(schedule_b_bonus_m), ELC_MAX_SCHEDULE_B_M)), 4)
+            custom = True
+        except (TypeError, ValueError):
+            pass
+    if custom:
+        summary = (
+            f"{years} Years · SB {format_money_display(sb_total)} · Sched A "
+            f"{format_money_display(schedule_a) if schedule_a else 'None'}"
+            + (f" · Sched B {format_money_display(schedule_b)}" if schedule_b else "")
+        )
 
     arrays = _year_arrays(years, ELC_AAV_M, ELC_MINOR_SALARY_M, sb_total)
     assign = assignment_plan or _default_assignment(legal)
@@ -420,14 +451,24 @@ def evaluate_offer_acceptance(
     sb = float(offer.get("signing_bonus_total_m") or 0)
     sa = float(offer.get("schedule_a_bonus_m") or 0)
     sbb = float(offer.get("schedule_b_bonus_m") or 0)
-    if sb >= ELC_MAX_SIGNING_BONUS_TOTAL_M * 0.55:
-        score += 0.08
-        positives.append("strong signing bonus")
-    elif sb <= 0.01:
+    try:
+        _term = max(1, int(offer.get("term_years") or 3))
+    except (TypeError, ValueError):
+        _term = 3
+    # Graded, so each dollar the GM adds at the desk moves the agent.
+    sb_frac = min(1.0, sb / max(0.001, ELC_MAX_SIGNING_BONUS_TOTAL_M * (_term / 3.0)))
+    sa_frac = min(1.0, sa / max(0.001, ELC_MAX_SCHEDULE_A_M))
+    if sb <= 0.01:
         score -= 0.07
         concerns.append("no signing bonus")
+    else:
+        score += -0.04 + 0.16 * sb_frac
+        if sb_frac >= 0.55:
+            positives.append("strong signing bonus")
+        elif sb_frac < 0.35:
+            concerns.append("light signing bonus")
     if sa > 0:
-        score += 0.05
+        score += 0.02 + 0.06 * sa_frac
         positives.append("Schedule A bonuses")
     if sbb > 0:
         score += 0.06
@@ -521,11 +562,22 @@ def evaluate_offer_acceptance(
     counter = None
     if decision == "rejected" and score >= 0.38:
         decision = "countered"
+        max_sb_term = ELC_MAX_SIGNING_BONUS_TOTAL_M * (_term / 3.0)
+        ask_sb = round(min(max_sb_term, sb + max_sb_term * 0.3), 4)
+        ask_sa = round(min(ELC_MAX_SCHEDULE_A_M, sa + ELC_MAX_SCHEDULE_A_M * 0.35), 4)
+        wants_money = sa + sbb < ELC_MAX_SCHEDULE_A_M or sb < max_sb_term - 0.001
         counter = {
-            "request": "more_bonuses" if sa + sbb < ELC_MAX_SCHEDULE_A_M else "development_promise",
+            "request": "more_bonuses" if wants_money else "development_promise",
             "preferred_template": "maximum_bonus_elc",
             "preferred_assignment": "return_junior" if legal.get("can_return_junior") else assign,
-            "message": "Agent wants stronger bonuses or a clearer development path",
+            "signing_bonus_total_m": ask_sb,
+            "schedule_a_bonus_m": ask_sa,
+            "message": (
+                f"Agent asks for a {format_money_display(ask_sb)} signing bonus and "
+                f"{format_money_display(ask_sa)} in Schedule A bonuses"
+                if wants_money
+                else "Agent wants a clearer development path"
+            ),
         }
     elif decision == "rejected" and score >= 0.44:
         decision = "considering"
@@ -686,7 +738,12 @@ def preview_elc_offer(
             "projected_cap_hit_m": ELC_AAV_M,
             "usable_cap_space_m": snap.get("usable_cap_space_m"),
             "bonus_reserve_m": snap.get("bonus_reserve_m"),
-            "bonus_exposure_m": float(built.get("performance_bonus_m") or 0),
+            # This season's hold: max Schedule A/B plus year one of the signing bonus.
+            "bonus_exposure_m": round(
+                float(built.get("performance_bonus_m") or 0)
+                + float((list(built.get("signing_bonus_by_year_m") or [0.0]) or [0.0])[0] or 0),
+                4,
+            ),
         },
         "slot_preview": {
             "contract_slots_used": used,

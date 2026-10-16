@@ -189,6 +189,9 @@ def _ask_for_player(player: Any, league: Any, *, days_on_market: int = 0, offer_
         # Late August / September: replacement and mid-tier accept prove-it money.
         ask = max(LEAGUE_MINIMUM_AAV_M, min(ask, fair * (0.85 if ovr >= 76 else 0.78)))
 
+    if demand.get("market_steal"):
+        # An overlooked player's bargain ask survives the stored-ask and decay floors.
+        ask = min(ask, float(demand.get("want_aav_m") or ask))
     ask = round(max(LEAGUE_MINIMUM_AAV_M, float(ask)), 3)
     try:
         setattr(player, "asking_aav_m", ask)
@@ -955,6 +958,13 @@ def _try_sign_leaning_players(
         # each fit point is worth about 1% of AAV.
         from services.contract_economy import player_destination_factors
 
+        try:
+            from app.sim_engine.trades.trade_market_adaptive import user_dominance
+
+            _user_dom = user_dominance(league)
+        except Exception:
+            _user_dom = 0.0
+
         def _fit_value(tid: str, aav: float) -> float:
             tm = team_by_id.get(str(tid))
             try:
@@ -962,7 +972,11 @@ def _try_sign_leaning_players(
             except Exception:
                 pts = 0.0
             # Capped: a +40 fan-base pull shouldn't make a 40% pay cut look even.
-            return float(aav or 0) * (1.0 + max(-0.15, min(0.20, pts * 0.01)))
+            val = float(aav or 0) * (1.0 + max(-0.15, min(0.20, pts * 0.01)))
+            if str(tid) == user_tid and _user_dom > 0.0:
+                # Rubber banding: a runaway user club loses close calls (<= 5%).
+                val *= 1.0 - 0.05 * _user_dom
+            return val
 
         # Prefer best offer from a CPU team (user must sign via UI)
         offers = sorted(
@@ -1294,6 +1308,11 @@ def tick_free_agency_market(
     for _ in range(days):
         book["day"] = int(book.get("day") or 0) + 1
         day = int(book["day"])
+        if day == 1:
+            try:
+                _maybe_seed_mystery_box_fa(session, book)
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
 
         # Age every entry
         for entry in book["entries"].values():
@@ -1332,6 +1351,7 @@ def tick_free_agency_market(
 
         signed = _try_sign_leaning_players(session, max_signings=signs_cap)
         all_signings.extend(signed)
+        _mystery_box_reveal_check(session, book)
 
         # Decision counts for UI
         counts: Dict[str, int] = {}
@@ -1520,6 +1540,124 @@ def mark_fa_player_signed(session: Any, player_id: str) -> None:
     # Drop from live book next ensure — keep signed marker until pool drops them
     book["entries"] = entries
     session.fa_market_book = book
+    _mystery_box_reveal_check(session, book)
+
+
+#: Chance a free-agency period opens with one "mystery box" UFA (hidden true ratings).
+MYSTERY_BOX_FA_CHANCE = 0.35
+_MYSTERY_OUTCOMES = (("gem", 0.30, 7), ("as_listed", 0.50, 0), ("dud", 0.20, -5))
+
+
+def _maybe_seed_mystery_box_fa(session: Any, book: Dict[str, Any]) -> None:
+    """Goofy: on FA opening day one unremarkable UFA becomes a mystery box.
+
+    His listed OVR stays the pre-roll number; his real ratings shift (gem +7,
+    dud -5 per rating) and are revealed in the news when someone signs him.
+    """
+    if not getattr(session, "goofy_events_enabled", True) or book.get("mystery_box"):
+        return
+    import random
+    import zlib
+
+    season = int(getattr(session, "season_calendar_year", 0) or 0)
+    rng = random.Random(zlib.crc32(f"goofy_mystery_fa|{season}|{getattr(session, 'user_team_id', '')}".encode()))
+    if rng.random() >= MYSTERY_BOX_FA_CHANCE:
+        book["mystery_box"] = {"none": True}
+        return
+    league = getattr(getattr(session, "sim", None), "league", None)
+    pool = []
+    for p in _iter_domestic_fa_pool(league):
+        ovr = _player_ovr(p)
+        if 62 <= ovr <= 76 and 23 <= _fa_age(p) <= 31 and isinstance(getattr(p, "ratings", None), dict):
+            pool.append(p)
+    if not pool:
+        book["mystery_box"] = {"none": True}
+        return
+    player = rng.choice(sorted(pool, key=_player_id))
+    listed = int(round(_player_ovr(player)))
+    u = rng.random()
+    outcome, delta = "as_listed", 0
+    acc = 0.0
+    for name, w, d in _MYSTERY_OUTCOMES:
+        acc += w
+        if u < acc:
+            outcome, delta = name, d
+            break
+    if delta:
+        ratings = player.ratings
+        for k in list(ratings.keys()):
+            try:
+                ratings[k] = int(max(25, min(95, int(float(ratings[k])) + delta)))
+            except (TypeError, ValueError):
+                continue
+        try:
+            from app.sim_engine.entities.player import persist_recomputed_ovr
+
+            persist_recomputed_ovr(player)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    try:
+        setattr(player, "_mystery_box", outcome)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    ident = getattr(player, "identity", None)
+    name = str(getattr(ident, "name", "") or getattr(player, "name", "") or "Unknown")
+    book["mystery_box"] = {
+        "player_id": _player_id(player), "name": name, "listed_ovr": listed,
+        "outcome": outcome, "delta": delta, "revealed": False,
+    }
+    _mystery_box_story(
+        session, f"opening:{_player_id(player)}",
+        f"Mystery box on the market: {name}",
+        f"Nobody can agree on {name}. Scouts list him at {listed} OVR, his agent calls him 'a generational talent', "
+        "and his former coach just laughed. His real ratings stay hidden until someone signs him.",
+        _player_id(player),
+    )
+
+
+def _mystery_box_story(session: Any, key: str, headline: str, details: str, pid: str, team_id: str = "") -> None:
+    try:
+        from services.franchise_sim import _record_storyline
+
+        _record_storyline(session, {
+            "id": f"story:goofy:mystery_fa:{key}",
+            "type": "league",
+            "kind": "goofy",
+            "category": "free_agency",
+            "headline": headline,
+            "details": details,
+            "summary": details,
+            "player_id": pid,
+            "team_id": team_id,
+            "team": team_id,
+            "priority": "MEDIUM",
+            "date": str(getattr(session, "season_calendar_year", "") or ""),
+            "goofy": True,
+        })
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+
+
+def _mystery_box_reveal_check(session: Any, book: Dict[str, Any]) -> None:
+    mb = book.get("mystery_box") if isinstance(book, dict) else None
+    if not isinstance(mb, dict) or mb.get("none") or mb.get("revealed"):
+        return
+    pid = str(mb.get("player_id") or "")
+    entry = (book.get("entries") or {}).get(pid)
+    if not isinstance(entry, dict) or entry.get("state") != STATE_SIGNED:
+        return
+    mb["revealed"] = True
+    player = entry.get("player_ref")
+    team_id = str(getattr(player, "team_id", "") or "") if player is not None else ""
+    true_ovr = int(round(_player_ovr(player))) if player is not None else int(mb.get("listed_ovr") or 0)
+    name = str(mb.get("name") or "The mystery free agent")
+    if mb.get("outcome") == "gem":
+        head, body = f"Mystery box opened: {name} is a GEM", f"Listed at {mb.get('listed_ovr')}, he is actually {true_ovr} OVR. Somebody just won free agency."
+    elif mb.get("outcome") == "dud":
+        head, body = f"Mystery box opened: {name} is... a dud", f"Listed at {mb.get('listed_ovr')}, he is actually {true_ovr} OVR. The receipt has been misplaced."
+    else:
+        head, body = f"Mystery box opened: {name} is exactly as advertised", f"{true_ovr} OVR, same as the label said. Anticlimactic."
+    _mystery_box_story(session, f"reveal:{pid}", head, body, pid, team_id)
 
 
 def annotate_fa_rows_with_decisions(session: Any, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -1759,6 +1897,17 @@ def annotate_fa_rows_with_decisions(session: Any, rows: List[Dict[str, Any]]) ->
                     r["bonus_demand_label"] = f"Wants {_want:.0%} as signing bonus"
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
+        # Goofy mystery box: the board shows the listed (pre-roll) OVR, not the truth.
+        _mb = book.get("mystery_box") if isinstance(book, dict) else None
+        if isinstance(_mb, dict) and not _mb.get("revealed") and str(_mb.get("player_id") or "") == pid:
+            listed = _mb.get("listed_ovr")
+            for key in ("overall", "ovr"):
+                if key in r:
+                    r[key] = listed
+            r["mystery_box"] = True
+            r["mystery_label"] = "Mystery Box: true ratings hidden until he signs"
+            if r.get("name"):
+                r["name"] = f"{r['name']} (Mystery Box)"
         out.append(r)
     return out
 

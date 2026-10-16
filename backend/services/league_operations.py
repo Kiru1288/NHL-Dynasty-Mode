@@ -1599,6 +1599,9 @@ def build_franchise_pulse(session: FranchiseSession, ops: Dict[str, Any]) -> Dic
         "revenue_label": f"${_safe_float(user.get('revenue', 0)):.0f}M",
         "fan_spending": user.get("fan_label") or _fan_sentiment_label(_safe_float(user.get("fan_sentiment", 55))),
         "fan_sentiment": user.get("fan_sentiment", 55),
+        "fan_rating": user.get("fan_rating", user.get("fan_sentiment", 55)),
+        "fan_rank": user.get("fan_rank"),
+        "fan_rank_of": user.get("fan_rank_of"),
         "fan_label": user.get("fan_label") or _fan_sentiment_label(_safe_float(user.get("fan_sentiment", 55))),
         "boycott_risk": user.get("boycott_risk", "Low"),
         "cap_contribution_m": user.get("cap_contribution_m", 0),
@@ -1695,6 +1698,15 @@ def _build_league_operations_payload_impl(session: FranchiseSession) -> Dict[str
         row["profit_positive"] = prof >= 0
         row["fan_heat_pct"] = round(_safe_float(row.get("fan_sentiment", 55)), 1)
         row["relocation_bar_pct"] = round(_safe_float(row.get("relocation_risk", 0)) * 100, 1)
+    # Fan rating (0-100 fan sentiment) and where it sits league-wide (1 = hottest base).
+    fan_vals = sorted((round(_safe_float(r.get("fan_sentiment", 55), 55), 1) for r in team_rows), reverse=True)
+    for row in team_rows:
+        fan_val = _safe_float(row.get("fan_sentiment", 55), 55)
+        row["fan_rating"] = round(fan_val, 1)
+        # Competition ranking: tied ratings share a rank (1 + clubs strictly above).
+        row["fan_rank"] = 1 + sum(1 for v in fan_vals if v > row["fan_rating"])
+        row["fan_rank_of"] = len(team_rows)
+        row["fan_label"] = _fan_sentiment_label(fan_val)
 
     league_revenue = calculate_league_revenue(team_rows)
     total_superstar_boost = round(sum(_safe_float(t.get("superstar_revenue_boost", 0)) for t in team_rows), 1)

@@ -146,7 +146,8 @@ def _apply_environment(p: Any, team: Optional[Any]) -> None:
     coach_mod = 0.90 + 0.16 * min(1.0, coach)
     try:
         setattr(p, "_league_quality_mod", 0.88 + 0.2 * lq)
-        setattr(p, "_dev_env_growth_mult", org_mod * coach_mod)
+        staff = float(getattr(team, "_staff_dev_mult", 1.0) or 1.0) if team is not None else 1.0
+        setattr(p, "_dev_env_growth_mult", org_mod * coach_mod * staff)
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
 
@@ -265,14 +266,24 @@ def prospect_in_season_tick(session: Any) -> Dict[str, int]:
         try:
             rights = getattr(p, "nhl_rights_team_id", None)
             _apply_environment(p, teams.get(str(rights)) if rights is not None else None)
+            changed = False
             if apply_prospect_in_season_pulse(p, rng, season_id) != 0.0:
                 moved += 1
+                changed = True
             plan = getattr(p, "_prospect_season_plan", None) or {}
             pulses = int(plan.get("pulses", 0))
             if pulses and pulses % _PROSPECT_POT_REVIEW_EVERY == 0:
                 res = apply_prospect_potential_review(p, rng, season_id)
                 if res.get("applied") and abs(float(res.get("display_delta", 0.0) or 0.0)) > 0:
                     pot_moved += 1
+                    changed = True
+            if changed:
+                try:
+                    from services.franchise_sim import _record_rating_history
+
+                    _record_rating_history(session, p)
+                except Exception:
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
         except Exception:
             continue
     if moved or pot_moved:
@@ -301,6 +312,10 @@ def prospect_growth_fields(p: Any) -> Dict[str, Any]:
         if start is not None:
             cur = int(round(display_rating(player_current_ovr_01(p))))
             out["ovr_change_season"] = cur - int(start)
+            out["season_ovr_delta"] = out["ovr_change_season"]
+        hist = getattr(p, "rating_history", None)
+        if isinstance(hist, list) and hist:
+            out["rating_history"] = [dict(h) for h in hist[-30:] if isinstance(h, dict)]
         pstart = getattr(p, "season_start_potential", None)
         pcur = _pot_display(p)
         if pstart is not None and pcur is not None:

@@ -111,8 +111,20 @@ def _injury_wear(player: Any) -> float:
     wear = float(getattr(health, "wear_and_tear", 0.0) or 0.0) if health else 0.0
     hist = getattr(health, "injury_history", None) if health else None
     if isinstance(hist, list) and hist:
-        wear = max(wear, min(1.0, 0.08 * len(hist)))
+        # Injury count is only a proxy: a pile of minor knocks must never read as a
+        # career-ending injury (that retired healthy mid-20s stars).
+        wear = max(wear, min(0.6, 0.05 * len(hist)))
     return _clamp(wear)
+
+
+def _true_career_ending(player: Any) -> bool:
+    """Real career-ending health state (the tracked wear value, not the injury-count proxy)."""
+    health = getattr(player, "health", None)
+    try:
+        wear = float(getattr(health, "wear_and_tear", 0.0) or 0.0) if health else 0.0
+    except (TypeError, ValueError):
+        wear = 0.0
+    return wear >= 0.92 or bool(getattr(player, "career_ending_injury", False))
 
 
 def _player_morale(player: Any) -> float:
@@ -704,6 +716,32 @@ def _apply_retirement_cap_charge(session: FranchiseSession, team: Any, player: A
     if age_at_signing < 35 or future_years <= 0:
         row["buyout_annual_m"] = 0.0
         row["buyout_years"] = 0
+        # CBA cap-advantage recapture: a long front-loaded deal that ends by
+        # retirement charges the banked advantage over the seasons it had left.
+        try:
+            from services.contract_economy import cap_recapture_amount_m
+
+            recapture = float(cap_recapture_amount_m(player) or 0.0) if future_years > 0 else 0.0
+        except Exception:
+            recapture = 0.0
+        if recapture > 0.01:
+            per = round(recapture / future_years, 3)
+            buyouts = list(getattr(team, "buyout_cap_hits", None) or [])
+            for i in range(int(future_years)):
+                yr = first_season + i
+                buyouts.append({
+                    "season": f"{yr}-{(yr + 1) % 100:02d}",
+                    "amount_m": per,
+                    "player_id": _player_id(player),
+                    "player_name": _player_name(player),
+                    "source": "recapture",
+                })
+            try:
+                team.buyout_cap_hits = buyouts
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+            row["recapture_annual_m"] = per
+            row["recapture_years"] = int(future_years)
         return
     buyouts = list(getattr(team, "buyout_cap_hits", None) or [])
     for i in range(int(future_years)):
@@ -1240,13 +1278,24 @@ def run_franchise_retirement_pass(session: FranchiseSession) -> Dict[str, Any]:
                 retire_chance = max(retire_chance, 0.55)
             risk = int(round(_clamp(retire_chance, 0.0, 1.0) * 100))
 
+            # Age gate: nobody under 32 retires without a real career-ending injury, and
+            # healthy 32-33s only rarely do. Unknown age (0) counts as young.
+            if age < 32 and not _true_career_ending(player):
+                retire_chance = 0.0
+                risk = min(risk, 5)
+            elif age < 34 and not _true_career_ending(player):
+                cap_chance = 0.03 if ovr >= 0.62 else 0.08
+                if retire_chance > cap_chance:
+                    retire_chance = cap_chance
+                    risk = int(round(cap_chance * 100))
+
             healthy_star = ovr >= elite_cut and age < 35 and wear < 0.85 and not ctx.get("career_ending_injury")
             if healthy_star:
                 retire_chance = 0.0
                 risk = min(risk, 24)
 
             primary = str(getattr(decision, "primary_reason", "age") if decision else "age")
-            locked = _is_locked_retirement(risk, age, ovr, wear)
+            locked = _is_locked_retirement(risk, age, ovr, wear) and (age >= 34 or _true_career_ending(player))
             borderline = _is_user_borderline(session, tid, risk, age, locked)
 
             candidates.append(
@@ -1275,7 +1324,8 @@ def run_franchise_retirement_pass(session: FranchiseSession) -> Dict[str, Any]:
             c["chance"] *= factor
             c["risk"] = int(round(float(c["chance"]) * 100))
     elif projected < NHL_RETIREMENT_FLOOR and active:
-        low = sorted(active, key=lambda x: (-x["age"], x["ovr"]))[: max(1, NHL_RETIREMENT_FLOOR - int(projected))]
+        older = [c for c in active if int(c["age"]) >= 33]
+        low = sorted(older, key=lambda x: (-x["age"], x["ovr"]))[: max(1, NHL_RETIREMENT_FLOOR - int(projected))]
         for c in low:
             c["chance"] = min(0.65, float(c["chance"]) + 0.04)
             c["risk"] = int(round(float(c["chance"]) * 100))
@@ -1372,6 +1422,9 @@ def run_franchise_retirement_pass(session: FranchiseSession) -> Dict[str, Any]:
         tid = str(getattr(team, "team_id", getattr(team, "id", "")) or "")
         for player in list(getattr(team, "roster", None) or []):
             if not getattr(player, "retired", False):
+                continue
+            # Deaths are not retirements; they are announced by their own event.
+            if getattr(player, "deceased", False) or getattr(player, "_universe_deceased", False):
                 continue
             pid = _player_id(player)
             if any(str(r.get("player_id")) == pid for r in payload["all"]):

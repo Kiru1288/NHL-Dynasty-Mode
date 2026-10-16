@@ -4,7 +4,7 @@
  * The goal: a scout file you *see* instead of read.
  *  - OVR / Potential always come with how sure your staff is (certainty ring + a
  *    "could really be" band), so a thin file never looks like a finished one.
- *  - Skills show a dramatic tier (AWFUL → GENERATIONAL) and where the kid ranks
+ *  - Skills show a dramatic tier (AWFUL → WORLD-CLASS) and where the kid ranks
  *    among this draft class (percentile bars + radar).
  *  - Class rank, NHL odds and career outcomes as dials / donuts.
  *
@@ -12,6 +12,7 @@
  */
 
 import React, { createContext, useContext } from "react";
+import { createPortal } from "react-dom";
 
 /* ------------------------------------------------------------------ */
 /* Class pool context (for percentiles)                                 */
@@ -41,7 +42,7 @@ function clamp(v, lo, hi) {
 
 /** Dramatic skill tiers — the word should tell you how good, at a glance. */
 export const SKILL_TIERS = [
-  { min: 92, key: "generational", label: "GENERATIONAL", color: "#ff5fd2" },
+  { min: 92, key: "world-class", label: "WORLD-CLASS", color: "#ff5fd2" },
   { min: 86, key: "elite", label: "ELITE", color: "#f6c453" },
   { min: 80, key: "great", label: "GREAT", color: "#52df94" },
   { min: 74, key: "very-good", label: "VERY GOOD", color: "#13d8e7" },
@@ -142,6 +143,109 @@ export function percentileLabel(p) {
 /* Components                                                           */
 /* ------------------------------------------------------------------ */
 
+/** NHL-role ladder for a potential/ceiling number (calibrated to the NHL rating spread). */
+export const PROJECTION_TIERS = [
+  { min: 94, key: "franchise", label: "FRANCHISE", color: "#f6c453" },
+  { min: 90, key: "elite", label: "FIRST LINE", color: "#52df94" },
+  { min: 86, key: "great", label: "TOP SIX", color: "#13d8e7" },
+  { min: 82, key: "very-good", label: "MIDDLE SIX", color: "#8ab4ff" },
+  { min: 77, key: "good", label: "BOTTOM SIX", color: "#9fb3c4" },
+  { min: 72, key: "average", label: "FRINGE NHL", color: "#ffb35c" },
+  { min: 0, key: "weak", label: "LONG SHOT", color: "#ff7a5c" },
+];
+
+export function projectionTier(value) {
+  const v = n(value);
+  if (v == null || v <= 0) return { key: "unknown", label: "UNKNOWN", color: "#607789" };
+  return PROJECTION_TIERS.find((t) => v >= t.min) || PROJECTION_TIERS[PROJECTION_TIERS.length - 1];
+}
+
+/** Class tier ladder colours (backend class_tier.key). */
+const CLASS_TIER_COLORS = {
+  transcendent: "#ffd24a",
+  generational: "#ff6b2d",
+  franchise: "#f6c453",
+  blue_chip: "#52df94",
+  first_line: "#13d8e7",
+  first_round: "#8ab4ff",
+  second_round: "#9fb3c4",
+  mid_round: "#8096a8",
+  late_flyer: "#a78b6a",
+};
+
+const PCT_LABELS = {
+  scoring: "Scoring",
+  nhle: "NHLe",
+  size: "Size",
+  skating: "Skating",
+  shooting: "Shooting",
+  hockey_iq: "Hockey IQ",
+  defense: "Defense",
+  physical: "Physical",
+  save_pct: "Save %",
+};
+
+/**
+ * Plain, common draft indicators: consensus rank, class tier, stat line, NHLe and
+ * percentile ranks within the class (from backend class_indicators).
+ */
+export function ClassIndicators({ indicators }) {
+  const ci = indicators && typeof indicators === "object" ? indicators : null;
+  if (!ci) return null;
+  const tier = ci.tier || {};
+  const line = ci.stat_line || {};
+  const pcts = ci.percentiles || {};
+  const goalie = ci.position_group === "G";
+  const gp = n(line.gp) ?? 0;
+  const pm = n(line.plus_minus);
+  const color = CLASS_TIER_COLORS[tier.key] || "#8ab4ff";
+  const pctKeys = Object.keys(PCT_LABELS).filter((k) => pcts[k] != null);
+  return (
+    <section className="pv-class">
+      <div className="pv-class__head">
+        {tier.label ? <TierBadge tier={{ key: tier.key, label: tier.label, color }} /> : null}
+        {ci.consensus_rank != null ? <strong>Consensus #{ci.consensus_rank}</strong> : null}
+        {ci.class_percentile != null ? <span>{percentileLabel(ci.class_percentile)} of class</span> : null}
+        {ci.nhle != null ? <span>NHLe {ci.nhle} pts / 82</span> : null}
+      </div>
+      <div className="pv-class__line">
+        {line.league ? <span><b>LEAGUE</b>{line.league}</span> : null}
+        <span><b>GP</b>{gp}</span>
+        {goalie ? (
+          <>
+            <span><b>W</b>{line.wins ?? 0}</span>
+            <span><b>SV%</b>{n(line.save_pct) ? Number(line.save_pct).toFixed(3) : "—"}</span>
+            <span><b>GAA</b>{n(line.gaa) ? Number(line.gaa).toFixed(2) : "—"}</span>
+          </>
+        ) : (
+          <>
+            <span><b>G</b>{line.goals ?? 0}</span>
+            <span><b>A</b>{line.assists ?? 0}</span>
+            <span><b>P</b>{line.points ?? 0}</span>
+            <span><b>+/-</b>{pm == null ? (gp > 0 ? 0 : "—") : pm > 0 ? `+${pm}` : pm}</span>
+            <span><b>P/GP</b>{line.ppg != null ? Number(line.ppg).toFixed(2) : "—"}</span>
+          </>
+        )}
+      </div>
+      {pctKeys.length ? (
+        <div className="pv-class__pcts">
+          {pctKeys.map((k) => {
+            const p = clamp(n(pcts[k]) ?? 0, 0, 100);
+            const c = p >= 90 ? "#52df94" : p >= 65 ? "#13d8e7" : p >= 35 ? "#8ab4ff" : "#ffb35c";
+            return (
+              <div key={k} className="pv-class__pct" title={`${p}th percentile in this class`}>
+                <span>{PCT_LABELS[k]}</span>
+                <strong>{p}</strong>
+                <i style={{ "--w": `${Math.max(2, p)}%`, "--c": c }} />
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 export function TierBadge({ value, tier: tierIn, small = false }) {
   const tier = tierIn || skillTier(value);
   return (
@@ -203,7 +307,7 @@ export function RatingCertaintyGauge({ title, valueText, range, certainty, tone 
       <div className="pv-gauge__head">
         <span>{title}</span>
         <strong style={{ color }}>{hidden ? hiddenText : valueText || "—"}</strong>
-        {!hidden && r ? <TierBadge value={r.mid} small /> : null}
+        {!hidden && r ? <TierBadge tier={tone === "gold" ? projectionTier(r.mid) : undefined} value={r.mid} small /> : null}
       </div>
       <div className="pv-gauge__body">
         <div className="pv-gauge__track" aria-hidden="true">
@@ -420,15 +524,23 @@ export function ProspectVisualStyles() {
 
 const PV_CSS = `
 .pv-tier{
-  display:inline-flex;align-items:center;justify-content:center;
-  padding:3px 8px;border-radius:4px;font-size:10.5px;font-weight:1000;letter-spacing:.12em;
-  color:var(--tier);background:color-mix(in srgb, var(--tier) 14%, transparent);
-  border:1px solid color-mix(in srgb, var(--tier) 45%, transparent);
-  white-space:nowrap;line-height:1.1;
+  display:inline-block;padding:0;background:none;border:0;border-radius:0;
+  font-family:var(--ed-head, inherit);font-size:10.5px;font-weight:800;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--tier);white-space:nowrap;line-height:1.1;
 }
-.pv-tier.is-small{padding:2px 6px;font-size:9.5px;letter-spacing:.1em;}
-.pv-tier--elite,.pv-tier--generational{box-shadow:0 0 10px color-mix(in srgb, var(--tier) 40%, transparent);}
-.pv-tier--generational{animation:pv-shimmer 2.4s ease-in-out infinite;}
+.pv-tier.is-small{font-size:9.5px;letter-spacing:.12em;}
+.pv-tier--world-class,.pv-tier--franchise,.pv-tier--generational,.pv-tier--transcendent{text-shadow:0 0 8px color-mix(in srgb, var(--tier) 45%, transparent);}
+.pv-class{display:grid;gap:10px;margin:10px 0;padding:10px 12px;border-top:1px solid rgba(128,150,168,.22);border-bottom:1px solid rgba(128,150,168,.22);}
+.pv-class__head{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 14px;}
+.pv-class__head strong{font-size:12px;letter-spacing:.08em;color:#e2edf6;}
+.pv-class__head span{font-size:11px;color:#8096a8;}
+.pv-class__line{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12px;color:#c9d6e2;font-variant-numeric:tabular-nums;}
+.pv-class__line b{color:#8096a8;font-weight:600;margin-right:3px;font-size:10.5px;letter-spacing:.08em;}
+.pv-class__pcts{display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:6px 12px;}
+.pv-class__pct{display:grid;grid-template-columns:1fr auto;gap:2px 6px;font-size:10.5px;color:#8096a8;letter-spacing:.06em;text-transform:uppercase;}
+.pv-class__pct strong{color:#e2edf6;font-variant-numeric:tabular-nums;}
+.pv-class__pct i{grid-column:1 / -1;height:3px;background:rgba(128,150,168,.18);position:relative;}
+.pv-class__pct i::after{content:"";position:absolute;left:0;top:0;bottom:0;width:var(--w);background:var(--c);}
 .pv-tier--awful,.pv-tier--bad{font-style:italic;}
 .pv-tier--unknown{--tier:#607789;color:#8096a8;}
 @keyframes pv-shimmer{0%,100%{filter:brightness(1)}50%{filter:brightness(1.35)}}
@@ -516,5 +628,606 @@ export function CertaintyChip({ certainty }) {
       <i style={{ "--w": `${clamp(n(certainty) ?? 0, 0, 100)}%`, "--c": t.color }} />
       {short}
     </span>
+  );
+}
+
+
+/* ------------------------------------------------------------------ */
+/* Box scores + player game logs (Calendar + Player Dossier)            */
+/* Styles: components/dossier/PlayerDossier.css (bxs-*), drawn in the  */
+/* Entry Draft broadcast language (ops navy panels, gold numbers).      */
+/* ------------------------------------------------------------------ */
+
+const fmtClock = (sec) => {
+  const s = Math.max(0, Math.round(Number(sec) || 0));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+};
+const fmtPct = (v, digits = 1) => (v == null || !Number.isFinite(Number(v)) ? "—" : `${(Number(v) * 100).toFixed(digits)}%`);
+const fmtSv = (v) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(3).replace(/^0/, ""));
+const fmtSigned = (v) => (Number(v) > 0 ? `+${v}` : String(v ?? 0));
+const fmtNum = (v, digits = 0) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(digits));
+
+function BoxSkaterTable({ rows, onOpenPlayer }) {
+  if (!rows || !rows.length) return <p className="bxs-empty">No skater lines stored.</p>;
+  return (
+    <div className="bxs-table-wrap">
+      <table className="bxs-table">
+        <thead>
+          <tr>
+            <th className="bxs-l">Skater</th>
+            <th>G</th>
+            <th>A</th>
+            <th>P</th>
+            <th>+/-</th>
+            <th>PIM</th>
+            <th>SOG</th>
+            <th>HIT</th>
+            <th>BLK</th>
+            <th title="Faceoffs won-lost">FO</th>
+            <th title="Takeaways">TK</th>
+            <th title="Giveaways">GV</th>
+            <th>CF%</th>
+            <th>TOI</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.player_id} className={r.pts > 0 ? "is-scored" : ""}>
+              <td className="bxs-l">
+                {onOpenPlayer ? (
+                  <button type="button" className="bxs-link" onClick={() => onOpenPlayer(r.player_id)}>
+                    {r.name}
+                  </button>
+                ) : (
+                  r.name
+                )}
+                <em>{r.pos}</em>
+              </td>
+              <td>{r.g}</td>
+              <td>{r.a}</td>
+              <td className="bxs-strong">{r.pts}</td>
+              <td className={r.pm > 0 ? "bxs-good" : r.pm < 0 ? "bxs-bad" : ""}>{fmtSigned(r.pm)}</td>
+              <td>{r.pim}</td>
+              <td>{r.sog}</td>
+              <td>{r.hit}</td>
+              <td>{r.blk}</td>
+              <td title={r.fo_pct != null ? fmtPct(r.fo_pct, 0) : undefined}>{r.fow + r.fol ? `${r.fow}-${r.fol}` : "—"}</td>
+              <td>{r.tk ?? 0}</td>
+              <td>{r.gv ?? 0}</td>
+              <td>{fmtPct(r.cf_pct, 0)}</td>
+              <td>{fmtClock(r.toi_sec)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function BoxGoalieTable({ rows }) {
+  if (!rows || !rows.length) return null;
+  return (
+    <div className="bxs-table-wrap">
+      <table className="bxs-table">
+        <thead>
+          <tr>
+            <th className="bxs-l">Goalie</th>
+            <th>DEC</th>
+            <th>SA</th>
+            <th>SV</th>
+            <th>GA</th>
+            <th>SV%</th>
+            <th>TOI</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((g) => (
+            <tr key={g.player_id}>
+              <td className="bxs-l">
+                {g.name}
+                {g.shutout ? <em className="bxs-tag">SO</em> : null}
+              </td>
+              <td>{g.decision || "—"}</td>
+              <td>{g.sa}</td>
+              <td>{g.sv}</td>
+              <td>{g.ga}</td>
+              <td className="bxs-strong">{fmtSv(g.sv_pct)}</td>
+              <td>{fmtClock(g.toi_sec)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** Full box score sheet. Pass `box` directly or a `gameId` to fetch. */
+export function BoxScoreView({ box }) {
+  const [side, setSide] = React.useState("away");
+  if (!box) return null;
+  const { home, away } = box;
+  const labels = box.period_labels || ["1st", "2nd", "3rd"];
+  const teamName = (tid) => (String(tid) === String(home.id) ? home.abbr || home.name : away.abbr || away.name);
+  const teamStats = [
+    ["Shots", away.sog, home.sog],
+    ["Shot attempts", away.shot_attempts, home.shot_attempts],
+    ["xG", fmtNum(away.xg, 2), fmtNum(home.xg, 2)],
+    ["Power play", `${away.pp_goals}/${away.ppo}`, `${home.pp_goals}/${home.ppo}`],
+    ["PIM", away.pim, home.pim],
+    ["Hits", away.hits, home.hits],
+    ["Blocks", away.blocks, home.blocks],
+    [
+      "Faceoffs",
+      away.faceoffs ? `${away.faceoffs.won} (${fmtPct(away.faceoffs.pct, 0)})` : "—",
+      home.faceoffs ? `${home.faceoffs.won} (${fmtPct(home.faceoffs.pct, 0)})` : "—",
+    ],
+    ["Takeaways", away.takeaways ?? "—", home.takeaways ?? "—"],
+    ["Giveaways", away.giveaways ?? "—", home.giveaways ?? "—"],
+  ];
+  const byPeriod = {};
+  (box.goals || []).forEach((g) => {
+    const key = g.period ? (g.period >= 4 ? "OT" : labels[g.period - 1] || `P${g.period}`) : "Scoring";
+    (byPeriod[key] = byPeriod[key] || []).push(g);
+  });
+  const sel = side === "home" ? home : away;
+  return (
+    <div className="bxs-sheet">
+      <section className="bxs-hero">
+        {[away, home].map((t, i) => (
+          <div key={t.id} className={`bxs-hero-team ${t.goals > (i ? away.goals : home.goals) ? "is-winner" : ""}`}>
+            <span className="bxs-hero-abbr">{t.abbr || t.id}</span>
+            <span className="bxs-hero-name">{t.name}</span>
+            <strong className="bxs-hero-score">{t.goals}</strong>
+          </div>
+        ))}
+        <div className="bxs-hero-meta">
+          <span>{box.shootout ? "Final / SO" : box.overtime ? "Final / OT" : "Final"}</span>
+          <span>{box.date}</span>
+          {box.scope && box.scope !== "regular_season" ? <span>{String(box.scope).replace(/_/g, " ")}</span> : null}
+        </div>
+      </section>
+
+      <section className="bxs-grid-2">
+        <div className="bxs-card">
+          <h4>Scoring by period</h4>
+          <table className="bxs-table bxs-compact">
+            <thead>
+              <tr>
+                <th className="bxs-l">Team</th>
+                {labels.map((l) => (
+                  <th key={l}>{l}</th>
+                ))}
+                <th>T</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[away, home].map((t) => (
+                <tr key={t.id}>
+                  <td className="bxs-l">{t.abbr || t.name}</td>
+                  {labels.map((l, i) => (
+                    <td key={l}>{t.periods?.[i] ?? 0}</td>
+                  ))}
+                  <td className="bxs-strong">{t.goals}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <h4>Shots by period</h4>
+          <table className="bxs-table bxs-compact">
+            <tbody>
+              {[away, home].map((t) => (
+                <tr key={t.id}>
+                  <td className="bxs-l">{t.abbr || t.name}</td>
+                  {labels.map((l, i) => (
+                    <td key={l}>{t.shots?.[i] ?? 0}</td>
+                  ))}
+                  <td className="bxs-strong">{t.sog}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="bxs-card">
+          <h4>Team stats</h4>
+          <div className="bxs-teamstats">
+            <div className="bxs-teamstats-head">
+              <span>{away.abbr || away.name}</span>
+              <span />
+              <span>{home.abbr || home.name}</span>
+            </div>
+            {teamStats.map(([label, a, h]) => (
+              <div key={label} className="bxs-teamstats-row">
+                <b>{a}</b>
+                <span>{label}</span>
+                <b>{h}</b>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section className="bxs-card">
+        <h4>Scoring summary</h4>
+        {!box.event_detail ? (
+          <p className="bxs-note">Simmed in bulk: scorers are recorded, goal times are not.</p>
+        ) : null}
+        {Object.keys(byPeriod).length === 0 ? <p className="bxs-empty">No goals.</p> : null}
+        {Object.entries(byPeriod).map(([period, goals]) => (
+          <div key={period} className="bxs-period">
+            <div className="bxs-period-label">{period}</div>
+            {goals.map((g, i) => (
+              <div key={i} className="bxs-goal">
+                <span className="bxs-goal-time">{g.clock || "—"}</span>
+                <span className="bxs-goal-team">{teamName(g.team_id)}</span>
+                <span className="bxs-goal-who">
+                  <strong>{g.scorer?.name}</strong>
+                  {g.assists?.length ? <small> ({g.assists.map((a) => a.name).join(", ")})</small> : <small> (unassisted)</small>}
+                </span>
+                <span className="bxs-goal-tags">
+                  {g.strength && g.strength !== "EV" ? <em className="bxs-tag">{g.strength}</em> : null}
+                  {g.empty_net ? <em className="bxs-tag">EN</em> : null}
+                  {g.overtime ? <em className="bxs-tag">OT</em> : null}
+                  {g.gwg ? <em className="bxs-tag is-gold">GWG</em> : null}
+                  {g.tag ? (
+                    <em className="bxs-tag is-gold" title="Rink oddity">
+                      {{
+                        goalie_goal: "GOALIE GOAL",
+                        penalty_shot: "PENALTY SHOT",
+                        fluke_ref_skate: "OFF REF'S SKATE",
+                        fluke_broken_stick: "BROKEN STICK",
+                        fluke_boards: "BOARDS BOUNCE",
+                      }[g.tag] || "FLUKE"}
+                    </em>
+                  ) : null}
+                </span>
+                {g.score ? <span className="bxs-goal-score">{g.score}</span> : null}
+              </div>
+            ))}
+          </div>
+        ))}
+      </section>
+
+      {box.fun_events?.length ? (
+        <section className="bxs-card">
+          <h4>Rink oddities</h4>
+          {box.fun_events.map((ev, i) => (
+            <p key={`${ev.kind}-${i}`} className="bxs-note">
+              <strong>{ev.headline}</strong> {ev.text}
+            </p>
+          ))}
+        </section>
+      ) : null}
+
+      {box.stars?.length ? (
+        <section className="bxs-card">
+          <h4>Three stars</h4>
+          <div className="bxs-stars">
+            {box.stars.map((s) => (
+              <div key={s.player_id} className="bxs-star">
+                <span className="bxs-star-rank">{"★".repeat(s.rank)}</span>
+                <strong>{s.name}</strong>
+                <small>
+                  {teamName(s.team_id)} · {s.line}
+                </small>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      <section className="bxs-card">
+        <div className="bxs-tabs">
+          {[
+            ["away", away],
+            ["home", home],
+          ].map(([k, t]) => (
+            <button key={k} type="button" className={side === k ? "is-active" : ""} onClick={() => setSide(k)}>
+              {t.name}
+            </button>
+          ))}
+        </div>
+        <BoxSkaterTable rows={box.skaters?.[side]} />
+        <BoxGoalieTable rows={box.goalies?.[side]} />
+        <p className="bxs-note">{sel.name}: {sel.hits} hits, {sel.blocks} blocks.</p>
+      </section>
+    </div>
+  );
+}
+
+/** Modal wrapper — fetches `/api/franchise/box-score/{gameId}`. */
+export function BoxScoreModal({ gameId, onClose, fetchBox }) {
+  const [box, setBox] = React.useState(null);
+  const [error, setError] = React.useState("");
+  React.useEffect(() => {
+    let live = true;
+    setBox(null);
+    setError("");
+    if (!gameId) return undefined;
+    Promise.resolve(fetchBox(gameId))
+      .then((b) => live && setBox(b))
+      .catch((e) => live && setError(e?.response?.status === 404 ? "No box score stored for this game." : "Could not load the box score."));
+    return () => {
+      live = false;
+    };
+  }, [gameId, fetchBox]);
+  React.useEffect(() => {
+    const onKey = (e) => e.key === "Escape" && onClose?.();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  if (!gameId) return null;
+  const modal = (
+    <div className="bxs-backdrop" role="presentation" onClick={onClose}>
+      <div className="bxs-modal" role="dialog" aria-modal="true" aria-label="Box score" onClick={(e) => e.stopPropagation()}>
+        <header>
+          <div>
+            <p>Box score</p>
+            <h2>{box ? `${box.away.name} @ ${box.home.name}` : "Loading…"}</h2>
+          </div>
+          <button type="button" className="bxs-close" onClick={onClose} aria-label="Close box score">
+            ×
+          </button>
+        </header>
+        <div className="bxs-modal-body">
+          {error ? <p className="bxs-empty">{error}</p> : box ? <BoxScoreView box={box} /> : <p className="bxs-empty">Loading…</p>}
+        </div>
+      </div>
+    </div>
+  );
+  return typeof document !== "undefined" && document.body ? createPortal(modal, document.body) : modal;
+}
+
+function PerfTile({ label, value, tone }) {
+  return (
+    <div className={`bxs-tile ${tone ? `is-${tone}` : ""}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+/**
+ * Performance tab body: season totals (counting + analytics), game log, WJC.
+ * `log` is the `/game-log` payload; `onOpenGame(gameId)` opens a box score.
+ */
+export function PlayerPerformanceLog({ log, onOpenGame, scope: scopeProp }) {
+  const totalsByScope = log?.totals || {};
+  const scopes = Object.keys(totalsByScope);
+  const [scope, setScope] = React.useState(scopeProp || "regular_season");
+  const activeScope = totalsByScope[scope] ? scope : scopes[0];
+  const t = totalsByScope[activeScope] || null;
+  const games = (log?.games || []).filter((g) => !activeScope || (g.scope || "regular_season") === activeScope);
+  const L = log?.season_ledger || {};
+  const goalie = Boolean(log?.is_goalie);
+  const xgf = Number(L.xgf || 0);
+  const xga = Number(L.xga || 0);
+  const wjc = log?.wjc || [];
+  return (
+    <div className="bxs-perf">
+      {scopes.length > 1 ? (
+        <div className="bxs-tabs">
+          {scopes.map((s) => (
+            <button key={s} type="button" className={s === activeScope ? "is-active" : ""} onClick={() => setScope(s)}>
+              {s.replace(/_/g, " ")}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {t ? (
+        goalie ? (
+          <div className="bxs-tiles">
+            <PerfTile label="GP / GS" value={`${t.gp} / ${t.gs}`} />
+            <PerfTile label="W-L-OTL" value={`${t.w}-${t.l}-${t.otl}`} />
+            <PerfTile label="SV%" value={fmtSv(t.sv_pct)} tone="gold" />
+            <PerfTile label="GAA" value={fmtNum(t.gaa, 2)} />
+            <PerfTile label="SA / SV" value={`${t.sa} / ${t.sv}`} />
+            <PerfTile label="SO" value={t.so} />
+            <PerfTile label="QS / QS%" value={`${t.qs} / ${fmtPct(t.qs_pct, 0)}`} />
+            <PerfTile label="TOI" value={fmtClock(t.toi_sec)} />
+            <PerfTile label="xGA" value={L.goalie_xga != null ? fmtNum(L.goalie_xga, 1) : "—"} />
+            <PerfTile
+              label="GSAx"
+              value={L.goalie_xga != null && L.ga != null ? fmtNum(Number(L.goalie_xga) - Number(L.ga), 1) : "—"}
+            />
+            <PerfTile label="Stars" value={t.stars} />
+          </div>
+        ) : (
+          <>
+            <h4 className="bxs-h">Counting</h4>
+            <div className="bxs-tiles">
+              <PerfTile label="GP" value={t.gp} />
+              <PerfTile label="G" value={t.g} tone="gold" />
+              <PerfTile label="A" value={t.a} />
+              <PerfTile label="PTS" value={t.pts} tone="gold" />
+              <PerfTile label="+/-" value={fmtSigned(t.pm)} tone={t.pm > 0 ? "good" : t.pm < 0 ? "bad" : ""} />
+              <PerfTile label="PIM" value={t.pim} />
+              <PerfTile label="PPG / PPP" value={`${t.ppg} / ${t.ppp}`} />
+              <PerfTile label="SHG / SHP" value={`${t.shg} / ${t.shp}`} />
+              <PerfTile label="EVG / EVP" value={`${t.evg} / ${t.evp}`} />
+              <PerfTile label="GWG" value={t.gwg} />
+              <PerfTile label="SOG" value={t.sog} />
+              <PerfTile label="SH%" value={fmtPct(t.sh_pct)} />
+              <PerfTile label="Hits" value={t.hit} />
+              <PerfTile label="Blocks" value={t.blk} />
+              <PerfTile label="FO%" value={t.fo_pct != null ? `${fmtPct(t.fo_pct)} (${t.fow}-${t.fol})` : "—"} />
+              <PerfTile label="TK / GV" value={`${t.tk ?? 0} / ${t.gv ?? 0}`} />
+              <PerfTile label="Multi-pt games" value={t.multi_point_games} />
+              <PerfTile label="Best pt streak" value={t.longest_point_streak} />
+            </div>
+            <h4 className="bxs-h">Analytics &amp; usage</h4>
+            <div className="bxs-tiles">
+              <PerfTile label="TOI/GP" value={fmtClock(t.toi_per_gp)} />
+              <PerfTile label="EV TOI/GP" value={fmtClock(t.ev_toi_per_gp)} />
+              <PerfTile label="PP TOI/GP" value={fmtClock(t.pp_toi_per_gp)} />
+              <PerfTile label="SH TOI/GP" value={fmtClock(t.pk_toi_per_gp)} />
+              <PerfTile label="CF%" value={fmtPct(t.cf_pct)} tone={t.cf_pct >= 0.52 ? "good" : t.cf_pct && t.cf_pct < 0.48 ? "bad" : ""} />
+              <PerfTile label="ixG" value={fmtNum(t.ixg, 1)} />
+              <PerfTile label="G - ixG" value={fmtNum(t.g - t.ixg, 1)} />
+              <PerfTile label="xGF%" value={xgf + xga > 0 ? fmtPct(xgf / (xgf + xga)) : "—"} />
+              <PerfTile label="On-ice xGF / xGA" value={xgf + xga > 0 ? `${fmtNum(xgf, 1)} / ${fmtNum(xga, 1)}` : "—"} />
+              <PerfTile label="P/60" value={fmtNum(t.p60, 2)} />
+              <PerfTile label="A1 / A2" value={L.primary_assists != null ? `${L.primary_assists} / ${L.secondary_assists ?? 0}` : "—"} />
+              <PerfTile label="Stars" value={t.stars} />
+            </div>
+          </>
+        )
+      ) : (
+        <p className="bxs-empty">No stored games this season yet. Lines appear as games are played.</p>
+      )}
+
+      {games.length ? (
+        <>
+          <h4 className="bxs-h">Game log · {log.season}</h4>
+          <div className="bxs-table-wrap bxs-log">
+            <table className="bxs-table">
+              <thead>
+                {goalie ? (
+                  <tr>
+                    <th className="bxs-l">Date</th>
+                    <th className="bxs-l">Opp</th>
+                    <th className="bxs-l">Result</th>
+                    <th>DEC</th>
+                    <th>SA</th>
+                    <th>SV</th>
+                    <th>GA</th>
+                    <th>SV%</th>
+                    <th>TOI</th>
+                  </tr>
+                ) : (
+                  <tr>
+                    <th className="bxs-l">Date</th>
+                    <th className="bxs-l">Opp</th>
+                    <th className="bxs-l">Result</th>
+                    <th>G</th>
+                    <th>A</th>
+                    <th>P</th>
+                    <th>+/-</th>
+                    <th>PIM</th>
+                    <th>SOG</th>
+                    <th>PPP</th>
+                    <th>HIT</th>
+                    <th>BLK</th>
+                    <th title="Faceoffs won-lost">FO</th>
+                    <th title="Takeaways / giveaways">TK/GV</th>
+                    <th>CF%</th>
+                    <th>ixG</th>
+                    <th>TOI</th>
+                  </tr>
+                )}
+              </thead>
+              <tbody>
+                {[...games].reverse().map((g) => (
+                  <tr
+                    key={g.game_id}
+                    className={`${onOpenGame ? "is-clickable" : ""} ${g.pts >= 2 || g.shutout ? "is-scored" : ""}`}
+                    onClick={onOpenGame ? () => onOpenGame(g.game_id) : undefined}
+                    title={onOpenGame ? "Open box score" : undefined}
+                  >
+                    <td className="bxs-l">{String(g.date || "").slice(5)}</td>
+                    <td className="bxs-l">
+                      {g.home ? "vs" : "@"} {g.opp_name}
+                    </td>
+                    <td className={`bxs-l ${g.team_result === "W" ? "bxs-good" : "bxs-bad"}`}>{g.result}</td>
+                    {goalie ? (
+                      <>
+                        <td>{g.decision}</td>
+                        <td>{g.sa}</td>
+                        <td>{g.sv}</td>
+                        <td>{g.ga}</td>
+                        <td className="bxs-strong">{fmtSv(g.sv_pct)}</td>
+                        <td>{fmtClock(g.toi_sec)}</td>
+                      </>
+                    ) : (
+                      <>
+                        <td>
+                          {g.g}
+                          {g.gwg ? <em className="bxs-tag is-gold">GW</em> : null}
+                        </td>
+                        <td>{g.a}</td>
+                        <td className="bxs-strong">{g.pts}</td>
+                        <td className={g.pm > 0 ? "bxs-good" : g.pm < 0 ? "bxs-bad" : ""}>{fmtSigned(g.pm)}</td>
+                        <td>{g.pim}</td>
+                        <td>{g.sog}</td>
+                        <td>{g.ppg + g.ppa}</td>
+                        <td>{g.hit}</td>
+                        <td>{g.blk}</td>
+                        <td>{g.fow + g.fol ? `${g.fow}-${g.fol}` : "—"}</td>
+                        <td>{`${g.tk ?? 0}/${g.gv ?? 0}`}</td>
+                        <td>{fmtPct(g.cf_pct, 0)}</td>
+                        <td>{fmtNum(g.ixg, 2)}</td>
+                        <td>{fmtClock(g.toi_sec)}</td>
+                      </>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      ) : null}
+
+      {wjc.length ? (
+        <>
+          <h4 className="bxs-h">World Junior Championship</h4>
+          <div className="bxs-table-wrap">
+            <table className="bxs-table">
+              <thead>
+                <tr>
+                  <th className="bxs-l">Year</th>
+                  <th className="bxs-l">Team</th>
+                  <th className="bxs-l">Result</th>
+                  <th>GP</th>
+                  {goalie ? (
+                    <>
+                      <th>W-L</th>
+                      <th>SV%</th>
+                      <th>SO</th>
+                    </>
+                  ) : (
+                    <>
+                      <th>G</th>
+                      <th>A</th>
+                      <th>P</th>
+                      <th>+/-</th>
+                    </>
+                  )}
+                  <th className="bxs-l">Grade</th>
+                </tr>
+              </thead>
+              <tbody>
+                {wjc.map((w) => (
+                  <tr key={w.year}>
+                    <td className="bxs-l">{w.year}</td>
+                    <td className="bxs-l">{w.team || "—"}</td>
+                    <td className="bxs-l">{w.result || "—"}</td>
+                    <td>{w.gp}</td>
+                    {goalie ? (
+                      <>
+                        <td>{`${w.w ?? 0}-${w.l ?? 0}`}</td>
+                        <td>{w.sv_pct != null ? fmtSv(Number(w.sv_pct) > 1 ? Number(w.sv_pct) / 100 : w.sv_pct) : "—"}</td>
+                        <td>{w.shutouts ?? 0}</td>
+                      </>
+                    ) : (
+                      <>
+                        <td>{w.goals}</td>
+                        <td>{w.assists}</td>
+                        <td className="bxs-strong">{w.points}</td>
+                        <td>{fmtSigned(w.plus_minus ?? 0)}</td>
+                      </>
+                    )}
+                    <td className="bxs-l">{w.performance_grade ? String(w.performance_grade).replace(/_/g, " ") : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {wjc.filter((w) => w.summary).map((w) => (
+            <p key={`s${w.year}`} className="bxs-note">
+              {w.year}: {w.summary}
+            </p>
+          ))}
+        </>
+      ) : null}
+    </div>
   );
 }

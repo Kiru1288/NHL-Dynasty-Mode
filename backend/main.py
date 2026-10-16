@@ -550,12 +550,15 @@ def post_franchise_expansion_protection(
 ) -> dict[str, Any]:
     """Save the user's expansion-draft protection list (7F / 3D / 1G)."""
     from services.json_safe import json_safe
-    from services.league_governance import build_governance_payload, set_expansion_protection
+    from services.league_governance import build_governance_payload, set_expansion_protection, set_expansion_schedule
 
     s = _session_or_404(x_franchise_session)
     b = body or {}
     try:
-        set_expansion_protection(s, [str(x) for x in (b.get("player_ids") or [])])
+        if b.get("schedule_every") is not None:
+            set_expansion_schedule(s, int(b.get("schedule_every") or 0))
+        if b.get("player_ids") is not None or b.get("scheme"):
+            set_expansion_protection(s, [str(x) for x in (b.get("player_ids") or [])], scheme=b.get("scheme"))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     save_session(s)
@@ -917,6 +920,38 @@ def get_franchise_game(game_id: str, x_franchise_session: Optional[str] = Header
     if not box:
         raise HTTPException(status_code=404, detail="Game not found or recap not available for this save.")
     return {"game": box}
+
+
+@app.get("/api/franchise/box-score/{game_id}")
+def get_franchise_box_score(game_id: str, x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    """Compact box score for one finished game (current + previous season are kept)."""
+    from app.sim_engine.franchise.serialization import get_box_score_payload  # noqa: WPS433
+
+    s = _session_or_404(x_franchise_session)
+    box = get_box_score_payload(s, game_id)
+    if not box:
+        raise HTTPException(status_code=404, detail="No box score stored for this game.")
+    return {"box_score": box}
+
+
+@app.get("/api/franchise/player/{player_id}/game-log")
+def get_franchise_player_game_log(
+    player_id: str,
+    season: Optional[int] = Query(default=None),
+    x_franchise_session: Optional[str] = Header(default=None),
+) -> dict[str, Any]:
+    """Per-game lines, season totals by scope, ledger analytics and WJC history for one player."""
+    from app.sim_engine.franchise.serialization import get_player_game_log_payload  # noqa: WPS433
+
+    s = _session_or_404(x_franchise_session)
+    return get_player_game_log_payload(s, player_id, season)
+
+
+@app.get("/api/franchise/records")
+def get_franchise_box_records(x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    """Single-game record books kept from stored box scores."""
+    s = _session_or_404(x_franchise_session)
+    return {"records": dict(getattr(s, "box_score_records", None) or {})}
 
 
 @app.get("/api/franchise/chemistry")

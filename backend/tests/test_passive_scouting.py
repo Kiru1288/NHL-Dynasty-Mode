@@ -37,6 +37,8 @@ def _minimal_session(**kwargs) -> FranchiseSession:
         "watchlist": [],
         "assignments": [],
         "active_deployments": [],
+        # These tests exercise hand-run (hardcore) scouting; staff auto-manage is on by default.
+        "auto_manage": False,
     }
     return session
 

@@ -62,6 +62,33 @@ _MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct",
 
 
 # ---------------------------------------------------------------------------
+# Clause lookups (shared with waivers / expansion draft)
+# ---------------------------------------------------------------------------
+
+
+def clause_profile(player: Any) -> Dict[str, Any]:
+    """{"label": "NMC"|"NTC"|"M-NTC"|"None", "nmc", "ntc", "mntc", "approved_destinations"}."""
+    try:
+        return dict(_clause_summary(player))
+    except Exception:
+        return {"label": "None", "nmc": False, "ntc": False, "mntc": 0, "approved_destinations": []}
+
+
+def is_nmc(player: Any) -> bool:
+    """True when the player's live contract carries a no-movement clause.
+
+    NMC players cannot be placed on waivers or assigned without consent, and must
+    be protected (exposure-exempt) in an expansion draft unless they waive.
+    """
+    return bool(clause_profile(player).get("nmc"))
+
+
+def expansion_exempt(player: Any) -> bool:
+    """Expansion-draft exposure flag: NMC holders must be protected."""
+    return is_nmc(player)
+
+
+# ---------------------------------------------------------------------------
 # Dates / windows
 # ---------------------------------------------------------------------------
 

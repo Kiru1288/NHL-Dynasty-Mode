@@ -7109,6 +7109,12 @@ function RegressionList({
 
 const TEAM_STAT_VIEWS = [
   {
+    id: "standings",
+    label: "Standings",
+    defaultSort: "points",
+    defaultDir: "desc",
+  },
+  {
     id: "overall",
     label: "Overall",
     defaultSort: "points",
@@ -8545,6 +8551,210 @@ function TeamStatsProfile({
   );
 }
 
+/* NHL standings: Division / Wild Card / Conference / League. Order comes from the
+   backend (points, P%, RW, ROW, W, head-to-head, GD) via standings_order. */
+const STANDINGS_MODES = [
+  { id: "division", label: "Division" },
+  { id: "wildcard", label: "Wild Card" },
+  { id: "conference", label: "Conference" },
+  { id: "league", label: "League" },
+];
+
+function standingsFallbackCompare(a, b) {
+  const pct = (t) => (t.gp > 0 ? t.pts / (t.gp * 2) : 0);
+  return (
+    b.pts - a.pts ||
+    pct(b) - pct(a) ||
+    b.rw - a.rw ||
+    b.row - a.row ||
+    b.w - a.w ||
+    b.gf - b.ga - (a.gf - a.ga) ||
+    b.gf - a.gf
+  );
+}
+
+function buildStandingsRows(teamRows, standings) {
+  const byId = new Map();
+  (teamRows || []).forEach((t) => byId.set(String(teamRowId(t)), t));
+  const src = Array.isArray(standings) && standings.length ? standings : teamRows || [];
+  const out = src.map((row) => {
+    const id = String(teamRowId(row));
+    const team = byId.get(id) || {};
+    return {
+      ...team,
+      ...row,
+      team_id: id,
+      conference: pickString(row?.conference, team?.conference, ""),
+      division: pickString(row?.division, team?.division, ""),
+      gp: safeInt(firstPresent(row?.gp, team?.gp), 0),
+      w: safeInt(firstPresent(row?.w, row?.wins, team?.wins), 0),
+      l: safeInt(firstPresent(row?.l, row?.losses, team?.losses), 0),
+      otl: safeInt(firstPresent(row?.otl, team?.otl), 0),
+      pts: safeInt(firstPresent(row?.pts, row?.points, team?.points), 0),
+      rw: safeInt(firstPresent(row?.rw, team?.rw), 0),
+      row: safeInt(firstPresent(row?.row, team?.row), 0),
+      gf: safeInt(firstPresent(row?.gf, team?.gf), 0),
+      ga: safeInt(firstPresent(row?.ga, team?.ga), 0),
+      _order: safeInt(row?.standings_order, 0),
+    };
+  });
+  const ordered = out.length > 0 && out.every((r) => r._order > 0);
+  return out.sort((a, b) => (ordered ? a._order - b._order : standingsFallbackCompare(a, b)));
+}
+
+function StandingsGroupTable({ title, rows, data, cutAfter = 0, note }) {
+  return (
+    <section className="sc-standings-block">
+      <header>
+        <strong>{title}</strong>
+        {note ? <span>{note}</span> : null}
+      </header>
+      <table className="sc-standings-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th className="is-team">Team</th>
+            <th>GP</th>
+            <th>W</th>
+            <th>L</th>
+            <th>OTL</th>
+            <th>PTS</th>
+            <th>P%</th>
+            <th>RW</th>
+            <th>ROW</th>
+            <th>GF</th>
+            <th>GA</th>
+            <th>DIFF</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((t, i) => {
+            const diff = t.gf - t.ga;
+            const classes = [
+              isUserTeamRow(t, data) ? "is-user-team-row" : "",
+              cutAfter && i === cutAfter - 1 && rows.length > cutAfter ? "is-cutline" : "",
+            ]
+              .filter(Boolean)
+              .join(" ");
+            return (
+              <tr key={t.team_id} className={classes}>
+                <td>{i + 1}</td>
+                <td className="is-team">
+                  <TeamLogoMark team={t} size="table" />
+                  <span>{teamDisplayLabel(t)}</span>
+                </td>
+                <td>{t.gp}</td>
+                <td>{t.w}</td>
+                <td>{t.l}</td>
+                <td>{t.otl}</td>
+                <td className="is-pts">{t.pts}</td>
+                <td>{t.gp > 0 ? (t.pts / (t.gp * 2)).toFixed(3).replace(/^0/, "") : ".000"}</td>
+                <td>{t.rw}</td>
+                <td>{t.row}</td>
+                <td>{t.gf}</td>
+                <td>{t.ga}</td>
+                <td>{diff > 0 ? `+${diff}` : diff}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
+function TeamStandingsBoard({ rows, data }) {
+  const [mode, setMode] = useState("division");
+  const standingsSrc = data?.franchiseState?.standings;
+  const standings = useMemo(() => buildStandingsRows(rows, standingsSrc), [rows, standingsSrc]);
+  const conferences = useMemo(() => {
+    const confs = Array.from(new Set(standings.map((t) => t.conference).filter(Boolean)));
+    // NHL order: Eastern first.
+    return confs.sort((a, b) => (/east/i.test(a) ? -1 : /east/i.test(b) ? 1 : a.localeCompare(b)));
+  }, [standings]);
+  const divisionsOf = (conf) =>
+    Array.from(
+      new Set(standings.filter((t) => t.conference === conf).map((t) => t.division).filter(Boolean))
+    ).sort();
+
+  let body = null;
+  if (mode === "league" || !conferences.length) {
+    body = <StandingsGroupTable title="League" rows={standings} data={data} />;
+  } else if (mode === "conference") {
+    body = conferences.map((conf) => (
+      <StandingsGroupTable
+        key={conf}
+        title={`${conf} Conference`}
+        rows={standings.filter((t) => t.conference === conf)}
+        data={data}
+      />
+    ));
+  } else if (mode === "division") {
+    body = conferences.map((conf) =>
+      divisionsOf(conf).map((div) => (
+        <StandingsGroupTable
+          key={`${conf}-${div}`}
+          title={`${div} Division`}
+          note={`${conf} Conference`}
+          rows={standings.filter((t) => t.conference === conf && t.division === div)}
+          data={data}
+          cutAfter={3}
+        />
+      ))
+    );
+  } else {
+    body = conferences.map((conf) => {
+      const top = new Set();
+      const blocks = divisionsOf(conf).map((div) => {
+        const leaders = standings
+          .filter((t) => t.conference === conf && t.division === div)
+          .slice(0, 3);
+        leaders.forEach((t) => top.add(t.team_id));
+        return (
+          <StandingsGroupTable
+            key={`${conf}-${div}`}
+            title={div}
+            note={`${conf} · top 3`}
+            rows={leaders}
+            data={data}
+          />
+        );
+      });
+      const rest = standings.filter((t) => t.conference === conf && !top.has(t.team_id));
+      return (
+        <React.Fragment key={conf}>
+          {blocks}
+          <StandingsGroupTable
+            title={`${conf} Wild Card`}
+            note="Top 2 qualify"
+            rows={rest}
+            data={data}
+            cutAfter={2}
+          />
+        </React.Fragment>
+      );
+    });
+  }
+
+  return (
+    <section className="sc-team-table-panel sc-standings-board">
+      <div className="sc-team-scope-control sc-standings-modes">
+        {STANDINGS_MODES.map((m) => (
+          <button
+            key={m.id}
+            type="button"
+            className={mode === m.id ? "is-active" : ""}
+            onClick={() => setMode(m.id)}
+          >
+            {m.label}
+          </button>
+        ))}
+      </div>
+      <div className="sc-standings-scroll">{body}</div>
+    </section>
+  );
+}
+
 function TeamTab({ data, loadState }) {
   const rows = useMemo(() => {
     return data.teams?.length
@@ -8554,7 +8764,7 @@ function TeamTab({ data, loadState }) {
         : [];
   }, [data.teams, data.team]);
 
-  const [view, setView] = useState("overall");
+  const [view, setView] = useState("standings");
   const [scope, setScope] = useState("league");
   const [search, setSearch] = useState("");
   const [conference, setConference] = useState("all");
@@ -8808,6 +9018,9 @@ function TeamTab({ data, loadState }) {
         onReset={resetFilters}
       />
 
+      {view === "standings" ? (
+        <TeamStandingsBoard rows={rows} data={data} />
+      ) : (
       <section className="sc-team-table-panel">
         {wideTable ? (
           <div className="sc-team-scroll-hint">
@@ -8842,6 +9055,7 @@ function TeamTab({ data, loadState }) {
           }
         />
       </section>
+      )}
 
       <TeamStatsProfile
         team={selectedTeam}
@@ -17995,6 +18209,81 @@ function StatsCentralStyles() {
         color: #fff;
         border-color: rgba(19, 216, 231, 0.4);
         background: rgba(19, 216, 231, 0.08);
+      }
+
+      .sc-standings-modes {
+        grid-template-columns: repeat(4, 1fr);
+        flex: 0 0 auto;
+        min-height: 32px;
+      }
+
+      .sc-standings-scroll {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow: auto;
+        padding: 8px;
+        display: grid;
+        align-content: start;
+        gap: 10px;
+      }
+
+      .sc-standings-block header {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 4px 6px;
+        color: #fff;
+        font-size: 0.75rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        border-bottom: 1px solid rgba(19, 216, 231, 0.3);
+      }
+
+      .sc-standings-block header span {
+        color: var(--muted);
+      }
+
+      .sc-standings-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.75rem;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .sc-standings-table th,
+      .sc-standings-table td {
+        padding: 4px 6px;
+        text-align: right;
+        white-space: nowrap;
+        border-bottom: 1px solid rgba(156, 218, 236, 0.07);
+      }
+
+      .sc-standings-table th {
+        color: var(--muted);
+        font-weight: 800;
+      }
+
+      .sc-standings-table .is-team {
+        text-align: left;
+        width: 100%;
+      }
+
+      .sc-standings-table td.is-team span {
+        margin-left: 6px;
+        vertical-align: middle;
+      }
+
+      .sc-standings-table .is-pts {
+        color: #fff;
+        font-weight: 900;
+      }
+
+      .sc-standings-table tr.is-user-team-row td {
+        background: rgba(19, 216, 231, 0.1);
+      }
+
+      .sc-standings-table tr.is-cutline td {
+        border-bottom: 2px solid rgba(19, 216, 231, 0.55);
       }
 
       .sc-team-table-panel {

@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 # Bump when the talent curve / depth-star spread changes so Trade Hub caches rebuild
 # without requiring a new franchise save.
-TRADE_VALUE_FORMULA_VERSION = 16  # v15: exponential star curve, age/goalie/position, term surplus, consolidation
+TRADE_VALUE_FORMULA_VERSION = 17  # v17: cheaper depth roles; v15: exponential star curve, age/goalie/position, term surplus, consolidation
 # Soft ceiling used only for UI-relative clamps / legacy helpers — player totals are uncapped.
 TRADE_VALUE_SOFT_CEIL = 450.0
 LEAGUE_MINIMUM_AAV_M = 0.775
@@ -74,12 +74,18 @@ AHL_FILLER_BASE = 1.0
 AHL_FILLER_PER_OVR = 0.6  # per OVR point above 70
 AHL_HIGH_CEILING_MULT = 0.75  # 23+ AHL players who still project (POT >= 80)
 # Depth roles (rank on their own NHL roster): value multipliers + role-fair AAV.
+# v16: depth was still fetching 2nd/3rd-round-pick returns; bottom-six F and
+# third-pair D are replaceable and should come cheap.
 DEPTH_ROLE_MULT = {
-    "third_line_f": 0.72,
-    "fourth_line_f": 0.50,
-    "third_pair_d": 0.62,
-    "extra_d": 0.45,
+    "third_line_f": 0.55,
+    "fourth_line_f": 0.34,
+    "third_pair_d": 0.48,
+    "extra_d": 0.30,
 }
+# Talent-based depth role (ignores where he slots on his own club): a 75 OVR is a
+# bottom-six forward league-wide even when a weak team dresses him in its top six.
+DEPTH_TALENT_F = ((73.0, "fourth_line_f"), (76.5, "third_line_f"))
+DEPTH_TALENT_D = ((72.0, "extra_d"), (75.5, "third_pair_d"))
 # Role-fair AAV from the real market (v15.1): 3rd-line forwards sign for ~$3-4M,
 # 4th-liners ~$1.5M, third-pair D ~$3M. The old $2.2M / $1.2M bar turned ordinary
 # depth deals into negative-value contracts.
@@ -1844,6 +1850,11 @@ def _evaluate_player_asset_value_impl(
             total *= role_mult
     else:
         role = _depth_role(player, source_team, org_loc)
+        if not role and org_loc == "nhl" and low_ceiling and age >= 23 and pos != "G":
+            for _cut, _r in (DEPTH_TALENT_D if pos == "D" else DEPTH_TALENT_F):
+                if val_ovr < _cut:
+                    role = _r
+                    break
         if role and val_ovr < DEPTH_ROLE_MAX_VAL_OVR and (low_ceiling or age >= 26):
             depth_role = role
             role_mult = DEPTH_ROLE_MULT[role]

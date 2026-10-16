@@ -6,13 +6,13 @@
 import { goalieStrengthCopy, goalieWeaknessCopy } from "./prospectDossierHelpers";
 
 export const PYRAMID_TIERS = [
-  { key: "transcendent", label: "Transcendent", rarity: "1 / 100,000", color: "#ffd24a", ink: "#1a1204", order: 1, minPeak: 96 },
-  { key: "generational", label: "Generational", rarity: "Once a decade", color: "#ff6b2d", ink: "#1a0900", order: 2, minPeak: 93 },
-  { key: "franchise", label: "Franchise", rarity: "Cornerstone", color: "#c084fc", ink: "#14081f", order: 3, minPeak: 90 },
-  { key: "elite", label: "Elite", rarity: "Elite driver", color: "#22d3ee", ink: "#041318", order: 4, minPeak: 87 },
-  { key: "star", label: "Star", rarity: "Top-line piece", color: "#34d399", ink: "#04140e", order: 5, minPeak: 84 },
-  { key: "core", label: "Core", rarity: "Everyday NHLer", color: "#3b82f6", ink: "#06101f", order: 6, minPeak: 80 },
-  { key: "depth", label: "Depth", rarity: "Bottom six / pair", color: "#8aa0b8", ink: "#0b1218", order: 7, minPeak: 76 },
+  { key: "transcendent", label: "Transcendent", rarity: "1 / 100,000", color: "#ffd24a", ink: "#1a1204", order: 1, minPeak: 99 },
+  { key: "generational", label: "Generational", rarity: "Once every several drafts", color: "#ff6b2d", ink: "#1a0900", order: 2, minPeak: 96 },
+  { key: "franchise", label: "Franchise", rarity: "Cornerstone", color: "#c084fc", ink: "#14081f", order: 3, minPeak: 92 },
+  { key: "elite", label: "Elite", rarity: "Elite driver", color: "#22d3ee", ink: "#041318", order: 4, minPeak: 89 },
+  { key: "star", label: "Star", rarity: "Top-line piece", color: "#34d399", ink: "#04140e", order: 5, minPeak: 86 },
+  { key: "core", label: "Core", rarity: "Top-six / top-four", color: "#3b82f6", ink: "#06101f", order: 6, minPeak: 82 },
+  { key: "depth", label: "Depth", rarity: "Bottom six / pair", color: "#8aa0b8", ink: "#0b1218", order: 7, minPeak: 77 },
   { key: "nhler", label: "NHLer", rarity: "Roster NHLer", color: "#64748b", ink: "#0b1016", order: 8, minPeak: 72 },
   { key: "longshot", label: "Longshot", rarity: "Long-term flyer", color: "#a78b6a", ink: "#140f08", order: 9, minPeak: 0 },
 ];
@@ -110,11 +110,14 @@ export function resolvePyramidTier(player) {
       break;
     }
   }
+  // Transcendent / Generational are backend class flags (very rare), never a raw peak.
+  const classKey = String(player?.classTier?.key || player?.class_tier?.key || "");
+  if (pick.key === "transcendent") pick = PYRAMID_BY_KEY.generational;
+  if (pick.key === "generational" && classKey !== "generational") pick = PYRAMID_BY_KEY.franchise;
   // Rank cap: a 4th-rounder with a juicy ceiling still isn't a franchise pick on the board.
-  if (pick.key === "transcendent" && rank > 2) pick = PYRAMID_BY_KEY.generational;
-  if (pick.key === "generational" && rank > 5) pick = PYRAMID_BY_KEY.franchise;
-  if (pick.key === "franchise" && rank > 12) pick = PYRAMID_BY_KEY.elite;
-  if (pick.key === "elite" && rank > 24) pick = PYRAMID_BY_KEY.star;
+  if (pick.key === "franchise" && rank > 3) pick = PYRAMID_BY_KEY.elite;
+  if (pick.key === "elite" && rank > 12) pick = PYRAMID_BY_KEY.star;
+  if (pick.key === "star" && rank > 32) pick = PYRAMID_BY_KEY.core;
   if (isOverager(player) && pick.order <= 4) {
     pick = PYRAMID_TIERS[Math.min(PYRAMID_TIERS.length - 1, pick.order)] || pick;
   }

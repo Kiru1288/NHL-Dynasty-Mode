@@ -382,7 +382,12 @@ def start_live_playoffs(session: FranchiseSession) -> Dict[str, Any]:
 
     conf_names = sorted(by_conf.keys())
     for conf in conf_names:
-        bucket = sorted(by_conf[conf], key=lambda s: int(s.get("seed_high") or 99))
+        # NHL bracket order from the engine (bracket_slot); older payloads fall back to seed order.
+        nhl_bracket = len(by_conf[conf]) == 4 and all(int(m.get("bracket_slot", -1) if m.get("bracket_slot") is not None else -1) >= 0 for m in by_conf[conf])
+        if nhl_bracket:
+            bucket = sorted(by_conf[conf], key=lambda s: int(s.get("bracket_slot")))
+        else:
+            bucket = sorted(by_conf[conf], key=lambda s: int(s.get("seed_high") or 99))
         for slot, m in enumerate(bucket):
             hi = str(m.get("team_high_id") or m.get("home_id") or "")
             lo = str(m.get("team_low_id") or m.get("away_id") or "")
@@ -405,6 +410,8 @@ def start_live_playoffs(session: FranchiseSession) -> Dict[str, Any]:
                 "is_user_series": user_id in (hi, lo),
                 "next_game": 1,
                 "scheduled_day": 0,
+                "nhl_bracket": nhl_bracket,
+                "division": m.get("division"),
             }
             series_rows.append(row)
 
@@ -660,6 +667,10 @@ def _simulate_one_game(
             hs, as_ = max(hs, as_ + 1), as_
         else:
             as_, hs = max(as_, hs + 1), hs
+    ot_periods = 0
+    if ot:
+        r_ot = _rng_float(session.session_id, row.get("series_id"), game_no, "otp")
+        ot_periods = 3 if r_ot > 0.95 else (2 if r_ot > 0.78 else 1)
 
     winner_id = home_id if home_wins else away_id
     if winner_id == hi:
@@ -679,16 +690,27 @@ def _simulate_one_game(
         "home_score": int(hs),
         "away_score": int(as_),
         "ot": ot,
+        "ot_periods": ot_periods,
         "winner_id": winner_id,
         "played_at": _now_iso(),
         "playoff_day": day,
     }
     try:
-        stars = _accumulate_playoff_player_stats(session, home_id, away_id, int(hs), int(as_), bool(ot), f"{row.get('series_id')}|{game_no}")
+        goalie_lines: List[Dict[str, Any]] = []
+        stars = _accumulate_playoff_player_stats(session, home_id, away_id, int(hs), int(as_), bool(ot), f"{row.get('series_id')}|{game_no}", goalie_lines)
         if stars:
             entry["stars"] = stars
+        if goalie_lines:
+            entry["goalies"] = goalie_lines
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
+    if ot_periods >= 3 and getattr(session, "goofy_events_enabled", True):
+        try:
+            from services.franchise_sim import _goofy_pizza_marathon  # noqa: WPS433
+
+            _goofy_pizza_marathon(session, entry)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     log = list(row.get("game_log") or [])
     log.append(entry)
     row["game_log"] = log
@@ -698,11 +720,95 @@ def _simulate_one_game(
         row["series_score"] = f"{row.get('wins_high')}-{row.get('wins_low')}"
         row["winner_id"] = _winner_id(row)
         row["loser_id"] = _loser_id(row)
+    if isinstance(live, dict):
+        try:
+            p_winner = p_home if winner_id == home_id else (1.0 - p_home)
+            _detect_playoff_events(live, row, entry, p_winner)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     return entry
+
+
+def _detect_playoff_events(
+    live: Dict[str, Any], row: Dict[str, Any], entry: Dict[str, Any], p_winner: float
+) -> None:
+    """Cheap single-pass popup detection from the game just played (no extra sims)."""
+    events = live.setdefault("_events", [])
+    if len(events) > 60:
+        return
+    hi = str(row.get("team_high_id") or "")
+    lo = str(row.get("team_low_id") or "")
+    uid = str(live.get("user_team_id") or "")
+    winner = str(entry.get("winner_id") or "")
+    loser = lo if winner == hi else hi
+    game_no = int(entry.get("game") or 0)
+    wh = int(row.get("wins_high") or 0)
+    wl = int(row.get("wins_low") or 0)
+    complete = row.get("status") == "complete"
+    base = {
+        "series_id": row.get("series_id"),
+        "round_index": row.get("round_index"),
+        "game": game_no,
+        "team_id": winner,
+        "opp_id": loser,
+        "score": f"{max(entry['home_score'], entry['away_score'])}-{min(entry['home_score'], entry['away_score'])}",
+        "series_score": f"{max(wh, wl)}-{min(wh, wl)}",
+        "seed_winner": row.get("seed_high") if winner == hi else row.get("seed_low"),
+        "seed_loser": row.get("seed_low") if winner == hi else row.get("seed_high"),
+        "involves_user": bool(uid) and uid in (hi, lo),
+        "playoff_day": entry.get("playoff_day"),
+    }
+
+    def push(kind: str, **extra: Any) -> None:
+        ev = dict(base)
+        ev["kind"] = kind
+        ev["id"] = f"{row.get('series_id')}|{game_no}|{kind}"
+        ev.update(extra)
+        events.append(ev)
+
+    otp = int(entry.get("ot_periods") or 0)
+    if otp >= 2:
+        push("marathon_ot", ot_periods=otp)
+    elif otp and complete:
+        push("ot_elimination", ot_periods=otp)
+    if not complete and p_winner < 0.33:
+        push("upset_game", win_prob=round(p_winner, 3))
+    if not complete and wh == 3 and wl == 3:
+        push("game7_set")
+    if not complete:
+        return
+    # Series is over — replay the (≤7 game) log once for the loser's biggest lead.
+    lw = ww = 0
+    loser_max_lead = 0
+    loser_wins_at_max = 0
+    for g in row.get("game_log") or []:
+        if str(g.get("winner_id")) == winner:
+            ww += 1
+        else:
+            lw += 1
+        if lw - ww > loser_max_lead:
+            loser_max_lead = lw - ww
+            loser_wins_at_max = lw
+    if min(wh, wl) == 0:
+        push("sweep")
+    if loser_wins_at_max == 3 and loser_max_lead >= 2:
+        push("series_choke", blown=f"3-{3 - loser_max_lead}")
+    if game_no == 7:
+        push("game7_result")
+    try:
+        sw = int(base["seed_winner"] or 0)
+        sl = int(base["seed_loser"] or 0)
+    except (TypeError, ValueError):
+        sw = sl = 0
+    if winner == lo and (not (sw and sl) or sw > sl):
+        push("upset_series")
+    if uid and loser == uid:
+        push("user_eliminated")
 
 
 def _accumulate_playoff_player_stats(
     session: FranchiseSession, home_id: str, away_id: str, hs: int, as_: int, ot: bool, seed: str,
+    goalie_out: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     """Per-player playoff lines for a score-only playoff game (feeds Conn Smythe, career, feeds).
 
@@ -793,6 +899,10 @@ def _accumulate_playoff_player_stats(
             g["shots_against"] += opp_shots
             g["ga"] += ga
             g["saves"] += max(0, opp_shots - ga)
+            if goalie_out is not None:
+                # Per-game line for the hub's series card (series goalie stats).
+                goalie_out.append({"player_id": player_key(gk[0]), "name": g.get("name"), "team_id": str(tid),
+                                   "shots": int(opp_shots), "saves": int(max(0, opp_shots - ga)), "ga": int(ga)})
             if gf > ga:
                 g["w"] += 1
                 if ga == 0:
@@ -813,6 +923,10 @@ def _sort_winners_by_standings(session: FranchiseSession, team_ids: List[str]) -
     if standings is None:
         return list(team_ids)
     try:
+        if hasattr(standings, "sort_records"):
+            recs = [getattr(standings, "records", {}).get(str(tid)) for tid in team_ids]
+            if all(r is not None for r in recs):
+                return [str(r.team_id) for r in standings.sort_records(recs)]
         scored: List[Tuple[int, int, int, str]] = []
         for tid in team_ids:
             rec = getattr(standings, "records", {}).get(tid) or getattr(standings, "records", {}).get(str(tid))
@@ -852,6 +966,7 @@ def _try_advance_bracket(session: FranchiseSession, live: Dict[str, Any]) -> Non
         ]
         if not r1 or not all(_series_complete(s) for s in r1):
             continue
+        r1 = sorted(r1, key=lambda s: int(s.get("bracket_slot") or 0))
         winners = _sort_winners_by_standings(session, [_winner_id(s) for s in r1 if _winner_id(s)])
         r2 = [
             s for s in series
@@ -861,7 +976,10 @@ def _try_advance_bracket(session: FranchiseSession, live: Dict[str, Any]) -> Non
         r2 = sorted(r2, key=lambda s: int(s.get("bracket_slot") or 0))
         # Pair 1v4, 2v3
         pairs = []
-        if len(winners) >= 4:
+        if len(r1) == 4 and all(s.get("nhl_bracket") for s in r1):
+            # Fixed NHL bracket: R1 slots 0+1 meet, slots 2+3 meet — no re-seeding.
+            pairs = [(_winner_id(r1[0]), _winner_id(r1[1])), (_winner_id(r1[2]), _winner_id(r1[3]))]
+        elif len(winners) >= 4:
             pairs = [(winners[0], winners[3]), (winners[1], winners[2])]
         elif len(winners) >= 2:
             pairs = [(winners[0], winners[1])]
@@ -955,6 +1073,13 @@ def _try_advance_bracket(session: FranchiseSession, live: Dict[str, Any]) -> Non
 
     live["series"] = series
     live["updated_at"] = _now_iso()
+    try:
+        # Playoff beard meter: grows once per new round, fan vote when the run ends.
+        from services.player_social_engine import goofy_playoff_beards  # noqa: WPS433
+
+        goofy_playoff_beards(session, live)
+    except Exception:
+        pass
 
 
 def _find_series(live: Dict[str, Any], series_id: str) -> Dict[str, Any]:
@@ -1021,6 +1146,23 @@ def _maybe_finish(session: FranchiseSession, live: Dict[str, Any]) -> Optional[D
 
 
 def handle_playoff_action(
+    session: FranchiseSession,
+    action: str,
+    body: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Run a playoff action and attach popup events detected while simming."""
+    live0 = getattr(session, "playoff_live", None)
+    if isinstance(live0, dict):
+        live0.pop("_events", None)
+    result = _handle_playoff_action_inner(session, action, body)
+    live1 = getattr(session, "playoff_live", None)
+    events = live1.pop("_events", None) if isinstance(live1, dict) else None
+    if isinstance(result, dict):
+        result["events"] = list(events or [])
+    return result
+
+
+def _handle_playoff_action_inner(
     session: FranchiseSession,
     action: str,
     body: Optional[Dict[str, Any]] = None,
@@ -1220,6 +1362,54 @@ def handle_playoff_action(
             "action": action,
             "games": games,
             "note": note,
+            "playoff_day": live.get("playoff_day"),
+            "finish": finish,
+            "playoff": get_playoff_hub_payload(session),
+        }
+
+    if action == "advance_days":
+        # Batched day sim for fast mode: N nights in one request.
+        # stop_at: "user_game" (stop before the user's next tip), "round_end", or "" (run N days).
+        count = max(1, min(60, int(body.get("count") or 1)))
+        stop_at = str(body.get("stop_at") or "user_game").strip().lower()
+        start_round = int(live.get("current_round") or 1)
+        games = []
+        days = 0
+        stop_reason = None
+        while days < count and not live.get("completed"):
+            _sync_same_night_slate(live)
+            if stop_at == "user_game" and _user_series_blocking(live):
+                stop_reason = "user_game"
+                break
+            for row in list(_due_active_series(live, cpu_only=False)):
+                games.append({
+                    "series_id": row.get("series_id"),
+                    "game": _play_series_game(session, live, row, respect_schedule=True),
+                })
+            live["playoff_day"] = int(live.get("playoff_day") or 0) + 1
+            days += 1
+            _try_advance_bracket(session, live)
+            if stop_at == "round_end" and int(live.get("current_round") or 1) != start_round:
+                stop_reason = "round_end"
+                break
+            if any(e.get("kind") == "user_eliminated" for e in live.get("_events") or []):
+                stop_reason = "user_eliminated"
+                break
+        _sync_same_night_slate(live)
+        blocker = _user_series_blocking(live)
+        session.playoff_live = live
+        _sync_payload_from_live(session, live)
+        finish = _maybe_finish(session, live)
+        invalidate_session_payload_caches(session, "playoffs_sim")
+        return {
+            "ok": True,
+            "action": action,
+            "games": games,
+            "days_simmed": days,
+            "stop_reason": stop_reason or ("complete" if live.get("completed") else None),
+            "blocked": bool(blocker) and days == 0,
+            "reason": "Your series tips tonight — Play/Sim your game first." if blocker and days == 0 else None,
+            "series": _slim_series(blocker) if blocker else None,
             "playoff_day": live.get("playoff_day"),
             "finish": finish,
             "playoff": get_playoff_hub_payload(session),
