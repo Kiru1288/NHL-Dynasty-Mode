@@ -2975,6 +2975,113 @@ def assign_elc_contract(
     }
 
 
+def _free_affiliate_minimum_slot(team: Any) -> bool:
+    """Drop one buried league-minimum two-way so a real prospect ELC can use the slot."""
+    candidates = []
+    for attr in ("ahl_roster", "echl_roster", "roster"):
+        for p in list(_get(team, attr, None) or []):
+            c = _get(p, "contract", None)
+            if not isinstance(c, dict):
+                continue
+            source = str(c.get("source") or "")
+            if source not in ("affiliate_nhl_spc", "ahl_spc", "echl_spc", "ahl_echl_two_way"):
+                continue
+            if attr == "roster" and not (
+                _get(p, "in_minors", False) or _get(p, "is_buried", False) or _get(p, "buried", False)
+            ):
+                continue
+            if not uses_nhl_contract_slot(p):
+                continue
+            try:
+                ovr = float(_player_ovr(p))
+            except Exception:
+                ovr = 50.0
+            candidates.append((ovr, p, c))
+    if not candidates:
+        return False
+    candidates.sort(key=lambda row: row[0])
+    player, c = candidates[0][1], candidates[0][2]
+    c["type"] = "AHL"
+    c["contract_type"] = "AHL"
+    c["is_nhl_spc"] = False
+    c["nhl_spc"] = False
+    c["standard_player_contract"] = False
+    c["cap_hit_m"] = 0.0
+    c["two_way"] = False
+    try:
+        player.cap_hit_m = 0.0
+        player.is_nhl_spc = False
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    return True
+
+
+def _cpu_elc_targets(team: Any, league: Any) -> list:
+    tid = str(_get(team, "team_id", None) or _get(team, "id", "") or "")
+    targets = list(_get(team, "prospect_pool", None) or []) + list(_all_rostered(team))
+    if not tid:
+        return targets
+    for block in _get(league, "development_leagues", None) or []:
+        teams = block.get("teams") if isinstance(block, dict) else None
+        for tm in teams or []:
+            players = tm.get("players") if isinstance(tm, dict) else None
+            for p in players or []:
+                rights = str(
+                    _get(p, "nhl_rights_team_id", "") or _get(p, "rights_team_id", "") or ""
+                )
+                if rights == tid:
+                    targets.append(p)
+    return targets
+
+
+def run_cpu_prospect_elc_pass(session: Any) -> Dict[str, Any]:
+    """Sign CPU prospects who are ready or about to lose their rights. Never the user's."""
+    sim = getattr(session, "sim", None)
+    league = getattr(sim, "league", None) if sim else None
+    if sim is None or league is None:
+        return {"elc_signed": 0, "elc_skipped": 0}
+    season_year = int(getattr(session, "season_calendar_year", 2025) or 2025)
+    try:
+        from services.draft_rights_engine import should_cpu_auto_sign_elc
+    except Exception:
+        return {"elc_signed": 0, "elc_skipped": 0}
+    user_tid = str(getattr(session, "user_team_id", "") or "")
+    elc_signed = 0
+    elc_skipped = 0
+    for team in _get(league, "teams", None) or []:
+        tid = str(_get(team, "team_id", None) or _get(team, "id", "") or "")
+        if tid and tid == user_tid:
+            continue
+        seen: set = set()
+        for p in _cpu_elc_targets(team, league):
+            pid = _player_id(p)
+            if not pid or pid in seen:
+                continue
+            seen.add(pid)
+            if not is_elc_eligible(p):
+                continue
+            ok, reason = should_cpu_auto_sign_elc(p, team, season_year=season_year, league=league)
+            if not ok:
+                elc_skipped += 1
+                continue
+            res = assign_elc_contract(p, team, league, season_year)
+            if not res.get("ok") and str(res.get("error_code") or "") == "contract_slots_full":
+                if _free_affiliate_minimum_slot(team):
+                    res = assign_elc_contract(p, team, league, season_year)
+            if res.get("ok") and not res.get("already_signed"):
+                elc_signed += 1
+                try:
+                    setattr(p, "rights_status", "signed")
+                    setattr(p, "organizational_status", "signed")
+                    setattr(p, "signed_status", "signed")
+                except Exception:
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
+                _ = reason
+            else:
+                elc_skipped += 1
+    return {"elc_signed": elc_signed, "elc_skipped": elc_skipped}
+
+
 def assign_elc_from_offer(
     player: Any,
     team: Any,
@@ -3204,11 +3311,11 @@ def run_prospect_promotion_pass(session: Any) -> Dict[str, Any]:
     rng = getattr(sim, "rng", None) or random.Random(season_year)
 
     try:
-        from services.draft_rights_engine import process_draft_rights_deadlines, should_cpu_auto_sign_elc
+        from services.draft_rights_engine import process_draft_rights_deadlines
 
         process_draft_rights_deadlines(session, league, season_year)
     except Exception:
-        should_cpu_auto_sign_elc = None  # type: ignore
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     for team in _get(league, "teams", None) or []:
         for p in list(_get(team, "prospect_pool", None) or []):
@@ -3234,37 +3341,9 @@ def run_prospect_promotion_pass(session: Any) -> Dict[str, Any]:
                     promoted += 1
 
     user_tid = str(getattr(session, "user_team_id", "") or "")
-    for team in _get(league, "teams", None) or []:
-        tid = str(_get(team, "team_id", None) or _get(team, "id", "") or "")
-        # Never auto-sign the user's unsigned prospects — GM decision.
-        if tid and tid == user_tid:
-            continue
-        targets = list(_get(team, "prospect_pool", None) or []) + list(_all_rostered(team))
-        seen: set = set()
-        for p in targets:
-            pid = _player_id(p)
-            if not pid or pid in seen:
-                continue
-            seen.add(pid)
-            if not is_elc_eligible(p):
-                continue
-            if should_cpu_auto_sign_elc is not None:
-                ok, reason = should_cpu_auto_sign_elc(p, team, season_year=season_year, league=league)
-                if not ok:
-                    elc_skipped += 1
-                    continue
-            else:
-                reason = "fallback"
-            res = assign_elc_contract(p, team, league, season_year)
-            if res.get("ok") and not res.get("already_signed"):
-                elc_signed += 1
-                try:
-                    setattr(p, "rights_status", "signed")
-                    setattr(p, "organizational_status", "signed")
-                    setattr(p, "signed_status", "signed")
-                except Exception:
-                    _swallowed_log.debug("suppressed exception", exc_info=True)
-                _ = reason
+    elc = run_cpu_prospect_elc_pass(session)
+    elc_signed = int(elc.get("elc_signed") or 0)
+    elc_skipped = int(elc.get("elc_skipped") or 0)
 
     wire = _ensure_waiver_wire(league)
     if any(not e.get("cleared") and not e.get("claimed_by") for e in wire):
@@ -5390,7 +5469,8 @@ def evaluate_contract_offer(
         _buyback = max(0.0, min(1.0, gap_m / max(0.5, want_aav * 0.15)))
         interest -= 9.0 * _frac * (1.0 - 0.7 * _buyback)
         bonus_short = _frac >= 0.5 and _buyback < 0.5
-    interest = max(0.0, min(100.0, interest))
+    # Raw score; the 0..100 meter is a soft cap applied once at the end.
+    interest = max(0.0, min(130.0, interest))
 
     # Bonus / loyalty flexes the cash floor so AAV can sit under market want.
     effective_min = min_acceptable
@@ -5408,7 +5488,7 @@ def evaluate_contract_offer(
     meets_floor = max(aav_m, money_m) >= effective_min
     # Depth players soften on near-market offers — ramp smoothly (no 85% ratio cliff).
     if ovr < 84:
-        interest = min(100.0, interest + 11.0 * _smoothstep((r - 0.78) / 0.14))
+        interest = min(130.0, interest + 11.0 * _smoothstep((r - 0.78) / 0.14))
     if ovr < 84 and r >= 0.82 and interest >= 50.0:
         near_market = _smoothstep((r - 0.80) / 0.10)
         if not meets_floor and near_market >= 0.35:
@@ -5418,7 +5498,7 @@ def evaluate_contract_offer(
     if ovr < 74 and str(context or "").lower() in ("ufa", "free_agent", "fa", ""):
         fringe = max(0.0, min(1.0, (74.0 - ovr) / 14.0))
         if aav_m >= LEAGUE_MINIMUM_AAV_M * 0.999 and r >= 0.85:
-            interest = min(100.0, interest + 16.0 + 22.0 * fringe + (3.0 if term_gap > 0 else 0.0))
+            interest = min(130.0, interest + 16.0 + 22.0 * fringe + (3.0 if term_gap > 0 else 0.0))
             meets_floor = True
     if ovr < 76:
         accept_cut = 52.0
@@ -5466,14 +5546,66 @@ def evaluate_contract_offer(
         and not bonus_short
         and not _lr_block
     ):
-        interest = max(interest, accept_cut + 4.0 + min(20.0, max(0.0, gap_m) / max(0.25, want_aav) * 60.0))
-        interest = min(100.0, interest)
+        interest = max(interest, accept_cut + 4.0 + min(14.0, max(0.0, gap_m) / max(0.25, want_aav) * 40.0))
+        interest = min(130.0, interest)
         meets_floor = True
         accepted = True
-    instant_accept = accepted and interest >= (80.0 if ovr < 84 else 88.0)
 
-    if accepted and instant_accept:
+    # Open market: he compares your offer with the best CPU bid on the board
+    # (salary, term and fit), not just with his ask.
+    market_rival: Optional[Dict[str, Any]] = None
+    market_ratio: Optional[float] = None
+    beat_aav: Optional[float] = None
+    outbid = False
+    _sess_mk = offer.get("_franchise_session") or offer.get("_session")
+    _tid_mk = str(getattr(team, "team_id", "") or getattr(team, "id", "") or "")
+    if (
+        str(context or "").lower() in ("ufa", "free_agent", "fa", "free_agency")
+        and _sess_mk is not None
+        and _tid_mk
+        and _tid_mk == str(getattr(_sess_mk, "user_team_id", "") or "")
+    ):
+        try:
+            from services.fa_market_engine import user_fa_offer_standing
+
+            standing = user_fa_offer_standing(_sess_mk, player, aav_m, years, league=league)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+            standing = None
+        if standing and standing.get("rival"):
+            market_rival = standing["rival"]
+            market_ratio = float(standing.get("ratio") or 0.0)
+            if market_ratio < 1.0:
+                interest -= min(26.0, (1.0 - market_ratio) * 130.0)
+                if market_ratio < 0.985:
+                    accepted = False
+                    outbid = True
+                    beat_aav = standing.get("match_aav_m")
+            else:
+                interest += min(5.0, (market_ratio - 1.0) * 50.0)
+            interest = max(0.0, interest)
+
+    # Soft ceiling: the meter climbs slowly past 70, so overpaying has diminishing
+    # returns and a 100 is close to unreachable.
+    if interest > 70.0:
+        interest = 70.0 + 30.0 * math.tanh((interest - 70.0) / 40.0)
+    interest = max(0.0, min(100.0, interest))
+    instant_accept = accepted and interest >= (80.0 if ovr < 84 else 88.0)
+    if instant_accept and market_rival is not None and (market_ratio or 0.0) < 1.08:
+        # A close race with another club: he takes a few days to weigh it.
+        instant_accept = False
+
+    if outbid and market_rival is not None:
+        _rv_name = str(market_rival.get("team_abbrev") or market_rival.get("team_name") or "Another club")
+        reason = (
+            f"{_rv_name} has a better offer on the table "
+            f"(${float(market_rival.get('aav_m') or 0):.2f}M × {int(market_rival.get('years') or 1)} yrs)"
+            + (f" — you'd need about ${float(beat_aav):.2f}M at this term" if beat_aav else "")
+        )
+    elif accepted and instant_accept:
         reason = "Accepted immediately"
+    elif accepted and market_rival is not None:
+        reason = "Considering — weighing your offer against other clubs"
     elif accepted:
         reason = "Considering — will decide after reviewing the market"
     elif bonus_short:
@@ -5500,6 +5632,9 @@ def evaluate_contract_offer(
     # Days until a non-instant accept resolves (1–5). Stronger interest = sooner.
     if accepted and not instant_accept:
         resolve_days = max(1, min(5, int(round((88.0 - interest) / 7.0)) + 1))
+        if market_rival is not None:
+            # Rival clubs get a chance to answer before he decides.
+            resolve_days = max(2, resolve_days)
     else:
         resolve_days = 0
 
@@ -5515,6 +5650,13 @@ def evaluate_contract_offer(
     # rule escalated forever: offer $2.54M vs a $2.12M ask -> counter $2.59M).
     if aav_m >= counter_aav:
         counter_aav = round(aav_m, 3)
+    if beat_aav:
+        counter_aav = round(max(counter_aav, float(beat_aav) + 0.05), 3)
+        try:
+            _cap_ul_b = float(_league_salary_cap_upper_limit(league) or MARKET_VALUE_CAP_ANCHOR_M)
+            counter_aav = min(counter_aav, round(max_salary_share_of_cap(league) * _cap_ul_b, 3))
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     counter_nmc = bool(nmc or preferred_clause == "NMC")
     if counter_nmc:
         counter_ntc = False
@@ -5646,6 +5788,18 @@ def evaluate_contract_offer(
             reason=reason,
         ),
         "market_value_m": demand["market_value_m"],
+        "best_rival_offer": (
+            {
+                "team_id": market_rival.get("team_id"),
+                "team_name": market_rival.get("team_name"),
+                "team_abbrev": market_rival.get("team_abbrev"),
+                "aav_m": market_rival.get("aav_m"),
+                "years": market_rival.get("years"),
+            }
+            if market_rival is not None else None
+        ),
+        "outbid": bool(outbid),
+        "match_aav_m": beat_aav,
         "want_aav_m": want_aav,
         "min_acceptable_aav_m": effective_min,
         "want_years": want_years,
@@ -7039,6 +7193,7 @@ def sign_player_to_team(
         evaluation = evaluate_contract_offer(
             player, team, offer, league, context=str(offer.get("context") or "ufa")
         )
+        evaluation = _agent_poker_face(evaluation, offer.get("_session") or offer.get("_franchise_session"), player)
         return {
             "ok": True,
             "status": "evaluated",
@@ -7062,6 +7217,10 @@ def sign_player_to_team(
                 "instant_accept": evaluation.get("instant_accept"),
                 "pending_decision": evaluation.get("pending_decision"),
                 "resolve_days": evaluation.get("resolve_days"),
+                "best_rival_offer": evaluation.get("best_rival_offer"),
+                "outbid": evaluation.get("outbid"),
+                "match_aav_m": evaluation.get("match_aav_m"),
+                "reason": evaluation.get("reason"),
                 "projected_cap_after_m": evaluation.get("projected_cap_after_m"),
                 "projected_cap_space_next_season_m": evaluation.get("projected_cap_space_next_season_m"),
             },
@@ -7102,7 +7261,7 @@ def sign_player_to_team(
 
     if not eval_result.get("accepted") and not offer.get("force"):
         interest = float(eval_result.get("interest") or 0)
-        status = "rejected" if interest < 40.0 else "countered"
+        status = "rejected" if interest < 40.0 and not eval_result.get("outbid") else "countered"
         counter = eval_result.get("counter_offer") or {}
         _talks = _record_talks_round(session, player, team, aav_m, float(eval_result.get("want_aav_m") or 0.0))
         if _talks.get("closed"):
@@ -7200,6 +7359,9 @@ def sign_player_to_team(
                 "cap_hit_m": eval_result.get("cap_hit_m"),
                 "aav_m": eval_result.get("aav_m"),
                 "feedback": counter_feedback,
+                "best_rival_offer": eval_result.get("best_rival_offer"),
+                "outbid": eval_result.get("outbid"),
+                "match_aav_m": eval_result.get("match_aav_m"),
             },
             "negotiation": (getattr(session, "resign_negotiations", {}) or {}).get(pid) if session else None,
             "talks": _talks,
@@ -7576,6 +7738,40 @@ def sign_player_to_team(
     }
 
 
+#: Preview interest reads up to this many points off the truth (per player, per day).
+AGENT_POKER_FACE_PTS = 4.0
+
+
+def _agent_poker_face(evaluation: Dict[str, Any], session: Any, player: Any) -> Dict[str, Any]:
+    """A preview is the agent's read, not the player's real answer.
+
+    The shown interest carries a fixed per-player, per-day offset, and near the line
+    the shown yes/no follows that read. Re-previewing all day can't find his exact floor.
+    """
+    import zlib
+
+    if not isinstance(evaluation, dict):
+        return evaluation
+    day = int(getattr(session, "calendar_cursor", 0) or 0) if session is not None else 0
+    seed = zlib.crc32(f"poker|{_player_id(player)}|{day}".encode())
+    offset = ((seed % 2001) / 1000.0 - 1.0) * AGENT_POKER_FACE_PTS
+    true_i = float(evaluation.get("interest") or 0.0)
+    cut = float(evaluation.get("accept_cut") or 0.0)
+    shown = max(0.0, min(100.0, true_i + offset))
+    out = dict(evaluation)
+    out["interest"] = round(shown, 1)
+    out["interest_range_low"] = round(max(0.0, shown - 5.0), 1)
+    out["interest_range_high"] = round(min(100.0, shown + 5.0), 1)
+    if cut > 0 and abs(true_i - cut) < AGENT_POKER_FACE_PTS and not out.get("outbid"):
+        read_yes = shown >= cut
+        out["accepted"] = read_yes
+        out["instant_accept"] = bool(read_yes and out.get("instant_accept"))
+        out["pending_decision"] = bool(read_yes and not out["instant_accept"])
+        if read_yes and not out.get("resolve_days"):
+            out["resolve_days"] = 2
+    return out
+
+
 def _offer_feedback_label(evaluation: Dict[str, Any], aav_m: float, years: int) -> str:
     """Descriptive negotiation feedback — no hidden formula leakage."""
     interest = float(evaluation.get("interest") or 0)
@@ -7583,6 +7779,8 @@ def _offer_feedback_label(evaluation: Dict[str, Any], aav_m: float, years: int) 
     want_years = int(evaluation.get("want_years") or 1)
     reason = str(evaluation.get("reason") or "")
     clause_note = str(evaluation.get("clause_note") or "")
+    if evaluation.get("outbid"):
+        return f"Outbid: {reason}" if reason else "Another club has a better offer"
     if evaluation.get("instant_accept"):
         return "Slam dunk — signing immediately"
     if evaluation.get("pending_decision"):
@@ -7900,8 +8098,19 @@ def cpu_should_match_offer_sheet(
     """CPU match call: weigh the player's worth against the contract and the picks, then cap."""
     aav_m = float(sheet.get("aav_m") or 0)
     years = max(1, int(sheet.get("years") or 1))
+    core_young = _player_ovr(player) >= 82 and _player_age(player) <= 25
     if not can_sign_player(rights_team, aav_m, league=league, player=player).get("ok"):
-        return False, "cap"
+        # A club will clear a little room (a depth trade / waiver) to keep a young core
+        # player rather than lose him to a cap-timed sheet.
+        short_ok = False
+        if core_young:
+            try:
+                usable = float(get_team_cap_snapshot_full(rights_team, league).get("usable_cap_space_m") or 0.0)
+                short_ok = usable + 2.5 >= aav_m
+            except Exception:
+                short_ok = False
+        if not short_ok:
+            return False, "cap"
     if not validate_contract_slots(rights_team, league, additional=1).get("ok"):
         return False, "contract_slots"
     market = float(compute_market_value(player, league) or 0.0)
@@ -7915,6 +8124,8 @@ def cpu_should_match_offer_sheet(
     comp_val = sum(pick_val.get(int(r), 0.0) for r in (sheet.get("compensation_rounds") or []))
     star = ovr >= 84 and age <= 26
     if star and aav_m <= market * 1.35:
+        return True, "core_player"
+    if core_young and aav_m <= market * 1.25:
         return True, "core_player"
     if surplus + comp_val * 0.25 >= -0.5 * years and aav_m <= market * 1.2:
         return True, "value"
@@ -9657,6 +9868,7 @@ def run_cpu_in_season_free_agency(
     return {"signings": signings, "count": len(signings)}
 
 
+
 #: CPU RFAs at or above this OVR stay qualified-but-unsigned for the first days of
 #: free agency, so they can be offer-sheeted (by the user or another club).
 RFA_OFFER_SHEET_WINDOW_MIN_OVR = 75.0
@@ -9955,10 +10167,9 @@ def run_cpu_own_ufa_resign(session: Any) -> Dict[str, Any]:
             overload = bool(ctx["overload"].get(pos)) and ovr < ctx["best_ovr"].get(pos, 0.0) + 2.0
             unaffordable = cap_space < start_aav or slots_left <= 0
 
-            # No force-keep: stars can walk when the club has no room, is overloaded,
-            # or cannot meet the ask — same agency players have on the open market.
-            # Franchise players (88+) are never walked solely for "surplus".
-            if slots_left <= 0 or (overload and ovr < 80) or (unaffordable and ovr < 84):
+            # Good players reach the open market when the club is full at the position
+            # or cannot pay. 88+ still get a real offer instead of a straight release.
+            if slots_left <= 0 or (overload and ovr < 86) or (unaffordable and ovr < 87):
                 try:
                     setattr(player, "ufa_exclusive", False)
                 except Exception:
@@ -10026,13 +10237,23 @@ def run_cpu_own_ufa_resign(session: Any) -> Dict[str, Any]:
                 })
                 continue
 
-            # A star on a non-rebuilding club usually stays, but some choose to
-            # test the market (low loyalty, a club that is not winning). ~10%.
-            if ovr >= 84:
-                walk_p = 0.12 - (loyalty - 0.5) * 0.20
+            # July needs a real class of good UFAs. Most 90+ stay. A large share of
+            # the 80-86 group tests the market, more so when the club is already deep.
+            if ovr >= 80:
+                if ovr >= 90:
+                    walk_p = 0.08
+                elif ovr >= 87:
+                    walk_p = 0.20
+                elif ovr >= 84:
+                    walk_p = 0.34
+                else:
+                    walk_p = 0.46
+                walk_p -= (loyalty - 0.5) * 0.16
                 if window in ("contender", "contend", "win_now", "win-now", "cup_contender"):
-                    walk_p *= 0.6
-                walk_p = max(0.03, min(0.25, walk_p))
+                    walk_p *= 0.75
+                if overload:
+                    walk_p += 0.12
+                walk_p = max(0.06, min(0.58, walk_p))
                 roll = random.Random(_stable_seed("own_ufa_walk", pid, tid, season_year) & 0xFFFFFFFF).random()
                 if roll < walk_p:
                     try:
@@ -10177,6 +10398,29 @@ def _apply_offer_sheet_decision(
         if not slot_ok.get("ok"):
             return {"ok": False, "reason": slot_ok.get("reason")}
         check = _validate_sign_cap(rights_team, cap_hit, league, player=player)
+        rtid = str(_get(rights_team, "team_id", "") or _get(rights_team, "id", ""))
+        if not check.get("ok") and rtid != str(getattr(session, "user_team_id", "") or ""):
+            # CPU clubs clear room to keep a core RFA: bury up to two depth contracts.
+            depth = sorted(
+                [
+                    p for p in list(_get(rights_team, "roster", None) or [])
+                    if p is not player
+                    and not getattr(p, "in_minors", False)
+                    and not getattr(p, "is_buried", False)
+                    and _player_ovr(p) < _player_ovr(player) - 6
+                    and player_cap_hit_millions(p) > LEAGUE_MINIMUM_AAV_M + 0.4
+                ],
+                key=lambda p: (_player_ovr(p), -player_cap_hit_millions(p)),
+            )
+            for victim in depth[:2]:
+                try:
+                    bury_player_contract(rights_team, victim, league, skip_waiver_check=True)
+                except Exception:
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
+                    continue
+                check = _validate_sign_cap(rights_team, cap_hit, league, player=player)
+                if check.get("ok"):
+                    break
         if not check.get("ok"):
             return {"ok": False, "reason": check.get("reason")}
         apply_contract_to_player(player, contract, season_year)
@@ -10286,6 +10530,13 @@ def run_cpu_offer_sheet_pass(session: Any, *, max_sheets: int = 4) -> Dict[str, 
     rng = getattr(sim, "rng", None) or random.Random(0)
     filed: List[Dict[str, Any]] = []
     team_sheet_counts: Dict[str, int] = {}
+    try:
+        from app.sim_engine.trades.trade_market_adaptive import league_heat
+
+        heat = float(league_heat(league, day=int(getattr(session, "calendar_cursor", 0) or 0)))
+    except Exception:
+        heat = 0.0
+    user_sheets = 0
 
     for offering_team in _get(league, "teams", None) or []:
         if len(filed) >= max_sheets:
@@ -10303,6 +10554,8 @@ def run_cpu_offer_sheet_pass(session: Any, *, max_sheets: int = 4) -> Dict[str, 
             file_chance = 0.12
         else:
             file_chance = 0.08
+        if window not in ("rebuilder", "rebuild", "tank"):
+            file_chance += 0.10 * heat
         if rng.random() > file_chance:
             continue
 
@@ -10311,21 +10564,22 @@ def run_cpu_offer_sheet_pass(session: Any, *, max_sheets: int = 4) -> Dict[str, 
             rtid = str(_get(rights_team, "team_id", "") or _get(rights_team, "id", ""))
             if not rtid or rtid == off_tid:
                 continue
+            on_user = rtid == user_tid and heat >= 0.15 and user_sheets < 1
             for entry in list(_ensure_rfa_rights_list(rights_team)):
                 player = entry.get("player_ref")
                 if player is None:
                     continue
                 ovr = _player_ovr(player)
-                if ovr < 80 or ovr > 86:
+                if ovr < (78 if on_user else 80) or ovr > (88 if on_user else 86):
                     continue
                 if not rfa_offer_sheet_eligible(player, entry):
                     continue
                 pos = _position_bucket(player)
                 need = float(ctx["need_score"].get(pos, 0))
-                if need < 0.35:
+                if need < (0.35 - 0.20 * heat if on_user else 0.35):
                     continue
-                market = compute_market_value(player, league)
-                candidates.append((need + ovr * 0.01, player, rights_team, entry))
+                score = need + ovr * 0.01 + (0.40 * heat if on_user else 0.0)
+                candidates.append((score, player, rights_team, entry))
 
         if not candidates:
             continue
@@ -10333,7 +10587,10 @@ def run_cpu_offer_sheet_pass(session: Any, *, max_sheets: int = 4) -> Dict[str, 
         _, player, rights_team, entry = candidates[0]
         market = compute_market_value(player, league)
         years = 4 if _player_ovr(player) >= 84 else 3
-        aav_m = round(min(market * rng.uniform(1.02, 1.12), float(ctx.get("cap_space_m", 0) or 0) * 0.92), 3)
+        rights_is_user = str(_get(rights_team, "team_id", "") or _get(rights_team, "id", "")) == user_tid
+        # Sheets aimed at you are priced to hurt: rich enough that matching squeezes your cap.
+        lo, hi = (1.08, 1.20) if rights_is_user else (1.02, 1.12)
+        aav_m = round(min(market * rng.uniform(lo, hi), float(ctx.get("cap_space_m", 0) or 0) * 0.92), 3)
         if aav_m < LEAGUE_MINIMUM_AAV_M:
             continue
         res = execute_offer_sheet(
@@ -10343,6 +10600,8 @@ def run_cpu_offer_sheet_pass(session: Any, *, max_sheets: int = 4) -> Dict[str, 
         )
         if res.get("ok"):
             team_sheet_counts[off_tid] = team_sheet_counts.get(off_tid, 0) + 1
+            if rights_is_user:
+                user_sheets += 1
             filed.append({"team_id": off_tid, "player_id": _player_id(player), "aav_m": aav_m, "years": years})
 
     return {"filed": filed, "count": len(filed)}

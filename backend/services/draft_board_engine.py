@@ -16,6 +16,31 @@ def _rng(seed_parts: Any) -> float:
     return int(hashlib.md5(raw.encode()).hexdigest()[:8], 16) / 0xFFFFFFFF
 
 
+_SCOUTING_REGIONS = ("North America", "Scandinavia", "Russia / CIS", "Europe")
+
+
+def team_home_regions(team_id: str) -> tuple:
+    """Two regions where this club's staff is deepest (stable per club)."""
+    i = int(hashlib.md5(f"home_regions|{team_id}".encode()).hexdigest()[:8], 16)
+    a = _SCOUTING_REGIONS[i % 4]
+    b = _SCOUTING_REGIONS[(i // 4 + 1 + i % 4) % 4]
+    return (a, b) if a != b else (a, _SCOUTING_REGIONS[(i + 1) % 4])
+
+
+def prospect_region(entry: Dict[str, Any]) -> str:
+    region = str(entry.get("region") or "").strip()
+    if region in _SCOUTING_REGIONS:
+        return region
+    cl = str(entry.get("country") or entry.get("nationality") or "").strip().lower()
+    if cl in ("canada", "united states", "usa", "us", "can"):
+        return "North America"
+    if cl in ("sweden", "finland", "norway", "denmark", "swe", "fin"):
+        return "Scandinavia"
+    if cl in ("russia", "belarus", "kazakhstan", "rus"):
+        return "Russia / CIS"
+    return "Europe" if cl else ""
+
+
 def team_scouting_estimate(
     *,
     team_id: str,
@@ -25,12 +50,18 @@ def team_scouting_estimate(
     public_rank: int,
     scouting_quality: float = 60.0,
     draft_year: int = 2026,
+    region: str = "",
 ) -> Dict[str, Any]:
     """
     Build a team-private estimate of a prospect. Higher scouting_quality → tighter noise.
+    Clubs read their home regions and the top of the class much more accurately.
     """
     q = max(20.0, min(95.0, float(scouting_quality)))
     noise_amp = (100.0 - q) / 100.0
+    if region and region in team_home_regions(team_id):
+        noise_amp *= 0.5
+    if int(public_rank or 99) <= 32:
+        noise_amp *= 0.75
     n1 = _rng((team_id, prospect_id, draft_year, "ovr")) - 0.5
     n2 = _rng((team_id, prospect_id, draft_year, "pot")) - 0.5
     n3 = _rng((team_id, prospect_id, draft_year, "risk"))
@@ -71,7 +102,12 @@ def enrich_board_entry_with_team_scouting(
     interview: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     pid = str(entry.get("key") or entry.get("prospect_id") or entry.get("id") or "")
-    true_ovr = float(entry.get("true_ovr") or entry.get("nhl_readiness") or 55)
+    true_ovr = float(
+        entry.get("true_ovr")
+        or (entry.get("current_ovr_estimate") if entry.get("ovr_revealed") else None)
+        or entry.get("nhl_readiness")
+        or 55
+    )
     true_pot = float(entry.get("potential_score") or entry.get("ceiling") or true_ovr + 8)
     pub = int(entry.get("rank") or entry.get("public_rank") or 99)
     est = team_scouting_estimate(
@@ -82,6 +118,7 @@ def enrich_board_entry_with_team_scouting(
         public_rank=pub,
         scouting_quality=scouting_quality,
         draft_year=draft_year,
+        region=prospect_region(entry),
     )
     out = {**entry, **est}
     if interview:

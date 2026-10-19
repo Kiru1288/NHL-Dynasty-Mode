@@ -561,6 +561,8 @@ def ask_hometown_discount(session: Any, player_id: str) -> Dict[str, Any]:
         - traits["money"] * 0.22
         - (0.10 if ovr >= 88 else 0.0)
     )
+    broken = _broken_promise_count(session, player_id)
+    chance -= 0.12 * min(3, broken)
     chance = max(0.04, min(0.85, chance))
     roll = _rng("hometown", player_id, _window(session)).random()
     name = _player_name(player)
@@ -596,6 +598,9 @@ def ask_hometown_discount(session: Any, player_id: str) -> Dict[str, Any]:
             spread=spread_roll,
             league_min=float(league_minimum_aav(league) or 0.0),
         )
+        # Good players know what they're worth: the better he is, the smaller the cut.
+        tier_cap = 0.17 if ovr >= 88 else 0.20 if ovr >= 84 else 0.25 if ovr >= 80 else 0.42
+        amount = round(min(amount, base_ask * tier_cap), 2)
         pct = round(100.0 * amount / base_ask, 1) if base_ask > 0 else 0.0
         try:
             setattr(player, "_hometown_discount", {
@@ -742,6 +747,17 @@ def _current_ask(session: Any, player: Any, where: str) -> float:
         return 0.0
 
 
+def _broken_promise_count(session: Any, player_id: str) -> int:
+    """Every promise you broke to him, including ones he 'forgave' after an apology."""
+    return sum(
+        1
+        for p in (getattr(session, "universe_promises", None) or [])
+        if isinstance(p, dict)
+        and str(p.get("player_id") or "") == str(player_id)
+        and str(p.get("status") or "") in ("broken", "forgiven")
+    )
+
+
 def interest_adjustment(session: Any, player: Any, team: Any, context: str) -> float:
     """Extra interest (pts on the 0-100 offer scale) for offers from the user's club."""
     from services.contract_economy import _player_id
@@ -765,6 +781,8 @@ def interest_adjustment(session: Any, player: Any, team: Any, context: str) -> f
         bonus += (float(arel.get("agent_gm_trust", 0.55)) - 0.55) * 25.0
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
+    # An apology repairs trust, not the memory: broken promises keep costing at the table.
+    bonus -= 3.0 * min(3, _broken_promise_count(session, _player_id(player)))
     return max(-12.0, min(18.0, bonus))
 
 

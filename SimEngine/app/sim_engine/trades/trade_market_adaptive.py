@@ -11,7 +11,7 @@ Runtime state lives on league.cpu_market_runtime (dict).
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 # Season targets (tunable without touching proposer loops).
 TARGET_PICK_RATE = 0.36
@@ -277,6 +277,7 @@ def compute_user_dominance(league: Any, strength_map: Dict[str, Any], user_team_
     try:
         setattr(league, "_user_dominance", round(dom, 4))
         setattr(league, "_user_rival_ids", frozenset(rivals))
+        setattr(league, "_user_team_id", utid)
     except Exception:
         pass
     return dom
@@ -290,13 +291,130 @@ def is_user_rival(league: Any, team_id: Any) -> bool:
     return str(team_id) in (getattr(league, "_user_rival_ids", None) or ())
 
 
-def rubber_band_accept_bump(league: Any, team: Any, team_id: Any) -> float:
-    """Extra AI-interest a CPU club needs before taking a deal from a dominant user.
+# --- League heat ("the league talks") -----------------------------------------------
+# GMs compare notes. Lopsided trades with the user, a runaway record and repeated
+# raids on the same clubs build heat. Heat makes every CPU club a little harder to
+# deal with: stiffer trade asks, more FA competition, offer sheets on your RFAs and
+# waiver claims on your players. Grudges are per club and fade over ~4 months.
 
-    Subtle: at most +0.04 for anyone, +0.07 for a contender or rival.
+#: User gain over the partner (value points, before deal-size scaling) that counts as a fleece.
+FLEECE_GAP = 6.0
+#: Days a fleece is remembered (league-wide talk and the partner's own grudge).
+FLEECE_MEMORY_DAYS = 120
+
+
+def _clock(league: Any, day: Optional[int]) -> int:
+    if day is not None:
+        try:
+            d = int(day)
+            setattr(league, "_heat_clock", max(d, int(getattr(league, "_heat_clock", 0) or 0)))
+            return d
+        except (TypeError, ValueError):
+            pass
+    return int(getattr(league, "_heat_clock", 0) or 0)
+
+
+def record_user_trade_outcome(
+    league: Any,
+    partner_ids: Any,
+    user_gain: float,
+    *,
+    day: Optional[int] = None,
+    scale: float = 1.0,
+) -> None:
+    """Remember a completed user trade. Only lopsided wins for the user stick."""
+    if league is None:
+        return
+    gain = float(user_gain or 0.0) / max(1.0, float(scale or 1.0))
+    if gain < FLEECE_GAP:
+        return
+    d = _clock(league, day)
+    ledger = getattr(league, "_user_trade_grudges", None)
+    if not isinstance(ledger, dict):
+        ledger = {}
+    for tid in list(partner_ids or []):
+        rows = [r for r in list(ledger.get(str(tid)) or []) if d - int(r.get("day", 0)) < FLEECE_MEMORY_DAYS]
+        rows.append({"day": d, "gap": round(gain, 2)})
+        ledger[str(tid)] = rows[-6:]
+    try:
+        setattr(league, "_user_trade_grudges", ledger)
+    except Exception:
+        pass
+
+
+def team_grudge(league: Any, team_id: Any, *, day: Optional[int] = None) -> float:
+    """0..1 — how burned this club feels by the user's recent trades."""
+    ledger = getattr(league, "_user_trade_grudges", None) if league is not None else None
+    if not isinstance(ledger, dict):
+        return 0.0
+    d = _clock(league, day)
+    total = 0.0
+    for r in ledger.get(str(team_id)) or []:
+        age = d - int(r.get("day", 0) or 0)
+        if age >= FLEECE_MEMORY_DAYS:
+            continue
+        fade = 1.0 - age / float(FLEECE_MEMORY_DAYS)
+        total += fade * min(1.0, 0.45 + float(r.get("gap", 0.0)) / 30.0)
+    return max(0.0, min(1.0, total))
+
+
+def _user_points_pct(league: Any) -> Optional[float]:
+    utid = str(getattr(league, "_user_team_id", "") or "")
+    if not utid:
+        return None
+    for t in list(getattr(league, "teams", None) or []):
+        if str(getattr(t, "team_id", getattr(t, "id", ""))) != utid:
+            continue
+        try:
+            gp = float(getattr(t, "gp", getattr(t, "games_played", 0)) or 0)
+            pts = float(getattr(t, "pts", getattr(t, "points", 0)) or 0)
+        except Exception:
+            return None
+        if gp < 15:
+            return None
+        return pts / max(1.0, gp * 2.0)
+    return None
+
+
+def league_heat(league: Any, *, day: Optional[int] = None) -> float:
+    """0..1 — how much the league is ganging up on the user."""
+    if league is None:
+        return 0.0
+    dom = user_dominance(league)
+    d = _clock(league, day)
+    talk = 0.0
+    ledger = getattr(league, "_user_trade_grudges", None)
+    if isinstance(ledger, dict):
+        for rows in ledger.values():
+            for r in rows or []:
+                age = d - int(r.get("day", 0) or 0)
+                if age < FLEECE_MEMORY_DAYS:
+                    talk += 0.12 * (1.0 - age / float(FLEECE_MEMORY_DAYS))
+    record = 0.0
+    pct = _user_points_pct(league)
+    if pct is not None and pct > 0.60:
+        record = min(0.35, (pct - 0.60) * 2.5)
+    titles = float(getattr(league, "_user_recent_cups", 0) or 0)
+    return max(0.0, min(1.0, 0.70 * dom + min(0.45, talk) + record + 0.10 * min(2.0, titles)))
+
+
+def gm_daily_mood(team_id: Any, day: Optional[int]) -> float:
+    """Deterministic per-GM, per-day mood in [-1, 1]. Same answer all day, new one tomorrow."""
+    import zlib
+
+    seed = zlib.crc32(f"gm_mood|{team_id}|{int(day or 0)}".encode())
+    return ((seed % 2001) / 1000.0) - 1.0
+
+
+def rubber_band_accept_bump(league: Any, team: Any, team_id: Any, *, day: Optional[int] = None) -> float:
+    """Extra AI-interest a CPU club needs before taking a deal from the user.
+
+    Dominance, league heat and this club's own grudge stack, capped at +0.22.
     """
     dom = user_dominance(league)
-    if dom <= 0.0:
+    heat = league_heat(league, day=day)
+    grudge = team_grudge(league, team_id, day=day)
+    if dom <= 0.0 and heat <= 0.0 and grudge <= 0.0:
         return 0.0
     sharp = is_user_rival(league, team_id)
     if not sharp and team is not None:
@@ -304,4 +422,5 @@ def rubber_band_accept_bump(league: Any, team: Any, team_id: Any) -> float:
             if "contend" in str(getattr(team, key, "") or "").lower():
                 sharp = True
                 break
-    return dom * (0.07 if sharp else 0.04)
+    bump = dom * (0.12 if sharp else 0.07) + heat * (0.06 if sharp else 0.035) + grudge * 0.12
+    return min(0.22, bump)

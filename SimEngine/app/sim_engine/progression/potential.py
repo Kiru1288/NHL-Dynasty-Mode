@@ -299,31 +299,12 @@ def write_player_potential99(player: Any, pot99: float) -> float:
 
 
 def lift_potential_with_growth(player: Any, ovr_before_01: float, ovr_after_01: float) -> Optional[float]:
-    """When a young player's overall climbs, his ceiling climbs with him.
+    """Potential leads. An overall gain is not evidence the ceiling moved.
 
-    Growth isn't only a march toward a fixed POT: a player who keeps improving shows
-    he has more in him. Young players also keep a little headroom above their OVR so a
-    21-year-old who hits his "potential" isn't declared finished.
-    Returns the new POT (display) when it changed.
+    Ceiling changes come from potential reviews and breakout or bust evidence.
+    Overall is pulled toward whatever potential already is.
     """
-    try:
-        age = _age(player)
-        after99 = float(ovr_after_01) * 99.0
-        gain = (float(ovr_after_01) - float(ovr_before_01)) * 99.0
-        pot = read_player_potential99(player)
-        # Potential is a CEILING. It used to trail OVR (up to 55% of every gain plus
-        # 3-4 points of headroom), so 2/3 of the league outgrew their potential in a
-        # season and the gap to POT never predicted anything. Now growth only keeps
-        # POT from sitting below current OVR; real ceiling moves come from evidence
-        # (potential reviews, breakout/bust drift).
-        _ = (age, gain)
-        target = max(pot, after99)
-        target = min(99.0, target)
-        if target > pot + 0.05:
-            write_player_potential99(player, target)
-            return target
-    except Exception:
-        return None
+    _ = (player, ovr_before_01, ovr_after_01)
     return None
 
 
@@ -334,7 +315,9 @@ def ensure_potential_floor(player: Any) -> Optional[float]:
 
         ovr99 = float(player_current_ovr_01(player)) * 99.0
         pot = read_player_potential99(player)
-        if pot is None or float(pot) + 0.05 < ovr99:
+        # A missing ceiling, or one a point under current ability, is a data hole.
+        # A ceiling several points under is real: overall comes back to it.
+        if pot is None or pot < 1.0 or (pot + 0.05 < ovr99 and ovr99 - pot <= 2.0):
             write_player_potential99(player, min(99.0, ovr99))
             return ovr99
     except Exception:

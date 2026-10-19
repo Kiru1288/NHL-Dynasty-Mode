@@ -300,6 +300,7 @@ def _trade_state_signature(session: Any, assets_by_team: Dict[str, Any]) -> str:
 GM_PATIENCE_WARN = 3  # rejected proposals to one GM in a day before he warns you
 GM_PATIENCE_LIMIT = 5  # ...and before he stops taking calls until tomorrow
 PING_PONG_DAYS = 30
+GM_PREVIEW_PROBES_PER_STRIKE = 6  # distinct rejected previews to one GM in a day per patience strike
 
 
 def _partner_of(session: Any, assets_by_team: Dict[str, Any]) -> str:
@@ -369,6 +370,26 @@ def evaluate_franchise_trade(
         public["accepted"] = False
         public["verdict"] = "rejected"
         public["rejection_reasons"] = [block] + [r for r in list(public.get("rejection_reasons") or []) if r != block]
+    if not record_rumor_fallout and partner and not public.get("accepted"):
+        # Tyre-kicking: every few distinct rejected previews to the same GM in a day
+        # costs one patience strike, so a package can't be tuned against him forever.
+        import hashlib
+
+        sig = hashlib.sha256(repr(sorted((assets_by_team or {}).items())).encode()).hexdigest()[:12]
+        probes = {k: v for k, v in dict(getattr(session, "_gm_probe_seen", None) or {}).items() if str(k).startswith(f"{cur}|")}
+        seen = set(probes.get(pkey) or ())
+        if sig not in seen:
+            seen.add(sig)
+            probes[pkey] = sorted(seen)
+            session._gm_probe_seen = probes
+            if len(seen) % GM_PREVIEW_PROBES_PER_STRIKE == 0:
+                patience = {k: v for k, v in patience.items() if str(k).startswith(f"{cur}|")}
+                patience[pkey] = int(patience.get(pkey, 0) or 0) + 1
+                session._gm_patience = patience
+        if int(patience.get(pkey, 0) or 0) >= GM_PATIENCE_WARN:
+            public["rejection_reasons"] = list(public.get("rejection_reasons") or []) + [
+                "Their GM is getting tired of the back-and-forth today."
+            ]
     if record_rumor_fallout and partner:
         if not public.get("accepted"):
             n = int(patience.get(pkey, 0) or 0) + 1
@@ -705,6 +726,23 @@ def execute_franchise_trade(
             from app.sim_engine.trades.clause_consent import consume_consents
 
             consume_consents(session, moved)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+
+    try:
+        if exec_result and (not isinstance(exec_result, dict) or exec_result.get("ok", True)):
+            from app.sim_engine.trades.trade_market_adaptive import record_user_trade_outcome
+
+            vb = evaluation.get("value_breakdown") or {}
+            utid = str(ctx["user_team_id"])
+            u_br = vb.get(utid) or {}
+            partners = [t for t in vb.keys() if str(t) != utid]
+            if u_br and partners:
+                gap = float(u_br.get("net", 0.0)) - min(float((vb.get(t) or {}).get("net", 0.0)) for t in partners)
+                size = max(float(u_br.get("incoming_total") or 0.0), float(u_br.get("outgoing_total") or 0.0))
+                record_user_trade_outcome(
+                    ctx["league"], partners, gap, day=int(ctx.get("calendar_cursor") or 0), scale=max(1.0, size / 90.0)
+                )
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
 

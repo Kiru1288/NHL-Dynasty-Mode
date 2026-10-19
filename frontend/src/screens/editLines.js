@@ -432,8 +432,21 @@ function emptyLines(includeThird = false) {
   const goalieSlots = { Starter: "", Backup: "" };
   if (includeThird) goalieSlots.Third = "";
   return {
-    forwards: [1, 2, 3, 4].map((n) => ({ id: `f${n}`, name: `Line ${n}`, slots: { LW: "", C: "", RW: "" } })),
-    defense: [1, 2, 3].map((n) => ({ id: `d${n}`, name: `Pair ${n}`, slots: { LD: "", RD: "" } })),
+    forwards: [1, 2, 3, 4].map((n) => ({
+      id: `f${n}`,
+      name: `Line ${n}`,
+      slots: { LW: "", C: "", RW: "" },
+      toi_share: [34, 29, 22, 15][n - 1],
+      zone: n <= 2 ? "offensive" : "defensive",
+      usage: n <= 2 ? "attack" : "checking",
+    })),
+    defense: [1, 2, 3].map((n) => ({
+      id: `d${n}`,
+      name: `Pair ${n}`,
+      slots: { LD: "", RD: "" },
+      toi_share: [46, 34, 20][n - 1],
+      pair_role: n === 1 ? "shutdown" : n === 2 ? "neutral" : "sheltered",
+    })),
     goalies: [{ id: "g1", name: "Goalies", slots: goalieSlots }],
   };
 }
@@ -1222,6 +1235,75 @@ function SectionHead({ title, note }) {
   </div>;
 }
 
+const FWD_SHARE_DEFAULT = [34, 29, 22, 15];
+const DEF_SHARE_DEFAULT = [46, 34, 20];
+
+function shownShare(line, index, group) {
+  const n = Number(line?.toi_share);
+  if (Number.isFinite(n)) return n;
+  return (group === "defense" ? DEF_SHARE_DEFAULT : FWD_SHARE_DEFAULT)[index] || 10;
+}
+
+function DeployPills({ value, options, onPick }) {
+  return <span className="lb-deploy-pills">
+    {options.map(([id, label]) => (
+      <button
+        type="button"
+        key={id}
+        className={`lb-deploy-pill ${value === id ? "on" : ""}`}
+        onClick={(event) => { event.stopPropagation(); onPick(id); }}
+      >{label}</button>
+    ))}
+  </span>;
+}
+
+function DeploymentStrip({ group, lines, onShareStart, onShare, onShareEnd, onDeploy }) {
+  const defense = group === "defense";
+  return <div className="lb-deploy" onClick={(event) => event.stopPropagation()}>
+    {lines.map((line, index) => {
+      const share = shownShare(line, index, group);
+      return <div className="lb-deploy-row" key={line.id}>
+        <span className="lb-deploy-name">{defense ? `Pair ${index + 1}` : `Line ${index + 1}`}</span>
+        <label className="lb-deploy-share">
+          <input
+            type="range"
+            min="8"
+            max="60"
+            step="1"
+            value={Math.round(share)}
+            aria-label={`${defense ? "Pair" : "Line"} ${index + 1} ice-time share`}
+            onPointerDown={onShareStart}
+            onChange={(event) => onShare(group, line.id, Number(event.target.value))}
+            onPointerUp={onShareEnd}
+            onBlur={onShareEnd}
+          />
+          <span>{Math.round(share)}%</span>
+        </label>
+        {defense ? (
+          <DeployPills
+            value={line.pair_role || (index === 0 ? "shutdown" : index === 1 ? "neutral" : "sheltered")}
+            options={[["shutdown", "Shutdown"], ["sheltered", "Sheltered"], ["neutral", "Neutral"], ["offensive", "Offensive"]]}
+            onPick={(pair_role) => onDeploy(group, line.id, { pair_role })}
+          />
+        ) : (
+          <>
+            <DeployPills
+              value={line.zone || (index < 2 ? "offensive" : "defensive")}
+              options={[["offensive", "Offensive"], ["defensive", "Defensive"]]}
+              onPick={(zone) => onDeploy(group, line.id, { zone })}
+            />
+            <DeployPills
+              value={line.usage || (index < 2 ? "attack" : "checking")}
+              options={[["attack", "Attack"], ["checking", "Checking"]]}
+              onPick={(usage) => onDeploy(group, line.id, { usage })}
+            />
+          </>
+        )}
+      </div>;
+    })}
+  </div>;
+}
+
 function FormationLegend({ depthLabel = "Line-to-line depth" }) {
   return <div className="fm-legend">
     <span className="fm-legend-item"><span className="fm-legend-swatch" />Strong link</span>
@@ -1295,7 +1377,8 @@ function FormationBoard({
   mode, setMode, lineState, playerMap, chemReport, chemistryByUnit, warningsByUnit, linksByUnit, depthLinks,
   selectedUnit, selectedSlotKey, selectedPlayer, locks, showThird, menuKey, clipboard,
   onSelectUnit, onSlotSelect, onDrop, onDragStart, onRemove, onToggleLock, onSlotKeyDown,
-  registerSlotRef, onWarnings, onMenuToggle, actions, onTogglePool, onToggleInspector, rosterEmpty,
+  registerSlotRef,   onWarnings, onMenuToggle, actions, onTogglePool, onToggleInspector, rosterEmpty,
+  onShareStart, onShare, onShareEnd, onDeploy,
 }) {
   const options = [[LINEUP_MODES.ALL, "All"], [LINEUP_MODES.FORWARDS, "Forwards"], [LINEUP_MODES.DEFENSE, "Defence"], [LINEUP_MODES.GOALIES, "Goalies"]];
   const showForwards = mode === LINEUP_MODES.ALL || mode === LINEUP_MODES.FORWARDS;
@@ -1319,7 +1402,8 @@ function FormationBoard({
     </div>
     {rosterEmpty ? <div className="lb-empty">Roster unavailable</div> : <div className="fm-scroll">
       {showForwards ? <div className="fm-section">
-        <SectionHead title="Forwards" note="Every linemate pairing is linked both ways" />
+        <SectionHead title="Forwards" note="Ice share is the minutes and the scoring weight" />
+        <DeploymentStrip group="forwards" lines={lineState.forwards} onShareStart={onShareStart} onShare={onShare} onShareEnd={onShareEnd} onDeploy={onDeploy} />
         {lineState.forwards.map((line, index) => <React.Fragment key={line.id}>
           <FormationUnit
             {...shared}
@@ -1340,7 +1424,8 @@ function FormationBoard({
       </div> : null}
 
       {showDefense ? <div className="fm-section">
-        <SectionHead title="Defence" note="One link per pair" />
+        <SectionHead title="Defence" note="Shutdown takes the hard minutes. Sheltered hides them." />
+        <DeploymentStrip group="defense" lines={lineState.defense} onShareStart={onShareStart} onShare={onShare} onShareEnd={onShareEnd} onDeploy={onDeploy} />
         {lineState.defense.map((line, index) => <React.Fragment key={line.id}>
           <FormationUnit
             {...shared}
@@ -1634,6 +1719,7 @@ export function EvenStrengthLines(props) {
     // Only the backend counts as "saved": a browser-cached or auto-built lineup
     // is still unsaved, otherwise the Chemistry report projects different lines.
     const savedBase = hasBackend ? chosen.lineState : emptyLines(showThird);
+    const needsDeploySave = hasBackend && [...(backendRaw?.forwards || []), ...(backendRaw?.defense || [])].some((line) => line && line.toi_share == null);
     hydratedSession.current = sessionId;
     setLineState(chosen.lineState);
     setLocks({});
@@ -1641,7 +1727,13 @@ export function EvenStrengthLines(props) {
     setFuture([]);
     setSelectedSlotKey("");
     setSelectedPlayerId("");
-    setSavedSnapshot(snapshot(savedBase, {}));
+    if (needsDeploySave) {
+      const stripped = cloneLines(chosen.lineState);
+      for (const line of [...stripped.forwards, ...stripped.defense]) delete line.toi_share;
+      setSavedSnapshot(snapshot(stripped, {}));
+    } else {
+      setSavedSnapshot(snapshot(savedBase, {}));
+    }
     if (chosen.removed > 0 && staleNotice.current !== sessionId) {
       staleNotice.current = sessionId;
       setToast({ type: "warning", message: `${chosen.removed} stale assignments removed.` });
@@ -1806,6 +1898,51 @@ export function EvenStrengthLines(props) {
     setAnnouncement(message);
     return true;
   }, [lineState, locks]);
+
+  const shareBefore = useRef(null);
+  const onShareStart = useCallback(() => {
+    shareBefore.current = snapshot(lineState, locks);
+  }, [lineState, locks]);
+  const onShareMove = useCallback((group, lineId, raw) => {
+    const defaults = group === "defense" ? [46, 34, 20] : [34, 29, 22, 15];
+    const units = lineState[group] || [];
+    const idx = units.findIndex((line) => line.id === lineId);
+    if (idx < 0) return;
+    const current = units.map((line, i) => {
+      const n = Number(line.toi_share);
+      return Number.isFinite(n) ? n : (defaults[i] || 10);
+    });
+    const clamped = Math.max(8, Math.min(60, Math.round(Number(raw))));
+    const rest = Math.max(0, 100 - clamped);
+    const otherSum = current.reduce((sum, value, i) => (i === idx ? sum : sum + value), 0) || 1;
+    const rounded = current.map((value, i) => (i === idx ? clamped : Math.round((rest * value) / otherSum)));
+    let drift = 100 - rounded.reduce((sum, value) => sum + value, 0);
+    const donor = rounded
+      .map((value, i) => [value, i])
+      .filter(([, i]) => i !== idx)
+      .sort((a, b) => b[0] - a[0])[0];
+    if (donor) rounded[donor[1]] += drift;
+    setLineState({
+      ...lineState,
+      [group]: units.map((line, i) => ({ ...line, toi_share: rounded[i] })),
+    });
+  }, [lineState]);
+  const onShareEnd = useCallback(() => {
+    if (!shareBefore.current) return;
+    const before = shareBefore.current;
+    shareBefore.current = null;
+    if (snapshotKey(before) === snapshotKey(snapshot(lineState, locks))) return;
+    setHistory((current) => [...current, before].slice(-HISTORY_LIMIT));
+    setFuture([]);
+    setAnnouncement("Ice time updated.");
+  }, [lineState, locks]);
+  const onDeploy = useCallback((group, lineId, patch) => {
+    const next = {
+      ...lineState,
+      [group]: (lineState[group] || []).map((line) => (line.id === lineId ? { ...line, ...patch } : line)),
+    };
+    commit(next, locks, "Deployment updated.");
+  }, [lineState, locks, commit]);
 
   const undo = useCallback(() => {
     if (!history.length) return;
@@ -2191,6 +2328,10 @@ export function EvenStrengthLines(props) {
           onTogglePool={() => setPoolOpen((current) => !current)}
           onToggleInspector={() => setInspectorOpen((current) => !current)}
           rosterEmpty={!players.length && !rosterLoading}
+          onShareStart={onShareStart}
+          onShare={onShareMove}
+          onShareEnd={onShareEnd}
+          onDeploy={onDeploy}
         />
         <LineInspector
           open={inspectorOpen}

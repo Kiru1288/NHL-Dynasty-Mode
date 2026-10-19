@@ -1033,6 +1033,26 @@ def process_draft_rights_deadlines(
     return payload
 
 
+def _prospect_path_bucket(player: Any) -> str:
+    parts = " ".join(
+        str(getattr(player, key, "") or "")
+        for key in (
+            "development_path",
+            "post_draft_league",
+            "league",
+            "current_league_id",
+            "league_code",
+        )
+    ).lower()
+    if "ncaa" in parts or "college" in parts:
+        return "ncaa"
+    if any(token in parts for token in ("europe", "shl", "liiga", "khl", "del", "swiss", "czech", "extraliga")):
+        return "europe"
+    if any(token in parts for token in ("junior", "ohl", "whl", "qmjhl", "chl", "ushl")):
+        return "junior"
+    return "other"
+
+
 def should_cpu_auto_sign_elc(
     player: Any,
     team: Any,
@@ -1045,8 +1065,14 @@ def should_cpu_auto_sign_elc(
     """
     if str(getattr(player, "signed_status", "") or "").lower() == "signed":
         return False, "already_signed"
-    if not bool(getattr(player, "entry_level_contract_eligible", False)):
-        return False, "not_elc_eligible"
+    try:
+        from services.contract_economy import is_elc_eligible
+
+        if not is_elc_eligible(player):
+            return False, "not_elc_eligible"
+    except Exception:
+        if not bool(getattr(player, "entry_level_contract_eligible", False)):
+            return False, "not_elc_eligible"
 
     expiry = getattr(player, "rights_expiry_year", None)
     status = str(getattr(player, "rights_status", "") or "")
@@ -1068,18 +1094,22 @@ def should_cpu_auto_sign_elc(
     if readiness <= 1.5:  # 0–1 scale from ovr() → 0–99 scale
         readiness *= 99.0
     age = int(getattr(player, "age", 18) or 18)
-    path = str(getattr(player, "development_path", "") or "")
+    path = _prospect_path_bucket(player)
 
     # Rights about to expire / marked expiring
     if status == "rights_expiring" or (expiry is not None and int(expiry) <= int(season_year) + 1):
         return True, "rights_expiration_risk"
 
-    # Clearly NHL-ready and not in multi-year NCAA return
-    if readiness >= 72 and path != "NCAA":
+    # Clearly NHL-ready. NCAA teenagers stay in school.
+    if readiness >= 70 and path != "ncaa":
         return True, "prospect_readiness"
+    if path == "ncaa" and age >= 21 and readiness >= 64:
+        return True, "age_and_readiness"
 
-    # Older juniors / European pros ready to turn pro
-    if age >= 21 and readiness >= 64 and path in ("Junior", "Europe"):
+    # Juniors turning pro, and European pros old enough to come over.
+    if path == "junior" and age >= 20 and readiness >= 60:
+        return True, "age_and_readiness"
+    if path == "europe" and age >= 21 and readiness >= 62:
         return True, "age_and_readiness"
 
     # Cap / slots: do not auto-sign if org is near contract limit

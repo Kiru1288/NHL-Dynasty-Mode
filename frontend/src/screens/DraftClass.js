@@ -16,20 +16,10 @@ import {
   PerformanceStrip,
   LeagueBadge,
 } from "../components/franchise/commandVisuals";
-import { BOARD_SOURCES, WORKSPACE_TABS, confMeaning, enrichProspectsForWarRoom, groupByPyramid, overageStockNote, rankProspectsForSource, skillDevelopmentNotes, weeklyStockMovers, weeklyTrajectoryPoints } from "./draftWarRoom";
-import {
-  OutcomeDonut,
-  PercentileBars,
-  ProspectVisualStyles,
-  RatingCertaintyGauge,
-  SkillRadar,
-  SnapshotDials,
-  certaintyTier,
-  parseRange,
-  percentileOf,
-  prospectCertainty,
-} from "../components/dossier/ProspectVisuals";
-import { resolveProjectedRangeLabel, resolveOvrBands, resolveGoalieToolRows, buildScoutingDeskEntries, outcomeRibbonSegmentsForPosition, formatDeskGrade, dossierFileNotes, buildStubProspectProfile, resolveWjcDossierBlock } from "./prospectDossierHelpers";
+import { BOARD_SOURCES, WORKSPACE_TABS, confMeaning, enrichProspectsForWarRoom, groupByPyramid, rankProspectsForSource, weeklyStockMovers } from "./draftWarRoom";
+import { buildProspectDossierModel } from "../components/dossier/prospectDossierModel";
+import { ProspectDossier, useDossierTab } from "../components/dossier/ProspectDossierView";
+import { resolveOvrBands, buildStubProspectProfile } from "./prospectDossierHelpers";
 
 let TRANSCENDENT_BOSS_AUDIO_URL = null;
 try {
@@ -177,9 +167,6 @@ async function runCoverageDeploy(target, { intensity = "normal" } = {}) {
   }
   const res = await api.post(SCOUTING_ENDPOINTS.focus, body);
   return res?.data || {};
-}
-function clamp(n, min, max) {
-  return Math.max(min, Math.min(max, n));
 }
 
 function seededNumber(seed) {
@@ -381,81 +368,6 @@ function prospectPpgValue(player) {
   return gp > 0 ? pts / gp : 0;
 }
 
-function formatHandedness(handedness) {
-  const h = String(handedness || "").trim().toLowerCase();
-  if (!h) return null;
-  if (h.startsWith("l")) return "L";
-  if (h.startsWith("r")) return "R";
-  return h.slice(0, 1).toUpperCase();
-}
-
-function cleanTeamName(player, profile) {
-  const raw = profile?.team || player?.team || player?.teamName || "";
-  if (profile?.team) return profile.team;
-  return formatProspectTeam(
-    { team_name: raw, team: raw, league_code: player?.leagueCode, league: player?.league },
-    raw
-  );
-}
-
-function cleanLeagueName(player, profile) {
-  if (profile?.league) return profile.league;
-  return formatProspectLeague({
-    league_display: player?.leagueDisplay,
-    league_code: player?.leagueCode,
-    league: player?.league,
-    league_name: player?.league,
-    team_name: player?.team || player?.teamName,
-    team: player?.team,
-  }) || player?.league || "—";
-}
-
-function getPlayerIdentityBadges(player, profile) {
-  const fromBackend = profile?.identity_badges;
-  if (fromBackend && typeof fromBackend === "object") {
-    return {
-      position: fromBackend.position || player?.position || "—",
-      handedness: fromBackend.handedness || formatHandedness(profile?.handedness || player?.handedness),
-      height: fromBackend.height || profile?.height || player?.height,
-      weight: fromBackend.weight || (profile?.weight ? `${Math.round(Number(profile.weight))} LBS` : null),
-      age: fromBackend.age || (profile?.age ? `${profile.age}Y` : player?.age ? `${player.age}Y` : null),
-    };
-  }
-  const weight = profile?.weight ?? player?.weight;
-  return {
-    position: player?.position || profile?.position || "—",
-    handedness: formatHandedness(profile?.handedness || player?.handedness),
-    height: profile?.height || player?.height,
-    weight: weight != null && Number.isFinite(Number(weight)) ? `${Math.round(Number(weight))} LBS` : null,
-    age: profile?.age ? `${profile.age}Y` : player?.age ? `${player.age}Y` : null,
-  };
-}
-
-function getPlayerTags(player, profile) {
-  if (profile?.ceilingHidden || profile?.potential?.hidden) {
-    if (Array.isArray(profile?.tags) && profile.tags.length) return profile.tags;
-    return [];
-  }
-  if (Array.isArray(profile?.tags) && profile.tags.length) return profile.tags;
-  const tags = [];
-  const pos = String(player?.position || profile?.position || "").toUpperCase();
-  const ppg = Number(profile?.stats?.ppg ?? player?.ppg) || 0;
-  const gp = Number(profile?.stats?.games ?? player?.gp) || 0;
-  if (gp < 15) return tags.slice(0, 5);
-  if (ppg >= 0.9) tags.push("Production");
-  if (player?.isGem || profile?.gem?.label === "Gem") tags.push("Gem");
-  if (player?.isBustRisk || profile?.gem?.label === "Risk") tags.push("Boom/Bust");
-  if (pos !== "G" && pos !== "D" && ppg >= 0.55) tags.push("Goal Scorer");
-  return tags.slice(0, 5);
-}
-
-
-function movementDisplayText(stock) {
-  if (!stock?.available && stock?.direction === "UNKNOWN") return "—";
-  return stockBadgeText(stock, { compact: true });
-}
-
-
 function prospectPublicPct(player) {
   const n = Number(coalesce(
     player?.publicScoutingConfidence,
@@ -477,15 +389,6 @@ function prospectEffectivePct(player) {
   return prospectDedicatedPct(player) ?? prospectPublicPct(player);
 }
 
-
-function prospectIntelTier(pct) {
-  if (pct == null) return null;
-  if (pct <= 35) return "Unknown";
-  if (pct <= 55) return "Limited";
-  if (pct <= 75) return "Solid";
-  if (pct <= 90) return "Strong";
-  return "Locked";
-}
 
 function prospectConfidenceFogClass(pct) {
   if (pct == null) return "dc-conf-fog--blind";
@@ -781,38 +684,6 @@ function addPositionRanks(prospects) {
       counters[p.position] = (counters[p.position] || 0) + 1;
       return { ...p, positionRank: counters[p.position] };
     });
-}
-
-
-function attributeDisplay(exactValue, completion, attrSeed = 0, { wideFog = false } = {}) {
-  const v = Number(exactValue);
-  const hasVal = Number.isFinite(v) && v > 0;
-  const base = hasVal ? v : 50;
-  const fogBoost = wideFog ? 1.65 : 1.0;
-  // Only fully lock when there is essentially no scouting file at all.
-  if (completion <= 18) {
-    return { text: "?", range: null, width: 0, locked: true, confidence: "Unknown" };
-  }
-  // Ceiling fog / early looks → banded ranges, never blank "?" when we have a tool value.
-  if (completion <= 55 || wideFog) {
-    const spread = Math.round(12 * fogBoost);
-    const low = clamp(base - spread + (seededNumber(base + attrSeed) % 5), 40, 96);
-    const high = clamp(low + spread + (wideFog ? 4 : 0), low, 96);
-    return { text: `${low}–${high}`, range: [low, high], width: (low + high) / 2, locked: false, confidence: "Preliminary" };
-  }
-  if (completion <= 80) {
-    const spread = 6;
-    const low = clamp(base - spread + (seededNumber(base + attrSeed + 7) % 3), 45, 96);
-    const high = clamp(low + spread, low, 96);
-    return { text: `${low}–${high}`, range: [low, high], width: (low + high) / 2, locked: false, confidence: "Moderate Confidence" };
-  }
-  if (completion < 95) {
-    const spread = 2;
-    const low = clamp(base - spread, 45, 96);
-    const high = clamp(base + spread, low, 96);
-    return { text: `${low}–${high}`, range: [low, high], width: base, locked: false, confidence: "High Confidence" };
-  }
-  return { text: String(Math.round(base)), range: [base, base], width: base, locked: false, confidence: "Fully Scouted" };
 }
 
 
@@ -1503,35 +1374,6 @@ function normalizeBackendFranchiseTier(row) {
     available: false,
   };
 }
-
-function getStockTone(stock) {
-  const dir = String(stock?.direction || "UNKNOWN").toUpperCase();
-  if (dir === "UP") return "rise";
-  if (dir === "DOWN") return "fall";
-  if (dir === "NEW") return "new";
-  if (dir === "STABLE") return "stable";
-  return "neutral";
-}
-
-
-
-
-
-function stockBadgeText(stock, options = {}) {
-  const compact = options === true || options?.compact;
-  if (!stock?.available && stock?.direction === "UNKNOWN") return "—";
-  const delta = Number(stock?.deltaRank) || 0;
-  const unit = String(stock?.stockUnit || "heat");
-  const suffix = !compact && unit === "rank" && delta !== 0 ? " rk" : "";
-  if (delta > 0) return `+${delta}${suffix}`;
-  if (delta < 0) return `${delta}${suffix}`;
-  if (stock?.direction === "NEW") return "NEW";
-  return "+0";
-}
-
-
-
-
 
 function fullName(player) {
   return `${player.firstName} ${player.lastName}`;
@@ -2520,78 +2362,25 @@ function wrNumClassForTier(tierKey) {
 }
 
 
-function outcomeRibbonSegments(outcomes, isGoalie = false, outcomeDistribution = null) {
-  return outcomeRibbonSegmentsForPosition(outcomes, isGoalie, outcomeDistribution);
-}
-
-function OffIceFrameStrip({ player, tools, profile }) {
-  const backend = profile?.off_ice_frame || profile?.offIceFrame;
-  const frameRows = Array.isArray(backend?.rows) ? backend.rows : [];
-  if (frameRows.length && frameRows[0]?.label) {
-    return (
-      <div className="wr-office-strip wr-office-strip--frame">
-        <span className="dc-profile-tags__label">
-          Off-ice &amp; frame <span className="wr-muted">//</span> chapter scores
-        </span>
-        <div className="wr-office-strip__grid">
-          {frameRows.map((row) => (
-            <div className="wr-office-strip__row" key={row.label}>
-              <span className="wr-office-strip__label">{row.label}</span>
-              <div className="wr-office-pips" aria-label={`${row.label} ${row.pips ?? 0} of 10`}>
-                {Array.from({ length: 10 }, (_, i) => (
-                  <i key={i} className={i < (row.pips ?? 0) ? "is-on" : ""} />
-                ))}
-              </div>
-              <em>{row.detail}</em>
-              <strong>{row.score ?? "—"}</strong>
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  }
-  return null;
-}
-
-function ProspectScoutingDesk({ desk, confPct, compact = false, maxEntries = null }) {
-  const allEntries = desk?.entries || [];
-  const entries = maxEntries != null ? allEntries.slice(0, maxEntries) : allEntries;
-  const returned = allEntries.filter((e) => !e.locked).length;
-  const total = allEntries.length;
-  return (
-    <section className={`wr-scout-desk${compact ? " wr-scout-desk--compact" : ""}`}>
-      <span className="dc-profile-tags__label">
-        The scouting desk <span className="wr-muted">//</span> {returned} of {total} reports returned
-      </span>
-      <div className="wr-scout-desk__list">
-        {entries.map((row) => (
-          <article
-            key={`${row.scout}-${row.gradeLabel}-${row.meta || ""}`}
-            className={`wr-scout-desk__row is-${row.tone}${row.locked ? " is-locked" : ""}`}
-          >
-            <div className="wr-scout-desk__meta">
-              <div className="wr-scout-desk__name">{row.scout}</div>
-              <div className="wr-scout-desk__sub">{row.meta}</div>
-            </div>
-            <div className="wr-scout-desk__quote">
-              {row.locked ? (
-                <span className="wr-hatch wr-scout-desk__redact" aria-hidden="true" />
-              ) : (
-                <p>{row.quote ? `"${row.quote}"` : "—"}</p>
-              )}
-            </div>
-            <div className="wr-scout-desk__grade">
-              <strong>{formatDeskGrade(row)}</strong>
-              {row.gradeLabel ? <span>{row.gradeLabel}</span> : null}
-            </div>
-          </article>
-        ))}
-      </div>
-      {confPct != null ? (
-        <small className="wr-scout-desk__conf">{confPct}% scouting confidence on file</small>
-      ) : null}
-    </section>
+/** Current ability estimate for the board column. Ceiling fog does not blank present skill. */
+function resolveCurrentEstimate(player, profile, ceilingHidden, dedicatedFile) {
+  const exact = Number(profile?.scoutedOverall ?? profile?.currentOvrEstimate ?? player?.ovrHint);
+  const revealed = Boolean(player?.ovrRevealed) || (
+    Number(profile?.userScoutPct ?? player?.dedicatedScoutingPct ?? 0) >= OVR_REVEAL_THRESHOLD
   );
+  if (revealed && (!ceilingHidden || dedicatedFile) && Number.isFinite(exact) && exact > 0) {
+    return { text: String(Math.round(exact)), detail: "Scouted OVR", exact: true };
+  }
+  const low = Number(profile?.overallRangeLow ?? player?.ovrRange?.low);
+  const high = Number(profile?.overallRangeHigh ?? player?.ovrRange?.high);
+  if (Number.isFinite(low) && Number.isFinite(high) && low > 0 && high >= low) {
+    const dash = "\u2013";
+    return { text: `${Math.round(low)}${dash}${Math.round(high)}`, detail: ceilingHidden ? "Present ability" : "Range", exact: false };
+  }
+  if (Number.isFinite(exact) && exact > 0 && !ceilingHidden) {
+    return { text: `~${Math.round(exact)}`, detail: "Estimate", exact: false };
+  }
+  return { text: "\u2014", detail: "Not revealed", exact: false };
 }
 
 function ProspectBoardRow({ player, index, selected, expanded, onSelect, onPrefetch, meta, showConsensus }) {
@@ -2911,204 +2700,6 @@ function ModalCloseButton({ onClick, label = "Close" }) {
 /** @deprecated Prefer ModalCloseButton — kept so older call sites keep working if reintroduced. */
 
 
-function ProfileChip({ children, tone = "neutral" }) {
-  if (!children) return null;
-  return <span className={`dc-profile-chip dc-profile-chip--${tone}`}>{children}</span>;
-}
-
-
-
-// Displayed tools use real scouted attributes — no cosmetic lift toward ceiling.
-function prospectAttributeLift(profile) {
-  return 0;
-}
-
-
-// NHL readiness — driven by current ability / ETA, never rank alone.
-function nhlReadinessLabel(rank, ceiling, currentOvr, profile) {
-  if (profile?.readinessLabel) return profile.readinessLabel;
-  if (profile?.ceilingHidden || profile?.potential?.hidden) {
-    const age = Number(profile?.age ?? 18);
-    if (age <= 17) return "Multi-year project";
-    if (age >= 20) return "Near-term decision";
-    return "Development TBD";
-  }
-  const etaLabel = String(profile?.eta?.label || profile?.nhlEta || "").toUpperCase();
-  if (etaLabel === "NOW") return "NHL ready";
-  if (etaLabel === "1Y") return "1 year away";
-  if (etaLabel === "2Y") return "2 years away";
-  if (etaLabel === "3Y") return "3 years away";
-  if (etaLabel === "4Y+" || etaLabel === "4Y") return "Long-term project";
-  const cur = Number(currentOvr) || 0;
-  const c = Number(ceiling) || 0;
-  if (cur >= 76) return "NHL ready";
-  if (cur >= 70 || (cur >= 64 && c >= 76)) return "1 year away";
-  if (cur >= 60) return "2 years away";
-  if (cur >= 54) return "3 years away";
-  return "Long-term project";
-}
-
-// Compact season-line stats only — no prose ("small sample", stock blurbs, league names).
-
-/** Collapse consecutive same-rank samples so early movement isn't crushed onto the left edge. */
-
-/** Weekly value trail — stored board history only. */
-function buildValueTrajectoryPoints(profile, player) {
-  return weeklyTrajectoryPoints(profile, player);
-}
-
-function formatSignalPct(v) {
-  if (v == null || !Number.isFinite(Number(v))) return "—";
-  const n = Number(v);
-  return `${(n <= 1.5 ? n * 100 : n).toFixed(1)}%`;
-}
-
-function formatSignalSigned(v, decimals = 1) {
-  if (v == null || !Number.isFinite(Number(v))) return "—";
-  const n = Number(v);
-  if (n > 0) return `+${n.toFixed(decimals)}`;
-  return n.toFixed(decimals);
-}
-
-function formatSignalNum(v, decimals = 0) {
-  if (v == null || !Number.isFinite(Number(v))) return "—";
-  return Number(v).toFixed(decimals);
-}
-
-/** Current ability estimate — always available; ceiling fog does not blank present skill. */
-function resolveCurrentEstimate(player, profile, ceilingHidden, dedicatedFile) {
-  const exact = Number(profile?.scoutedOverall ?? profile?.currentOvrEstimate ?? player?.ovrHint);
-  // Your own file reveals the OVR — league-wide coverage (scout_confidence) never does.
-  const revealed = Boolean(player?.ovrRevealed) || (
-    Number(profile?.userScoutPct ?? player?.dedicatedScoutingPct ?? 0) >= OVR_REVEAL_THRESHOLD
-  );
-  // Exact OVR only when revealed / dedicated file — never as a late-round ceiling leak.
-  if (revealed && (!ceilingHidden || dedicatedFile) && Number.isFinite(exact) && exact > 0) {
-    return { text: String(Math.round(exact)), detail: "Scouted OVR", exact: true };
-  }
-  const low = Number(profile?.overallRangeLow ?? player?.ovrRange?.low);
-  const high = Number(profile?.overallRangeHigh ?? player?.ovrRange?.high);
-  if (Number.isFinite(low) && Number.isFinite(high) && low > 0 && high >= low) {
-    return { text: `${Math.round(low)}–${Math.round(high)}`, detail: ceilingHidden ? "Present ability" : "Range", exact: false };
-  }
-  if (Number.isFinite(exact) && exact > 0 && !ceilingHidden) {
-    return { text: `~${Math.round(exact)}`, detail: "Estimate", exact: false };
-  }
-  return { text: "—", detail: "Not revealed", exact: false };
-}
-
-
-function ValueTrajectoryChart({ points, compact = false }) {
-  if (!points?.length) {
-    return (
-      <div className={`dc-signal-chart dc-signal-chart--empty${compact ? " is-compact" : ""}`}>
-        <span className="dc-profile-tags__label">Value trajectory</span>
-        <p>No board movement history yet</p>
-      </div>
-    );
-  }
-  if (points.length === 1) {
-    const pt = points[0];
-    return (
-      <div className={`dc-signal-chart dc-signal-chart--single${compact ? " is-compact" : ""}`}>
-        <div className="dc-signal-chart__head">
-          <span className="dc-profile-tags__label">Weekly value trajectory</span>
-          <strong className="is-flat">CURRENT SLOT</strong>
-        </div>
-        <div className="dc-signal-chart__single-rank">
-          <strong className="wr-num-gold">#{pt.rank}</strong>
-          <span>{pt.label || "Board position"}</span>
-        </div>
-        <p className="dc-signal-chart__single-note">No prior weekly samples on file yet.</p>
-      </div>
-    );
-  }
-  const ranks = points.map((p) => p.rank);
-  const minR = Math.min(...ranks);
-  const maxR = Math.max(...ranks);
-  // Keep a usable vertical range even on flat seasons so the line isn't a 1px stub.
-  const pad = Math.max(2, Math.round((maxR - minR) * 0.18) || 3);
-  const yMin = Math.max(1, minR - pad);
-  const yMax = Math.max(yMin + 4, maxR + pad);
-  const w = compact ? 280 : 520;
-  const h = compact ? 72 : 128;
-  const left = 8;
-  const right = 8;
-  const top = 8;
-  const bottom = 8;
-  const spanX = Math.max(1, points.length - 1);
-  const coords = points.map((pt, i) => {
-    const x = left + ((w - left - right) * i) / spanX;
-    // Lower board rank (#1) sits higher on the chart.
-    const t = (pt.rank - yMin) / Math.max(1e-6, yMax - yMin);
-    const y = top + t * (h - top - bottom);
-    return { x, y, ...pt };
-  });
-  const poly = coords.map((c) => `${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(" ");
-  const area = `${left},${h - bottom} ${poly} ${coords[coords.length - 1].x.toFixed(1)},${h - bottom}`;
-  const first = coords[0];
-  const last = coords[coords.length - 1];
-  const rising = last.rank < first.rank;
-  const falling = last.rank > first.rank;
-  const gradId = compact ? "dcTrailGlowCompact" : "dcTrailGlow";
-  const fillId = compact ? "dcTrailFillCompact" : "dcTrailFill";
-  return (
-    <div className={`dc-signal-chart${compact ? " is-compact" : ""} dc-signal-chart--weekly`}>
-      <div className="dc-signal-chart__head">
-        <span className="dc-profile-tags__label">Weekly value trajectory</span>
-        <strong className={rising ? "is-up" : falling ? "is-down" : ""}>
-          {rising ? "RISING" : falling ? "FALLING" : "FLAT"}
-        </strong>
-        <span className="dc-signal-chart__delta">#{last.rank}</span>
-      </div>
-      <svg className="dc-signal-chart__svg" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="xMidYMid meet" aria-hidden="true">
-        <defs>
-          <linearGradient id={gradId} x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0%" stopColor="rgba(43,228,255,0.55)" />
-            <stop offset="100%" stopColor="rgba(244,198,110,1)" />
-          </linearGradient>
-          <linearGradient id={fillId} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="rgba(43,228,255,0.22)" />
-            <stop offset="100%" stopColor="rgba(43,228,255,0)" />
-          </linearGradient>
-        </defs>
-        <polygon fill={`url(#${fillId})`} points={area} />
-        <polyline fill="none" stroke={`url(#${gradId})`} strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round" points={poly} />
-        {coords.map((c, i) => (
-          <circle
-            key={`${c.rank}-${i}`}
-            cx={c.x}
-            cy={c.y}
-            r={i === coords.length - 1 ? 3.6 : 2.4}
-            fill={i === coords.length - 1 ? "#f4c66e" : "#2be4ff"}
-            stroke="rgba(3,10,18,0.85)"
-            strokeWidth="1"
-          />
-        ))}
-      </svg>
-      {!compact ? (
-        <div className="dc-signal-chart__axis">
-          <span>{first.label}</span>
-          <span>{last.label}</span>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function SignalMetricTile({ label, value, tone, hint }) {
-  const empty = value == null || value === "" || value === "—";
-  return (
-    <div
-      className={`dc-signal-metric${empty ? " is-empty" : ""}${tone ? ` is-${tone}` : ""}`}
-      title={hint || undefined}
-    >
-      <span>{label}</span>
-      <strong>{empty ? "—" : value}</strong>
-    </div>
-  );
-}
-
 function SignalNationFlag({ country, size = 64, className = "" }) {
   const shiny = flagApiUrl(country, size, "shiny");
   const flat = flagApiUrl(country, size, "flat");
@@ -3134,574 +2725,6 @@ function SignalNationFlag({ country, size = 64, className = "" }) {
   );
 }
 
-function positionDisplayName(pos) {
-  const p = String(pos || "").toUpperCase();
-  if (p === "C") return "CENTRE";
-  if (p === "LW") return "LEFT WING";
-  if (p === "RW") return "RIGHT WING";
-  if (p === "D" || p === "LD" || p === "RD") return "DEFENCE";
-  if (p === "G") return "GOALTENDER";
-  if (p === "F" || p === "W") return "FORWARD";
-  return p || "—";
-}
-
-function heightWithCm(height, heightCm = null) {
-  if (heightCm != null && Number.isFinite(Number(heightCm)) && Number(heightCm) > 0) {
-    const totalIn = Math.round(Number(heightCm) / 2.54);
-    const ft = Math.floor(totalIn / 12);
-    const inch = totalIn % 12;
-    const cm = Math.round(Number(heightCm));
-    return { imperial: `${ft}'${inch}"`, metric: `${cm} CM` };
-  }
-  const raw = String(height || "").trim();
-  if (!raw) return { imperial: "—", metric: null };
-  let m = raw.match(/(\d{1,2})\s*['′]\s*(\d{1,2})/);
-  if (!m) m = raw.match(/(\d{1,2})\s*[-]\s*(\d{1,2})/);
-  if (!m) return { imperial: raw, metric: null };
-  const cm = Math.round((Number(m[1]) * 12 + Number(m[2])) * 2.54);
-  return { imperial: `${m[1]}'${m[2]}"`, metric: Number.isFinite(cm) ? `${cm} CM` : null };
-}
-
-function weightWithKg(weight) {
-  const n = Number(String(weight || "").replace(/[^\d.]/g, ""));
-  if (!Number.isFinite(n) || n <= 0) return { lbs: "—", kg: null };
-  return { lbs: `${Math.round(n)} LBS`, kg: `${Math.round(n / 2.20462)} KG` };
-}
-
-function resolveToolRows(player, profile) {
-  const backendTools = Array.isArray(profile?.tools) ? profile.tools : null;
-  if (backendTools?.length) {
-    return backendTools.map((t) => ({
-      label: t.label,
-      text: t.text || String(t.score ?? t.grade ?? "—"),
-      locked: Boolean(t.locked),
-      raw: Number(t.score ?? t.raw ?? t.grade),
-      mid: Number(t.score ?? t.raw ?? t.grade),
-      low: t.low ?? null,
-      high: t.high ?? null,
-      tier: t.tier,
-    }));
-  }
-  const ceilingHidden = Boolean(profile?.ceilingHidden || profile?.potential?.hidden);
-  const dedicatedFile = Boolean(profile?.dedicatedScoutFile);
-  const wideFog = ceilingHidden && !dedicatedFile;
-  const ambient = Number(profile?.scout_confidence ?? player?.scoutingConfidence ?? player?.completion);
-  const userScout = Number(profile?.userScoutPct ?? player?.scoutedPercentage);
-  let completion = Math.max(
-    Number.isFinite(ambient) ? ambient : 0,
-    (Number.isFinite(userScout) && userScout > 0) ? userScout : 0,
-  );
-  if (completion <= 0) completion = 28;
-  if (wideFog) completion = Math.min(Math.max(completion, 18), 66);
-
-  if (isGoaliePosition(player?.position)) {
-    return resolveGoalieToolRows(player, profile, completion, wideFog);
-  }
-
-  const lift = prospectAttributeLift(profile);
-  const bump = (val) => {
-    const n = Number(val);
-    if (!Number.isFinite(n)) return val;
-    return Math.min(94, Math.round(n + lift));
-  };
-  const pickAttr = (...keys) => {
-    for (const k of keys) {
-      const v = player?.[k] ?? profile?.[k] ?? profile?.attributes?.[k] ?? profile?.tools?.[k];
-      if (v != null && Number.isFinite(Number(v)) && Number(v) > 0) return Number(v);
-    }
-    return null;
-  };
-  return [
-    ["Skating", bump(pickAttr("skating", "Skating")), 1],
-    ["Shot", bump(pickAttr("shooting", "shot", "Shooting")), 2],
-    ["Vision", bump(pickAttr("passing", "vision", "Passing")), 3],
-    ["Defense", bump(pickAttr("defense", "Defence")), 4],
-    ["Physical", bump(pickAttr("physical", "Physical")), 5],
-    ["IQ", bump(pickAttr("hockeyIQ", "hockey_iq", "iq")), 6],
-  ].map(([label, val, seed]) => {
-    const display = attributeDisplay(val, completion, seed, { wideFog });
-      const mid = display.range
-      ? (display.range[0] + display.range[1]) / 2
-      : (display.locked ? null : Number(val));
-    const raw = Number.isFinite(Number(val)) ? Number(val) : (Number.isFinite(mid) ? mid : null);
-    return {
-      label,
-      text: display.text,
-      locked: display.locked,
-      raw,
-      mid: Number.isFinite(mid) ? mid : raw,
-      low: display.range ? display.range[0] : null,
-      high: display.range ? display.range[1] : null,
-    };
-  });
-}
-
-
-
-
-
-
-function upsideImpactFromProfile(ceilingOvr, franchiseTier, rank, ceilingHidden) {
-  const band = peakProjectionBand(ceilingOvr, ceilingHidden);
-  return { text: band.upside, dots: band.upsideDots, tone: band.tone };
-}
-
-/** NHL role from peak OVR — kept in lockstep with upsideImpactFromProfile bands. */
-function projectedRoleFromPeak(ceilingOvr, position, ceilingHidden) {
-  const band = peakProjectionBand(ceilingOvr, ceilingHidden);
-  if (band.role === "—") return { text: "—", dots: 0, tone: "muted" };
-  const pos = String(position || "").toUpperCase();
-  let role = band.role;
-  if (pos === "G") {
-    if (role === "Franchise") role = "Franchise";
-    else if (role === "Elite" || role === "Top Line") role = "Starter";
-    else if (role === "Top 6") role = "Tandem";
-    else if (role === "Middle 6") role = "Bench";
-    else role = "AHL Starter";
-  } else if (pos === "D" || pos === "LD" || pos === "RD") {
-    if (role === "Top Line") role = "Top 2";
-    else if (role === "Top 6") role = "Top 4";
-    else if (role === "Middle 6") role = "Bottom 4";
-    else if (role === "Bottom 6") role = "Top 6";
-  }
-  return { text: String(role).toUpperCase(), dots: band.roleDots, tone: band.tone === "gold" ? "gold" : "cyan" };
-}
-
-/** Draft pick window from board rank (not the same as NHL role). */
-function draftWindowFromRank(rank) {
-  const r = Number(rank);
-  if (!Number.isFinite(r) || r <= 0) return "—";
-  if (r <= 2) return "Top 2";
-  if (r <= 5) return "Lottery";
-  if (r <= 10) return "Top 10";
-  if (r <= 15) return "Mid 1st";
-  if (r <= 32) return "1st Round";
-  if (r <= 64) return "2nd Round";
-  if (r <= 96) return "3rd Round";
-  return "Mid/Late";
-}
-
-/**
- * Shared peak-OVR bands so Upside Impact and Projected Role never disagree.
- * Franchise role only at true franchise ceilings (92+).
- */
-function peakProjectionBand(ceilingOvr, ceilingHidden) {
-  if (ceilingHidden) {
-    return { upside: "—", role: "—", upsideDots: 0, roleDots: 0, tone: "muted" };
-  }
-  const pot = Number(ceilingOvr);
-  if (!Number.isFinite(pot) || pot <= 0) {
-    return { upside: "—", role: "—", upsideDots: 0, roleDots: 0, tone: "muted" };
-  }
-  if (pot >= 92) {
-    return { upside: "FRANCHISE ALTERING", role: "Franchise", upsideDots: 10, roleDots: 10, tone: "gold" };
-  }
-  if (pot >= 88) {
-    return { upside: "ELITE IMPACT", role: "Elite", upsideDots: 9, roleDots: 9, tone: "gold" };
-  }
-  if (pot >= 84) {
-    return { upside: "HIGH UPSIDE", role: "Top Line", upsideDots: 7, roleDots: 7, tone: "cyan" };
-  }
-  if (pot >= 80) {
-    return { upside: "STRONG UPSIDE", role: "Top 6", upsideDots: 6, roleDots: 6, tone: "cyan" };
-  }
-  if (pot >= 75) {
-    return { upside: "MODERATE UPSIDE", role: "Middle 6", upsideDots: 5, roleDots: 5, tone: "cyan" };
-  }
-  if (pot >= 70) {
-    return { upside: "DEPTH UPSIDE", role: "Bottom 6", upsideDots: 3, roleDots: 3, tone: "violet" };
-  }
-  return { upside: "LIMITED UPSIDE", role: "Depth", upsideDots: 2, roleDots: 2, tone: "violet" };
-}
-
-function riskTemperatureFromGem(gem, riskLabel, volatility) {
-  const raw = String(gem?.label || riskLabel || volatility || "").trim();
-  if (!raw) return { text: "—", dots: 0, tone: "muted" };
-  const lower = raw.toLowerCase();
-  if (lower.includes("bust") || lower.includes("elevat") || lower === "high") {
-    return { text: "ELEVATED", dots: 8, tone: "violet" };
-  }
-  if (lower.includes("uncertain") || lower.includes("volatile")) {
-    return { text: "VOLATILE", dots: 6, tone: "gold" };
-  }
-  if (lower.includes("gem") || lower.includes("safe") || lower === "low") {
-    return { text: "LOW", dots: 2, tone: "cyan" };
-  }
-  if (lower.includes("neutral") || lower.includes("medium") || lower === "mod") {
-    return { text: "NEUTRAL", dots: 5, tone: "muted" };
-  }
-  const tier = Number(gem?.tier);
-  if (Number.isFinite(tier)) {
-    return { text: raw.toUpperCase(), dots: Math.max(1, Math.min(10, tier * 2 + 2)), tone: "violet" };
-  }
-  return { text: raw.toUpperCase(), dots: 5, tone: "muted" };
-}
-
-function competitionLens(competition) {
-  if (!competition || typeof competition !== "object") return { text: "—", dots: 0, tone: "muted" };
-  const score = Number(competition.level_score);
-  const label = String(competition.label || "").toUpperCase() || "—";
-  let band = "MODERATE";
-  let dots = 5;
-  if (Number.isFinite(score)) {
-    if (score >= 75) band = "HIGH";
-    else if (score >= 60) band = "SOLID";
-    else if (score < 45) band = "LIGHT";
-    dots = Math.max(1, Math.min(10, Math.round(score / 10)));
-  } else if (label && label !== "—") {
-    const lower = label.toLowerCase();
-    if (lower.includes("high") || lower.includes("elite")) { band = "HIGH"; dots = 8; }
-    else if (lower.includes("solid") || lower.includes("strong")) { band = "SOLID"; dots = 6; }
-    else if (lower.includes("light") || lower.includes("low")) { band = "LIGHT"; dots = 3; }
-    else { band = label; dots = 5; }
-  } else {
-    return { text: "—", dots: 0, tone: "muted" };
-  }
-  return { text: band, dots, tone: "cyan", detail: label };
-}
-
-function prospectDisplayName(player) {
-  return `${player?.firstName || ""} ${player?.lastName || ""}`.trim();
-}
-
-
-function mediaCredPhrase(v) {
-  const n = Number(v);
-  if (!Number.isFinite(n) || n <= 0) return null;
-  if (n < 30) return "Speculation";
-  if (n < 50) return "Early chatter";
-  if (n < 75) return "Credible";
-  return "Strongly sourced";
-}
-
-function arcStagePhrase(story) {
-  const st = String(story?.arc_status || story?.status || "active").toLowerCase();
-  if (st === "resolved") return "Archived";
-  if (Number(story?.repeat_count) > 1 || story?.escalated_from) return "Escalating";
-  if (Number(story?.repeat_count) === 1) return "Developing";
-  return "Active";
-}
-
-function collectProspectStorylines(franchiseState, player) {
-  const rows = Array.isArray(franchiseState?.storyline_events) ? franchiseState.storyline_events : [];
-  const id = String(player?.id || "").toLowerCase();
-  const name = prospectDisplayName(player).toLowerCase();
-  const lastName = name.split(/\s+/).pop() || "";
-
-  return rows.filter((ev) => {
-    const pid = String(ev?.player_id || ev?.playerId || "").toLowerCase();
-    const pname = String(ev?.player_name || ev?.playerName || "").toLowerCase();
-    const related = Array.isArray(ev?.related_player_ids)
-      ? ev.related_player_ids.map((x) => String(x).toLowerCase())
-      : [];
-    const affected = Array.isArray(ev?.affected_player_ids)
-      ? ev.affected_player_ids.map((x) => String(x).toLowerCase())
-      : [];
-    const players = Array.isArray(ev?.players) ? ev.players.map((x) => String(x).toLowerCase()) : [];
-    const headline = String(ev?.headline || ev?.title || "").toLowerCase();
-    const cat = String(ev?.category || ev?.type || "").toLowerCase();
-    const isDraft = /draft|prospect/.test(cat) || /draft|prospect/.test(headline);
-
-    if (id && (pid === id || related.includes(id) || affected.includes(id))) return true;
-    if (name && (pname === name || players.includes(name))) return true;
-    if (lastName && lastName.length > 2 && headline.includes(lastName)) return isDraft || pid === id;
-    return false;
-  });
-}
-
-function groupProspectStoryArcs(events) {
-  const byArc = new Map();
-  events.forEach((ev, idx) => {
-    const arcId = String(ev?.storyline_id || ev?.storylineId || ev?.id || `beat-${idx}`);
-    if (!byArc.has(arcId)) byArc.set(arcId, []);
-    byArc.get(arcId).push(ev);
-  });
-  return [...byArc.entries()]
-    .map(([arcId, beats]) => {
-      const sorted = [...beats].sort((a, b) =>
-        String(a?.calendar_iso || a?.date || "").localeCompare(String(b?.calendar_iso || b?.date || ""))
-      );
-      const latest = sorted[sorted.length - 1] || {};
-      return {
-        arcId,
-        beats: sorted,
-        headline: latest.headline || latest.title || "Draft narrative",
-        heat: Math.max(...sorted.map((b) => Number(b?.heat) || 0)),
-        credibility: Math.max(...sorted.map((b) => Number(b?.credibility) || 0)),
-        stage: arcStagePhrase(latest),
-      };
-    })
-    .sort((a, b) => b.heat - a.heat || b.beats.length - a.beats.length);
-}
-
-
-
-function prospectSocialKeys(player) {
-  const id = String(player?.id || player?.key || "").trim();
-  const name = prospectDisplayName(player);
-  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
-  return [...new Set([id, slug, name.toLowerCase()].filter(Boolean))];
-}
-
-function postMatchesProspect(post, player) {
-  const keys = prospectSocialKeys(player);
-  const authorId = String(post?.author_id || post?.prospect_key || post?.player_id || "").toLowerCase();
-  const authorName = String(post?.author_name || post?.author || "").toLowerCase();
-  const blob = `${post?.related_headline || ""} ${post?.text || ""}`.toLowerCase();
-  const last = prospectDisplayName(player).toLowerCase().split(/\s+/).pop() || "";
-  if (keys.some((k) => k && authorId === String(k).toLowerCase())) return true;
-  if (last.length > 2 && authorName.includes(last)) return true;
-  if (last.length > 2 && blob.includes(last)) return true;
-  return false;
-}
-
-function resolveProspectSocialProfile(narrativeUniverse, player) {
-  const profiles = narrativeUniverse?.prospect_social_profiles || {};
-  for (const key of prospectSocialKeys(player)) {
-    if (profiles[key]) return profiles[key];
-    const slugHit = Object.entries(profiles).find(([k]) => k.toLowerCase() === key.toLowerCase());
-    if (slugHit) return slugHit[1];
-  }
-  return null;
-}
-
-function collectProspectRedditThreads(narrativeUniverse, player) {
-  const threads = Array.isArray(narrativeUniverse?.reddit_threads) ? narrativeUniverse.reddit_threads : [];
-  const last = prospectDisplayName(player).toLowerCase().split(/\s+/).pop() || "";
-  return threads.filter((thread) => {
-    const title = String(thread?.title || thread?.headline || "").toLowerCase();
-    const body = String(thread?.body || thread?.text || thread?.summary || "").toLowerCase();
-    const related = String(thread?.related_player_id || thread?.player_id || "").toLowerCase();
-    const keys = prospectSocialKeys(player);
-    if (keys.some((k) => related && related === String(k).toLowerCase())) return true;
-    if (last.length > 2 && (title.includes(last) || body.includes(last))) return true;
-    return false;
-  }).slice(0, 4);
-}
-
-function buildProspectMediaBundle(franchiseState, player, profile, allProspects) {
-  const storylines = collectProspectStorylines(franchiseState, player);
-  const narrativeUniverse = franchiseState?.narrative_universe || {};
-  const backendArcs = Array.isArray(narrativeUniverse?.story_arcs)
-    ? narrativeUniverse.story_arcs.filter((a) => String(a?.player_id || "") === String(player?.id || ""))
-    : [];
-  const arcs = backendArcs.length
-    ? backendArcs.map((arc) => ({
-        arcId: arc.arc_id,
-        beats: Array.isArray(arc.beats) ? arc.beats : [],
-        headline: arc.headline || "Draft narrative",
-        heat: Number(arc.heat) || 0,
-        stage: arc.phase || arc.status || "Active",
-      }))
-    : groupProspectStoryArcs(storylines);
-  const intelTags = Array.isArray(profile?.intel_desk_tags || profile?.intelDeskTags)
-    ? (profile.intel_desk_tags || profile.intelDeskTags)
-    : [];
-  const stock = player?.draftStock || null;
-  const stockNote = movementDisplayText(stock) || null;
-  const socialPosts = Array.isArray(narrativeUniverse?.social_posts)
-    ? narrativeUniverse.social_posts.filter((p) => postMatchesProspect(p, player)).slice(0, 6)
-    : [];
-  const socialProfile = resolveProspectSocialProfile(narrativeUniverse, player);
-  const redditThreads = collectProspectRedditThreads(narrativeUniverse, player);
-  const puckrPosts = socialPosts.filter((p) => String(p?.platform || p?.source || "").toLowerCase() !== "reddit");
-  const redditFromSocial = socialPosts.filter((p) => /reddit|icehole|r\//i.test(String(p?.platform || p?.source || p?.subreddit || "")));
-
-  return {
-    storylines: storylines.slice(-12).reverse(),
-    arcs,
-    publicImage: intelTags,
-    publications: [],
-    socialPosts: puckrPosts,
-    redditThreads: [...redditThreads, ...redditFromSocial.map((p) => ({
-      title: p.related_headline || "Prospect chatter",
-      body: p.text,
-      subreddit: p.subreddit || "r/hockey",
-      calendar_iso: p.calendar_iso,
-      score: p.likes,
-    }))].slice(0, 4),
-    socialProfile,
-    mediaPressure: null,
-    stockNarrative: stockNote,
-    hasCoverage:
-      storylines.length > 0
-      || intelTags.length > 0
-      || Boolean(socialProfile)
-      || socialPosts.length > 0
-      || redditThreads.length > 0,
-  };
-}
-
-function ProspectMediaUniverse({ bundle, compact = false }) {
-  if (!bundle?.hasCoverage && !bundle?.publicImage?.length) {
-    return null;
-  }
-
-  return (
-    <section className={`dc-brochure-media${compact ? " dc-brochure-media--compact" : ""}`}>
-      <header className="dc-media-head">
-        <span>Media universe</span>
-        <strong>Narrative file</strong>
-        {bundle.mediaPressure ? <em>{bundle.mediaPressure}</em> : null}
-      </header>
-
-      <div className="dc-media-grid">
-        {bundle.publicImage?.length ? (
-          <article className="dc-media-card">
-            <h4>Intel tags</h4>
-            <div className="dc-media-tags">
-              {bundle.publicImage.map((tag) => (
-                <span key={tag} className="dc-media-tag">{tag}</span>
-              ))}
-            </div>
-            {bundle.stockNarrative ? <p className="dc-media-note">{bundle.stockNarrative}</p> : null}
-          </article>
-        ) : null}
-
-        {bundle.publications.length ? (
-          <article className="dc-media-card">
-            <h4>Publication boards</h4>
-            <ul className="dc-media-pubs">
-              {bundle.publications.map((pub) => (
-                <li key={pub.outlet}>
-                  <strong>{pub.outlet}</strong>
-                  <span>#{pub.rank}</span>
-                  <p>{pub.note}</p>
-                </li>
-              ))}
-            </ul>
-          </article>
-        ) : null}
-
-        {bundle.arcs.length ? (
-          <article className="dc-media-card dc-media-card--wide">
-            <h4>Story arcs</h4>
-            <div className="dc-media-arcs">
-              {bundle.arcs.slice(0, 3).map((arc) => (
-                <div key={arc.arcId} className="dc-media-arc">
-                  <div className="dc-media-arc__head">
-                    <strong>{arc.headline}</strong>
-                    <span>{arc.stage}{arc.beats.length > 1 ? ` · ${arc.beats.length} beats` : ""}</span>
-                  </div>
-                  <ol className="dc-media-timeline">
-                    {arc.beats.slice(-6).map((beat, i) => (
-                      <li key={beat.id || beat.storyline_id || i}>
-                        <time>{beat.calendar_iso || beat.date || "—"}</time>
-                        <span>{beat.headline || beat.title || beat.summary || "Update"}</span>
-                        {mediaCredPhrase(beat.credibility) ? (
-                          <em>{mediaCredPhrase(beat.credibility)}</em>
-                        ) : null}
-                      </li>
-                    ))}
-                  </ol>
-                </div>
-              ))}
-            </div>
-          </article>
-        ) : bundle.storylines.length ? (
-          <article className="dc-media-card dc-media-card--wide">
-            <h4>League coverage</h4>
-            <ul className="dc-media-wire">
-              {bundle.storylines.slice(0, 6).map((ev, i) => (
-                <li key={ev.id || ev.storyline_id || i}>
-                  <time>{ev.calendar_iso || ev.date || "—"}</time>
-                  <strong>{ev.headline || ev.title || "Storyline"}</strong>
-                  {ev.summary || ev.short_summary ? <p>{ev.summary || ev.short_summary}</p> : null}
-                </li>
-              ))}
-            </ul>
-          </article>
-        ) : null}
-      </div>
-
-      {bundle.socialProfile ? (
-        <article className="dc-media-card dc-media-card--wide">
-          <h4>Prospect social</h4>
-          <div className="dc-media-social-profile">
-            <strong>{bundle.socialProfile.handle || "@prospect"}</strong>
-            <span>{Number(bundle.socialProfile.followers || 0).toLocaleString()} followers</span>
-            {bundle.socialProfile.bio ? <p>{bundle.socialProfile.bio}</p> : null}
-            {bundle.socialProfile.personality ? (
-              <em>{String(bundle.socialProfile.personality).replace(/_/g, " ")}</em>
-            ) : null}
-          </div>
-          {Array.isArray(bundle.socialProfile.posts) && bundle.socialProfile.posts.length ? (
-            <ul className="dc-media-wire">
-              {bundle.socialProfile.posts.slice(-6).reverse().map((post, i) => (
-                <li key={post.id || i}>
-                  <time>{post.calendar_iso || "—"}</time>
-                  <p>{post.text}</p>
-                  {post.likes != null ? (
-                    <em>{Number(post.likes || 0).toLocaleString()} likes</em>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </article>
-      ) : null}
-
-      {bundle.socialPosts?.length ? (
-        <article className="dc-media-card dc-media-card--wide">
-          <h4>Puckr / Twitter pulse</h4>
-          <ul className="dc-media-wire">
-            {bundle.socialPosts.map((post, i) => (
-              <li key={post.id || i}>
-                <strong>{post.author_name || post.handle}{post.verified ? " ✓" : ""}</strong>
-                <time>{post.calendar_iso || "—"}</time>
-                <p>{post.text}</p>
-              </li>
-            ))}
-          </ul>
-        </article>
-      ) : null}
-
-      {bundle.redditThreads?.length ? (
-        <article className="dc-media-card dc-media-card--wide">
-          <h4>IceHole / Reddit</h4>
-          <ul className="dc-media-wire">
-            {bundle.redditThreads.map((thread, i) => (
-              <li key={thread.id || thread.thread_id || i}>
-                <strong>{thread.subreddit || "r/hockey"}</strong>
-                <time>{thread.calendar_iso || thread.date || "—"}</time>
-                <p>{thread.title || thread.headline || "Thread"}</p>
-                {thread.body || thread.text ? <p>{thread.body || thread.text}</p> : null}
-                {thread.score != null ? <em>{Number(thread.score).toLocaleString()} score</em> : null}
-              </li>
-            ))}
-          </ul>
-        </article>
-      ) : null}
-    </section>
-  );
-}
-
-/** Dossier skill profile = the chapter columns only (no granular tool stats). */
-const DOSSIER_SKATER_CHAPTERS = [
-  ["Offence", "offence"], ["Defence", "defence"], ["Transition", "transition"],
-  ["Mental", "mental"], ["Physicality", "physical"], ["Character", "character"],
-];
-const DOSSIER_GOALIE_CHAPTERS = [["Glove", "glove"], ["Blocker", "blocker"], ["Stick", "stick"]];
-function dossierChapterNum(raw) {
-  if (raw == null || raw === "") return null;
-  if (typeof raw === "object") {
-    const lo = Number(raw.low ?? raw.lo);
-    const hi = Number(raw.high ?? raw.hi);
-    return Number.isFinite(lo) && Number.isFinite(hi) ? (lo + hi) / 2 : null;
-  }
-  const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
-
-/** First `count` sentences of a paragraph — the dossier read like an essay. */
-function firstSentences(text, count = 2) {
-  const t = String(text || "").trim();
-  if (!t) return "";
-  const parts = t.match(/[^.!?]+[.!?]+/g);
-  if (!parts || parts.length <= count) return t;
-  return parts.slice(0, count).join(" ").trim();
-}
-
 function ProspectProfileModal({
   player,
   profile,
@@ -3721,11 +2744,10 @@ function ProspectProfileModal({
   scoutActionBusy = false,
   scoutActionNote = "",
 }) {
-  const [dossierTab, setDossierTab] = useState("file");
+  const [dossierTab, setDossierTab] = useDossierTab();
   const [showAssignPanel, setShowAssignPanel] = useState(false);
 
   useEffect(() => {
-    setDossierTab("file");
     setShowAssignPanel(false);
   }, [player?.id]);
 
@@ -3787,205 +2809,50 @@ function ProspectProfileModal({
   }
 
   const scoutMeta = meta || EMPTY_SCOUTING_META;
-  const stats = profile?.stats || {};
-  const gp = Number(player.gp ?? stats.games) || 0;
-  const pts = Number(player.points ?? stats.points) || 0;
-  const goals = Number(player.goals ?? stats.goals) || 0;
-  const assists = Number(player.assists ?? stats.assists) || 0;
-  const ppg = stats.ppg != null ? Number(stats.ppg) : (gp > 0 ? prospectPpgValue(player) : null);
-  const isGoalie = isGoaliePosition(player.position);
-
-  const pot = profile?.potential;
-  const fit = profile?.team_fit || profile?.teamFit;
-  const gem = profile?.gem;
-  const competition = profile?.competition;
-  const strengths = Array.isArray(profile?.strengths) ? profile.strengths : [];
-  getPlayerTags(player, profile).filter((t) => {
-    const primary = String(strengths[0] || "").toLowerCase();
-    return !primary || String(t).toLowerCase() !== primary;
+  const model = buildProspectDossierModel(player, profile || {}, {
+    allProspects,
+    userScoutPct: Number(profile?.userScoutPct ?? player?.dedicatedScoutingPct ?? player?.scoutedPercentage ?? 0),
   });
-  const scoutConf = Number(profile?.scout_confidence ?? player?.scoutingConfidence ?? player?.completion);
-  const confPct = Number.isFinite(scoutConf) ? Math.round(scoutConf) : null;
-  const intelTier = profile?.intel_label || prospectIntelTier(confPct);
-  const team = cleanTeamName(player, profile);
-  const league = cleanLeagueName(player, profile);
-  const countryLabel = countryDisplayLabel(player, profile);
-  const badges = getPlayerIdentityBadges(player, profile);
-  const rank = prospectRank(player);
-  const stock = player.draftStock || null;
-  const trend = movementDisplayText(stock);
-  const trendTone = getStockTone(stock);
-  const fitReasons = (Array.isArray(fit?.reasons) ? fit.reasons : [])
-    .map(humanizeScoutReason)
-    .filter(Boolean);
-  const fitNote = fitReasons.length
-    ? fitReasons.slice(0, 2).join(" · ")
-    : (fit?.label ? `${fit.label} organizational match` : null);
-  const ceilingHidden = Boolean(profile?.ceilingHidden || pot?.hidden || player?.ceilingHidden);
-  const dedicatedFile = Boolean(profile?.dedicatedScoutFile);
-  const ovrBands = resolveOvrBands(profile, player, ceilingHidden);
-  const confNote = confPct == null
-    ? null
-    : ceilingHidden && !dedicatedFile
-      ? "INCOMPLETE READ"
-      : confPct >= 91
-        ? "LOCKED READ"
-        : confPct >= 56
-          ? `${String(intelTier || "SOLID").toUpperCase()} COVERAGE`
-          : "LIMITED LOOKS";
-  (compareIds || []).includes(player.id);
-
-  const ceilingRating = Number(pot?.rating);
-  const currentOvr = Number(profile?.scoutedOverall ?? profile?.currentOvrEstimate);
-  const readinessLabel = nhlReadinessLabel(rank, ceilingRating, currentOvr, profile);
-  const sampleThin = Boolean(profile?.sampleThin || stats?.sampleThin || (gp > 0 && gp < 15));
-  const riskLabel = gem?.label || player.riskLabel || null;
-  const volatility = profile?.developmentVolatility || null;
-  const currentEstimate = ovrBands.nowText
-    ? { text: ovrBands.nowText, detail: ceilingHidden ? "Present ability" : "Range", exact: false }
-    : resolveCurrentEstimate(player, profile, ceilingHidden, dedicatedFile);
-  const trajectory = buildValueTrajectoryPoints(profile, player);
-  const analytics = extractProspectAnalytics(player, profile);
-  const tools = resolveToolRows(player, profile);
-  const skillNotes = skillDevelopmentNotes(tools, player);
-  const toolsWithNotes = skillNotes.rows;
-  const archetype = profile?.archetype?.label
-    ? { label: String(profile.archetype.label).toUpperCase(), blurb: profile.scout_report || profile.development_trajectory || "", source: "backend" }
-    : { label: "—", blurb: profile?.scout_report || "", source: "backend" };
-  const playStyleTag = profile?.play_style_block?.label
-    ? { label: profile.play_style_block.label, source: "backend" }
-    : (profile?.play_style ? { label: profile.play_style, source: "backend" } : null);
-  const playStyle = playStyleTag?.label || null;
-  const devTrajectory = profile?.development_trajectory || profile?.developmentTrajectory || "";
-  const projectedRange = resolveProjectedRangeLabel(player, profile, ceilingHidden);
-  const scoutingDesk = buildScoutingDeskEntries(player, profile, { gp, analytics });
-  const outcomeDistribution = profile?.outcome_distribution || profile?.outcomeDistribution || null;
-  const ribbonSegs = outcomeRibbonSegments(null, isGoalie, outcomeDistribution);
-  const headroom = ovrBands.headroom;
-  const overageNote = overageStockNote(player);
-  // Dashboard metrics (derived from data already on the profile — nothing invented).
-  const nhlProbability = Number(profile?.potential?.nhl_probability);
-  const readinessPct = Number.isFinite(nhlProbability)
-    ? Math.max(4, Math.min(100, Math.round(nhlProbability)))
-    : null;
-  const etaText = profile?.eta?.label || profile?.eta?.text
-    || (typeof profile?.eta === "string" ? profile.eta : null)
-    || profile?.nhl_eta || player?.nhlEta || "—";
-  const strengthLines = (Array.isArray(profile?.strengths) && profile.strengths.length)
-    ? profile.strengths
-    : (Array.isArray(profile?.strengthsEvidence) ? profile.strengthsEvidence.map((e) => (typeof e === "string" ? e : `${e.title} — ${e.fact}`)) : []);
-  const weaknessLines = (Array.isArray(profile?.concerns) && profile.concerns.length)
-    ? profile.concerns
-    : (Array.isArray(profile?.weaknessesEvidence) ? profile.weaknessesEvidence.map((e) => (typeof e === "string" ? e : `${e.title} — ${e.fact}`)) : []);
-  const characterRead = profile?.character_read;
-  const charReadConf = Number(characterRead?.confidence ?? 0);
-  const traitsKnown = (Array.isArray(characterRead?.traits) ? characterRead.traits : []).some(
-    (t) => t?.tier && t.tier !== "Unknown",
-  );
-  const characterReadUnlocked = traitsKnown || charReadConf >= 45;
-  const offIceEstimated = !characterReadUnlocked
-    && ((Number(player?.character ?? player?.characterScore) > 0));
-  const fileNotes = dossierFileNotes(player, profile, scoutingDesk, { offIceEstimated });
-  const pyramid = player.pyramidTier;
-  const mediaBundle = buildProspectMediaBundle(franchiseState, player, profile, allProspects);
-  const ht = heightWithCm(badges.height || player.height, player.heightCm ?? profile?.height_cm);
-  const wt = weightWithKg(badges.weight || player.weight);
-  const handRaw = badges.handedness || formatHandedness(player.handedness);
-  const shoots = handRaw
-    ? (String(handRaw).toUpperCase().startsWith("L") ? "SHOOTS LEFT" : "SHOOTS RIGHT")
-    : "—";
-  const posName = positionDisplayName(badges.position || player.position);
-  const peakVal = !ceilingHidden && pot?.rating != null ? Number(pot.rating) : null;
-  const volatilityRaw = !ceilingHidden ? String(profile?.developmentVolatility || "").trim() : "";
-  const volatilityDisplay = (!volatilityRaw || volatilityRaw.toLowerCase() === "unknown")
-    ? "—"
-    : volatilityRaw.toUpperCase();
-  const boardYear = profile?.draft_year || player?.draftYear || null;
-  upsideImpactFromProfile(peakVal ?? ceilingRating, player.franchiseTier, rank, ceilingHidden);
-  const roleLens = projectedRoleFromPeak(peakVal ?? ceilingRating, player.position, ceilingHidden);
-  const draftWindow = draftWindowFromRank(rank);
-  riskTemperatureFromGem(gem, riskLabel, volatility);
-  competitionLens(competition);
-
-  const warTone = (() => {
-    const w = Number(analytics.war);
-    if (!Number.isFinite(w)) return null;
-    if (w >= 2.2 || profile?.analytics?.analytics_signal === "gem_finder") return "gem";
-    if (w >= 1.2) return "hot";
-    if (w < 0) return "cold";
-    return null;
-  })();
-
-  const analyticsTiles = isGoalie
-    ? [
-        { label: "GP", value: gp > 0 ? String(gp) : "—" },
-        { label: "W", value: formatSignalNum(player.wins, 0) },
-        { label: "SV%", value: player.savePct != null ? String(player.savePct) : "—" },
-        { label: "GAA", value: player.gaa != null ? String(player.gaa) : "—" },
-        { label: "GSAx", value: formatSignalSigned(analytics.gsax, 2) },
-        { label: "QS", value: formatSignalNum(analytics.quality_starts, 0) },
-        { label: "SO", value: formatSignalNum(player.shutouts, 0) },
-        { label: "TOI", value: analytics.toi != null ? formatSignalNum(analytics.toi, 1) : "—" },
-      ]
-    : [
-        { label: "GP", value: gp > 0 ? String(gp) : "—" },
-        { label: "G-A-P", value: gp > 0 ? `${goals}-${assists}-${pts}` : "—" },
-        { label: "P/GP", value: ppg != null && Number.isFinite(ppg) && gp > 0 ? Number(ppg).toFixed(2) : "—" },
-        { label: "SH%", value: formatSignalPct(analytics.shooting_pct) },
-        { label: "Prim P", value: formatSignalNum(analytics.primary_points, 0) },
-        { label: "WAR", value: formatSignalSigned(analytics.war, 2), tone: warTone },
-        { label: "xGF%", value: formatSignalPct(analytics.xgf_pct) },
-        { label: "CF%", value: formatSignalPct(analytics.cf_pct) },
-        { label: "Shots/G", value: formatSignalNum(analytics.shot_rate, 2) },
-        { label: "TOI", value: analytics.toi != null ? formatSignalNum(analytics.toi, 1) : "—" },
-        { label: "+/-", value: formatSignalSigned(analytics.plus_minus, 0) },
-      ];
-
-  const wjcBlock = resolveWjcDossierBlock(profile, isGoalie);
-
-  // --- Visual file: certainty, class percentiles, outcomes -----------------
-  const userScoutPct = Number(profile?.userScoutPct ?? player?.dedicatedScoutingPct ?? player?.scoutedPercentage ?? 0);
-  const cert = prospectCertainty({
-    scoutPct: Number.isFinite(userScoutPct) ? userScoutPct : 0,
-    publicConf: confPct,
-    revealed: Boolean(player?.ovrRevealed),
-    ceilingHidden,
-    rank,
-  });
-  const nowRange = parseRange(currentEstimate?.text);
-  const peakRange = ceilingHidden ? null : parseRange(ovrBands.peakText);
-  const peers = (allProspects || []).filter((x) => isGoaliePosition(x?.position) === isGoalie);
-  const chapterSkillList = isGoalie ? DOSSIER_GOALIE_CHAPTERS : DOSSIER_SKATER_CHAPTERS;
-  const ownChapters = player?.chapterProfile?.chapters || {};
-  const skillRows = chapterSkillList.map(([label, key]) => {
-    const raw = ownChapters[key] ?? (key === "defence" ? ownChapters.defense : undefined);
-    const value = dossierChapterNum(raw);
-    const locked = value == null;
-    const band = Boolean(raw && typeof raw === "object" && raw.band);
-    return {
-      label,
-      value,
-      locked,
-      text: band ? `${Math.round(raw.low)}–${Math.round(raw.high)}` : undefined,
-      soft: band || cert.ovr < 55,
-      percentile: locked ? null : percentileOf(peers.map((x) => dossierChapterNum(x?.chapterProfile?.chapters?.[key])), value),
-    };
-  });
-  const radarAxes = skillRows
-    .filter((r) => !r.locked)
-    .map((r) => {
-      const key = (chapterSkillList.find(([l]) => l === r.label) || [])[1];
-      const vals = peers.map((x) => dossierChapterNum(x?.chapterProfile?.chapters?.[key])).filter((v) => v != null);
-      return { label: r.label, short: String(r.label).slice(0, 5), value: r.value, classAvg: vals.length ? vals.reduce((x, y) => x + y, 0) / vals.length : null };
-    });
-  const classSize = (allProspects || []).length || null;
-  const rankPct = rank && classSize ? Math.max(1, Math.round(100 - (rank / Math.max(classSize, rank)) * 100)) : null;
-  const prodPct = !isGoalie && ppg != null && gp > 0 ? percentileOf(peers.map((x) => (Number(x?.gp) > 0 ? x?.ppg : null)), ppg) : null;
-  const donutSegs = ribbonSegs ? ribbonSegs.map((seg) => ({ key: seg.key, label: seg.label, pct: seg.pct })) : null;
+  const filmReports = scoutMeta.requestedReports || {};
+  const filmDone = Boolean(filmReports.film_study || filmReports.filmStudy);
+  const filmReady = Boolean(scoutMeta.watchlist || scoutMeta.assignedScout);
+  const countryLabel = model.identity.nation || countryDisplayLabel(player, profile);
+  const actions = [
+    {
+      id: "scout",
+      label: "Scout player",
+      hint: scoutActionBusy ? "Scouting…" : "One-off visit",
+      disabled: scoutActionBusy || !onRunScoutAction,
+      onClick: () => onRunScoutAction?.("player_focus"),
+    },
+    {
+      id: "film",
+      label: "Film study",
+      hint: filmDone ? "Film study · done" : filmReady ? "1 per prospect" : "Shortlist or assign first",
+      title: filmDone ? "Film study · done" : filmReady ? "4-hour film study" : "Shortlist or assign a scout first",
+      disabled: scoutActionBusy || !onRunScoutAction || !filmReady || filmDone,
+      onClick: () => onRunScoutAction?.("film_study"),
+    },
+    {
+      id: "assign",
+      label: scoutMeta.assignedScout ? `Scout: ${scoutMeta.assignedScout}` : "Assign scout",
+      hint: "On assignment · file +~2%/day",
+      primary: true,
+      disabled: scoutActionBusy || !onAssignScout,
+      onClick: () => setShowAssignPanel((v) => !v),
+    },
+    {
+      id: "short",
+      label: scoutMeta.watchlist ? "Shortlisted" : "Shortlist",
+      hint: scoutMeta.watchlist ? "On your board" : "Pin to your board",
+      disabled: !onToggleWatchlist,
+      onClick: onToggleWatchlist,
+    },
+  ];
 
   return (
     <div
-      className={`dc-profile-modal dc-profile-modal--prospect dc-profile-modal--file-open${isTranscendent ? " prospect-modal--transcendent" : ""}${rank > 32 || (confPct != null && confPct < 45) ? " dc-profile-modal--uncertain" : ""}`}
+      className={`dc-profile-modal dc-profile-modal--prospect dc-profile-modal--file-open${isTranscendent ? " prospect-modal--transcendent" : ""}`}
       role="dialog"
       aria-modal="true"
       aria-label={`${player.firstName} ${player.lastName} scouting profile`}
@@ -3993,376 +2860,48 @@ function ProspectProfileModal({
       <button type="button" className="dc-profile-modal__backdrop" onClick={onClose} aria-label="Close" />
       <article className={`dc-signal-panel dc-signal-panel--premium dc-signal-panel--dossier dc-dossier-shell${isTranscendent ? " aura-gold shake-on-open" : ""}`}>
         <ModalCloseButton onClick={onClose} label="Close prospect profile" />
-        <header className="dc-signal-banner dc-signal-banner--file">
-          {profileEnriching ? (
-            <p className="dc-dossier-enriching" aria-live="polite">Syncing full scout file…</p>
-          ) : null}
-          <nav className="dc-dossier-nav" aria-label="Dossier sections">
-            <button
-              type="button"
-              className={`dc-dossier-nav__btn${dossierTab === "file" ? " is-active" : ""}`}
-              onClick={() => setDossierTab("file")}
-              aria-pressed={dossierTab === "file"}
-            >
-              <svg className="dc-dossier-nav__icon" viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M7 4h7l3 3v13H7V4zm2 2v11h6V8h-4V6H9zm1 4h4v2h-4v-2zm0 3h4v2h-4v-2z" fill="currentColor" />
-              </svg>
-              <span>Scout file</span>
-            </button>
-            <button
-              type="button"
-              className={`dc-dossier-nav__btn${dossierTab === "intel" ? " is-active" : ""}`}
-              onClick={() => setDossierTab("intel")}
-              aria-pressed={dossierTab === "intel"}
-            >
-              <svg className="dc-dossier-nav__icon" viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M4 18h16v2H4v-2zm2-4h3v3H6v-3zm5 0h3v3h-3v-3zm5-3h3v6h-3v-6zM4 8h3v3H4V8zm5-3h3v6H9V5zm5 2h3v4h-3V7z" fill="currentColor" />
-              </svg>
-              <span>Intel desk</span>
-            </button>
-          </nav>
-        </header>
-
+        {profileEnriching ? (
+          <p className="dc-dossier-enriching" aria-live="polite">Syncing full scout file…</p>
+        ) : null}
         {!profile ? (
           <p className="dc-empty-note dc-profile-modal__loading">Scouting profile loading…</p>
         ) : (
-          <div className="dc-dossier-body">
-            <div className="dc-dossier-split">
-              <aside className="dc-dossier-identity-rail dc-signal-identity dc-signal-identity--compact">
-                <div className="dc-signal-portrait">
-                  <DraftClassHeadshot player={player} size="lg" />
-                  <SignalNationFlag country={countryLabel} size={64} className="dc-signal-portrait__flag" />
-                  <div className={`dc-signal-portrait__stock is-${trendTone || "muted"}`}>
-                    <strong className={wrNumClassForRank(rank)}>#{rank}</strong>
-                    <span>{trend}</span>
-                  </div>
-                </div>
-                <div className="dc-signal-identity__title">
-                  <h2>{player.firstName} {player.lastName}</h2>
-                  <p className="dc-signal-identity__pos">{posName}{pyramid ? ` · ${pyramid.label}` : ""}</p>
-                </div>
-                <ul className="dc-signal-bio dc-signal-bio--compact">
-                  <li><div><span>Nation</span><strong>{String(countryLabel || "—").toUpperCase()}</strong></div></li>
-                  <li><div><span>Shoots</span><strong>{shoots}</strong></div></li>
-                  <li><div><span>Frame</span><strong>{ht.imperial}{wt.lbs !== "—" ? ` · ${wt.lbs}` : ""}</strong></div></li>
-                  <li><div><span>Club</span><strong>{team && team !== "—" ? team : "—"}</strong><span className="dc-signal-bio__sub">{league || "—"}</span></div></li>
-                </ul>
-                <div className="dc-file-depth">
-                  <span className="dc-profile-tags__label">File depth</span>
-                  <div className="dc-file-depth__bar" role="meter" aria-valuenow={confPct ?? 0} aria-valuemin={0} aria-valuemax={100} aria-label={`${confPct ?? 0}% scouting confidence`}>
-                    <i style={{ width: `${confPct ?? 0}%` }} />
-                  </div>
-                  <strong>{confPct ?? "—"}% scouting confidence</strong>
-                  {projectedRange.text ? <em>{projectedRange.text}</em> : null}
-                  {ovrBands.peakRangeLabel ? <em>{ovrBands.peakRangeLabel}</em> : null}
-                  {confNote ? <small>{confNote}</small> : null}
-                </div>
-              </aside>
-
-              <div className="dc-dossier-main-scroll">
-                <section className="dc-brochure-hero dc-brochure-hero--dossier dc-brochure-hero--rail">
-                  <div className="dc-archetype-head">
-                    <div className="dc-archetype-head__copy">
-                      <span className="dc-profile-tags__label">Archetype</span>
-                      <h3 className="wr-num-gold dc-archetype-head__title">{archetype.label}</h3>
-                      <p className="dc-archetype-head__blurb">{firstSentences(archetype.blurb, 2)}</p>
-                      <div className="dc-archetype-head__chips">
-                        {playStyle ? (
-                          <ProfileChip tone="accent">Play style · {String(playStyle).toUpperCase()}</ProfileChip>
-                        ) : null}
-                        {readinessLabel ? (
-                          <ProfileChip tone="muted">{readinessLabel}</ProfileChip>
-                        ) : null}
-                        {fitNote ? (
-                          <ProfileChip tone="good">{fitNote}</ProfileChip>
-                        ) : null}
-                        {trend ? (
-                          <ProfileChip tone={trendTone || "muted"}>{trend}</ProfileChip>
-                        ) : null}
-                      </div>
-                    </div>
-                    <div className="dc-archetype-head__metrics">
-                      <ProspectVisualStyles />
-                      <div className="pv-gauge-pair">
-                        <RatingCertaintyGauge
-                          title="Now"
-                          valueText={currentEstimate.text}
-                          range={nowRange}
-                          certainty={cert.ovr}
-                          tone="cyan"
-                          hidden={!nowRange}
-                          hiddenText="No read"
-                        />
-                        <RatingCertaintyGauge
-                          title={headroom != null && headroom > 0 ? `Peak · +${headroom}` : "Peak"}
-                          valueText={ovrBands.peakText}
-                          range={peakRange}
-                          certainty={cert.pot}
-                          tone="gold"
-                          hidden={ceilingHidden || !peakRange}
-                        />
-                      </div>
-                    </div>
-                  </div>
-                </section>
-
-            {dossierTab === "file" ? (
-              <div className="dc-dossier-pane dc-dossier-pane--file">
-                <SnapshotDials
-                  items={[
-                    rankPct != null
-                      ? { label: "Class rank", pct: rankPct, center: `#${rank}`, sub: rankPct >= 50 ? `TOP ${Math.max(1, 100 - rankPct)}%` : "", color: "#f6c453", title: `Board #${rank} of ${classSize}` }
-                      : null,
-                    { label: "Your file", pct: Number.isFinite(userScoutPct) ? userScoutPct : 0, center: `${Math.round(Number.isFinite(userScoutPct) ? userScoutPct : 0)}%`, sub: certaintyTier(cert.ovr).label.split(" ")[0], color: certaintyTier(cert.ovr).color, title: "How much of him your scouts have seen" },
-                    readinessPct != null ? { label: "NHL odds", pct: readinessPct, color: "#52df94", title: "Chance he becomes an NHL regular" } : null,
-                    prodPct != null ? { label: "Production", pct: prodPct, center: `${prodPct}`, sub: "PCTL", color: "#13d8e7", title: "Points per game vs. the class" } : null,
-                    confPct != null ? { label: "League looks", pct: confPct, color: "#8ab4ff", title: "How much the whole league has seen him" } : null,
-                  ]}
-                />
-                <style>{".dc-dossier-visuals{margin:10px 0;} .dc-dossier-pane--file .pv-dials{margin:4px 0 6px;} .dc-archetype-head__metrics .pv-gauge-pair{min-width:min(520px,100%);}"}</style>
-                <div className="pv-visual-grid dc-dossier-visuals">
-                  <PercentileBars
-                    rows={skillRows}
-                    title={isGoalie ? "Goalie profile" : "Skill profile"}
-                    note={cert.ovr < 55 ? "Estimated · thin file" : "vs. this draft class"}
-                  />
-                  <div className="pv-stack">
-                    {radarAxes.length >= 3 ? <SkillRadar axes={radarAxes} color={isGoalie ? "#8ab4ff" : "#13d8e7"} /> : null}
-                    {donutSegs && donutSegs.length ? <OutcomeDonut segments={donutSegs} title="Career outcomes" /> : null}
-                  </div>
-                </div>
-
-                <div className="dc-dossier-dashboard">
-                  {/* Column 1 — read of the player right now */}
-                  <div className="dc-dash-col">
-                    <OffIceFrameStrip player={player} tools={toolsWithNotes} profile={profile} />
-                    <article className="dc-report-card dc-metric-card">
-                      <h4>NHL readiness</h4>
-                      {readinessPct != null ? (
-                        <div className="dc-meter" aria-label={`${readinessPct}% NHL projection`}>
-                          <i style={{ width: `${readinessPct}%` }} />
-                        </div>
-                      ) : null}
-                      <p className="dc-metric-card__lead">{readinessLabel || "Projecting"}</p>
-                      <ul className="dc-kv">
-                        <li><span>Projected role</span><strong>{roleLens?.label || "—"}</strong></li>
-                        <li><span>ETA</span><strong>{etaText}</strong></li>
-                        {readinessPct != null ? (
-                          <li><span>NHL probability</span><strong>{readinessPct}%</strong></li>
-                        ) : null}
-                      </ul>
-                    </article>
-                    <article className="dc-report-card dc-metric-card">
-                      <h4>How sure are we?</h4>
-                      <ul className="dc-kv">
-                        <li><span>Current OVR</span><strong style={{ color: certaintyTier(cert.ovr).color }}>{cert.ovr}% · {certaintyTier(cert.ovr).label}</strong></li>
-                        <li><span>Potential</span><strong style={{ color: certaintyTier(cert.pot).color }}>{ceilingHidden ? "Not on file" : `${cert.pot}% · ${certaintyTier(cert.pot).label}`}</strong></li>
-                      </ul>
-                      {confNote ? <small className="dc-metric-card__note">{confNote}</small> : null}
-                    </article>
-                  </div>
-
-                  {/* Column 2 — the written report */}
-                  <div className="dc-dash-col">
-                    <article className="dc-report-card">
-                      <h4>Strengths</h4>
-                      <ul>{(strengths.filter(Boolean).length ? strengths.filter(Boolean) : strengthLines).slice(0, 3).map((line) => <li key={line}>{line}</li>)}</ul>
-                    </article>
-                    <article className="dc-report-card">
-                      <h4>Weaknesses</h4>
-                      {weaknessLines.length ? (
-                        <ul>{weaknessLines.slice(0, 3).map((line) => <li key={line}>{line}</li>)}</ul>
-                      ) : (
-                        <p className="dc-report-card__empty">
-                          {confPct != null && confPct < 45
-                            ? "Not enough coverage to flag concerns — keep scouting."
-                            : "No material weaknesses flagged on the current file."}
-                        </p>
-                      )}
-                    </article>
-                  </div>
-
-                  {/* Column 3 — character + projection */}
-                  <div className="dc-dash-col">
-                    <article className={`dc-report-card${player.characterConcerns ? " is-concern" : ""}`}>
-                      <h4>{player.characterConcerns ? "Character · flagged on file" : "Life & character"}</h4>
-                      <p>
-                        {characterRead?.headline
-                          ? `Scout read — ${characterRead.headline}.`
-                          : "No material character flags in the current report."}
-                      </p>
-                      {Array.isArray(characterRead?.traits) && characterRead.traits.length ? (
-                        <ul className="dc-char-traits">
-                          {characterRead.traits.map((trait) => (
-                            <li key={trait.label}>{trait.label}: {trait.tier}</li>
-                          ))}
-                        </ul>
-                      ) : null}
-                    </article>
-                    <article className="dc-report-card dc-metric-card">
-                      <h4>Development path</h4>
-                      <p>{devTrajectory || "Projection sharpens as looks accumulate."}</p>
-                      <ul className="dc-kv">
-                        <li><span>Upside role</span><strong>{roleLens?.label || "—"}</strong></li>
-                        <li><span>Volatility</span><strong>{volatilityDisplay}</strong></li>
-                        {!ceilingHidden && ovrBands.peakText ? (
-                          <li><span>Peak</span><strong>{ovrBands.peakText}</strong></li>
-                        ) : null}
-                      </ul>
-                    </article>
-                    <article className="dc-report-card dc-metric-card">
-                      <h4>Draft projection</h4>
-                      <ul className="dc-kv">
-                        <li><span>Board rank</span><strong>#{rank}</strong></li>
-                        {projectedRange.text ? (
-                          <li><span>Range</span><strong>{projectedRange.text}</strong></li>
-                        ) : (draftWindow ? (
-                          <li><span>Window</span><strong>{draftWindow}</strong></li>
-                        ) : null)}
-                        {boardYear ? <li><span>Class</span><strong>{boardYear}</strong></li> : null}
-                      </ul>
-                    </article>
-                    {overageNote ? (
-                      <article className="dc-report-card is-overage">
-                        <h4>Overage file</h4>
-                        <p>{overageNote}</p>
-                      </article>
-                    ) : null}
-                  </div>
-                </div>
-
-                {wjcBlock ? (
-                  <section className="dc-brochure-block dc-brochure-block--compact dc-wjc-dossier">
-                    <span className="dc-profile-tags__label">
-                      World Juniors (U20)
-                      {wjcBlock.grade ? <span className="wr-muted"> · {wjcBlock.grade}</span> : null}
-                    </span>
-                    <p className="dc-wjc-dossier__headline">{wjcBlock.headline}</p>
-                    {wjcBlock.summary ? <p className="dc-wjc-dossier__summary">{wjcBlock.summary}</p> : null}
-                    <div className="dc-signal-metrics dc-signal-metrics--focus dc-signal-metrics--dossier">
-                      {wjcBlock.tiles.map((tile) => (
-                        <SignalMetricTile key={`wjc-${tile.label}`} label={tile.label} value={tile.value} />
-                      ))}
-                    </div>
-                    {wjcBlock.impactLines?.length ? (
-                      <ul className="dc-wjc-dossier__impact">
-                        {wjcBlock.impactLines.map((line) => <li key={line}>{line}</li>)}
-                      </ul>
-                    ) : null}
-                  </section>
-                ) : null}
-              </div>
-            ) : (
-              <div className="dc-dossier-pane dc-dossier-pane--intel">
-                <ProspectScoutingDesk desk={scoutingDesk} confPct={confPct} compact maxEntries={4} />
-                <ProspectMediaUniverse bundle={mediaBundle} compact />
-                <section className="dc-brochure-analytics dc-brochure-analytics--inline dc-brochure-analytics--dossier">
-                  <div className="dc-signal-footer__stock">
-                    <ValueTrajectoryChart points={trajectory} compact />
-                  </div>
-                  <div className="dc-signal-season">
-                    <div className="dc-signal-season__head">
-                      <span className="dc-profile-tags__label">Season &amp; analytics</span>
-                      {sampleThin ? <span className="dc-signal-sample">Thin sample</span> : null}
-                    </div>
-                    <div className="dc-signal-metrics dc-signal-metrics--focus dc-signal-metrics--dossier">
-                      {analyticsTiles.map((tile) => (
-                        <SignalMetricTile key={tile.label} label={tile.label} value={tile.value} tone={tile.tone} hint={tile.hint} />
-                      ))}
-                    </div>
-                  </div>
-                </section>
-                {wjcBlock ? (
-                  <section className="dc-brochure-block dc-brochure-block--compact dc-wjc-dossier">
-                    <span className="dc-profile-tags__label">World Juniors impact</span>
-                    <p className="dc-wjc-dossier__headline">{wjcBlock.headline}</p>
-                    {wjcBlock.summary ? <p className="dc-wjc-dossier__summary">{wjcBlock.summary}</p> : null}
-                    {wjcBlock.impactLines?.length ? (
-                      <ul className="dc-wjc-dossier__impact">
-                        {wjcBlock.impactLines.map((line) => <li key={`intel-${line}`}>{line}</li>)}
-                      </ul>
-                    ) : null}
-                  </section>
-                ) : null}
-              </div>
+          <ProspectDossier
+            model={model}
+            portrait={(
+              <>
+                <DraftClassHeadshot player={player} size="lg" />
+                <SignalNationFlag country={countryLabel} size={48} className="dd-flag" />
+              </>
             )}
-
+            tab={dossierTab}
+            onTab={setDossierTab}
+            actions={actions}
+            statusNote={scoutActionNote}
+            assignPanel={showAssignPanel ? (
+              <div className="dd-assign">
+                {SCOUT_NAMES.map((name) => (
+                  <button
+                    key={name}
+                    type="button"
+                    className={scoutMeta.assignedScout === name ? "is-active" : ""}
+                    disabled={scoutActionBusy}
+                    onClick={() => {
+                      onAssignScout?.(name);
+                      setShowAssignPanel(false);
+                    }}
+                  >
+                    {name}
+                  </button>
+                ))}
               </div>
-            </div>
-
-            <footer className="dc-signal-actionbar dc-signal-actionbar--dossier" aria-label="Dossier actions">
-              {fileNotes.length ? (
-                <div className="dc-dossier-notes" role="note" aria-label="File caveats">
-                  {fileNotes.map((note) => (
-                    <p key={note}>{note}</p>
-                  ))}
-                </div>
-              ) : null}
-              {scoutActionNote ? <p className="dc-dossier-scout-note">{scoutActionNote}</p> : null}
-              <div className="dc-dossier-scout-actions">
-                <button
-                  type="button"
-                  className="dc-btn dc-btn--secondary"
-                  disabled={scoutActionBusy || !onRunScoutAction}
-                  onClick={() => onRunScoutAction?.("player_focus")}
-                >
-                  {scoutActionBusy ? "Scouting…" : "Scout player"}
-                </button>
-                <button
-                  type="button"
-                  className="dc-btn dc-btn--secondary"
-                  disabled={scoutActionBusy || !onRunScoutAction || !(scoutMeta.watchlist || scoutMeta.assignedScout)}
-                  title={(scoutMeta.watchlist || scoutMeta.assignedScout) ? "4-hour film study" : "Shortlist or assign a scout first"}
-                  onClick={() => onRunScoutAction?.("film_study")}
-                >
-                  Film study
-                </button>
-                <button
-                  type="button"
-                  className={`dc-btn dc-btn--secondary${showAssignPanel ? " is-active" : ""}`}
-                  disabled={scoutActionBusy || !onAssignScout}
-                  onClick={() => setShowAssignPanel((v) => !v)}
-                >
-                  {scoutMeta.assignedScout ? `Scout: ${scoutMeta.assignedScout}` : "Assign scout"}
-                </button>
-              </div>
-              {showAssignPanel ? (
-                <div className="dc-dossier-scout-assign">
-                  {SCOUT_NAMES.map((name) => (
-                    <button
-                      key={name}
-                      type="button"
-                      className={scoutMeta.assignedScout === name ? "is-active" : ""}
-                      disabled={scoutActionBusy}
-                      onClick={() => {
-                        onAssignScout?.(name);
-                        setShowAssignPanel(false);
-                      }}
-                    >
-                      {name}
-                    </button>
-                  ))}
-                </div>
-              ) : null}
-              <button
-                type="button"
-                className={`dc-shortlist-icon${scoutMeta.watchlist ? " is-active" : ""}`}
-                onClick={onToggleWatchlist}
-                disabled={!onToggleWatchlist}
-                aria-label={scoutMeta.watchlist ? "Remove from shortlist" : "Add to shortlist"}
-                title={scoutMeta.watchlist ? "Remove from shortlist" : "Add to shortlist"}
-              >
-                ★ SHORTLIST
-              </button>
-            </footer>
-          </div>
+            ) : null}
+          />
         )}
       </article>
     </div>
   );
 }
-
-
 
 function IntelFeed({ prospects }) {
   const movers = useMemo(() => weeklyStockMovers(prospects, { minAbs: 1, limit: 80 }), [prospects]);

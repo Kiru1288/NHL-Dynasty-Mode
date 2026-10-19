@@ -3,8 +3,6 @@
  * stock effects, weekly movers, and brochure-dossier copy.
  */
 
-import { goalieStrengthCopy, goalieWeaknessCopy } from "./prospectDossierHelpers";
-
 export const PYRAMID_TIERS = [
   { key: "transcendent", label: "Transcendent", rarity: "1 / 100,000", color: "#ffd24a", ink: "#1a1204", order: 1, minPeak: 99 },
   { key: "generational", label: "Generational", rarity: "Once every several drafts", color: "#ff6b2d", ink: "#1a0900", order: 2, minPeak: 96 },
@@ -366,49 +364,6 @@ export function confMeaning(pct) {
   return { band: "No file", detail: `${n}% — name on a list, not a scouting report.` };
 }
 
-function isGoaliePlayer(player) {
-  const p = String(player?.position || "").toUpperCase();
-  return p === "G" || p.includes("GOAL");
-}
-
-export function skillDevelopmentNotes(tools, player) {
-  const goalie = isGoaliePlayer(player);
-  const rows = (tools || []).map((t) => {
-    const mid = Number(t.raw != null ? t.raw : t.mid);
-    const weak = Number.isFinite(mid) && mid < 70;
-    const plus = Number.isFinite(mid) && mid >= 82;
-    let reach = "Average translation";
-    if (t.locked || mid == null) reach = "Unscouted";
-    else if (goalie && weak && t.label === "Positioning") reach = "Development drag — angles are the first thing that fail at pro pace";
-    else if (goalie && weak && t.label === "Rebound") reach = "Development drag — second chances decide goalie careers";
-    else if (!goalie && weak && t.label === "Skating") reach = "Development drag — pace is the first thing that fails at pro speed";
-    else if (weak) reach = "Needs a real jump to hold this projection";
-    else if (plus) reach = "Already a carrying tool";
-    else reach = "On-track if the work stays honest";
-    return { ...t, weak, plus, reach };
-  });
-  const skating = rows.find((t) => t.label === "Skating");
-  const positioning = rows.find((t) => t.label === "Positioning");
-  const overager = isOverager(player);
-  const char = player?.characterFile;
-  let developOdds = 62;
-  if (goalie) {
-    if (positioning?.weak) developOdds -= 12;
-    if (rows.find((t) => t.label === "Rebound")?.weak) developOdds -= 10;
-  } else if (skating?.weak) developOdds -= 14;
-  if (overager) developOdds -= 16;
-  if (char?.flagged) developOdds -= char.hitPctHit || 8;
-  if ((Number(player?.workEthic) || 0) >= 80) developOdds += 8;
-  if ((Number(player?.coachability) || 0) >= 80) developOdds += 6;
-  if (prospectAge(player) <= 17) developOdds += 7;
-  developOdds = clamp(developOdds, 12, 92);
-  return {
-    rows,
-    developOdds,
-    skatingWeak: Boolean(goalie ? positioning?.weak : skating?.weak),
-  };
-}
-
 export function projectionOutcomes(player, profile, developOdds = 60) {
   const pot = profile?.potential && typeof profile.potential === "object" ? profile.potential : {};
   const range = player?.potentialRange || pot.range || null;
@@ -487,42 +442,6 @@ export function projectionOutcomes(player, profile, developOdds = 60) {
     source: "backend",
     note: null,
   };
-}
-
-export function strengthCopy(player, tools) {
-  if (isGoaliePlayer(player)) return goalieStrengthCopy(player, tools);
-  const name = `${player?.firstName || ""} ${player?.lastName || ""}`.trim() || "He";
-  const plus = (tools || []).filter((t) => t.plus).map((t) => t.label.toLowerCase());
-  if (player?.completion < 40) return [`${name} is still a first-look file — strengths are rumours until we get another viewing.`];
-  const lines = [];
-  if (plus.includes("skating")) lines.push("Separates in open ice; the first three strides are already NHL-fast.");
-  if (plus.includes("shot")) lines.push("Release jumps on goalies. Slot and the circle are both dangerous.");
-  if (plus.includes("vision") || plus.includes("iq")) lines.push("Sees the second option before the first one dies. Makes linemates honest.");
-  if (plus.includes("defense")) lines.push("Detail away from the puck is ahead of the age curve — kills plays, not just time.");
-  if (plus.includes("physical")) lines.push("Wins walls and net-fronts without turning into a passenger after contact.");
-  if (!lines.length) {
-    lines.push("Projectable frame and enough processing to stay in the lineup conversation.");
-    lines.push("Habits in transition are already usable; the carrying tool is still arriving.");
-  }
-  return lines.slice(0, 4);
-}
-
-export function weaknessCopy(player, tools, skatingWeak) {
-  if (isGoaliePlayer(player)) return goalieWeaknessCopy(player, tools);
-  const name = `${player?.firstName || ""} ${player?.lastName || ""}`.trim() || "He";
-  if (player?.completion < 40) return [`More looks needed before we tattoo a weakness onto ${name}.`];
-  const weak = (tools || []).filter((t) => t.weak).map((t) => t.label.toLowerCase());
-  const lines = [];
-  if (skatingWeak) lines.push("Skating is the tell. If the pace doesn’t jump, the rest of the tools play a league down.");
-  if (weak.includes("shot")) lines.push("Shot selection gets greedy; goalies see it too early.");
-  if (weak.includes("defense")) lines.push("Defensive reads still chase the puck instead of the next play.");
-  if (weak.includes("physical")) lines.push("Gets moved. Pro net-fronts will not be polite about it.");
-  if (weak.includes("vision") || weak.includes("iq")) lines.push("Forces seams that aren’t there; turnovers arrive dressed as ambition.");
-  if (isOverager(player)) lines.push("The extra year of junior inflates the boxcars. Same production at 17 would be a different conversation.");
-  if (!lines.length) {
-    lines.push("Needs pro pace and a thicker second effort before the projection is safe.");
-  }
-  return lines.slice(0, 4);
 }
 
 export function weeklyTrajectoryPoints(profile, player) {

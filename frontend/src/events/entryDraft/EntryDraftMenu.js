@@ -15,6 +15,8 @@ import { getTeamAbbreviation, getTeamLogoSrc } from "../../utils/teamLogos";
 import { flagApiUrl, resolveCountryCode } from "../../utils/countryFlags";
 import { buildDraftFanTweets, buildDraftPickReactionTweet } from "../awardsNight/awardHelpers";
 import { resolveWjcDossierBlock } from "../../screens/prospectDossierHelpers";
+import { buildProspectDossierModel } from "../../components/dossier/prospectDossierModel";
+import { DossierLayoutStyles, DossierSkillProfile, DossierVerdict } from "../../components/dossier/ProspectDossierView";
 import {
   formatPick,
   getPlayerName,
@@ -27,15 +29,9 @@ import {
   CertaintyChip,
   ClassIndicators,
   OutcomeDonut,
-  PercentileBars,
   ProspectClassContext,
   ProspectVisualStyles,
-  RatingCertaintyGauge,
-  SkillRadar,
-  SnapshotDials,
   certaintyTier,
-  parseRange,
-  percentileOf,
   prospectCertainty,
   useProspectClass,
 } from "../../components/dossier/ProspectVisuals";
@@ -839,162 +835,6 @@ function revealedOvrValue(p) {
 function isGoalie(p) {
   return String(getPlayerPosition(p) || "").toUpperCase() === "G";
 }
-
-const SKATER_CHAPTER_ORDER = [
-  ["Overall", "overall"],
-  ["Offence", "offence"],
-  ["Defence", "defence"],
-  ["Character", "character"],
-  ["Mental", "mental"],
-  ["Transition", "transition"],
-  ["Physical", "physical"],
-  ["Potential", "potential"],
-];
-
-const GOALIE_CHAPTER_ORDER = [
-  ["Overall", "overall"],
-  ["Glove", "glove"],
-  ["Blocker", "blocker"],
-  ["Stick", "stick"],
-  ["Potential", "potential"],
-];
-
-function chapterRatingsHidden(prospect) {
-  if (!prospect) return true;
-  if (prospect.ability_revealed || prospect.drafted_overall != null) return false;
-  if (prospect.ceiling_hidden || prospect.dossier?.ceilingHidden) return true;
-  const cp = prospect.chapter_profile || prospect.dossier?.chapter_profile;
-  if (cp?.hidden) return true;
-  if (prospect.dossier?.chapterProfileHidden) return true;
-  // Was `a ?? b ? 72 : 0`, which read ANY scouting % on file (even 0%) as 72% and
-  // showed every prospect's chapter ratings as if fully scouted.
-  const scout = num(prospect.scouted_percentage ?? (prospect.dossier?.dedicatedScoutFile ? 72 : 0)) ?? 0;
-  const rank = getRank(prospect);
-  if (scout >= 72) return false;
-  if (rank != null && rank > 64 && scout < 55) return true;
-  if (rank != null && rank > 32 && scout < 45) return true;
-  if (rank != null && rank > 15 && scout < 35) return true;
-  return false;
-}
-
-function chapterRatingsFogged(prospect) {
-  if (!prospect || chapterRatingsHidden(prospect)) return false;
-  if (prospect.ability_revealed || prospect.drafted_overall != null) return false;
-  const cp = prospect.chapter_profile || prospect.dossier?.chapter_profile;
-  return Boolean(cp?.fogged || prospect.dossier?.chapterProfileFogged);
-}
-
-function resolveChapterMap(prospect) {
-  if (!prospect) return {};
-  if (chapterRatingsHidden(prospect)) return {};
-
-  const profileChapters =
-    (prospect.chapter_profile?.chapters && typeof prospect.chapter_profile.chapters === "object"
-      ? prospect.chapter_profile.chapters
-      : null)
-    || (prospect.dossier?.chapter_profile?.chapters && typeof prospect.dossier.chapter_profile.chapters === "object"
-      ? prospect.dossier.chapter_profile.chapters
-      : null)
-    || (prospect.chapters && typeof prospect.chapters === "object" ? prospect.chapters : null)
-    || {};
-
-  const revealed = Boolean(prospect.ability_revealed || prospect.drafted_overall != null);
-  const fogged = !revealed && chapterRatingsFogged(prospect);
-
-  const readChapter = (key) => {
-    const raw = profileChapters[key] ?? (key === "defence" ? profileChapters.defense : null);
-    if (raw != null && raw !== "") {
-      if (typeof raw === "object" && raw.band) {
-        const lo = roundInt(raw.low ?? raw.lo);
-        const hi = roundInt(raw.high ?? raw.hi);
-        if (revealed) return roundInt(raw.mid ?? (lo != null && hi != null ? (lo + hi) / 2 : null));
-        if (lo != null && hi != null) return { band: true, lo, hi, mid: Math.round((lo + hi) / 2) };
-      }
-      const fromProfile = chapterValue(profileChapters, key);
-      if (fromProfile != null) return fromProfile;
-    }
-    if (key === "overall") return null;
-    return chapterValue(
-      {
-        offence: prospect.offence,
-        defence: prospect.defence ?? prospect.defense,
-        character: prospect.character ?? prospect.character_score,
-        mental: prospect.mental ?? prospect.hockey_iq,
-        transition: prospect.transition ?? prospect.skating,
-        physical: prospect.physical ?? prospect.physicality,
-        glove: prospect.glove,
-        blocker: prospect.blocker,
-        stick: prospect.stick,
-        potential: prospect.potential,
-      },
-      key
-    );
-  };
-
-  if (isGoalie(prospect)) {
-    return {
-      overall: readChapter("overall"),
-      glove: readChapter("glove"),
-      blocker: readChapter("blocker"),
-      stick: readChapter("stick"),
-      potential: readChapter("potential"),
-    };
-  }
-
-  if (fogged) {
-    return {
-      offence: readChapter("offence"),
-      defence: readChapter("defence"),
-      character: readChapter("character"),
-      mental: readChapter("mental"),
-      transition: readChapter("transition"),
-      physical: readChapter("physical"),
-    };
-  }
-
-  return {
-    overall: readChapter("overall"),
-    offence: readChapter("offence"),
-    defence: readChapter("defence"),
-    character: readChapter("character"),
-    mental: readChapter("mental"),
-    transition: readChapter("transition"),
-    physical: readChapter("physical"),
-    potential: readChapter("potential"),
-  };
-}
-
-function chapterValue(chapters, key) {
-  if (!chapters || typeof chapters !== "object") return null;
-  const aliases = key === "defence" ? ["defence", "defense"] : [key];
-  for (const alias of aliases) {
-    const raw = chapters[alias];
-    if (raw != null && raw !== "") {
-      const n = roundInt(raw);
-      if (n != null) return n;
-    }
-  }
-  return null;
-}
-
-/* Chapter-based rating rows (authoritative schema). */
-function chapterAttributeRows(prospect) {
-  if (!prospect || chapterRatingsHidden(prospect)) return [];
-  const chapters = resolveChapterMap(prospect);
-  const order = isGoalie(prospect) ? GOALIE_CHAPTER_ORDER : SKATER_CHAPTER_ORDER;
-  return order
-    .map(([label, key]) => {
-      const value = chapters[key];
-      if (value == null || value === "") return null;
-      if (typeof value === "object" && value.band) {
-        return [label, value];
-      }
-      const n = roundInt(value);
-      return n != null ? [label, n] : null;
-    })
-    .filter(Boolean);
-}
-
 
 function buildDraftGrade(userPicks) {
   const picks = safeArray(userPicks);
@@ -3788,13 +3628,10 @@ function StageDossier({
 
   const pub = getRank(prospect);
   const tb = getTeamRank(prospect);
-  const curLabel = resolveCurrentOvrLabel(prospect);
-  const potLabel = resolvePotentialOvrLabel(prospect);
-  const curParts = String(curLabel || "").split("–").map((x) => roundInt(x)).filter((x) => x != null);
-  const potParts = String(potLabel || "").split("–").map((x) => roundInt(x)).filter((x) => x != null);
-  const curMid = curParts.length ? curParts.reduce((a, b) => a + b, 0) / curParts.length : null;
-  const peakMid = potParts.length ? Math.max(...potParts) : null;
-  const growth = curMid != null && peakMid != null ? Math.max(0, Math.round(peakMid - curMid)) : null;
+  const dossierModel = buildProspectDossierModel(prospect, d, {
+    allProspects: classPool,
+    userScoutPct: num(prospect.scouted_percentage ?? prospect.dedicatedScoutingPct ?? d.userScoutPct) ?? 0,
+  });
 
   const projection = d.projection || {};
   const archetypeObj = d.archetype && typeof d.archetype === "object" ? d.archetype : null;
@@ -3804,14 +3641,9 @@ function StageDossier({
   const readiness = formatNhlReadiness(prospect);
   const etaLabel = (d.eta && typeof d.eta === "object" ? d.eta.label : d.eta) || d.estimatedNhlArrival || null;
   const scoutReport = d.scout_report || d.micro_summary || prospect.storyline || null;
-  const strengths = safeArray(d.strengths).slice(0, 3);
-  const concerns = safeArray(d.concerns).slice(0, 3);
   const projectionNotes = safeArray(d.projectionNotes || d.projection_notes).slice(0, 3);
   const intelLabel = d.intel_label || d.intelLabel || null;
-  const scoutPct = num(prospect.scouted_percentage ?? d.scoutingConfidence);
-  const ceilingHidden = Boolean(prospect.ceiling_hidden || d.ceilingHidden || d.peak_range?.hidden);
   const character = d.character_read || null;
-  const offIce = d.off_ice_frame && typeof d.off_ice_frame === "object" ? d.off_ice_frame : null;
   const comparison = d.player_comparison && typeof d.player_comparison === "object" ? d.player_comparison : null;
   const analytics = (d.analytics && typeof d.analytics === "object" ? d.analytics : null)
     || (prospect.analytics && typeof prospect.analytics === "object" ? prospect.analytics : null)
@@ -3839,64 +3671,6 @@ function StageDossier({
       ].filter(Boolean);
 
   const reachDelta = pub != null && currentPickOverall != null ? currentPickOverall - pub : null;
-
-  // --- Visual file: certainty, class percentiles, outcomes -----------------
-  const cert = getProspectCertainty(prospect);
-  const curRange = parseRange(curLabel);
-  const potRange = parseRange(potLabel);
-  const chapterHidden = chapterRatingsHidden(prospect);
-  const chapterSoft = chapterRatingsFogged(prospect) || cert.ovr < 55;
-  const posGroup = goalie ? "G" : "S";
-  const peers = classPool.filter((x) => (isGoalie(x) ? "G" : "S") === posGroup);
-  const peerChapters = peers.map((x) => {
-    const m = {};
-    chapterAttributeRows(x).forEach(([label, value]) => {
-      m[label] = typeof value === "object" && value?.band ? Number(value.mid) : Number(value);
-    });
-    return m;
-  });
-  const skillRows = chapterHidden
-    ? (goalie ? ["Glove", "Blocker", "Stick"] : ["Offence", "Defence", "Transition", "Mental", "Physicality", "Character"]).map((label) => ({ label, locked: true }))
-    : chapterAttributeRows(prospect)
-        .filter(([label]) => !["Overall", "Potential"].includes(label))
-        .map(([label, value]) => {
-          const band = typeof value === "object" && value?.band;
-          const v = band ? Number(value.mid) : Number(value);
-          return {
-            label,
-            value: v,
-            text: band ? `${value.lo}–${value.hi}` : undefined,
-            soft: chapterSoft || band,
-            percentile: percentileOf(peerChapters.map((m) => m[label]), v),
-          };
-        });
-  const radarAxes = skillRows
-    .filter((r) => !r.locked)
-    .map((r) => {
-      const vals = peerChapters.map((m) => Number(m[r.label])).filter((x) => Number.isFinite(x));
-      return {
-        label: r.label,
-        short: r.label.slice(0, 4),
-        value: r.value,
-        classAvg: vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null,
-      };
-    });
-  const classSize = classPool.length || null;
-  const rankPct = pub != null && classSize ? Math.max(1, Math.round(100 - (pub / Math.max(classSize, pub)) * 100)) : null;
-  const ppgPeers = peers.map((x) => resolveProductionStats(x, x.dossier?.stats).ppg);
-  const prodPct = !goalie && prod.ppg != null ? percentileOf(ppgPeers, prod.ppg) : null;
-  const nhlProb = num(d.potential?.nhl_probability ?? d.nhl_probability ?? prospect.nhl_probability);
-  const outcomeSegs = (() => {
-    const dist = d.outcome_distribution || d.outcomeDistribution || null;
-    const raw = Array.isArray(dist?.segments) ? dist.segments : Array.isArray(dist) ? dist : null;
-    if (raw) return raw.map((seg) => ({ key: seg.key || seg.label, label: seg.label || seg.key, pct: num(seg.pct ?? seg.value ?? seg.probability) }));
-    if (dist && typeof dist === "object") {
-      return Object.entries(dist)
-        .filter(([k, v]) => k !== "label" && Number.isFinite(Number(v)))
-        .map(([k, v]) => ({ key: k, label: k.replace(/_/g, " "), pct: Number(v) }));
-    }
-    return null;
-  })();
   const identityLine = [
     pos,
     ageRaw != null ? `Age ${roundInt(ageRaw) ?? ageRaw}` : null,
@@ -3931,37 +3705,8 @@ function StageDossier({
       </div>
 
       <ProspectVisualStyles />
-      <div className="pv-gauge-pair">
-        <RatingCertaintyGauge
-          title="Current OVR"
-          valueText={curLabel}
-          range={curRange}
-          certainty={cert.ovr}
-          tone="cyan"
-          hidden={!curRange}
-          hiddenText="No read"
-        />
-        <RatingCertaintyGauge
-          title="Potential"
-          valueText={potLabel}
-          range={potRange}
-          certainty={cert.pot}
-          tone="gold"
-          hidden={ceilingHidden || !potRange}
-        />
-      </div>
-
-      <SnapshotDials
-        items={[
-          rankPct != null
-            ? { label: "Class rank", pct: rankPct, center: `#${pub}`, sub: rankPct >= 50 ? `TOP ${Math.max(1, 100 - rankPct)}%` : "", color: "#f6c453", title: `Public board #${pub} of ${classSize}` }
-            : null,
-          { label: "Your file", pct: num(scoutPct) ?? 0, center: `${roundInt(scoutPct) ?? 0}%`, sub: certaintyTier(cert.ovr).label.split(" ")[0], color: certaintyTier(cert.ovr).color, title: "How much of him your scouts have seen" },
-          nhlProb != null ? { label: "NHL odds", pct: nhlProb, color: "#52df94", title: "Chance he becomes an NHL regular" } : null,
-          prodPct != null ? { label: "Production", pct: prodPct, center: `${prodPct}`, sub: "PCTL", color: "#13d8e7", title: "Points per game vs. the class" } : null,
-          growth != null && !ceilingHidden ? { label: "Upside", pct: Math.min(100, growth * 4), center: `+${growth}`, sub: "OVR", color: "#ff5fd2", title: "Projected growth to his ceiling" } : null,
-        ]}
-      />
+      <DossierLayoutStyles />
+      <DossierVerdict model={dossierModel} compact />
 
       <ClassIndicators indicators={prospect.class_indicators || prospect.classIndicators || d.classIndicators} />
 
@@ -3976,15 +3721,8 @@ function StageDossier({
 
       <div className={`${PREFIX}-dossier-grid`}>
         <div className={`${PREFIX}-dossier-main`}>
-          <div className="pv-visual-grid">
-            <PercentileBars
-              rows={skillRows}
-              title={goalie ? "Goalie profile" : "Skill profile"}
-              note={chapterHidden ? "Scout him to unlock" : chapterSoft ? "Estimated · thin file" : "vs. this draft class"}
-            />
-            {radarAxes.length >= 3 ? <SkillRadar axes={radarAxes} color={goalie ? "#8ab4ff" : "#13d8e7"} /> : null}
-          </div>
-          {outcomeSegs && outcomeSegs.length ? <OutcomeDonut segments={outcomeSegs} /> : null}
+          <DossierSkillProfile model={dossierModel} />
+          {dossierModel.role.outcomes?.length ? <OutcomeDonut segments={dossierModel.role.outcomes} /> : null}
 
           {productionRows.length ? (
             <section className={`${PREFIX}-sec`}>
@@ -4060,30 +3798,6 @@ function StageDossier({
             </section>
           ) : null}
 
-          {strengths.length || concerns.length ? (
-            <section className={`${PREFIX}-sec`}>
-              <SectionHead title="Evidence" icon="shield" />
-              <div className={`${PREFIX}-split`}>
-                {strengths.length ? (
-                  <div>
-                    <p className={`${PREFIX}-muted`}>Strengths</p>
-                    <ul className={`${PREFIX}-list`}>
-                      {strengths.map((s, i) => <li key={`s-${i}`}>{typeof s === "string" ? s : s.title || s.fact}</li>)}
-                    </ul>
-                  </div>
-                ) : null}
-                {concerns.length ? (
-                  <div>
-                    <p className={`${PREFIX}-muted`}>Concerns</p>
-                    <ul className={`${PREFIX}-list is-risk`}>
-                      {concerns.map((s, i) => <li key={`c-${i}`}>{typeof s === "string" ? s : s.title || s.fact}</li>)}
-                    </ul>
-                  </div>
-                ) : null}
-              </div>
-            </section>
-          ) : null}
-
           {character?.headline || character?.interview_notes ? (
             <section className={`${PREFIX}-sec`}>
               <SectionHead
@@ -4117,17 +3831,14 @@ function StageDossier({
             </section>
           ) : null}
 
-          {offIce && (offIce.headline || offIce.label || safeArray(offIce.traits).length) ? (
+          {dossierModel.character.visible ? (
             <section className={`${PREFIX}-sec`}>
-              <SectionHead title="Off-ice frame" icon="book" />
-              {offIce.headline || offIce.label ? <p className={`${PREFIX}-report`}>{offIce.headline || offIce.label}</p> : null}
-              {safeArray(offIce.traits).length ? (
-                <div className={`${PREFIX}-facts`}>
-                  {safeArray(offIce.traits).slice(0, 4).map((t) => (
-                    <Fact key={t.label || t} label={t.label || t} value={t.tier || t.value || t.score} />
-                  ))}
-                </div>
-              ) : null}
+              <SectionHead title="Character" icon="shield" />
+              <div className={`${PREFIX}-facts`}>
+                {dossierModel.character.traits.map((trait) => (
+                  <Fact key={trait.key} label={trait.label} value={trait.tier.label} />
+                ))}
+              </div>
             </section>
           ) : null}
 
@@ -4160,11 +3871,10 @@ function StageDossier({
 
         <aside className={`${PREFIX}-dossier-side`}>
           <div className={`${PREFIX}-facts ${PREFIX}-facts--stack`}>
-            <Fact label={goalie ? "Starter path" : "Projected role"} value={projection.label || d.prospect_role || prospect.prospect_role || archetype} />
-            <Fact label="NHL readiness" value={readiness} />
-            <Fact label="ETA" value={etaLabel || formatNhlArrivalEta(prospect)} />
-            <Fact label="Risk" value={prospect.risk_score ?? getRisk(prospect)} />
-            <Fact label="Sure of OVR" value={`${cert.ovr}% · ${certaintyTier(cert.ovr).label}`} />
+            <Fact label={goalie ? "Starter path" : "Projected role"} value={dossierModel.role.projected || projection.label || archetype} />
+            <Fact label="NHL readiness" value={dossierModel.role.readiness || readiness} />
+            <Fact label="ETA" value={dossierModel.role.eta || etaLabel || formatNhlArrivalEta(prospect)} />
+            <Fact label="NHL odds" value={dossierModel.display.nhlOdds} />
             <Fact label="Public board" value={pub != null ? `#${pub}` : null} />
             <Fact label="Your board" value={tb != null ? `#${tb}` : null} />
             <Fact

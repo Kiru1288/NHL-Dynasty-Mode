@@ -134,9 +134,9 @@ export function percentileOf(values, value) {
 
 export function percentileLabel(p) {
   if (p == null) return "—";
-  if (p >= 99) return "TOP 1%";
-  if (p >= 50) return `TOP ${Math.max(1, 100 - p)}%`;
-  return `BOTTOM ${Math.max(1, p)}%`;
+  const rounded = Math.round(p);
+  if (rounded >= 50) return `Top ${Math.max(1, 100 - rounded)}%`;
+  return `Bottom ${Math.max(1, rounded)}%`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -297,11 +297,10 @@ export function RatingCertaintyGauge({ title, valueText, range, certainty, tone 
   const MAX = 99;
   const pos = (v) => `${((clamp(v, MIN, MAX) - MIN) / (MAX - MIN)) * 100}%`;
   const tier = certaintyTier(certainty);
-  const spread = impliedSpread(certainty);
   const color = tone === "gold" ? "#f6c453" : "#13d8e7";
   const r = range;
-  const fogLo = r ? Math.min(r.lo, Math.round(r.mid) - spread) : null;
-  const fogHi = r ? Math.max(r.hi, Math.round(r.mid) + spread) : null;
+  const fogLo = r ? Math.round(Math.min(r.lo, 99)) : null;
+  const fogHi = r ? Math.round(Math.min(r.hi, 99)) : null;
   return (
     <div className={`pv-gauge pv-gauge--${tone}`}>
       <div className="pv-gauge__head">
@@ -343,8 +342,8 @@ export function RatingCertaintyGauge({ title, valueText, range, certainty, tone 
         <span>
           {hidden
             ? "Assign a scout to open this read."
-            : spread > 0 && r
-              ? `Could really be ${fogLo}–${fogHi}`
+            : r && Math.round(r.lo) !== Math.round(r.hi)
+              ? `${Math.round(Math.min(r.lo, 99))}–${Math.round(Math.min(r.hi, 99))}`
               : "This is the real number."}
         </span>
       </div>
@@ -352,30 +351,72 @@ export function RatingCertaintyGauge({ title, valueText, range, certainty, tone 
   );
 }
 
+function ratingScale(v) {
+  return ((clamp(n(v) ?? 40, 40, 99) - 40) / 59) * 100;
+}
+
+const RADAR_SHORT = {
+  offence: "OFF",
+  defense: "DEF",
+  defence: "DEF",
+  transition: "TRN",
+  mental: "MEN",
+  physicality: "PHY",
+  physical: "PHY",
+  character: "CHR",
+  glove: "GLV",
+  blocker: "BLK",
+  stick: "STK",
+};
+
+function radarShort(axis) {
+  const key = String(axis?.label || "").toLowerCase();
+  return RADAR_SHORT[key] || axis?.short || String(axis?.label || "").slice(0, 3).toUpperCase();
+}
+
 /** Skill rows: value, dramatic tier, and percentile vs this draft class. */
-export function PercentileBars({ rows, title = "Skill profile", note }) {
+export function PercentileBars({ rows, title = "Skill profile", note, headless = false }) {
   const list = (rows || []).filter(Boolean);
   if (!list.length) return null;
   return (
     <section className="pv-card">
-      <header className="pv-card__head">
-        <h4>{title}</h4>
-        {note ? <span>{note}</span> : <span>vs. this draft class</span>}
-      </header>
+      {headless ? null : (
+        <header className="pv-card__head">
+          <h4>{title}</h4>
+          {note ? <span>{note}</span> : <span>Tier = league scale · % = vs. this draft class</span>}
+        </header>
+      )}
       <div className="pv-bars">
         {list.map((row) => {
           const p = row.percentile;
-          const t = row.locked ? null : skillTier(row.value);
+          const t = row.locked ? null : (row.tier || skillTier(row.value));
+          const low = n(row.low);
+          const high = n(row.high);
+          const ranged = !row.locked && low != null && high != null && Math.round(low) !== Math.round(high);
+          const valueText = row.locked
+            ? "Scout to reveal"
+            : (row.text || (n(row.value) != null ? String(Math.round(n(row.value))) : "—"));
           return (
-            <div key={row.label} className={`pv-bar${row.locked ? " is-locked" : ""}${row.soft ? " is-soft" : ""}`}>
+            <div key={row.label} className={`pv-bar${row.locked ? " is-locked" : ""}${ranged || row.soft ? " is-soft" : ""}`}>
               <span className="pv-bar__label">{row.label}</span>
-              <div className="pv-bar__track" title={p != null ? `${p}th percentile in the class` : undefined}>
-                <i style={{ width: `${row.locked ? 0 : clamp(p ?? n(row.value) ?? 0, 2, 100)}%`, background: t?.color }} />
-                <b style={{ left: "50%" }} />
+              <div className="pv-bar__track" title={p != null ? percentileLabel(p) : undefined}>
+                {ranged ? (
+                  <i
+                    className="is-range"
+                    style={{
+                      left: `${ratingScale(Math.min(low, high))}%`,
+                      width: `${Math.max(2, ratingScale(Math.max(low, high)) - ratingScale(Math.min(low, high)))}%`,
+                      backgroundColor: t?.color,
+                    }}
+                  />
+                ) : (
+                  <i style={{ width: `${row.locked ? 0 : ratingScale(row.value)}%`, background: t?.color }} />
+                )}
+                {n(row.classAvg) != null ? <b style={{ left: `${ratingScale(row.classAvg)}%` }} /> : null}
               </div>
-              <strong className="pv-bar__value">{row.locked ? "?" : row.text ?? Math.round(n(row.value) ?? 0)}</strong>
-              {row.locked ? <span className="pv-tier pv-tier--unknown is-small">SCOUT IT</span> : <TierBadge tier={t} small />}
-              <span className="pv-bar__pct">{row.locked ? "" : percentileLabel(p)}</span>
+              <strong className="pv-bar__value">{valueText}</strong>
+              {row.locked || !t ? <span className="pv-bar__pct">—</span> : <TierBadge tier={t} small />}
+              <span className="pv-bar__pct">{row.locked ? "—" : percentileLabel(p)}</span>
             </div>
           );
         })}
@@ -385,12 +426,12 @@ export function PercentileBars({ rows, title = "Skill profile", note }) {
 }
 
 /** Radar of up to 8 skills (0–100). */
-export function SkillRadar({ axes, size = 210, color = "#13d8e7" }) {
+export function SkillRadar({ axes, size = 260, color = "#3ec6ff", headless = false }) {
   const list = (axes || []).filter((a) => a && n(a.value) != null).slice(0, 8);
   if (list.length < 3) return null;
   const cx = size / 2;
   const cy = size / 2;
-  const R = size / 2 - 30;
+  const R = size / 2 - 36;
   const pt = (i, v) => {
     const ang = (Math.PI * 2 * i) / list.length - Math.PI / 2;
     const rr = (clamp(v, 0, 100) / 100) * R;
@@ -400,10 +441,12 @@ export function SkillRadar({ axes, size = 210, color = "#13d8e7" }) {
   const avgPoly = list.map((a, i) => pt(i, n(a.classAvg) ?? 60).join(",")).join(" ");
   return (
     <section className="pv-card pv-radar">
-      <header className="pv-card__head">
-        <h4>Shape</h4>
-        <span><i className="pv-key" style={{ background: color }} /> him · <i className="pv-key is-avg" /> class avg</span>
-      </header>
+      {headless ? null : (
+        <header className="pv-card__head">
+          <h4>Shape</h4>
+          <span><i className="pv-key" style={{ background: color }} /> Him <i className="pv-key is-avg" /> Class avg</span>
+        </header>
+      )}
       <svg viewBox={`0 0 ${size} ${size}`} width="100%" style={{ maxWidth: size }} role="img" aria-label="Skill radar">
         {[0.25, 0.5, 0.75, 1].map((f) => (
           <polygon
@@ -415,12 +458,12 @@ export function SkillRadar({ axes, size = 210, color = "#13d8e7" }) {
         ))}
         {list.map((a, i) => {
           const [x, y] = pt(i, 100);
-          const [lx, ly] = pt(i, 122);
+          const [lx, ly] = pt(i, 118);
           return (
             <g key={a.label}>
               <line x1={cx} y1={cy} x2={x} y2={y} stroke="rgba(148,185,205,.12)" />
               <text x={lx} y={ly} textAnchor="middle" dominantBaseline="middle" className="pv-radar__label">
-                {a.short || a.label}
+                {radarShort(a)}
               </text>
             </g>
           );
@@ -439,7 +482,7 @@ export function SkillRadar({ axes, size = 210, color = "#13d8e7" }) {
 const OUTCOME_COLORS = ["#f6c453", "#52df94", "#13d8e7", "#8ab4ff", "#9fb3c4", "#ff7a5c", "#ff4d5e"];
 
 /** Career outcome donut. segments: [{key,label,pct}] */
-export function OutcomeDonut({ segments, title = "Career outcomes", size = 132 }) {
+export function OutcomeDonut({ segments, title = "Career outcomes", size = 132, headless = false }) {
   const list = (segments || []).filter((s) => s && n(s.pct) > 0);
   if (!list.length) return null;
   const total = list.reduce((a, s) => a + n(s.pct), 0) || 1;
@@ -450,9 +493,11 @@ export function OutcomeDonut({ segments, title = "Career outcomes", size = 132 }
   const top = list.reduce((a, b) => (n(b.pct) > n(a.pct) ? b : a), list[0]);
   return (
     <section className="pv-card pv-donut">
-      <header className="pv-card__head">
-        <h4>{title}</h4>
-      </header>
+      {headless ? null : (
+        <header className="pv-card__head">
+          <h4>{title}</h4>
+        </header>
+      )}
       <div className="pv-donut__body">
         <div className="pv-ring" style={{ width: size, height: size }}>
           <svg viewBox={`0 0 ${size} ${size}`} width={size} height={size} role="img" aria-label="Career outcome distribution">
@@ -525,19 +570,19 @@ export function ProspectVisualStyles() {
 const PV_CSS = `
 .pv-tier{
   display:inline-block;padding:0;background:none;border:0;border-radius:0;
-  font-family:var(--ed-head, inherit);font-size:10.5px;font-weight:800;letter-spacing:.14em;
+  font-family:var(--ed-head, inherit);font-size:11px;font-weight:800;letter-spacing:.08em;
   text-transform:uppercase;color:var(--tier);white-space:nowrap;line-height:1.1;
 }
-.pv-tier.is-small{font-size:9.5px;letter-spacing:.12em;}
+.pv-tier.is-small{font-size:11px;letter-spacing:.06em;}
 .pv-tier--world-class,.pv-tier--franchise,.pv-tier--generational,.pv-tier--transcendent{text-shadow:0 0 8px color-mix(in srgb, var(--tier) 45%, transparent);}
 .pv-class{display:grid;gap:10px;margin:10px 0;padding:10px 12px;border-top:1px solid rgba(128,150,168,.22);border-bottom:1px solid rgba(128,150,168,.22);}
 .pv-class__head{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 14px;}
 .pv-class__head strong{font-size:12px;letter-spacing:.08em;color:#e2edf6;}
 .pv-class__head span{font-size:11px;color:#8096a8;}
 .pv-class__line{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12px;color:#c9d6e2;font-variant-numeric:tabular-nums;}
-.pv-class__line b{color:#8096a8;font-weight:600;margin-right:3px;font-size:10.5px;letter-spacing:.08em;}
+.pv-class__line b{color:#8096a8;font-weight:600;margin-right:3px;font-size:11px;letter-spacing:.08em;}
 .pv-class__pcts{display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:6px 12px;}
-.pv-class__pct{display:grid;grid-template-columns:1fr auto;gap:2px 6px;font-size:10.5px;color:#8096a8;letter-spacing:.06em;text-transform:uppercase;}
+.pv-class__pct{display:grid;grid-template-columns:1fr auto;gap:2px 6px;font-size:11px;color:#8096a8;letter-spacing:.06em;text-transform:uppercase;}
 .pv-class__pct strong{color:#e2edf6;font-variant-numeric:tabular-nums;}
 .pv-class__pct i{grid-column:1 / -1;height:3px;background:rgba(128,150,168,.18);position:relative;}
 .pv-class__pct i::after{content:"";position:absolute;left:0;top:0;bottom:0;width:var(--w);background:var(--c);}
@@ -549,17 +594,17 @@ const PV_CSS = `
 .pv-ring svg{display:block;}
 .pv-ring__label{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;line-height:1;}
 .pv-ring__label strong{font-family: var(--dd-font-ui, Nunito, sans-serif);font-size:19px;font-weight:800;color:#e9f7fb;}
-.pv-ring__label small{margin-top:2px;font-size:8.5px;font-weight:900;letter-spacing:.1em;color:#8096a8;max-width:90%;}
+.pv-ring__label small{margin-top:2px;font-size:11px;font-weight:800;letter-spacing:.06em;color:#8096a8;max-width:90%;}
 
 .pv-gauge-pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;}
 .pv-gauge{border:1px solid rgba(156,218,236,.14);border-radius:8px;padding:10px 12px;background:rgba(13, 37, 85, .62);box-shadow:inset 0 1px 0 rgba(255,255,255,.04);min-width:0;}
 .pv-gauge__head{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;}
-.pv-gauge__head span{font-size:10.5px;font-weight:900;letter-spacing:.14em;text-transform:uppercase;color:#8096a8;}
+.pv-gauge__head span{font-size:11px;font-weight:900;letter-spacing:.14em;text-transform:uppercase;color:#8096a8;}
 .pv-gauge__head strong{font-family: var(--dd-font-ui, Nunito, sans-serif);font-size:30px;line-height:1;font-weight:800;letter-spacing:.02em;}
 .pv-gauge__body{display:flex;align-items:center;gap:12px;margin-top:6px;}
 .pv-gauge__track{position:relative;flex:1;height:12px;border-radius:6px;background:rgba(148,185,205,.10);margin:10px 0 14px;}
 .pv-gauge__tick{position:absolute;top:-3px;bottom:-3px;width:1px;background:rgba(148,185,205,.18);}
-.pv-gauge__tick b{position:absolute;top:18px;left:-8px;width:16px;text-align:center;font-size:9px;font-weight:700;color:#607789;font-style:normal;}
+.pv-gauge__tick b{position:absolute;top:18px;left:-10px;width:22px;text-align:center;font-size:11px;font-weight:700;color:#607789;font-style:normal;}
 .pv-gauge__fog{position:absolute;top:0;bottom:0;border-radius:6px;
   background:repeating-linear-gradient(135deg,rgba(246,196,83,.20) 0 4px,rgba(246,196,83,.06) 4px 8px);
   border:1px dashed rgba(246,196,83,.45);}
@@ -573,45 +618,47 @@ const PV_CSS = `
 .pv-card{border:1px solid rgba(156,218,236,.14);border-radius:8px;padding:10px 12px;background:rgba(13, 37, 85, .62);box-shadow:inset 0 1px 0 rgba(255,255,255,.04);min-width:0;}
 .pv-card__head{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:8px;}
 .pv-card__head h4{margin:0;font-family: var(--dd-font-ui, Nunito, sans-serif);font-size:15px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#e9f7fb;}
-.pv-card__head span{font-size:10.5px;color:#8096a8;letter-spacing:.06em;text-transform:uppercase;font-weight:800;display:inline-flex;align-items:center;gap:4px;}
+.pv-card__head span{font-size:11px;color:#8096a8;letter-spacing:.06em;text-transform:uppercase;font-weight:800;display:inline-flex;align-items:center;gap:4px;}
 .pv-key{display:inline-block;width:10px;height:3px;border-radius:2px;}
 .pv-key.is-avg{background:rgba(148,185,205,.6);}
 
-.pv-bars{display:flex;flex-direction:column;gap:6px;}
-.pv-bar{display:grid;grid-template-columns:minmax(76px,.9fr) minmax(80px,2fr) 30px 92px 66px;gap:8px;align-items:center;}
-.pv-bar__label{font-size:12px;font-weight:800;color:#c9dce6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.pv-bars{display:flex;flex-direction:column;gap:8px;}
+.pv-bar{display:grid;grid-template-columns:110px minmax(0,1fr) minmax(64px,max-content) max-content max-content;gap:8px;align-items:center;}
+.pv-bar__label{font-size:14px;font-weight:800;color:#c9dce6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .pv-bar__track{position:relative;height:9px;border-radius:5px;background:rgba(148,185,205,.10);overflow:visible;}
-.pv-bar__track i{position:absolute;left:0;top:0;bottom:0;border-radius:5px;transition:width .6s ease;box-shadow:0 0 8px rgba(46, 230, 214, .25);}
-.pv-bar__track b{position:absolute;top:-3px;bottom:-3px;width:1px;background:rgba(233,247,251,.35);}
-.pv-bar__value{font-family: var(--dd-font-ui, Nunito, sans-serif);font-size:18px;font-weight:800;text-align:right;color:#e9f7fb;}
-.pv-bar__pct{font-size:10px;font-weight:900;letter-spacing:.06em;color:#8096a8;text-align:right;white-space:nowrap;}
+.pv-bar__track i{position:absolute;left:0;top:0;bottom:0;border-radius:5px;transition:width .6s ease;}
+.pv-bar__track i.is-range{background-image:repeating-linear-gradient(135deg, rgba(255,255,255,.35) 0 3px, transparent 3px 6px);}
+.pv-bar__track b{position:absolute;top:-3px;bottom:-3px;width:2px;margin-left:-1px;background:rgba(233,247,251,.7);}
+.pv-bar__value{font-family: var(--dd-font-ui, Nunito, sans-serif);font-size:14px;font-weight:800;text-align:right;color:#e9f7fb;white-space:nowrap;font-variant-numeric:tabular-nums;min-width:64px;}
+.pv-bar__pct{font-size:11px;font-weight:800;letter-spacing:.04em;color:#9eb4c6;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums;}
 .pv-bar.is-soft .pv-bar__value{color:#f6c453;}
 .pv-bar.is-locked .pv-bar__label{color:#607789;}
 
-.pv-radar svg{display:block;margin:0 auto;}
-.pv-radar__label{font-size:9.5px;font-weight:900;letter-spacing:.06em;fill:#8096a8;text-transform:uppercase;}
+.pv-radar svg{display:block;margin:0 auto;min-height:220px;}
+.pv-radar__label{font-size:11px;font-weight:800;letter-spacing:.04em;fill:#c9dce6;text-transform:uppercase;}
 
-.pv-donut__body{display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
-.pv-legend{list-style:none;margin:0;padding:0;display:grid;gap:4px;flex:1;min-width:140px;}
-.pv-legend li{display:grid;grid-template-columns:10px 1fr auto;gap:6px;align-items:center;font-size:11.5px;color:#c9dce6;}
-.pv-legend i{width:10px;height:10px;border-radius:3px;}
-.pv-legend b{font-family: var(--dd-font-ui, Nunito, sans-serif);font-size:15px;}
+.pv-donut__body{display:flex;align-items:center;gap:16px;flex-wrap:wrap;justify-content:flex-start;}
+.pv-legend{list-style:none;margin:0;padding:0;display:grid;gap:6px;flex:0 1 auto;min-width:0;}
+.pv-legend li{display:flex;align-items:center;justify-content:flex-start;gap:8px;font-size:14px;color:#c9dce6;}
+.pv-legend i{width:10px;height:10px;border-radius:3px;flex:none;}
+.pv-legend span{white-space:nowrap;}
+.pv-legend b{font-family: var(--dd-font-ui, Nunito, sans-serif);font-size:14px;font-variant-numeric:tabular-nums;}
 
 .pv-dials{display:grid;grid-template-columns:repeat(auto-fit,minmax(92px,1fr));gap:8px;}
 .pv-dial{display:flex;flex-direction:column;align-items:center;gap:4px;border:1px solid rgba(156,218,236,.14);border-radius:8px;padding:8px 4px;background:rgba(13, 37, 85, .62);}
-.pv-dial > span{font-size:10px;font-weight:900;letter-spacing:.12em;text-transform:uppercase;color:#8096a8;text-align:center;}
+.pv-dial > span{font-size:11px;font-weight:900;letter-spacing:.12em;text-transform:uppercase;color:#8096a8;text-align:center;}
 
 .pv-visual-grid{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(200px,1fr);gap:10px;align-items:start;}
 .pv-stack{display:flex;flex-direction:column;gap:10px;min-width:0;}
 
 /* Board certainty chip */
-.pv-cert-chip{display:inline-flex;align-items:center;gap:5px;font-size:9.5px;font-weight:1000;letter-spacing:.1em;white-space:nowrap;}
+.pv-cert-chip{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:1000;letter-spacing:.1em;white-space:nowrap;}
 .pv-cert-chip i{display:inline-block;width:26px;height:5px;border-radius:3px;background:rgba(148,185,205,.15);position:relative;overflow:hidden;}
 .pv-cert-chip i::after{content:"";position:absolute;left:0;top:0;bottom:0;width:var(--w);background:var(--c);}
 
 @media (max-width: 760px){
   .pv-gauge-pair,.pv-visual-grid{grid-template-columns:1fr;}
-  .pv-bar{grid-template-columns:minmax(70px,1fr) minmax(60px,1.4fr) 28px 80px;}
+  .pv-bar{grid-template-columns:92px minmax(0,1fr) max-content;}
   .pv-bar__pct{display:none;}
 }
 @media (prefers-reduced-motion: reduce){

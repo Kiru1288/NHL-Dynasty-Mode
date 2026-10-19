@@ -12060,7 +12060,11 @@ def _gm_apply_meeting_outcome(session: Any, ctx: Dict[str, Any], interaction_typ
     rel = entity.setdefault("gm_relationship", {})
     for key, delta in (outcome.get("relationship") or {}).items():
         before = float(rel.get(key, 55))
-        after = _u_clip(before + float(delta))
+        delta = float(delta)
+        if delta > 0 and str(key) in ("negotiation_goodwill", "loyalty", "trust") and before > 55.0:
+            # Words wear thin: the warmer he already is, the less another meeting adds.
+            delta *= max(0.15, 1.0 - (before - 55.0) / 40.0)
+        after = _u_clip(before + delta)
         rel[key] = after
         mapped = _MEETING_RELATIONSHIP_STATE_MAP.get(str(key))
         already = False

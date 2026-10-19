@@ -21,6 +21,8 @@ import logging as _logging_swallow
 _swallowed_log = _logging_swallow.getLogger(__name__)
 
 DRAFT_OVR_REVEAL_THRESHOLD = 72.0
+# Below this a revealed OVR is a 2-point band; only a near-complete file shows the exact number.
+DRAFT_OVR_EXACT_THRESHOLD = 92.0
 # Auto-managed (staff) files stop here: OVR revealed, ceiling read solid, not a full file.
 AUTO_FILE_CAP = 86.0
 PUBLIC_INTEL_CLEAR_THROUGH_RANK = 45
@@ -46,7 +48,7 @@ MAX_ASSIGNED_PASSIVE_TARGETS = 64
 ASSIGNMENT_FREE_SLOTS = 12
 ASSIGNMENT_CAP_SLOTS_DEFAULT = 5
 SPOTLIGHT_MAX_TARGETS = 5
-SPOTLIGHT_PASSIVE_DAILY_BONUS = 10.0
+SPOTLIGHT_PASSIVE_DAILY_BONUS = 5.0
 SPOTLIGHT_MIN_RANK = 100
 HIDDEN_CEILING_POOL_SIZE = 20
 CEILING_FOG_DECAY_MONTH = 10
@@ -1086,7 +1088,8 @@ def _normalize_prospect(
         ),
         "file_status": (
             "Full file" if scouted >= 100.0
-            else "OVR revealed" if scouted >= float(DRAFT_OVR_REVEAL_THRESHOLD)
+            else "OVR confirmed" if scouted >= float(DRAFT_OVR_EXACT_THRESHOLD)
+            else "Strong OVR read" if scouted >= float(DRAFT_OVR_REVEAL_THRESHOLD)
             else "Scout assigned" if str(overlay.get("assigned_scout") or "").strip()
             else "Thin file"
         ),
@@ -1341,7 +1344,7 @@ def get_scouting_state(session: FranchiseSession) -> Dict[str, Any]:
             "files_full": full,
             "steps": [
                 "Assign a scout to a prospect — his file grows every day.",
-                f"At {int(DRAFT_OVR_REVEAL_THRESHOLD)}% you see the real OVR; at 100% the full file.",
+                f"At {int(DRAFT_OVR_REVEAL_THRESHOLD)}% you get a tight OVR read; at {int(DRAFT_OVR_EXACT_THRESHOLD)}% the exact number; at 100% the full file.",
                 "Deep dives (interview, medical, film) add a one-time boost and extra intel.",
             ],
         },

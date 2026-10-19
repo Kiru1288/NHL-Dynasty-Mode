@@ -174,6 +174,46 @@ def _contract_expiry_key(player: Any) -> Any:
     return _get(c, "expiry_year", None) if c is not None else None
 
 
+def _contract_type_token(player: Any) -> str:
+    c = _get(player, "contract", None)
+    raw = (
+        _get(c, "contract_type", None)
+        or _get(c, "type", None)
+        or _get(player, "contract_type", None)
+        or ""
+    )
+    return str(raw or "").strip().upper().replace("-", "_").replace(" ", "_")
+
+
+def _minors_deal_cap_exempt(player: Any) -> bool:
+    """AHL/ECHL/PTO deals, and league-minimum two-ways sitting in the minors, do not
+    hit the NHL cap. A minimum deal on the 23-man roster still counts.
+    """
+    token = _contract_type_token(player)
+    if token in ("AHL", "ECHL", "AHL_ECHL", "PTO", "ATO", "TRYOUT", "AHL_ONLY", "ECHL_ONLY", "MINORS", "MINOR"):
+        return True
+    c = _get(player, "contract", None)
+    in_minors = bool(
+        _get(player, "in_minors", False)
+        or _get(player, "is_buried", False)
+        or _get(player, "buried", False)
+    )
+    if not in_minors:
+        return False
+    if _get(c, "is_nhl_spc", None) is False or _get(c, "nhl_spc", None) is False:
+        return True
+    two_way = bool(_get(c, "two_way", False) or _get(player, "two_way", False))
+    source = str(_get(c, "source", "") or _get(player, "contract_source", "") or "")
+    if not two_way and source not in ("affiliate_nhl_spc", "ahl_spc", "echl_spc", "ahl_echl_two_way"):
+        return False
+    # A buried two-way at or under the bury threshold (league min + $375k) has a
+    # residual of zero. Charging the raw AAV is what put minimum deals on the cap.
+    full = player_full_cap_hit_millions(player)
+    if source in ("affiliate_nhl_spc", "ahl_spc", "echl_spc", "ahl_echl_two_way"):
+        return True
+    return full <= nhl_bury_threshold_millions(None) + 0.01
+
+
 def player_cap_hit_millions(player: Any) -> float:
     """Cap hit this club carries for the player — net of salary another club retained.
 
@@ -181,6 +221,8 @@ def player_cap_hit_millions(player: Any) -> float:
     carried the full AAV, so every retained deal double-counted and could push the
     acquirer over the cap.
     """
+    if _minors_deal_cap_exempt(player):
+        return 0.0
     full = player_full_cap_hit_millions(player)
     try:
         pct = float(_get(player, "retained_share_pct", 0.0) or 0.0)
@@ -197,6 +239,10 @@ def player_full_cap_hit_millions(player: Any) -> float:
     """This year's cap charge. AAV already includes a signing bonus, so a stored
     cap hit that sits well above AAV is the bonus counted a second time.
     """
+    if _contract_type_token(player) in (
+        "AHL", "ECHL", "AHL_ECHL", "PTO", "ATO", "TRYOUT", "AHL_ONLY", "ECHL_ONLY", "MINORS", "MINOR",
+    ):
+        return 0.0
     cap = 0.0
     aav = 0.0
     for key in ("cap_hit_m", "contract_aav_m"):
@@ -1523,7 +1569,19 @@ def can_trade_cap_fit(
         ok = True
         reason = "ok_reduces_cap"
     if not ok:
-        if projected_total_cap <= effective_limit + 0.02 and float(snap.get("ltirPool", 0.0)) > 0.001:
+        # LTIR relief only backs a trade while the injured player is genuinely long-term
+        # (CBA: 10 games / 24 days). A player about to return can't fund new salary.
+        long_term = False
+        try:
+            _c, _r, _rows = team_ltir_books(team)
+            long_term = not _rows or any(int(r.get("games_remaining") or 0) >= 10 for r in _rows)
+        except Exception:
+            long_term = True
+        if (
+            long_term
+            and projected_total_cap <= effective_limit + 0.02
+            and float(snap.get("ltirPool", 0.0)) > 0.001
+        ):
             ok = True
             ltir_relief = True
             reason = "ok_with_ltir"

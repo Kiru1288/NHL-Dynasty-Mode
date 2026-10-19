@@ -24,8 +24,8 @@ def set_fatigue(player: Any, v: float) -> None:
 def performance_factor(player: Any) -> float:
     """Slight drag when gassed."""
     f = get_fatigue(player)
-    # 0 fatigue -> ~1.0 ; 100 -> ~0.94
-    return max(0.94, 1.0 - 0.00055 * f)
+    # 0 fatigue -> ~1.0 ; 100 -> ~0.91 (the drop steepens once he's really gassed)
+    return max(0.91, 1.0 - 0.00055 * f - 0.0008 * max(0.0, f - 55.0))
 
 
 def injury_risk_from_fatigue(player: Any) -> float:
@@ -80,10 +80,27 @@ def team_avg_fatigue(team: Any) -> float:
     return sum(get_fatigue(p) for p in roster) / len(roster)
 
 
+def goalie_workload_drag(team: Any) -> float:
+    """Drag from riding the current starter: long start streaks and a heavy season load."""
+    st = getattr(team, "_gm_goalie_start_state", None)
+    if not isinstance(st, dict):
+        return 0.0
+    recs = [r for k, r in st.items() if k != "_team" and isinstance(r, dict)]
+    if not recs:
+        return 0.0
+    cur = max(recs, key=lambda r: int(r.get("last_day", -1) or -1))
+    consec = int(cur.get("consecutive", 0) or 0)
+    gp = int(cur.get("gp", 0) or 0)
+    b2b = int(cur.get("b2b_starts", 0) or 0)
+    drag = max(0, consec - 5) * 0.0035 + max(0, gp - 55) * 0.0006 + max(0, b2b - 6) * 0.0008
+    return min(0.035, drag)
+
+
 def team_fatigue_strength_factor(team: Any) -> float:
-    """Aggregate team drag from fatigue (~0.97–1.0)."""
+    """Aggregate team drag from fatigue and goalie workload (~0.92–1.0)."""
     avg = team_avg_fatigue(team)
-    return max(0.965, 1.0 - 0.00035 * avg)
+    skaters = max(0.95, 1.0 - 0.00035 * avg - 0.0004 * max(0.0, avg - 45.0))
+    return skaters * (1.0 - goalie_workload_drag(team))
 
 
 def _is_sidelined(player: Any) -> bool:

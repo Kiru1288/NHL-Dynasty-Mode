@@ -1780,16 +1780,16 @@ def calculate_season_growth_budget(
     mod *= 1.0 + 0.18 * momentum
     if age <= 23 and runway_pts >= 8.0 and gp >= 40:
         # High-ceiling kids still gain when buried (3rd pair) — production alone was freezing them.
-        mod *= 1.0 + min(0.45, runway_pts * 0.03)
+        mod *= 1.0 + min(0.18, runway_pts * 0.012)
 
     if age < 20:
-        mod *= 1.38 if not _is_goalie(player) else 1.22
+        mod *= 1.04 if not _is_goalie(player) else 1.03
     elif age < 22:
-        mod *= 1.26 if not _is_goalie(player) else 1.18
+        mod *= 1.03 if not _is_goalie(player) else 1.02
     elif age < 24:
-        mod *= 1.14
+        mod *= 1.02
     elif age <= 26:
-        mod *= 1.04
+        mod *= 1.0
     elif age <= 28:
         mod *= 0.88 if not _is_goalie(player) else 0.96
     elif age <= 31:
@@ -1797,23 +1797,22 @@ def calculate_season_growth_budget(
     else:
         mod *= 0.34
 
-    # Young NHL players should *explode*: real 19-22 year-olds routinely jump 5-10 OVR
-    # in a season once they're playing NHL minutes.
+    # A good year for a teenager is a point or two, not a new tier.
     young_boost = 1.0
     if age <= 23 and gp >= 15:
-        young_boost = 2.0 if age <= 21 else 1.7
+        young_boost = 1.06 if age <= 21 else 1.03
     elif age <= 23:
-        young_boost = 1.35
+        young_boost = 1.02
     mod *= young_boost
 
     if age <= 20 and gap_exp >= 0.10:
-        mod *= 1.16
-    elif age <= 23 and gap_exp >= 0.07:
-        mod *= 1.10
-    elif age <= 24 and gap_exp >= 0.06:
         mod *= 1.06
-    elif age <= 26 and gap_exp >= 0.08:
+    elif age <= 23 and gap_exp >= 0.07:
         mod *= 1.04
+    elif age <= 24 and gap_exp >= 0.06:
+        mod *= 1.02
+    elif age <= 26 and gap_exp >= 0.08:
+        mod *= 1.02
 
     role = str(
         getattr(context, "role", None)
@@ -1822,9 +1821,9 @@ def calculate_season_growth_budget(
         or ""
     ).lower()
     if any(k in role for k in ("elite", "top_line", "top_4", "starter", "first")):
-        mod *= 1.14
+        mod *= 1.05
     elif any(k in role for k in ("second", "line2", "top_6")):
-        mod *= 1.08
+        mod *= 1.03
     elif any(k in role for k in ("fourth", "depth", "scratch", "press")):
         mod *= 0.88
 
@@ -1839,7 +1838,7 @@ def calculate_season_growth_budget(
     overperf = _clamp((production - expected_prod) * 1.35, -0.25, 0.45)
     # Production vs. what his rating usually produces is the main lever after age:
     # a big year can ~1.5x the budget, a bad one roughly halves it.
-    mod *= _clamp(0.85 + overperf * 1.4 + (production - 0.5) * 0.15, 0.55, 1.55)
+    mod *= _clamp(0.85 + overperf * 1.1 + (production - 0.5) * 0.10, 0.55, 1.28)
 
     injury_days = _safe_attr_int(player, ["injury_days", "injured_days", "_injury_days"], 0)
     if injury_days >= 40:
@@ -1848,69 +1847,56 @@ def calculate_season_growth_budget(
         mod *= 0.78
 
     phase = str(dev_phase or "NORMAL").upper()
-    noise = 1.0 + rng.uniform(-0.10, 0.14) * vol
-    budget = approach * mod * noise
-
+    noise = 1.0 + rng.uniform(-0.08, 0.10) * vol
+    # Potential is the destination. Performance, morale, and fit decide how much
+    # of the remaining gap closes this season. There is no age ceiling.
+    fit_raw = getattr(player, "development_fit_score", None)
+    if fit_raw is None:
+        try:
+            fit_raw = calculate_development_fit_score(player, context)
+        except Exception:
+            fit_raw = 55.0
+    # Each factor is 1.0 in a normal year. A good one speeds the close; a bad one slows it.
+    fit_f = _clamp(1.0 + (float(fit_raw) - 55.0) / 100.0, 0.55, 1.35)
+    morale_f = _clamp(0.55 + float(morale) * 0.70, 0.55, 1.30)
+    perf_f = _clamp(1.0 + float(overperf) * 1.10, 0.55, 1.45)
+    coeff = perf_f * morale_f * fit_f * _clamp(ice_mod, 0.70, 1.20) * noise
+    if age <= 21:
+        close = 0.16
+    elif age <= 25:
+        close = 0.12
+    elif age <= 29:
+        close = 0.08
+    else:
+        close = 0.04
     if phase == "STALL":
-        budget *= rng.uniform(0.28, 0.52) if gap_exp >= 0.06 else rng.uniform(0.10, 0.28)
+        close *= 0.45
     elif phase == "SPIKE":
-        budget *= rng.uniform(1.55, 2.20)
-        if gap_max > gap_exp and rng.random() < float(profile.get("breakout_chance", 0.08)):
-            budget = min(0.11, budget + min(0.035, (gap_max - gap_exp) * 0.28))
+        close *= 1.35
     elif phase == "REGRESSION":
-        budget = -abs(max(0.008, min(0.035, approach * rng.uniform(0.55, 1.15))))
+        close = 0.0
+
+    over_pot = current - expected
+    if over_pot > 0.008:
+        # Overall ran past potential. It comes back a couple of points a year.
+        # A good year slows that; a bad year does not dump a whole tier at once.
+        hold = _clamp(coeff, 0.75, 1.40)
+        step = 0.018 if coeff >= 0.90 else 0.026
+        budget = -min(over_pot * 0.22, step) * (1.0 / hold)
+    elif phase == "REGRESSION":
+        budget = -min(0.030, 0.008 + gap_exp * 0.15)
+    elif gap_exp <= 0.008:
+        budget = -0.006 * max(0.0, 0.85 - coeff)
     else:
-        budget *= 0.95 + 0.12 * min(1.0, env_g)
+        budget = gap_exp * close * coeff
+        # One season closes a slice of the gap. The ceiling itself is potential, not an age wall.
+        step_cap = 0.042 if age <= 25 else 0.024
+        budget = min(budget, gap_exp * (0.45 if phase == "SPIKE" else 0.35), step_cap)
 
-    surplus_pts = _safe_attr_float(player, ["_dev_season_points_surplus"], None)
-    if surplus_pts is None and gp > 0:
-        actual_pts = _safe_attr_int(
-            player, ["_dev_season_points", "season_points", "pts"], 0
-        )
-        if actual_pts > 0:
-            surplus_pts = season_points_surplus_vs_expectation(player, actual_pts, gp)
-
-    if budget > 0:
-        # Allow strong / breakout years to hit design targets (+5–10 display).
-        hard_cap = 0.110 if phase == "SPIKE" else 0.085
-        gap_cap = max(0.028, gap_exp * 0.78 + 0.022) if gap_exp > 0 else 0.028
-        if age <= 23:
-            # Ceilings rise with growth (lift_potential_with_growth), so let kids run.
-            hard_cap = 0.160 if phase == "SPIKE" else 0.125
-            gap_cap = max(0.045, gap_exp * 1.05 + 0.035)
-        if surplus_pts is not None and gp >= 40:
-            gp_scale = _clamp(float(gp) / 82.0, 0.45, 1.0)
-            threshold = _SEASON_SURPLUS_POINTS_BUFFER * gp_scale
-            if float(surplus_pts) >= threshold:
-                excess = float(surplus_pts) - threshold
-                surge = _clamp(0.024 + excess * 0.00145, 0.0, 0.078)
-                if age > 33:
-                    surge *= 0.68
-                elif age > 30:
-                    surge *= 0.82
-                elif age > 27:
-                    surge *= 0.92
-                budget = max(budget, surge)
-                gap_cap = max(gap_cap, min(0.072, gap_cap + surge * 0.72))
-        elif production >= 0.88 and gp >= 50:
-            surge = _clamp(0.014 + max(0.0, overperf) * 0.14, 0.0, 0.038)
-            budget = max(budget, surge)
-        # Near expected but below maximum: still allow breakout polish into max.
-        if gap_exp <= 0.02 and gap_max >= 0.03:
-            gap_cap = max(gap_cap, min(0.055, gap_max * 0.85 + 0.015))
-        budget = min(budget, hard_cap, gap_cap)
-
-        # Elite runway floors — +2 should not be the default for franchise kids.
-        if age <= 20 and gap_exp >= 0.08 and phase in ("NORMAL", "SPIKE"):
-            budget = max(budget, 0.062 if phase == "NORMAL" else 0.090)
-        elif age <= 23 and gap_exp >= 0.05 and phase in ("NORMAL", "SPIKE"):
-            budget = max(budget, 0.048 if phase == "NORMAL" else 0.072)
-        elif gap_exp >= 0.04 and phase in ("NORMAL", "SPIKE"):
-            budget = max(budget, 0.030 if phase == "NORMAL" else 0.045)
-        elif gap_exp >= 0.06 and phase == "STALL":
-            budget = max(budget, 0.016)
-    else:
-        budget = max(budget, -0.038)
+    if injury_days >= 40 and budget > 0:
+        budget *= 0.62
+    elif injury_days >= 20 and budget > 0:
+        budget *= 0.78
 
     decline = str(profile.get("decline_state") or "none")
     if decline != "none" and budget > 0:
@@ -2152,17 +2138,17 @@ def reevaluate_ceilings_from_performance(player: Any, rng: Any) -> Dict[str, Any
     active_delta = 0.0
     max_delta = 0.0
     if overperf >= 0.22 and new_mom >= 0.45 and age <= 24:
-        proj_delta = rng.uniform(0.025, 0.045)  # ~+2.5–4.5 pot
-        active_delta = proj_delta + rng.uniform(0.005, 0.015)
-        max_delta = rng.uniform(0.005, 0.020)
+        proj_delta = rng.uniform(0.008, 0.016)  # ~+0.8–1.6 pot
+        active_delta = proj_delta + rng.uniform(0.0, 0.006)
+        max_delta = rng.uniform(0.0, 0.008)
         label = "breakout"
     elif overperf >= 0.14 or new_mom >= 0.55:
-        proj_delta = rng.uniform(0.015, 0.030)
+        proj_delta = rng.uniform(0.005, 0.012)
         active_delta = proj_delta
-        max_delta = rng.uniform(0.0, 0.012) if new_mom >= 0.5 else 0.0
+        max_delta = rng.uniform(0.0, 0.005) if new_mom >= 0.5 else 0.0
         label = "strong"
     elif overperf >= 0.08:
-        proj_delta = rng.uniform(0.008, 0.018)
+        proj_delta = rng.uniform(0.003, 0.008)
         active_delta = proj_delta * 0.85
         max_delta = 0.0
         label = "solid"
@@ -2175,8 +2161,8 @@ def reevaluate_ceilings_from_performance(player: Any, rng: Any) -> Dict[str, Any
         max_delta *= 0.50
 
     # Low-pot stars: allow climbing toward maximum even when near expected.
-    new_expected = clamp01(expected + proj_delta)
-    new_active = clamp01(max(new_expected, expected + active_delta))
+    new_expected = clamp01(min(0.99, expected + proj_delta))
+    new_active = clamp01(min(0.99, max(new_expected, expected + active_delta)))
     new_max = clamp01(min(0.99, maximum + max_delta))
     new_max = max(new_max, new_active)
 
@@ -2305,12 +2291,13 @@ def apply_player_development(player: Any, rng: Any) -> None:
         # the year-end pass sees gap ≈ 0 and throws the surplus away.
         cur = float(profile.get("current_ovr", ovr_before) or ovr_before)
         exp = float(profile.get("expected_ceiling", potential) or potential)
-        lift = 0.04 if surplus_now < 25.0 else (0.06 if surplus_now < 40.0 else 0.08)
+        lift = 0.012 if surplus_now < 25.0 else (0.018 if surplus_now < 40.0 else 0.024)
         if age >= 33:
             lift *= 0.55
         elif age >= 30:
             lift *= 0.75
-        new_exp = min(0.99, max(exp, cur + lift))
+        # A big year nudges the ceiling he already had. It does not adopt his overall as the new potential.
+        new_exp = min(0.99, exp + lift)
         profile["expected_ceiling"] = new_exp
         profile["maximum_ceiling"] = min(
             0.99,
@@ -2495,6 +2482,10 @@ def apply_player_development(player: Any, rng: Any) -> None:
         # In-season pulses were calculated against the old ceiling. A year that
         # beat his projection still has to land on the card.
         floor = 0.030 if surplus_now < 25.0 else (0.045 if surplus_now < 40.0 else 0.060)
+        if age <= 22:
+            floor = min(floor, 0.018)
+        elif age <= 25:
+            floor = min(floor, 0.028)
         if age >= 33:
             floor *= 0.60
         elif age >= 30:
@@ -2715,7 +2706,7 @@ def apply_in_season_development_pulse(
         # The old 0.002 floor swallowed almost every pulse, so NHL players barely grew
         # during the season at all.
         if age <= 24 and gap >= 0.05 and phase != "REGRESSION":
-            pulse_budget = 0.0035 if phase != "SPIKE" else 0.0055
+            pulse_budget = 0.0016 if phase != "SPIKE" else 0.0024
         else:
             return 0.0
 
@@ -2778,8 +2769,8 @@ def apply_in_season_development_pulse(
 # small pulses. The remainder is left for the offseason pass.
 _PROSPECT_IN_SEASON_SHARE = 0.85
 _PROSPECT_PULSES_PER_SEASON = 22
-_PROSPECT_POT_SEASON_CAP = 4.0  # display points
-_PROSPECT_POT_SEASON_CAP_TRANSCENDENT = 6.0
+_PROSPECT_POT_SEASON_CAP = 2.0  # display points
+_PROSPECT_POT_SEASON_CAP_TRANSCENDENT = 3.0
 _PROSPECT_POT_REVIEW_EVERY = 4  # pulses (~monthly at one pulse per 8 calendar days)
 _PROSPECT_POT_MIN_GP = 12
 
@@ -2805,6 +2796,15 @@ def _prospect_season_plan(player: Any, rng: Any, season_id: Any) -> Dict[str, An
     if phase == "REGRESSION":
         phase = "STALL"
     annual = float(calculate_season_growth_budget(player, None, profile, rng=rng, dev_phase=phase))
+    # One season in the minors is a few overalls. The old budget let a 19-year-old
+    # affiliate climb into the mid-80s.
+    if age <= 19:
+        year_cap = 0.028 if phase != "SPIKE" else 0.036
+    elif age <= 21:
+        year_cap = 0.024 if phase != "SPIKE" else 0.032
+    else:
+        year_cap = 0.020 if phase != "SPIKE" else 0.026
+    annual = min(annual, year_cap) if annual > 0 else max(annual, -0.018)
     plan = {
         "season": season_id,
         "phase": phase,
@@ -2862,6 +2862,7 @@ def apply_prospect_in_season_pulse(player: Any, rng: Any, season_id: Any) -> flo
     cum_target = total * min(1.0, progress * rng.uniform(0.9, 1.1))
     achieved = ovr_before_01 - float(plan["start_ovr01"])
     step = cum_target - achieved
+    step = max(-0.008, min(0.008, float(step)))
     if (total > 0 and step <= 0.0004) or (total < 0 and step >= -0.0004) or total == 0:
         return 0.0
     archetype = str(getattr(player, "_dev_archetype", "") or "") or None
@@ -2873,7 +2874,54 @@ def apply_prospect_in_season_pulse(player: Any, rng: Any, season_id: Any) -> flo
         phase=str(plan["phase"]),
     )
     if not deltas:
-        return 0.0
+        try:
+            from services.real_nhl_roster_importer import align_attribute_ovr_to_target
+
+            target = min(0.99, max(0.40, ovr_before_01 + float(step)))
+            align_attribute_ovr_to_target(player, target, rounds=12)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+        persist_recomputed_ovr(player)
+        ovr_mid = float(player_current_ovr_01(player))
+        gained = ovr_mid - ovr_before_01
+        if abs(gained) < 0.0004:
+            # Bank the planned step. A full overall is applied only once it is earned,
+            # so a prospect cannot gain a point on every pulse.
+            bank = float(plan.get("unspent_display") or 0.0) + float(step) * 99.0
+            if abs(bank) < 1.0:
+                plan["unspent_display"] = bank
+                return 0.0
+            bump = 1 if bank > 0 else -1
+            plan["unspent_display"] = bank - bump
+            cur = int(round(ovr_before_01 * 99.0))
+            nxt = max(40, min(99, cur + bump))
+            if nxt == cur:
+                return 0.0
+            try:
+                setattr(player, "overall", float(nxt))
+                existing = getattr(player, "ovr", None)
+                if existing is not None and not callable(existing):
+                    setattr(player, "ovr", float(nxt) / 99.0)
+            except Exception:
+                return 0.0
+            ovr_mid = float(nxt) / 99.0
+        elif abs(gained) > abs(float(step)) + 0.004:
+            ovr_mid = ovr_before_01 + float(step)
+        ovr_after_01 = ovr_mid
+        delta_01 = ovr_after_01 - ovr_before_01
+        plan["spent"] = ovr_after_01 - float(plan["start_ovr01"])
+        try:
+            from app.sim_engine.progression.potential import lift_potential_with_growth
+
+            lift_potential_with_growth(player, ovr_before_01, ovr_after_01)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+        try:
+            accum = float(getattr(player, "_in_season_ovr_delta_accum", 0.0) or 0.0)
+            setattr(player, "_in_season_ovr_delta_accum", accum + delta_01 * 99.0)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+        return float(delta_01 * 99.0)
     apply_attribute_deltas(player, deltas)
     persist_recomputed_ovr(player)
     # Spreading a small budget over ~100 attributes dilutes OVR; correct toward the intended step.
@@ -2964,11 +3012,11 @@ def apply_prospect_potential_review(player: Any, rng: Any, season_id: Any) -> Di
     sample = min(1.0, gp / 30.0)
     display_delta = 0.0
     if evidence >= 0.6:
-        display_delta = rng.uniform(1.0, 2.5)
+        display_delta = rng.uniform(0.4, 1.2)
     elif evidence >= 0.35:
-        display_delta = rng.uniform(0.5, 1.5)
+        display_delta = rng.uniform(0.25, 0.7)
     elif evidence >= 0.2 and rng.random() < 0.5:
-        display_delta = rng.uniform(0.3, 0.8)
+        display_delta = rng.uniform(0.15, 0.4)
     # Symmetric with the upside: prospects who keep under-producing lose ceiling
     # (busts). Previously only extreme evidence could move potential down at all.
     elif evidence <= -0.6:

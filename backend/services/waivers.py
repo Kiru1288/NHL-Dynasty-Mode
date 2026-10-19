@@ -288,6 +288,16 @@ def _resolve_entry(session: Any, entry: Dict[str, Any], cache: Optional[Dict[str
         [t for tid, t in teams.items() if tid != str(entry.get("original_team_id"))],
         key=lambda t: _waiver_priority_key(session, t),
     )
+    # Players you put on the wire draw extra claims when the league has it in for you:
+    # nobody wants to make your waiver tricks easy.
+    claim_bar = 0.42
+    if str(entry.get("original_team_id") or "") == user_tid:
+        try:
+            from app.sim_engine.trades.trade_market_adaptive import league_heat
+
+            claim_bar -= 0.10 * float(league_heat(league, day=int(getattr(session, "calendar_cursor", 0) or 0)))
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     winner = None
     for team in order:
         tid = _tid(team)
@@ -305,7 +315,7 @@ def _resolve_entry(session: Any, entry: Dict[str, Any], cache: Optional[Dict[str
                     cache.setdefault(tid, {})["needs"] = ctx
             if int(ctx.get("slots_remaining") or 0) <= 0 or not _claim_room(team, league, entry, cache):
                 continue
-            if score_waiver_claim_fit(team, player, ctx, league) >= 0.42:
+            if score_waiver_claim_fit(team, player, ctx, league) >= claim_bar:
                 winner = team
                 break
         except Exception:

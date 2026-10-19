@@ -3,6 +3,7 @@
  */
 
 import { hashSeed, isOverager } from "./draftWarRoom";
+import { skillTier } from "../components/dossier/ProspectVisuals";
 
 export const GOALIE_ARCHETYPES = [
   { key: "long_levered_wall", label: "LONG-LEVERED WALL", blurb: "Wins with reach and depth. The puck still finds seams he hasn't learned to close." },
@@ -423,17 +424,11 @@ export function resolveCreaseZoneGrades(player, profile, tools) {
   };
 }
 
+/** Same vocabulary as SKILL_TIERS. "Unknown" is not a rating. */
 export function zoneGradeWord(n) {
-  if (n == null || !Number.isFinite(n)) return "Unknown";
-  if (n >= 92) return "World-Class";
-  if (n >= 86) return "Elite";
-  if (n >= 80) return "Great";
-  if (n >= 74) return "Very Good";
-  if (n >= 66) return "Good";
-  if (n >= 58) return "Average";
-  if (n >= 50) return "Weak";
-  if (n >= 42) return "Bad";
-  return "Awful";
+  const tier = skillTier(n);
+  if (!tier || tier.key === "unknown") return "—";
+  return tier.label;
 }
 
 /** Tier key + fill intensity for zone map tiles — drives color differentiation. */
@@ -541,39 +536,6 @@ export function developmentTrajectoryNarrative(player, profile, tools, skillNote
   }
   return "Balanced development curve: tools are tracking, but pro translation still hinges on pace and consistency shift-to-shift.";
 }
-
-export function goalieStrengthCopy(player, tools) {
-  const name = `${player?.firstName || ""} ${player?.lastName || ""}`.trim() || "He";
-  if (player?.completion < 40) return [`${name} is still a first-look goalie file — strengths are rumours until we get another viewing.`];
-  const byLabel = Object.fromEntries((tools || []).map((t) => [t.label, t]));
-  const lines = [];
-  if (byLabel.Positioning?.plus) lines.push("Squares early and kills angle before the shot — structure is already pro-caliber for his age.");
-  if (byLabel.Reflexes?.plus) lines.push("Second-effort saves bail him out when depth breaks down.");
-  if (byLabel.Glove?.plus) lines.push("Glove hand is a weapon on rush chances and lateral releases.");
-  if (byLabel.Rebound?.plus) lines.push("Deadens pucks on first contact — forwards aren't feasting on second chances.");
-  if (byLabel["Puck-handling"]?.plus) lines.push("Comfortable stopping pucks behind the net and starting breakouts.");
-  if (!lines.length) {
-    lines.push("Projectable frame with enough compete to stay in the conversation.");
-    lines.push("Shows flashes when the crease is organized — consistency is the next layer.");
-  }
-  return lines.slice(0, 4);
-}
-
-export function goalieWeaknessCopy(player, tools) {
-  const name = `${player?.firstName || ""} ${player?.lastName || ""}`.trim() || "He";
-  if (player?.completion < 40) return [`More looks needed before we tattoo a weakness onto ${name}.`];
-  const byLabel = Object.fromEntries((tools || []).map((t) => [t.label, t]));
-  const lines = [];
-  if (byLabel.Rebound?.weak) lines.push("Rebounds leak into dangerous ice — recovery paths aren't automatic yet.");
-  if (byLabel.Positioning?.weak) lines.push("Depth and angle management still chase the play instead of leading it.");
-  if (byLabel["Puck-handling"]?.weak) lines.push("Forecheck pressure turns puck-handling into a turnover risk.");
-  if (byLabel.Reflexes?.weak) lines.push("Relies on size over quick hands — east-west plays stress him.");
-  if (byLabel.Blocker?.weak) lines.push("Blocker side can be exposed on catch-and-release looks.");
-  if (isOverager(player)) lines.push("Extra junior year inflates the stat line — same SV% at 18 would move the needle.");
-  if (!lines.length) lines.push("Needs pro pace reps before the projection is safe.");
-  return lines.slice(0, 4);
-}
-
 
 export function buildScoutingDeskEntries(player, profile, { gp = 0, analytics = null } = {}) {
   const backend = profile?.scouting_history || profile?.scoutingHistory || profile?.scout_reports;

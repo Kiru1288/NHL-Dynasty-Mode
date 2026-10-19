@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 # Bump when the talent curve / depth-star spread changes so Trade Hub caches rebuild
 # without requiring a new franchise save.
-TRADE_VALUE_FORMULA_VERSION = 17  # v17: cheaper depth roles; v15: exponential star curve, age/goalie/position, term surplus, consolidation
+TRADE_VALUE_FORMULA_VERSION = 18  # v18: everyday/tweener discount, 1st/2nd pick premium
 # Soft ceiling used only for UI-relative clamps / legacy helpers — player totals are uncapped.
 TRADE_VALUE_SOFT_CEIL = 450.0
 LEAGUE_MINIMUM_AAV_M = 0.775
@@ -57,12 +57,12 @@ PROSPECT_PREMIUM_MIN_POT = 74.0
 # v16: prospects are the league's scarcest currency — floors roughly 1.5x v15 and
 # extended down to mid-ceiling (74+) kids so a pipeline is never "worthless".
 _PROSPECT_FLOOR_ANCHORS: Tuple[Tuple[float, float], ...] = (
-    (74.0, 8.0),
-    (77.0, 14.0),
-    (80.0, 26.0),
-    (82.0, 38.0),
-    (84.0, 55.0),
-    (86.0, 82.0),
+    (74.0, 5.0),
+    (77.0, 8.0),
+    (80.0, 14.0),
+    (82.0, 22.0),
+    (84.0, 48.0),
+    (86.0, 78.0),
     (88.0, 118.0),
     (90.0, 165.0),
     (92.0, 215.0),
@@ -72,7 +72,7 @@ _PROSPECT_FLOOR_ANCHORS: Tuple[Tuple[float, float], ...] = (
 # AHL-only veterans (age 23+, low ceiling): near-zero filler.
 AHL_FILLER_BASE = 1.0
 AHL_FILLER_PER_OVR = 0.6  # per OVR point above 70
-AHL_HIGH_CEILING_MULT = 0.75  # 23+ AHL players who still project (POT >= 80)
+AHL_HIGH_CEILING_MULT = 0.55  # 23+ AHL tweeners who still project (POT >= 80)
 # Depth roles (rank on their own NHL roster): value multipliers + role-fair AAV.
 # v16: depth was still fetching 2nd/3rd-round-pick returns; bottom-six F and
 # third-pair D are replaceable and should come cheap.
@@ -100,6 +100,7 @@ DEPTH_ROLE_LABEL = {
     "fourth_line_f": "Fourth-line / extra forward",
     "third_pair_d": "Third-pair defenceman",
     "extra_d": "Depth / extra defenceman",
+    "everyday": "Everyday NHLer",
 }
 DEPTH_ROLE_MAX_VAL_OVR = 81.0  # legit top-6 talent buried on a deep club is not "depth"
 ROLE_BURDEN_PER_M_YEAR = 2.0
@@ -1223,6 +1224,9 @@ def prospect_floor_value(age: int, ovr: float, pot: float, confidence: float = 0
     age_f = 1.0 if age_i <= 19 else 0.96 if age_i == 20 else 0.90 if age_i == 21 else 0.82 if age_i == 22 else 0.72
     if age_i >= 21 and pot_f - float(ovr or 0.0) > 12.0:
         age_f *= 0.88
+    # A 22- or 23-year-old with a middling ceiling is a tweener, not a blue chip.
+    if age_i >= 22 and pot_f < 84.0:
+        age_f *= 0.72
     conf = max(0.0, min(1.0, float(confidence if confidence is not None else 0.5)))
     return round(base * age_f * (0.9 + 0.2 * conf), 2)
 
@@ -1295,6 +1299,24 @@ def _depth_role(player: Any, source_team: Any, org_loc: str) -> str:
     if rank <= 4:
         return ""
     return "third_pair_d" if rank <= 6 else "extra_d"
+
+
+def _everyday_replacement_mult(val_ovr: float) -> float:
+    """Share of full price a replaceable NHLer keeps. 83+ is a real top-six piece.
+
+    74 ~0.42 · 78 ~0.50 · 80 ~0.58 · 82 ~0.80. A mid second should beat a
+    third-liner; a late first should beat a good everyday player.
+    """
+    o = float(val_ovr)
+    if o >= 83.0:
+        return 1.0
+    if o >= 80.0:
+        mult = 0.58 + (o - 80.0) * 0.11
+    elif o >= 76.0:
+        mult = 0.42 + (o - 76.0) * 0.04
+    else:
+        mult = 0.36 + max(0.0, o - 72.0) * 0.02
+    return max(0.32, min(0.88, mult))
 
 
 def _role_contract_burden(cap_hit: float, years: int, role_aav: float) -> float:
@@ -1861,6 +1883,25 @@ def _evaluate_player_asset_value_impl(
             if total > 0:
                 total *= role_mult
             role_burden = _role_contract_burden(cap_hit, years, DEPTH_ROLE_AAV_M[role])
+    # League-wide: bottom-six, tweeners and everyday regulars are replaceable even
+    # when a weak roster dresses them in its top six. Blue-chip kids are not in this band.
+    blue_chip = bool(
+        is_prospect_val
+        or (age <= 21 and pot >= 84.0)
+        or (age <= 23 and pot >= 88.0)
+    )
+    if not blue_chip and pos != "G" and val_ovr < 83.0 and total > 0:
+        everyday = _everyday_replacement_mult(val_ovr)
+        if age <= 23 and pot >= ovr + 7 and val_ovr < 80.0:
+            everyday = min(0.85, everyday + 0.20)
+        if depth_role in ("fourth_line_f", "extra_d", "ahl_filler"):
+            everyday = 1.0 - (1.0 - everyday) * 0.30
+        elif depth_role:
+            everyday = 1.0 - (1.0 - everyday) * 0.50
+        total *= everyday
+        components["everyday_mult"] = round(everyday, 3)
+        if not depth_role:
+            depth_role = "everyday"
     role_adjust = float(total) - total_pre_role
     total_pre_floor = float(total)
     prospect_floor = prospect_floor_value(age, ovr, pot, _scouting_confidence(player))
@@ -1901,6 +1942,12 @@ def _evaluate_player_asset_value_impl(
         weight = 0.6 if term <= 1 else 0.6 / (1.0 + 0.5 * (term - 1))
         inj_discount = share_missed * weight + (0.08 if inj_games > games_left else 0.0)
         inj_discount = max(0.0, min(0.65, inj_discount))
+        _utid = str(ictx.get("user_team_id") or "")
+        _acq_tid = str(getattr(acquiring_team, "team_id", getattr(acquiring_team, "id", "")) or "")
+        if _utid and _acq_tid == _utid and term >= 2:
+            # Selling an injured star to the user: the GM knows you'll have him healthy
+            # next season, so he isn't a bargain-bin buy.
+            inj_discount *= 0.6
         components["injury_share_discount"] = round(inj_discount, 3)
         total *= 1.0 - inj_discount
     total = max(hockey_floor, float(total))
@@ -2048,11 +2095,28 @@ def evaluate_pick_asset_value(
             certainty = 0.2
         else:
             certainty = 0.0
+        # GMs know where the user's club is headed: its future picks are priced closer
+        # to where it finishes now, and with a steeper time discount.
+        _utid = str(ctx.get("user_team_id") or "")
+        user_pick = bool(_utid) and orig_tid == _utid and years_out >= 1
+        if user_pick:
+            certainty = max(certainty, 0.55 if years_out == 1 else 0.40)
         in_round = mid if rank is None else certainty * float(rank) + (1.0 - certainty) * mid
         expected_slot = (rnd - 1) * n_teams + in_round
         # Modest future discount (v14): 7%/yr, capped at 18% — was 10%/yr to 30%.
-        base = slot_curve_value(int(round(expected_slot))) * (1.0 - min(FUTURE_PICK_DISCOUNT_CAP, FUTURE_PICK_DISCOUNT_PER_YEAR * years_out))
+        disc_rate, disc_cap = (0.11, 0.28) if user_pick else (FUTURE_PICK_DISCOUNT_PER_YEAR, FUTURE_PICK_DISCOUNT_CAP)
+        base = slot_curve_value(int(round(expected_slot))) * (1.0 - min(disc_cap, disc_rate * years_out))
         age_discount = 0.0
+
+    # 1sts and 2nds are the picks GMs actually pay with. A mid first was landing
+    # on an 86, and a mid second on an everyday 80. The top of the lottery is
+    # already star money, so the first-round bump fades in as the slot gets later.
+    if rnd == 1:
+        slot_hint = float(known_slot if known_slot is not None else (expected_slot if expected_slot is not None else 16.0))
+        fade = min(1.0, max(0.15, (slot_hint - 4.0) / 18.0))
+        base *= 1.0 + 0.38 * fade
+    elif rnd == 2:
+        base *= 1.45
 
     window = _team_window(acquiring_team)
     window_mod = 0.0

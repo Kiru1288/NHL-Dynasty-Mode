@@ -51,9 +51,9 @@ def ballot_config_for(award_id: str) -> Dict[str, Any]:
         return dict(cfg)
     return {"voters": VOTER_COUNT, "points": list(BALLOT_POINTS), "body": "PHWA"}
 SUBJECTIVE_TROPHY_PUBLIC_CASE = {
-    "hart": "Most valuable all-around season.",
+    "hart": "Most valuable to his team — not the scoring race.",
     "norris": "Premier defenseman season.",
-    "selke": "Elite defensive forward season.",
+    "selke": "Elite defensive forward. PK and 5-on-5, not the Art Ross.",
     "vezina": "Best goaltender season.",
     "calder": "Top first-year NHL player.",
     "lady_byng": "Production with exceptional discipline.",
@@ -474,13 +474,53 @@ def _pk_toi_pg_minutes(row: Mapping[str, Any]) -> float:
     for key in ("pk_toi_per_game", "pk_toi_pg"):
         if row.get(key) is not None:
             return _safe_float(row.get(key))
+    gp = max(1, _gp(row))
+    sec = _safe_float(row.get("pk_toi_sec"), _safe_float(row.get("penalty_kill_toi_sec"), 0.0))
+    if sec > 0:
+        return sec / 60.0 / float(gp)
     per_gp = _optional_stat_per_gp(row, ("pk_toi", "sh_toi"))
     if per_gp is not None:
-        return per_gp
+        # Franchise-style seconds stored under pk_toi would be > 8 min/game.
+        return per_gp / 60.0 if per_gp > 8.0 else per_gp
     share = _safe_float(row.get("pk_toi_share"), 0.0)
     if share > 0:
         return share
     return 0.0
+
+
+def _pp_toi_pg_minutes(row: Mapping[str, Any]) -> float:
+    for key in ("pp_toi_per_game", "pp_toi_pg"):
+        if row.get(key) is not None:
+            return _safe_float(row.get(key))
+    gp = max(1, _gp(row))
+    sec = _safe_float(row.get("pp_toi_sec"), _safe_float(row.get("power_play_toi_sec"), 0.0))
+    if sec > 0:
+        return sec / 60.0 / float(gp)
+    per_gp = _optional_stat_per_gp(row, ("pp_toi",))
+    if per_gp is not None:
+        return per_gp / 60.0 if per_gp > 8.0 else per_gp
+    return 0.0
+
+
+def _hits_60(row: Mapping[str, Any]) -> float:
+    hits = _safe_float(row.get("hit"), _safe_float(row.get("hits"), 0.0))
+    gp = max(1, _gp(row))
+    toi_min = _toi_pg_minutes(row) * gp
+    if toi_min > 0:
+        return hits / toi_min * 60.0
+    return hits / float(gp)
+
+
+def _blocks_60(row: Mapping[str, Any]) -> float:
+    blocks = _safe_float(
+        row.get("blocked_shots"),
+        _safe_float(row.get("blocks"), _safe_float(row.get("blk"), 0.0)),
+    )
+    gp = max(1, _gp(row))
+    toi_min = _toi_pg_minutes(row) * gp
+    if toi_min > 0:
+        return blocks / toi_min * 60.0
+    return blocks / float(gp)
 
 
 def _is_centre(row: Mapping[str, Any]) -> bool:
@@ -1340,18 +1380,21 @@ def _toi_per_gp_normalized(row: Mapping[str, Any]) -> float:
 
 
 def hart_fallback_formula(row: Mapping[str, Any]) -> float:
-    ppg = float(_pts(row)) / max(1, _gp(row))
-    avail = min(1.0, float(_gp(row)) / 70.0)
-    offense = ppg * 40.0
-    availability = avail * 10.0
+    """Most valuable season, not the scoring race. Extra points have diminishing return."""
+    gp = max(1, _gp(row))
+    pts = float(_pts(row))
+    goals = float(_goals(row))
+    offense = math.sqrt(max(0.0, pts)) * 7.2 + goals * 0.18
+    availability = min(1.0, float(gp) / 74.0) * 8.0
+    two_way = _safe_float(row.get("plus_minus"), 0.0) * 0.15
     row["_fallback_terms"] = {
         "production_component": offense,
         "availability_component": availability,
         "team_context_component": 0.0,
-        "two_way_component": 0.0,
-        "individual_value_component": offense * 0.25,
+        "two_way_component": two_way,
+        "individual_value_component": offense * 0.35 + two_way,
     }
-    return offense + availability
+    return offense + availability + two_way
 
 
 def norris_fallback_formula(row: Mapping[str, Any], *, award_id: str = "norris") -> float:
@@ -1387,28 +1430,26 @@ def norris_fallback_formula(row: Mapping[str, Any], *, award_id: str = "norris")
 
 def selke_fallback_formula(row: Mapping[str, Any], *, award_id: str = "selke") -> float:
     toi_norm = _toi_per_gp_normalized(row)
-    toi_term = toi_norm * 10.0
+    toi_term = toi_norm * 8.0
     fo_taken = _safe_int(row.get("fo_taken"), _safe_int(row.get("faceoffs_taken"), 0))
     fo_pct = normalize_percentage(row.get("faceoff_pct")) if fo_taken > 0 else 0.5
     fo_term = fo_pct * 0.15
-    pk_toi_pg = _optional_stat_per_gp(row, ("pk_toi", "sh_toi", "pk_toi_per_game"))
-    if pk_toi_pg is None:
-        pk_share = _safe_float(row.get("pk_toi_share"), 0.0)
-        if pk_share > 0:
-            pk_toi_pg = pk_share
-        else:
-            log_fallback_degradation(award_id, ["pk_toi"])
-            pk_toi_pg = 0.0
-    pk_term = pk_toi_pg * 6.0
+    if _is_centre(row) and fo_taken >= 200:
+        fo_term += max(-0.4, (fo_pct - 0.50) * 8.0)
+    pk_toi_pg = _pk_toi_pg_minutes(row)
+    if pk_toi_pg <= 0:
+        log_fallback_degradation(award_id, ["pk_toi"])
+    pk_term = min(3.6, pk_toi_pg) * 14.0
+    def_term = _blocks_60(row) * 4.0 + min(10.0, _hits_60(row)) * 1.2
     pts_penalty = float(_pts(row)) * 0.05
     row["_fallback_terms"] = {
         "production_component": fo_term,
-        "two_way_component": toi_term + pk_term - pts_penalty,
+        "two_way_component": toi_term + pk_term + def_term - pts_penalty,
         "availability_component": toi_term,
-        "individual_value_component": -pts_penalty,
+        "individual_value_component": def_term - pts_penalty,
         "team_context_component": pk_term,
     }
-    return toi_term + fo_term + pk_term - pts_penalty
+    return toi_term + fo_term + pk_term + def_term - pts_penalty
 
 
 def vezina_fallback_formula(row: Mapping[str, Any]) -> float:
@@ -1694,17 +1735,52 @@ def _hart_core(row: Mapping[str, Any], team_context_by_tid: Optional[Mapping[str
     )
 
 
+def _hart_goalie_score(row: Mapping[str, Any], team_context_by_tid: Optional[Mapping[str, Mapping[str, Any]]]) -> float:
+    """A Vezina-level starter can take the Hart. A good-not-great one cannot."""
+    sv = goalie_sv_pct(row)
+    wins = _safe_float(row.get("w", row.get("wins")), 0.0)
+    so = _safe_float(row.get("so", row.get("shutouts")), 0.0)
+    gsax = _safe_float(row.get("gsax"), 0.0)
+    success = _team_success(row, team_context_by_tid)
+    return (
+        max(0.0, sv - 0.905) * 2200.0
+        + wins * 0.85
+        + so * 1.2
+        + gsax * 1.8
+        + success * 18.0
+        + min(1.0, float(_gp(row)) / 60.0) * 8.0
+    )
+
+
 def hart_ballot_score(row: Mapping[str, Any], team_context_by_tid: Optional[Mapping[str, Mapping[str, Any]]] = None, rank_by_tid: Optional[Mapping[str, int]] = None) -> float:
-    """Points, team importance, team success, relative corsi, and WAR."""
+    """Most valuable to his club. Scoring helps, but the Art Ross is a different trophy."""
     ctx = team_context_by_tid
     if not ctx and rank_by_tid is not None:
         rk = int(rank_by_tid.get(_tid(row), 16) or 16)
         teams_n = max(2, int(rank_by_tid.get("__team_count__", 32) or 32))
         ctx = {_tid(row): {"points_pct_norm": max(0.0, 1.0 - (rk - 1) / float(teams_n - 1))}}
+    if _is_goalie(row):
+        return _hart_goalie_score(row, ctx)
+
+    pts = float(_pts(row))
+    gp = max(1, _gp(row))
+    goals = float(_goals(row))
+    # Extra points flatten: 120 vs 95 is a gap, not a lock.
+    production = math.sqrt(max(0.0, pts)) * 7.2 + goals * 0.18
+    share = _safe_float(row.get("_team_point_share"), _safe_float(row.get("team_point_share"), 0.0))
+    carry = min(0.42, max(0.0, share)) * 48.0
+    team_row = dict((ctx or {}).get(_tid(row), {}))
+    success = _team_success(row, ctx) * 32.0
+    if team_row.get("playoff_qualified"):
+        success += 6.0
+    avail = min(1.0, float(gp) / 74.0) * 8.0
+    two_way = _safe_float(row.get("plus_minus"), _safe_float(row.get("plusMinus"), 0.0)) * 0.15
+    usage = min(22.0, _toi_pg_minutes(row)) * 0.35
     rel_cf = _safe_float(row.get("_rel_cf"), 0.0)
     if row.get("_rel_cf") is None:
         rel_cf = _as_share(row.get("rel_cf_pct")) or 0.0
-    return _hart_core(row, ctx) + rel_cf * 160.0
+    war = _safe_float(row.get("war"), 0.0) * 6.0
+    return production + carry + success + avail + two_way + usage + rel_cf * 40.0 + war
 
 
 def norris_ballot_score(row: Mapping[str, Any], team_context_by_tid: Optional[Mapping[str, Mapping[str, Any]]] = None) -> float:
@@ -1720,25 +1796,40 @@ def norris_ballot_score(row: Mapping[str, Any], team_context_by_tid: Optional[Ma
 
 
 def selke_ballot_score(row: Mapping[str, Any]) -> float:
-    """Defensive on-ice results. Penalty-kill time is not required."""
+    """Best defensive forward. Scoring is polish; PK, blocks, and 5-on-5 play decide it."""
     xga = row.get("_xga60")
-    xga_term = (2.55 - float(xga)) * 28.0 if xga is not None else 0.0
+    xga_term = (2.55 - float(xga)) * 18.0 if xga is not None else 0.0
     rel = row.get("_rel_xgf")
     if rel is None:
         rel = _as_share(row.get("rel_xgf_pct"))
     if rel is None:
         rel = row.get("_rel_cf") if row.get("_rel_cf") is not None else (_as_share(row.get("rel_cf_pct")) or 0.0)
-    gp = max(1, _gp(row))
-    blocks = _safe_float(row.get("blocked_shots"), _safe_float(row.get("blocks"), _safe_float(row.get("blk"), 0.0)))
-    toi_min = _toi_pg_minutes(row) * gp
-    blocks_60 = (blocks / toi_min * 60.0) if toi_min > 0 else (blocks / gp)
+    pk = _pk_toi_pg_minutes(row)
+    pp = _pp_toi_pg_minutes(row)
+    toi = _toi_pg_minutes(row)
+    ev = max(0.0, toi - pp - pk)
     pm = _safe_float(row.get("plus_minus"), _safe_float(row.get("plusMinus"), 0.0))
+    fo_taken = _safe_int(row.get("fo_taken"), _safe_int(row.get("faceoffs_taken"), 0))
+    fo_term = 0.0
+    if _is_centre(row) and fo_taken >= 200:
+        fo_term = 5.0 + max(-4.0, (normalize_percentage(row.get("faceoff_pct")) - 0.50) * 28.0)
+    elif _is_centre(row):
+        fo_term = 4.0
+    shg = _safe_float(row.get("shg"), _safe_float(row.get("sh_goals"), 0.0))
+    pts_term = min(70.0, float(_pts(row))) * 0.05
+    if pp > pk + 1.2:
+        pts_term -= (pp - pk) * 3.5
     return (
-        xga_term
-        + float(rel) * 220.0
-        + blocks_60 * 5.0
-        + pm * 0.25
-        + float(_pts(row)) * 0.10
+        min(3.8, pk) * 16.0
+        + _blocks_60(row) * 5.5
+        + min(12.0, _hits_60(row)) * 1.6
+        + pm * 0.40
+        + min(16.0, ev) * 1.1
+        + fo_term
+        + xga_term
+        + float(rel or 0.0) * 80.0
+        + pts_term
+        + shg * 2.5
     )
 
 
@@ -2507,7 +2598,16 @@ def eligible_rocket(rows: Sequence[Dict[str, Any]], season_length: int) -> List[
 
 def eligible_hart(rows: Sequence[Dict[str, Any]], season_length: int) -> List[Dict[str, Any]]:
     need = _season_games_threshold(season_length, 0.45, minimum=30)
-    return [r for r in rows if not _is_goalie(r) and _gp(r) >= need]
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        if _is_goalie(r):
+            ok, _details = goalie_workload_ok(r, season_length=season_length)
+            if ok:
+                out.append(r)
+            continue
+        if _gp(r) >= need:
+            out.append(r)
+    return out
 
 
 def eligible_norris(rows: Sequence[Dict[str, Any]], season_length: int) -> List[Dict[str, Any]]:
@@ -2525,8 +2625,27 @@ def eligible_norris(rows: Sequence[Dict[str, Any]], season_length: int) -> List[
 
 def eligible_selke(rows: Sequence[Dict[str, Any]], season_length: int) -> List[Dict[str, Any]]:
     need = _season_games_threshold(season_length, 0.45, minimum=30)
-    # Penalty-kill time is not a requirement.
-    return [r for r in rows if _is_forward(r) and _gp(r) >= need]
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        if not _is_forward(r) or _gp(r) < need:
+            continue
+        pk = _pk_toi_pg_minutes(r)
+        pp = _pp_toi_pg_minutes(r)
+        has_pk = (
+            pk > 0
+            or r.get("pk_toi_sec") is not None
+            or r.get("pk_toi") is not None
+            or r.get("pk_toi_pg") is not None
+        )
+        if has_pk:
+            if pk < 0.35:
+                continue
+            if pk < 0.55 and pp > 1.8:
+                continue
+        elif _toi_pg_minutes(r) < 14.5:
+            continue
+        out.append(r)
+    return out
 
 
 def eligible_lady_byng(rows: Sequence[Dict[str, Any]], season_length: int) -> List[Dict[str, Any]]:
@@ -3127,7 +3246,7 @@ def build_live_awards_race(
                 _race_metric("Share", r.get("_team_point_share"), "pct") if r.get("_team_point_share") else None,
             ],
         )
-        for r in _top_race(skaters, lambda row: hart_ballot_score(row, team_ctx), limit)
+        for r in _top_race(eligible_hart(rows, season_length), lambda row: hart_ballot_score(row, team_ctx), limit)
     ]
     vezina = [
         _race_card(
@@ -3593,25 +3712,6 @@ def compute_awards(
     skaters = [r for r in snap_rows if not _is_goalie(r)]
     goalies = [r for r in snap_rows if _is_goalie(r)]
 
-    # --- TEMP Selke audit: remove once checked ---
-    _analytics = ("war", "impact_score", "gsax", "defense_score", "analytics_rating")
-    for _r in sorted(eligible_selke(skaters, season_length), key=selke_ballot_score, reverse=True)[:5]:
-        logger.warning(
-            "SELKE %-22s full=%6.2f fb=%6.2f path=%s def=%s xgf=%s fo_taken=%s fo%%=%s pk_toi=%s pk_ga60=%s tk60=%s pts=%s",
-            _r.get("name"),
-            selke_ballot_score(_r),
-            selke_fallback_formula(dict(_r)),
-            "full" if any(_r.get(f) is not None for f in _analytics) else "fallback",
-            _r.get("defense_score"),
-            _r.get("xgf_pct"),
-            _r.get("fo_taken", _r.get("faceoffs_taken")),
-            _r.get("faceoff_pct"),
-            _r.get("pk_toi"),
-            _r.get("pk_xga_per_60", _r.get("pk_ga_per_60")),
-            _r.get("takeaways_per_60"),
-            _r.get("pts"),
-        )
-
     # Art Ross
     awards[AWARD_REGISTRY["art_ross"]["name"]] = _run_stat_race(
         AWARD_REGISTRY["art_ross"],
@@ -3637,12 +3737,12 @@ def compute_awards(
     # Hart
     awards[AWARD_REGISTRY["hart"]["name"]] = _run_ballot_award(
         AWARD_REGISTRY["hart"],
-        eligible_hart(skaters, season_length),
+        eligible_hart(snap_rows, season_length),
         lambda r: hart_ballot_score(r, team_ctx),
         team_map=team_map,
         season_seed=season_seed,
         season=season,
-        eligibility_summary=f"Meaningful skater participation (>= {_season_games_threshold(season_length, 0.45, 30)} GP).",
+        eligibility_summary=f"Skaters with >= {_season_games_threshold(season_length, 0.45, 30)} GP, plus starter-workload goalies.",
         required_fields=["gp"],
         fallback_fn=hart_fallback_formula,
         team_ctx=team_ctx,
@@ -3670,7 +3770,7 @@ def compute_awards(
         team_map=team_map,
         season_seed=season_seed,
         season=season,
-        eligibility_summary="Forwards with meaningful GP and usage (14:00 TOI/GP or 1:00 PK/GP).",
+        eligibility_summary="Forwards who kill penalties (or 14:30+ TOI when PK time is not tracked).",
         required_fields=["gp"],
         team_ctx=team_ctx,
         season_length=season_length,
@@ -4338,7 +4438,7 @@ def compute_official_watch_lists(
 
     out["art_ross"] = pack("art_ross", eligible_art_ross(skaters, season_length), _pts, "pts")
     out["rocket"] = pack("rocket", eligible_rocket(skaters, season_length), _goals, "g")
-    out["hart"] = pack("hart", eligible_hart(skaters, season_length), lambda r: hart_ballot_score(r, team_ctx), "score")
+    out["hart"] = pack("hart", eligible_hart(snap, season_length), lambda r: hart_ballot_score(r, team_ctx), "score")
     out["norris"] = pack("norris", eligible_norris(skaters, season_length), lambda r: norris_ballot_score(r, team_ctx), "score")
     out["selke"] = pack("selke", eligible_selke(skaters, season_length), selke_ballot_score, "score")
     out["calder"] = pack(

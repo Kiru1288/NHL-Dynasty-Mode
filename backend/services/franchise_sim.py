@@ -2173,6 +2173,13 @@ def start_franchise(
         _swallowed_log.debug("suppressed exception", exc_info=True)
     strength_map = sim._build_strength_map(teams)
     try:
+        from app.sim_engine.trades.trade_market_adaptive import compute_user_dominance
+
+        compute_user_dominance(league, dict(strength_map), str(uid or ""))
+        strength_map = _rubber_band_strength_map(strength_map, league, str(uid or ""))
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    try:
         from app.sim_engine.league.awards import assign_team_season_expectations
 
         assign_team_season_expectations(teams, strength_map, games=int(gp or 82))
@@ -3103,7 +3110,8 @@ def _ensure_team_affiliate_nhl_spcs(
 
     generated = 0
     used = _count_team_contract_slots(team)
-    room = max(0, int(org_slot_ceiling) - int(used))
+    # Minimum two-ways must not eat the last slots. CPU clubs need those for prospect ELCs.
+    room = max(0, int(org_slot_ceiling) - 8 - int(used))
     if room <= 0:
         return 0
 
@@ -3302,6 +3310,10 @@ def _emergency_call_up_goalie(team: Any) -> Optional[Any]:
     if len([p for p in nhl if not getattr(p, "retired", False) and not getattr(p, "in_minors", False)]) >= 23:
         demote_idx = None
         demote_score = 999.0
+        try:
+            from services.contract_economy import is_waiver_exempt as _exempt
+        except Exception:
+            _exempt = None
         for i, p in enumerate(nhl):
             if _is_goalie_player(p):
                 continue
@@ -3311,6 +3323,13 @@ def _emergency_call_up_goalie(team: Any) -> Optional[Any]:
             if getattr(p, "in_minors", False) or getattr(p, "is_buried", False):
                 continue
             score = float(_player_ovr99(p))
+            # A waiver-exempt skater goes down first: the emergency must not become a
+            # free pass to slip a waiver-eligible player through to the AHL.
+            try:
+                if _exempt is not None and not _exempt(p, team, None):
+                    score += 500.0
+            except Exception:
+                score += 500.0
             if score < demote_score:
                 demote_score = score
                 demote_idx = i
@@ -3318,6 +3337,9 @@ def _emergency_call_up_goalie(team: Any) -> Optional[Any]:
             demoted = nhl.pop(demote_idx)
             demoted.in_minors = True
             demoted.roster_location = "ahl"
+            if demote_score >= 500.0:
+                # Didn't clear waivers: he still needs them on the next assignment.
+                demoted.waiver_status = "required"
             ahl.append(demoted)
 
     pid = str(getattr(pick, "id", "") or "")
@@ -3330,6 +3352,8 @@ def _emergency_call_up_goalie(team: Any) -> Optional[Any]:
     if hasattr(pick, "buried"):
         pick.buried = False
     pick.roster_location = "nhl"
+    # A recall resets the waiver clock; an old "cleared" stamp doesn't carry over.
+    pick.waiver_status = None
     setattr(team, "roster", nhl)
     setattr(team, "ahl_roster", ahl)
     setattr(team, "echl_roster", echl)
@@ -9961,7 +9985,7 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
             t_ovr = float(raw_true_ovr if raw_true_ovr is not None else row.get("true_ovr") or 0)
         except (TypeError, ValueError):
             t_ovr = 0.0
-        from services.franchise_scouting import DRAFT_OVR_REVEAL_THRESHOLD
+        from services.franchise_scouting import DRAFT_OVR_EXACT_THRESHOLD, DRAFT_OVR_REVEAL_THRESHOLD
 
         # One shared band for every surface (board, scouting screen, draft night).
         # Re-deriving the fog per screen is what made the same prospect show three
@@ -9984,8 +10008,17 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
         ovr_hi = float(own_ovr["high"])
         ovr_est = round((ovr_lo + ovr_hi) / 2.0, 1)
         if ovr_revealed:
-            ovr_lo = ovr_hi = round(t_ovr, 1)
-            ovr_est = ovr_lo
+            if scout_overlay_pct >= DRAFT_OVR_EXACT_THRESHOLD:
+                ovr_lo = ovr_hi = round(t_ovr, 1)
+            else:
+                # A strong read is a tight band, not the answer: the truth sits
+                # somewhere inside it, not always in the middle.
+                import zlib as _z
+
+                _off = ((_z.crc32(f"ovr_read|{key}".encode()) % 1001) / 1000.0 - 0.5) * 1.6
+                ovr_lo = round(t_ovr - 1.0 + _off * 0.5, 1)
+                ovr_hi = round(ovr_lo + 2.0, 1)
+            ovr_est = round((ovr_lo + ovr_hi) / 2.0, 1)
         entry.update(
             {
                 "rank": rank,
@@ -10075,7 +10108,7 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
                 entry["film_study_complete"] = True
             if _ov.get("miss_discovered"):
                 entry["miss_discovered"] = True
-        if ovr_revealed:
+        if ovr_revealed and scout_overlay_pct >= DRAFT_OVR_EXACT_THRESHOLD:
             entry["true_ovr"] = round(t_ovr, 1)
         else:
             entry.pop("true_ovr", None)
@@ -12240,6 +12273,37 @@ def _cpu_choose_deployment_styles(sim: Any, teams: List[Any], user_team_id: str)
         setattr(t, "deployment_style", best_style)
 
 
+def _rubber_band_strength_map(raw: Dict[str, Any], league: Any, user_team_id: str) -> Dict[str, float]:
+    """Pull a runaway club back toward the league and give the bottom a little life.
+
+    A great roster still wins. It just stops turning the schedule into a formality.
+    """
+    out = {str(k): float(v) for k, v in (raw or {}).items()}
+    if len(out) < 4:
+        return out
+    mean = sum(out.values()) / len(out)
+    for key, value in list(out.items()):
+        out[key] = value + (mean - value) * 0.20
+    try:
+        from app.sim_engine.trades.trade_market_adaptive import user_dominance
+
+        dom = float(user_dominance(league) or 0.0)
+    except Exception:
+        dom = 0.0
+    utid = str(user_team_id or "")
+    if dom > 0.2 and utid in out:
+        pull = 0.32 * min(1.0, (dom - 0.2) / 0.8)
+        out[utid] = out[utid] + (mean - out[utid]) * pull
+        rivals = [r for r in (getattr(league, "_user_rival_ids", None) or []) if r in out and r != utid]
+        for rid in rivals:
+            gap = out[utid] - out[rid]
+            if gap > 0:
+                out[rid] = out[rid] + gap * (0.28 * dom)
+    for key, value in list(out.items()):
+        out[key] = max(0.30, min(0.82, value))
+    return out
+
+
 def _franchise_refresh_strength_map(session: FranchiseSession) -> None:
     """Rebuild team strength from current rosters/lines (trades otherwise use stale preseason map)."""
     sim = getattr(session, "sim", None)
@@ -12260,6 +12324,11 @@ def _franchise_refresh_strength_map(session: FranchiseSession) -> None:
         from app.sim_engine.trades.trade_market_adaptive import compute_user_dominance
 
         compute_user_dominance(league, dict(getattr(session, "strength_map", None) or {}), str(getattr(session, "user_team_id", "") or ""))
+        session.strength_map = _rubber_band_strength_map(
+            dict(session.strength_map or {}),
+            league,
+            str(getattr(session, "user_team_id", "") or ""),
+        )
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
 
@@ -13982,6 +14051,13 @@ def _run_bulk_incremental_catchup(session: FranchiseSession, *, steps_n: int) ->
                 _swallowed_log.debug("suppressed exception", exc_info=True)
         for _ in range(_due("_bulk_depth_tick_day", 5)):
             _depth_pool_progression_tick(session)
+        for _ in range(_due("_bulk_elc_tick_day", 30)):
+            try:
+                from services.contract_economy import run_cpu_prospect_elc_pass
+
+                run_cpu_prospect_elc_pass(session)
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
 
@@ -14666,6 +14742,12 @@ def _finalize_regular_calendar_day(
             from services.contract_economy import run_cpu_in_season_free_agency
 
             run_cpu_in_season_free_agency(session)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+        try:
+            from services.contract_economy import run_cpu_prospect_elc_pass
+
+            run_cpu_prospect_elc_pass(session)
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
 
@@ -27215,8 +27297,13 @@ def advance_player_meeting(session: FranchiseSession, meeting_id: str, choice_id
     with 'Active GM meeting not found')."""
     from app.sim_engine.franchise.storyline_engine import resolve_gm_player_meeting
 
-    if str(meeting_id) not in (getattr(session, "gm_active_meetings", None) or {}):
-        return resolve_player_meeting(session, str(meeting_id), str(choice_id))
+    mid = str(meeting_id)
+    if mid not in (getattr(session, "gm_active_meetings", None) or {}):
+        # A finished GM meeting is gone from the active table. Don't hand its id to the
+        # player-request resolver — that reports "universe interaction not found".
+        if mid.startswith("gmmeet_"):
+            raise ValueError("That meeting is already over.")
+        return resolve_player_meeting(session, mid, str(choice_id))
     result = resolve_gm_player_meeting(session, str(meeting_id), str(choice_id))
     session.last_gm_result = {
         "kind": "meeting",

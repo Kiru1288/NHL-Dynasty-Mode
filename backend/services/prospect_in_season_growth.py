@@ -153,13 +153,13 @@ def _apply_environment(p: Any, team: Optional[Any]) -> None:
 
 
 _POOL_TIER_GROWTH = {
-    "elite": (0.018, 0.048),
-    "high": (0.014, 0.034),
-    "mid": (0.004, 0.019),
-    "depth": (0.002, 0.013),
-    "longshot": (0.0, 0.010),
+    "elite": (0.010, 0.024),
+    "high": (0.007, 0.016),
+    "mid": (0.002, 0.010),
+    "depth": (0.001, 0.007),
+    "longshot": (0.0, 0.005),
 }
-_POOL_CURVE_MULT = {"fast": 1.35, "normal": 1.0, "slow": 0.62, "boom_bust": 1.05}
+_POOL_CURVE_MULT = {"fast": 1.12, "normal": 1.0, "slow": 0.62, "boom_bust": 1.02}
 _POOL_INSEASON_SHARE = 0.6  # of expected annual growth; the offseason pays the rest
 
 
@@ -249,10 +249,20 @@ def prospect_in_season_tick(session: Any) -> Dict[str, int]:
         rng = random.Random()
     season_id = int(getattr(session, "season_calendar_year", 2025) or 2025)
     teams = _team_lookup(league)
+    nhl_ids = set()
+    for tm in getattr(league, "teams", None) or []:
+        for p in getattr(tm, "roster", None) or []:
+            pid = str(getattr(p, "id", "") or getattr(p, "player_id", "") or "")
+            if pid:
+                nhl_ids.add(pid)
+            nhl_ids.add(id(p))
 
     moved = 0
     pot_moved = 0
     for p in iter_growth_prospects(league):
+        pid = str(getattr(p, "id", "") or getattr(p, "player_id", "") or "")
+        if (pid and pid in nhl_ids) or id(p) in nhl_ids:
+            continue
         if _has_value_range(p):
             try:
                 rights = getattr(p, "nhl_rights_team_id", None) or getattr(p, "team_id", None)
@@ -260,8 +270,6 @@ def prospect_in_season_tick(session: Any) -> Dict[str, int]:
                     moved += 1
             except Exception:
                 _swallowed_log.debug("suppressed exception", exc_info=True)
-            continue
-        if not _has_ratings(p):
             continue
         try:
             rights = getattr(p, "nhl_rights_team_id", None)

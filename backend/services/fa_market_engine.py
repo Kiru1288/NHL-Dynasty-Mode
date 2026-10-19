@@ -9,6 +9,7 @@ calendar time or advances the FA market.
 from __future__ import annotations
 
 import hashlib
+import math
 from typing import Any, Dict, List, Optional
 
 from services.contract_economy import LEAGUE_MINIMUM_AAV_M, _cpu_negotiate_offer, _player_age, _player_id, _player_name, _player_ovr, _position_bucket, compute_fair_aav, cpu_signing_blocked, evaluate_team_position_needs, generate_contract_terms, score_free_agent_fit, sign_player_to_team, sync_all_team_cap_fields
@@ -432,6 +433,117 @@ def _user_pending_offer_aav(session: Any, pid: str) -> float:
         return 0.0
 
 
+def _user_pending_offer_years(session: Any, pid: str) -> int:
+    neg = (getattr(session, "resign_negotiations", None) or {}).get(str(pid))
+    pending = neg.get("pending_offer") if isinstance(neg, dict) else None
+    if not isinstance(pending, dict):
+        return 1
+    try:
+        return max(1, int(pending.get("years") or 1))
+    except (TypeError, ValueError):
+        return 1
+
+
+def fa_offer_value(
+    session: Any,
+    player: Any,
+    team_id: str,
+    aav_m: float,
+    years: int,
+    *,
+    league: Any = None,
+    user_dom: Optional[float] = None,
+) -> float:
+    """What an offer is worth to the player: salary, term security and the fit.
+
+    Each destination-fit point is worth about 1% of AAV (capped), and each extra
+    year of term about 2%. A runaway user club loses close calls (rubber band).
+    """
+    if league is None:
+        league = getattr(getattr(session, "sim", None), "league", None)
+    tid = str(team_id or "")
+    team = None
+    for t in list(_get(league, "teams", None) or []) if league is not None else []:
+        if str(_get(t, "team_id", "") or _get(t, "id", "")) == tid:
+            team = t
+            break
+    pts = 0.0
+    if team is not None:
+        try:
+            from services.contract_economy import player_destination_factors
+
+            pts = float(player_destination_factors(player, team, league).get("score") or 0.0)
+        except Exception:
+            pts = 0.0
+    val = float(aav_m or 0) * (1.0 + max(-0.15, min(0.20, pts * 0.01)))
+    val *= 1.0 + 0.02 * min(6, max(0, int(years or 1) - 1))
+    user_tid = str(getattr(session, "user_team_id", "") or "")
+    if tid and tid == user_tid:
+        if user_dom is None:
+            try:
+                from app.sim_engine.trades.trade_market_adaptive import user_dominance
+
+                user_dom = float(user_dominance(league) or 0.0)
+            except Exception:
+                user_dom = 0.0
+        if user_dom > 0.0:
+            val *= 1.0 - 0.05 * user_dom
+    return val
+
+
+def cpu_fa_rival_offers(session: Any, player: Any, *, league: Any = None) -> List[Dict[str, Any]]:
+    """CPU offers on the board for this free agent, best value (to him) first."""
+    book = getattr(session, "fa_market_book", None)
+    if not isinstance(book, dict):
+        return []
+    entry = (book.get("entries") or {}).get(str(_player_id(player)))
+    if not isinstance(entry, dict) or entry.get("state") == STATE_SIGNED:
+        return []
+    user_tid = str(getattr(session, "user_team_id", "") or "")
+    rows: List[Dict[str, Any]] = []
+    for o in list(entry.get("offers") or []):
+        if not isinstance(o, dict) or o.get("is_user") or str(o.get("team_id")) == user_tid:
+            continue
+        aav = float(o.get("aav_m") or 0.0)
+        if aav <= 0:
+            continue
+        yrs = max(1, int(o.get("years") or 1))
+        rows.append({
+            **o,
+            "value": fa_offer_value(session, player, str(o.get("team_id")), aav, yrs, league=league),
+        })
+    rows.sort(key=lambda r: -float(r["value"]))
+    return rows
+
+
+def user_fa_offer_standing(
+    session: Any,
+    player: Any,
+    aav_m: float,
+    years: int,
+    *,
+    league: Any = None,
+) -> Dict[str, Any]:
+    """How the user's offer stacks up against the best CPU bid (value to the player)."""
+    user_tid = str(getattr(session, "user_team_id", "") or "")
+    user_value = fa_offer_value(session, player, user_tid, aav_m, years, league=league)
+    rivals = cpu_fa_rival_offers(session, player, league=league)
+    if not rivals:
+        return {"rival": None, "rivals": [], "user_value": user_value, "rival_value": 0.0, "ratio": None}
+    best = rivals[0]
+    rival_value = float(best["value"])
+    ratio = user_value / max(0.01, rival_value)
+    return {
+        "rival": best,
+        "rivals": rivals,
+        "user_value": user_value,
+        "rival_value": rival_value,
+        "ratio": ratio,
+        # AAV the user would need (same term) to match the best rival's value.
+        "match_aav_m": round(float(aav_m or 0) / max(0.01, ratio), 3) if aav_m else None,
+    }
+
+
 def _fa_lineup_gain(team: Any, player: Any) -> Optional[float]:
     try:
         from app.sim_engine.trades.lineup_impact import roster_delta  # noqa: WPS433
@@ -531,6 +643,18 @@ def _collect_cpu_offers(
         except Exception:
             continue
 
+    # League heat: when the user is running away with it (or fleecing clubs), GMs
+    # gang up on his free-agent targets — more bidders, and bids that top his.
+    try:
+        from app.sim_engine.trades.trade_market_adaptive import is_user_rival, league_heat
+
+        heat = float(league_heat(league, day=int(getattr(session, "calendar_cursor", 0) or 0)))
+    except Exception:
+        heat = 0.0
+
+        def is_user_rival(_lg: Any, _tid: Any) -> bool:  # noqa: E306
+            return False
+
     new_offers: List[Dict[str, Any]] = []
     team_offer_counts: Dict[str, int] = {}
     team_fringe_counts: Dict[str, int] = {}
@@ -564,6 +688,8 @@ def _collect_cpu_offers(
         except Exception:
             bonus_want = 0.0
         existing_offers = list(entry.get("offers") or [])
+        user_bid = _user_pending_offer_aav(session, pid)
+        user_target = user_bid > 0 and heat >= 0.15 and ovr >= 74
         # Cap concurrent bidders on replaceable players — bidding wars require
         # genuine multi-team need, which fringe talent almost never creates.
         if ovr < 70 and len(existing_offers) >= 2:
@@ -625,6 +751,12 @@ def _collect_cpu_offers(
                 continue
 
             need = float(ctx["need_score"].get(pos, 0))
+            spoiler = bool(
+                user_target
+                and (is_user_rival(league, tid) or need >= 0.25 or rng.random() < heat * 0.5)
+            )
+            if spoiler:
+                need = min(1.0, need + 0.25 * heat)
             if ovr >= STAR_FA_OVR and not prior_here and _team_at_star_cap(book, tid, spendable):
                 continue
             value_buy = _is_value_buy(
@@ -679,10 +811,20 @@ def _collect_cpu_offers(
                 offer_aav = round(min(float(offer_aav), league_max_salary_m(league)), 3)
             except Exception:
                 _swallowed_log.debug("suppressed exception", exc_info=True)
-            if value_buy:
+            if value_buy and not spoiler:
                 # Bargain bin: pay roughly his (already-softened) ask, not a bidding-war price.
                 ask_now = float(entry.get("ask_aav_m") or 0) or float(fair)
                 offer_aav = round(max(LEAGUE_MINIMUM_AAV_M, min(offer_aav, ask_now * 1.02, spendable * 0.95)), 3)
+            if spoiler:
+                # Word gets around about your offer; this club tops it to keep him away from you.
+                top_it = user_bid * (1.02 + 0.06 * heat * rng.random())
+                offer_aav = round(max(float(offer_aav), min(top_it, spendable * 0.95)), 3)
+                try:
+                    from services.contract_economy import league_max_salary_m
+
+                    offer_aav = round(min(offer_aav, league_max_salary_m(league)), 3)
+                except Exception:
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
             blocked = cpu_signing_blocked(team, player, ctx, offer_aav)
             if blocked and not (
                 value_buy
@@ -712,9 +854,11 @@ def _collect_cpu_offers(
             lineup_gain = _fa_lineup_gain(team, player)
             if lineup_gain is not None:
                 young = _fa_age(player) <= 24
-                if lineup_gain < 0.0015 and not value_buy and not (window == "rebuilder" and young):
+                if lineup_gain < 0.0015 and not value_buy and not (window == "rebuilder" and young) and not spoiler:
                     continue
                 fit += min(0.25, max(0.0, lineup_gain) * 20.0)
+            if spoiler:
+                fit += 0.15 * heat
             min_fit = _min_fit_for_ovr(ovr)
             if ovr >= 86 and day >= 12:
                 min_fit = max(0.08, min_fit - 0.06)
@@ -954,49 +1098,34 @@ def _try_sign_leaning_players(
                 continue
             entry["player_ref"] = player
 
-        # He weighs money against the fit (city, market, Canada, roster, role):
-        # each fit point is worth about 1% of AAV.
-        from services.contract_economy import player_destination_factors
-
-        try:
-            from app.sim_engine.trades.trade_market_adaptive import user_dominance
-
-            _user_dom = user_dominance(league)
-        except Exception:
-            _user_dom = 0.0
-
-        def _fit_value(tid: str, aav: float) -> float:
-            tm = team_by_id.get(str(tid))
-            try:
-                pts = float(player_destination_factors(player, tm, league).get("score") or 0.0) if tm is not None else 0.0
-            except Exception:
-                pts = 0.0
-            # Capped: a +40 fan-base pull shouldn't make a 40% pay cut look even.
-            val = float(aav or 0) * (1.0 + max(-0.15, min(0.20, pts * 0.01)))
-            if str(tid) == user_tid and _user_dom > 0.0:
-                # Rubber banding: a runaway user club loses close calls (<= 5%).
-                val *= 1.0 - 0.05 * _user_dom
-            return val
-
-        # Prefer best offer from a CPU team (user must sign via UI)
-        offers = sorted(
-            [o for o in entry.get("offers") or [] if str(o.get("team_id")) != user_tid],
-            key=lambda o: (
-                -_fit_value(str(o.get("team_id")), float(o.get("aav_m") or 0)),
-                -int(o.get("years") or 0),
-            ),
-        )
+        # He weighs money and term against the fit (city, market, Canada, roster, role).
+        offers = cpu_fa_rival_offers(session, player, league=league)
         if not offers:
             continue
         # The user's pending offer is on the table too. If it is the best one, he
         # waits for it to resolve instead of taking a lower CPU bid.
-        user_bid = _user_pending_offer_aav(session, str(entry.get("player_id") or ""))
-        if user_bid > 0 and _fit_value(user_tid, user_bid) >= _fit_value(
-            str(offers[0].get("team_id")), float(offers[0].get("aav_m") or 0)
-        ) - 1e-6:
+        _pid_e = str(entry.get("player_id") or "")
+        user_bid = _user_pending_offer_aav(session, _pid_e)
+        if user_bid > 0 and fa_offer_value(
+            session, player, user_tid, user_bid, _user_pending_offer_years(session, _pid_e), league=league
+        ) >= float(offers[0]["value"]) - 1e-6:
             entry["state"] = STATE_EVALUATING
             entry["reason"] = "Leaning toward your offer"
             continue
+
+        ovr_now = float(entry.get("overall") or 0)
+        if ovr_now >= 82:
+            # Leave a shoppable class on the board. CPU clubs can thin it later in the summer.
+            quality_left = 0
+            for p in fa_pool:
+                try:
+                    if float(_player_ovr(p) or 0) >= 82:
+                        quality_left += 1
+                except (TypeError, ValueError):
+                    continue
+            floor = 10 if day < 10 else (6 if day < 18 else 3)
+            if quality_left <= floor:
+                continue
 
         signed = False
         # Late-market stars: try a wider board — first suitor often can't clear clauses/cap.
@@ -1527,6 +1656,95 @@ def record_user_fa_offer(
     session.fa_market_book = book
 
 
+def sign_with_best_cpu_rival(
+    session: Any,
+    player: Any,
+    rivals: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """He took a better CPU offer over the user's: close it with that club.
+
+    Walks the rival list (best value first) until a club can still fit the deal.
+    Returns the signing row, or None when no rival can close.
+    """
+    sim = getattr(session, "sim", None)
+    league = getattr(sim, "league", None)
+    if league is None:
+        return None
+    season_year = int(getattr(session, "season_calendar_year", 2025) or 2025)
+    team_by_id = {
+        str(_get(t, "team_id", "") or _get(t, "id", "")): t
+        for t in list(_get(league, "teams", None) or [])
+    }
+    user_tid = str(getattr(session, "user_team_id", "") or "")
+    book = ensure_fa_market_book(session)
+    pid = str(_player_id(player))
+    entry = (book.get("entries") or {}).get(pid) or {}
+    for offer in rivals[:4]:
+        tid = str(offer.get("team_id") or "")
+        team = team_by_id.get(tid)
+        if team is None or tid == user_tid:
+            continue
+        aav = round(float(offer.get("aav_m") or 0.0), 3)
+        years = max(1, int(offer.get("years") or 1))
+        result = sign_player_to_team(
+            player,
+            team,
+            league,
+            season_year,
+            {
+                "aav_m": aav,
+                "years": years,
+                "context": "ufa",
+                "force": True,
+                "days_on_market": int(entry.get("days_on_market") or 0),
+                "offer_count": int(entry.get("offer_count") or 0),
+                "ntc": bool(offer.get("ntc")),
+                "nmc": bool(offer.get("nmc")),
+            },
+        )
+        if not result.get("ok"):
+            continue
+        team_name = str(_get(team, "name", "") or _get(team, "city", "") or tid)
+        team_abbrev = str(_get(team, "abbreviation", None) or _get(team, "abbrev", None) or "").upper()
+        day = int(book.get("day") or 0)
+        if isinstance(entry, dict):
+            entry["state"] = STATE_SIGNED
+            entry["reason"] = f"Signed with {team_name}"
+            entry["signed_aav_m"] = aav
+            entry["signed_years"] = years
+            entry["signed_team_id"] = tid
+            entry["signed_team_name"] = team_name
+        row = {
+            "team_id": tid,
+            "team_name": team_name,
+            "team_abbrev": team_abbrev,
+            "player_id": pid,
+            "name": _player_name(player),
+            "aav_m": aav,
+            "years": years,
+            "position": _position_bucket(player),
+            "overall": round(_player_ovr(player)),
+            "day": day,
+            "decision_path": "Took a better offer than yours",
+            "text": f"{team_name} signs {_player_name(player)} · {aav}M × {years}y",
+        }
+        peers = list(book.get("peer_signings") or [])
+        peers.append(row)
+        book["peer_signings"] = peers[-40:]
+        log = list(book.get("log") or [])
+        log.append({"kind": "signing", "text": row["text"]})
+        book["log"] = log[-48:]
+        cpu = getattr(session, "cpu_fa_signings", None)
+        if not isinstance(cpu, dict):
+            cpu = {"signings": []}
+            session.cpu_fa_signings = cpu
+        cpu.setdefault("signings", []).append({**row, "source": "outbid_user"})
+        session.fa_market_book = book
+        _mystery_box_reveal_check(session, book)
+        return row
+    return None
+
+
 def mark_fa_player_signed(session: Any, player_id: str) -> None:
     book = getattr(session, "fa_market_book", None)
     if not isinstance(book, dict):
@@ -1853,6 +2071,24 @@ def annotate_fa_rows_with_decisions(session: Any, rows: List[Dict[str, Any]]) ->
                 r["your_offer_rank"] = next(
                     (i + 1 for i, c in enumerate(competing) if c.get("is_user")), None
                 )
+                if _pl_terms is not None:
+                    try:
+                        st = user_fa_offer_standing(
+                            session,
+                            _pl_terms,
+                            float(user_offer.get("aav_m") or 0),
+                            int(user_offer.get("years") or 1),
+                        )
+                        if st.get("rival") is not None:
+                            m_ratio = float(st.get("ratio") or 0)
+                            r["your_offer_leads"] = m_ratio >= 1.0
+                            r["match_aav_m"] = st.get("match_aav_m")
+                            if m_ratio < 1.0:
+                                user_interest -= min(26.0, (1.0 - m_ratio) * 130.0)
+                    except Exception:
+                        _swallowed_log.debug("suppressed exception", exc_info=True)
+            if user_interest > 70.0:
+                user_interest = 70.0 + 30.0 * math.tanh((user_interest - 70.0) / 40.0)
             r["interest_to_user"] = round(max(5.0, min(97.0, user_interest)), 1)
             r["interest_to_user_label"] = (
                 "High" if user_interest >= 70 else ("Low" if user_interest < 45 else "Medium")

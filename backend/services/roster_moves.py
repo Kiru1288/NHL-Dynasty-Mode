@@ -350,6 +350,43 @@ def _call_up_cap_block(session: Any, team: Any, league: Any, player: Any) -> Opt
     return None
 
 
+#: Days before the same player can be shuttled between the NHL and the minors again.
+SHUTTLE_COOLDOWN_DAYS = 3
+#: A sizeable contract sent down sits longer before a recall (no cap-relief yo-yo).
+SHUTTLE_BIG_CONTRACT_DAYS = 10
+SHUTTLE_BIG_CONTRACT_M = 2.5
+
+
+def _shuttle_hold_days(session: Any, team: Any, player: Any, action: str, cursor: int) -> int:
+    last = getattr(player, "_last_shuttle_cursor", None)
+    if last is None:
+        return 0
+    try:
+        elapsed = int(cursor) - int(last)
+    except (TypeError, ValueError):
+        return 0
+    if elapsed < 0:
+        return 0
+    need = SHUTTLE_COOLDOWN_DAYS
+    last_action = str(getattr(player, "_last_shuttle_action", "") or "")
+    if action == "call_up_ahl" and last_action.startswith("send_down"):
+        # Injury emergencies: a club short of a dressed lineup can always recall.
+        dressed = [
+            p for p in list(getattr(team, "roster", None) or [])
+            if not getattr(p, "in_minors", False) and not getattr(p, "is_buried", False)
+        ]
+        if len(dressed) < 20:
+            return 0
+        try:
+            from app.sim_engine.economy.cap_engine import player_full_cap_hit_millions
+
+            if float(player_full_cap_hit_millions(player) or 0.0) >= SHUTTLE_BIG_CONTRACT_M:
+                need = SHUTTLE_BIG_CONTRACT_DAYS
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    return max(0, need - elapsed)
+
+
 def execute_roster_move(session: Any, body: Dict[str, Any]) -> Dict[str, Any]:
     from services.contract_economy import (
         bury_player_contract,
@@ -375,6 +412,17 @@ def execute_roster_move(session: Any, body: Dict[str, Any]) -> Dict[str, Any]:
     if player is None:
         return {"ok": False, "reason": "Player not found on your organization"}
 
+    shuttle_actions = ("call_up_ahl", "send_down_ahl", "send_down_echl")
+    cursor = int(getattr(session, "calendar_cursor", 0) or 0)
+    if action in shuttle_actions:
+        hold = _shuttle_hold_days(session, team, player, action, cursor)
+        if hold > 0:
+            return {
+                "ok": False,
+                "reason": f"He was just reassigned. He can be moved again in {hold} day{'s' if hold != 1 else ''}.",
+                "shuttle_cooldown_days": hold,
+            }
+
     result: Dict[str, Any]
     if action in ("call_up_ahl", "call_up_junior"):
         blocked = _call_up_cap_block(session, team, league, player)
@@ -390,6 +438,12 @@ def execute_roster_move(session: Any, body: Dict[str, Any]) -> Dict[str, Any]:
             result = unbury_player_contract(team, player, league)
             if result.get("ok") and not result.get("moved"):
                 result["moved"] = "ahl_to_nhl"
+            if result.get("ok"):
+                # Recalled: an old "cleared" stamp doesn't let him slide back down free.
+                try:
+                    player.waiver_status = None
+                except Exception:
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
         else:
             roster = list(getattr(team, "roster", None) or [])
             if len(roster) >= 23:
@@ -558,6 +612,12 @@ def execute_roster_move(session: Any, body: Dict[str, Any]) -> Dict[str, Any]:
         return {"ok": False, "reason": f"Unknown roster move: {action}"}
 
     if result.get("ok"):
+        if action in shuttle_actions:
+            try:
+                player._last_shuttle_cursor = cursor
+                player._last_shuttle_action = action
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         result.update(_move_summary(result.get("moved"), player, bool(result.get("waivers"))))
         result["player_name"] = _player_name(player)
         result["lineup"] = _sync_lineup_after_move(session, player, action, str(result.get("moved") or ""))

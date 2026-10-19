@@ -356,7 +356,8 @@ def test_high_potential_prospect_gets_meaningful_growth_budget_with_low_toi():
     budget = calculate_season_growth_budget(
         prospect, profile=profile, rng=random.Random(9), dev_phase="NORMAL"
     )
-    assert budget >= 0.035, budget
+    # Low minutes must not freeze a high-ceiling kid. A year is still only a couple of overalls.
+    assert budget >= 0.012, budget
 
 
 if __name__ == "__main__":

@@ -6659,6 +6659,47 @@ def resolve_user_fa_pending_offers(session: FranchiseSession, *, days: int = 1) 
                     "feedback": f"{name} signed elsewhere.",
                 })
                 continue
+            if ctx in ("ufa", "free_agency", "fa", ""):
+                # Decision day: he takes the best offer on the board, not just yours.
+                try:
+                    from services.fa_market_engine import sign_with_best_cpu_rival, user_fa_offer_standing
+
+                    standing = user_fa_offer_standing(
+                        session,
+                        player,
+                        float(pending.get("aav_m") or 0),
+                        int(pending.get("years") or 1),
+                        league=league,
+                    )
+                    if standing.get("rival") is not None and float(standing.get("ratio") or 0) < 0.985:
+                        better = [
+                            r for r in standing.get("rivals") or []
+                            if float(r.get("value") or 0) > float(standing.get("user_value") or 0) * 1.015
+                        ]
+                        row = sign_with_best_cpu_rival(session, player, better)
+                        if row is not None:
+                            entry["status"] = "lapsed"
+                            entry["pending_offer"] = None
+                            name = str(getattr(player, "name", None) or getattr(player, "full_name", pid) or pid)
+                            rejected.append({
+                                "player_id": pid,
+                                "name": name,
+                                "reason": "signed_elsewhere",
+                                "signed_team_id": row.get("team_id"),
+                                "signed_team_name": row.get("team_name"),
+                                "signed_team_abbrev": row.get("team_abbrev"),
+                                "aav_m": row.get("aav_m"),
+                                "years": row.get("years"),
+                                "your_aav_m": pending.get("aav_m"),
+                                "your_years": pending.get("years"),
+                                "feedback": (
+                                    f"{name} took a better offer from {row.get('team_name')} "
+                                    f"(${float(row.get('aav_m') or 0):.2f}M × {int(row.get('years') or 1)} yrs)."
+                                ),
+                            })
+                            continue
+                except Exception:
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
             offer = {
                 "aav_m": pending.get("aav_m"),
                 "years": pending.get("years"),

@@ -341,10 +341,10 @@ def _ai_interest_for_team(
     )
     reasons.extend(_guard)
     pick_lock_reasons.extend(_guard)
-    # Contender deadline boost for fit
-    if window == "contender" and _deadline_phase(context) > 0.35:
-        if net >= -3:
-            interest = min(1.0, interest + 0.12)
+    # Contender deadline boost — applied after the lineup check, and only in full when
+    # the deal actually makes tonight's lineup better.
+    deadline_boost = window == "contender" and _deadline_phase(context) > 0.35 and net >= -3
+    user_deal = bool(user_team_id) and str(user_team_id) in {str(t) for t in package.participating_team_ids}
 
     # Star consolidation tax — trading away best asset for many small pieces
     outgoing = val.get("outgoing") or []
@@ -368,11 +368,37 @@ def _ai_interest_for_team(
             if small_in >= 2 and sum(float(x.get("total", 0)) for x in incoming) < best_out - 5:
                 interest = min(interest, 0.25)
                 reasons.append("Too many low-value assets do not equal the outgoing star")
+        if user_deal and best_out >= 70 and len(incoming) >= 2:
+            # Two good pieces don't make a star: someone in the return has to be close to him.
+            best_in = max(float(x.get("total", 0)) for x in incoming)
+            if best_in < best_out * 0.70 and not _is_severe_overpay(net, incoming):
+                interest = min(interest, 0.40)
+                reasons.append("Wants a centerpiece back for a player of this calibre, not a bundle")
 
-    # Cap relief acceptance for cap-strapped teams
+    # Cap relief acceptance for cap-strapped teams. Your retained salary has to leave
+    # them at least even, not just "close" (retention was a free lubricant).
     cap_tier = str(getattr(team, "cap_pressure_tier", getattr(team, "cap_pressure", "")) or "").lower()
-    if cap_tier in ("cap_hell", "critical") and net >= -5:
-        interest = min(1.0, interest + 0.08)
+    if cap_tier in ("cap_hell", "critical") and net >= (0.0 if user_deal else -5.0):
+        interest = min(1.0, interest + (0.05 if user_deal else 0.08))
+
+    if user_deal:
+        # Flipping a player you just picked up raises flags: "why is he available again?"
+        cursor = (context or {}).get("calendar_cursor")
+        for asset in package.incoming_by_team.get(team_id, []):
+            if not isinstance(asset, PlayerTradeAsset) or str(asset.source_team_id or "") != str(user_team_id):
+                continue
+            src = team_by_id.get(str(user_team_id))
+            p, _ = find_player_on_team_roster(src, asset.player_id) if src is not None else (None, None)
+            if p is None or not bool(getattr(p, "acquired_via_trade", False)):
+                continue
+            try:
+                elapsed = int(cursor) - int(getattr(p, "last_acquired_day", None))
+            except (TypeError, ValueError):
+                continue
+            if 0 <= elapsed < 14:
+                interest = max(0.0, interest - 0.04 - 0.004 * (14 - elapsed))
+                reasons.append(f"Wary of {player_display_name(p)} — you only just acquired him")
+                break
 
     # Lineup check: does this deal make tonight's lineup better or worse? (CPU GMs used
     # to judge on asset value alone, so a contender could hand over its starting goalie
@@ -390,6 +416,9 @@ def _ai_interest_for_team(
                 reasons.append("Makes their lineup worse right now")
         elif lineup_delta >= 0.004:
             interest = min(1.0, interest + min(0.12, lineup_delta * 7.0))
+    if deadline_boost:
+        helps = lineup_delta is not None and lineup_delta > 0.002
+        interest = min(1.0, interest + (0.12 if helps or not user_deal else 0.03))
 
     tank_map = (context or {}).get("tank_pressure_by_team") or {}
     tank_row = tank_map.get(str(team_id)) or {}
@@ -937,11 +966,34 @@ def evaluate_trade_package(
                     if str(tid) == str(intent.get("seller_team_id") or "") and float(intent.get("seller_discount_value") or 0.0) > 0.0:
                         threshold = min(threshold, 0.50)
             elif user_team_id:
-                # Rubber banding: a runaway user club finds contenders/rivals harder to fleece.
+                # Rubber banding + league heat: a runaway or fleecing user club finds
+                # every GM harder to deal with, and burned clubs hold a grudge. Each GM
+                # also has a mood for the day, so re-tuning a package all day doesn't
+                # find a magic number.
                 try:
-                    from app.sim_engine.trades.trade_market_adaptive import rubber_band_accept_bump
+                    from app.sim_engine.trades.trade_market_adaptive import gm_daily_mood, rubber_band_accept_bump
 
-                    threshold += rubber_band_accept_bump(league, team_obj, tid)
+                    _day = (ctx or {}).get("calendar_cursor")
+                    threshold += rubber_band_accept_bump(league, team_obj, tid, day=_day)
+                    threshold += 0.03 * gm_daily_mood(tid, _day)
+                    # Deadline: rivals won't arm the team they're chasing.
+                    from app.sim_engine.trades.team_assessment import player_ovr
+                    from app.sim_engine.trades.trade_market_adaptive import is_user_rival, league_heat
+
+                    if _deadline_phase(ctx) > 0.35 and is_user_rival(league, tid):
+                        arming_user = False
+                        for a in package.incoming_by_team.get(str(user_team_id), []):
+                            if not isinstance(a, PlayerTradeAsset) or str(a.source_team_id or "") != str(tid):
+                                continue
+                            p, _ = find_player_on_team_roster(team_obj, a.player_id)
+                            if p is not None and player_ovr(p) >= 75:
+                                arming_user = True
+                                break
+                        if arming_user:
+                            threshold += 0.06 + 0.06 * league_heat(league, day=_day)
+                            ai_reasons_by_team.setdefault(tid, []).append(
+                                "Not helping a rival load up at the deadline"
+                            )
                 except Exception:
                     pass
             if interest_level.get(tid, 0.0) < threshold:
@@ -949,6 +1001,31 @@ def evaluate_trade_package(
                 tname = _team_display(team_obj, tid)
                 for r in ai_reasons_by_team.get(tid, []):
                     msg = f"{tname}: {r}"
+                    if msg not in rejection_reasons:
+                        rejection_reasons.append(msg)
+        if accepted and user_team_id and str(user_team_id) in value_breakdown and not (ctx or {}).get("cpu_ambient_trade"):
+            # The user doesn't get a looser fairness rule than CPU clubs do with each other.
+            u_br = value_breakdown[str(user_team_id)]
+            u_net = float(u_br.get("net", 0.0))
+            others = [
+                float(value_breakdown[t].get("net", 0.0))
+                for t in package.participating_team_ids
+                if str(t) != str(user_team_id) and t in value_breakdown
+            ]
+            if others:
+                size = max(float(u_br.get("incoming_total") or 0.0), float(u_br.get("outgoing_total") or 0.0))
+                deal_scale = max(1.0, size / 90.0)
+                try:
+                    from app.sim_engine.trades.trade_market_adaptive import league_heat
+
+                    heat = league_heat(league, day=(ctx or {}).get("calendar_cursor"))
+                except Exception:
+                    heat = 0.0
+                user_gap_max = (12.0 - 4.0 * heat) * deal_scale
+                user_gap = u_net - min(others)
+                if user_gap > user_gap_max:
+                    accepted = False
+                    msg = "They see this as lopsided in your favour and won't be fleeced"
                     if msg not in rejection_reasons:
                         rejection_reasons.append(msg)
         if accepted and (ctx or {}).get("cpu_ambient_trade") and fairness_gap > CPU_AMBIENT_FAIRNESS_GAP_MAX:
