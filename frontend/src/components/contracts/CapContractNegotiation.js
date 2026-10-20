@@ -16,7 +16,6 @@ import {
   resignInterestLabel,
 } from "../../utils/contractNegotiation";
 import {
-  agentDifficultyIcon,
   agentDifficultyTone,
   resolveAgentDealDifficulty,
 } from "../../utils/playerAgentDisplay";
@@ -508,115 +507,71 @@ export default function CapContractNegotiation({
       ? { label: "Sim a day for an answer", run: runSimNegotiationDay }
       : { label: isSubmitTurn && isRejected ? "Submit revised offer" : "Submit offer", run: runSubmit };
 
+  const offerClause = offerNmc ? "NMC" : offerNtcMode === "FULL" ? "NTC" : offerNtcMode === "MODIFIED" ? "M-NTC" : "";
+
+  // Reading order: who you're negotiating with and the gap between the two sides,
+  // then whether they'd sign, then your terms beside what the agent says, then the
+  // cap consequence next to the one primary action.
   return (
-    <div className="nd">
-      <header className="nd-top">
-        <button type="button" className="nd-back" disabled={busy} onClick={onBack} aria-label={backLabel} title={backLabel}>
+    <div className="nd nd2">
+      <header className="nd2-hero">
+        <button type="button" className="nd2-back" disabled={busy} onClick={onBack} aria-label={backLabel} title={backLabel}>
           ←
         </button>
-        <PlayerHeadshot player={player} size="md" showFlag={false} preferPhoto className="nd-top__face" />
-        <div className="nd-top__who">
+        <div className="nd2-face">
+          <PlayerHeadshot player={player} size="md" showFlag={false} preferPhoto />
+        </div>
+        <div className="nd2-who">
           <h3>{safeText(row?.name, "Player")}</h3>
           <p>
-            {safeText(row?.position, "—")} · {ovr} OVR{row?.age ? ` · ${row.age}` : ""}
-            {seasonLabel ? ` · ${seasonLabel}` : ""}
+            {[safeText(row?.position, "—"), `${ovr} OVR`, row?.age ? `age ${row.age}` : null, seasonLabel || null].filter(Boolean).join(" · ")}
+          </p>
+          <p className={`nd2-agent tone-${agentDifficultyTone(agentDiff.tier)}`} title={agentDiff.label}>
+            {[agentName, agentAgency, agentStyle].filter(Boolean).join(" · ")}
+            {agentDiff.label ? <b> · {agentDiff.label}</b> : null}
           </p>
         </div>
-        <div className={`nd-agent tone-${agentDifficultyTone(agentDiff.tier)}`} title={agentDiff.label}>
-          <span className="nd-agent__icon" aria-hidden="true">{agentDifficultyIcon(agentDiff.tier)}</span>
-          <span className="nd-agent__text">
-            <strong>{agentName}</strong>
-            <em>{[agentAgency, agentStyle, agentDiff.label].filter(Boolean).join(" · ")}</em>
-          </span>
+        <div className="nd2-gap" aria-label="Their ask against your offer">
+          <div>
+            <span>They want</span>
+            <strong>{formatMoneyM(wantAavM)}</strong>
+            <em>{wantYears} {wantYears === 1 ? "yr" : "yrs"}{preferredClause && preferredClause !== "None" ? ` · ${preferredClause}` : ""}</em>
+          </div>
+          <i aria-hidden="true" className={offerVsAsk >= -0.005 ? "is-up" : "is-down"}>
+            {Math.abs(offerVsAsk) < 0.005 ? "=" : `${offerVsAsk > 0 ? "+" : "−"}${formatMoneyM(Math.abs(offerVsAsk))}`}
+          </i>
+          <div className="is-you">
+            <span>You offer</span>
+            <strong>{formatMoneyM(offerAavNum)}</strong>
+            <em>{offerYearsNum} {offerYearsNum === 1 ? "yr" : "yrs"}{offerClause ? ` · ${offerClause}` : ""}</em>
+          </div>
         </div>
       </header>
 
-      <div className="nd-table">
-        <section className="nd-side nd-side--them" aria-label="Their side">
-          <div className="nd-ask">
-            <span>They want</span>
-            <strong>{formatMoneyM(wantAavM)} <small>× {wantYears} {wantYears === 1 ? "yr" : "yrs"}</small></strong>
-            {preferredClause && preferredClause !== "None" ? <em>plus {preferredClause}</em> : null}
+      <section className={`nd2-gauge tone-${meterTone}${willAccept ? " will-accept" : ""}`} aria-label="Deal interest">
+        <strong>{interestDisplay}</strong>
+        <div className="nd2-gauge__body">
+          <span>
+            {previewPending
+              ? "Checking with the agent…"
+              : willAccept
+                ? "They'd take this"
+                : `Needs ${Math.round(acceptCut)} to accept`}
+          </span>
+          <div className="nd2-gauge__track">
+            <i className="nd2-gauge__fill" style={{ width: `${Math.max(4, Math.min(100, meterWidth))}%` }} />
+            <i className="nd2-gauge__mark" style={{ left: `${acceptCut}%` }} title="Accept line" />
           </div>
+          <small>{previewPending || previewFresh ? "Agent's read" : "Live estimate"} · {resignInterestLabel(row)} interest in staying</small>
+        </div>
+      </section>
 
-          <div className="nd-thread" aria-live="polite">
-            <p className="nd-bubble">{agentLine}</p>
-            {dialogue.map((line, i) => (
-              <p key={`${i}-${line.slice(0, 24)}`} className="nd-bubble">{line}</p>
-            ))}
-            {evalSnap.agentMood && evalSnap.agentMood !== agentLine && !dialogue.includes(evalSnap.agentMood) ? (
-              <p className="nd-bubble is-mood">{evalSnap.agentMood}</p>
-            ) : null}
-            {isSubmitTurn ? (
-              <div className={`nd-verdict is-${negoStatus || "neutral"}`} role="status">
-                <span className="nd-verdict__badge">
-                  {agentStatusLabel(negoStatus)}
-                  {negotiationRound > 0 ? ` · round ${negotiationRound}` : ""}
-                </span>
-                {hasCounter ? (
-                  <p>
-                    Counter: <strong>{formatMoneyM(counterTerms.aav_m)} × {counterTerms.years} {counterTerms.years === 1 ? "yr" : "yrs"}</strong>
-                    {counterTerms.nmc ? " · NMC" : null}
-                    {!counterTerms.nmc && counterTerms.ntc_mode === "FULL" ? " · NTC" : null}
-                    {!counterTerms.nmc && counterTerms.ntc_mode === "MODIFIED" ? " · M-NTC" : null}
-                    <button type="button" className="nd-link" disabled={busy} onClick={() => applyCounterToSliders(counterTerms)}>
-                      Put it on my side
-                    </button>
-                  </p>
-                ) : null}
-                {isPending ? <p>They're comparing the market. Sim a day to hear back.</p> : null}
-                {isRejected ? <p>Change the money, term or protection and try again.</p> : null}
-              </div>
-            ) : null}
-          </div>
-
-          <InterestFactors
-            title="Why they'd stay"
-            factors={response?.evaluation?.interest_factors || row?.interest_factors}
-            fit={{
-              ...(response?.evaluation?.destination_fit || row?.destination_fit || {}),
-              fit_premium_pct: response?.evaluation?.fit_premium_pct,
-            }}
-          />
-
-          <NegotiationMeetingPanel
-            playerId={row?.player_id || row?.id}
-            compact
-            onChanged={() => {
-              runPreview();
-            }}
-          />
-        </section>
-
-        <section className="nd-side nd-side--you" aria-label="Your offer">
-          <div className={`nd-meter tone-${meterTone}${willAccept ? " will-accept" : ""}`} aria-label="Deal interest">
-            <div className="nd-meter__head">
-              <strong>{interestDisplay}</strong>
-              <span>
-                {previewPending
-                  ? "Checking with the agent…"
-                  : willAccept
-                    ? "They'd take this"
-                    : `Needs ${Math.round(acceptCut)} to accept`}
-              </span>
-            </div>
-            <div className="nd-meter__track">
-              <i className="nd-meter__fill" style={{ width: `${Math.max(4, Math.min(100, meterWidth))}%` }} />
-              <i className="nd-meter__mark" style={{ left: `${acceptCut}%` }} title="Accept line" />
-              <i className="nd-meter__mark is-instant" style={{ left: "88%" }} title="Instant accept" />
-            </div>
-            <p className="nd-meter__note">
-              {previewFresh || previewPending ? "Agent read" : "Live estimate"} · {resignInterestLabel(row)} interest in staying
-            </p>
-          </div>
-
-          <div className="nd-field">
-            <div className="nd-field__head">
+      <div className="nd2-body">
+        <section className="nd2-offer" aria-label="Your offer">
+          <div className="nd2-field">
+            <div className="nd2-field__head">
               <span>Cap hit per year</span>
               <strong>{formatMoneyM(offerAavNum)}</strong>
-              <em className={offerVsAsk >= 0 ? "is-up" : "is-down"}>
-                {Math.abs(offerVsAsk) < 0.005 ? "= their ask" : `${offerVsAsk > 0 ? "+" : "−"}${formatMoneyM(Math.abs(offerVsAsk))} vs ask`}
-              </em>
             </div>
             <div className="nd-range">
               <input
@@ -633,34 +588,15 @@ export default function CapContractNegotiation({
                 <i className="nd-range__ask" style={{ left: `${askPct}%` }} title={`Their ask ${formatMoneyM(ask.aav)}`} />
               ) : null}
             </div>
-            <div className="nd-range__scale">
+            <div className="nd2-scale">
               <span>{formatMoneyM(sliderMin)}</span>
+              <span>tick = their ask</span>
               <span>{formatMoneyM(sliderMax)}</span>
             </div>
           </div>
 
-          {legalTypes.length > 1 ? (
-            <div className="nd-field">
-              <div className="nd-field__head"><span>Contract type</span></div>
-              <div className="nd-seg" role="group" aria-label="Contract type">
-                {legalTypes.map((t) => (
-                  <button
-                    key={t.id}
-                    type="button"
-                    className={contractCategory === t.id ? "is-active" : ""}
-                    aria-pressed={contractCategory === t.id}
-                    disabled={busy}
-                    onClick={() => setOfferType(t.id)}
-                  >
-                    {t.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ) : null}
-
-          <div className="nd-field">
-            <div className="nd-field__head"><span>Years</span></div>
+          <div className="nd2-field nd2-field--row">
+            <span>Years</span>
             <div className="nd-seg" role="group" aria-label="Contract years">
               {termOptions.map((y) => (
                 <button
@@ -677,8 +613,8 @@ export default function CapContractNegotiation({
             </div>
           </div>
 
-          <div className="nd-field">
-            <div className="nd-field__head"><span>Protection</span></div>
+          <div className="nd2-field nd2-field--row">
+            <span>Protection</span>
             <div className="nd-seg" role="group" aria-label="Contract clauses">
               {[
                 ["NONE", "None"],
@@ -716,8 +652,28 @@ export default function CapContractNegotiation({
             </div>
           </div>
 
-          <div className="nd-field">
-            <div className="nd-field__head">
+          {legalTypes.length > 1 ? (
+            <div className="nd2-field nd2-field--row">
+              <span>Contract</span>
+              <div className="nd-seg" role="group" aria-label="Contract type">
+                {legalTypes.map((t) => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    className={contractCategory === t.id ? "is-active" : ""}
+                    aria-pressed={contractCategory === t.id}
+                    disabled={busy}
+                    onClick={() => setOfferType(t.id)}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          <div className="nd2-field">
+            <div className="nd2-field__head">
               <span>Signing bonus</span>
               <strong>{bonusAllowed ? formatMoneyM(offerBonusNum) : "Not available"}</strong>
             </div>
@@ -735,64 +691,115 @@ export default function CapContractNegotiation({
                     onChange={(e) => setOfferBonus(e.target.value)}
                   />
                 </div>
-                <p className="nd-note">
+                <p className="nd2-note">
                   Up to {formatMoneyM(bonusMaxM)} ({Math.round(bonusMaxPct * 100)}% of the deal)
                   {signingBonusElig?.cash_note ? ` · ${signingBonusElig.cash_note}` : ""}
                 </p>
               </>
             ) : (
-              <p className="nd-note">{signingBonusElig?.label || "Signing bonuses need club revenue of $155M or more."}</p>
+              <p className="nd2-note">{signingBonusElig?.label || "Signing bonuses need club revenue of $155M or more."}</p>
             )}
           </div>
+        </section>
 
-          <dl className="nd-cap">
-            <div>
-              <dt>Cap hit</dt>
-              <dd>{formatMoneyM(offerCapHitNum)}{offerBonusNum > 0 ? <small> incl. bonus</small> : null}</dd>
-            </div>
-            <div>
-              <dt>{capProj.dealStartsNextYear ? "Space this year" : "Space after signing"}</dt>
-              <dd className={projectedAfter != null && projectedAfter < 0 ? "is-bad" : ""}>
-                {projectedAfter != null ? formatMoneyM(projectedAfter) : "—"}
-              </dd>
-            </div>
-            <div>
-              <dt>{capProj.dealStartsNextYear ? "Space next year after" : inSeasonCap ? "Next year (info)" : "Next season"}</dt>
-              <dd className={projectedNext != null && projectedNext < 0 ? "is-bad" : ""}>
-                {projectedNext != null ? formatMoneyM(projectedNext) : "—"}
-              </dd>
-            </div>
-            {capProj.capBarPct != null ? (
-              <div className="nd-cap__bar" title="Cap used after this offer">
-                <i
-                  className={capProj.capBarPct >= 100 ? "is-over" : capProj.capBarPct >= 95 ? "is-tight" : ""}
-                  style={{ width: `${Math.min(100, capProj.capBarPct)}%` }}
-                />
-              </div>
-            ) : null}
-            {capProj.dealStartsNextYear ? <p className="nd-note">Starts next season, so it doesn't touch this year's cap.</p> : null}
-          </dl>
-
-          {localError ? <p className="nd-error" role="alert">{localError}</p> : null}
-
-          <div className="nd-actions">
-            <button type="button" className="nd-btn nd-btn--primary" disabled={busy || previewPending} onClick={primary.run}>
-              {primary.label}
-            </button>
-            <button type="button" className="nd-btn" disabled={busy || previewPending} onClick={runPreview}>
-              {previewPending ? "Asking…" : "Talk to agent"}
-            </button>
-            <button type="button" className="nd-btn" disabled={busy || previewPending || hometownBusy} onClick={askHometownDiscount}>
-              {hometownBusy ? "Asking…" : "Hometown discount?"}
-            </button>
-            {hasCounter || isPending ? (
-              <button type="button" className="nd-btn" disabled={busy || previewPending} onClick={runSubmit}>
-                Submit my offer instead
-              </button>
+        <section className="nd2-talk" aria-label="The agent">
+          <div className="nd2-thread" aria-live="polite">
+            <p className="nd2-bubble">{agentLine}</p>
+            {dialogue.map((line, i) => (
+              <p key={`${i}-${line.slice(0, 24)}`} className="nd2-bubble">{line}</p>
+            ))}
+            {evalSnap.agentMood && evalSnap.agentMood !== agentLine && !dialogue.includes(evalSnap.agentMood) ? (
+              <p className="nd2-bubble is-mood">{evalSnap.agentMood}</p>
             ) : null}
           </div>
+          {isSubmitTurn ? (
+            <div className={`nd2-verdict is-${negoStatus || "neutral"}`} role="status">
+              <strong>
+                {agentStatusLabel(negoStatus)}
+                {negotiationRound > 0 ? ` · round ${negotiationRound}` : ""}
+              </strong>
+              {hasCounter ? (
+                <p>
+                  Counter {formatMoneyM(counterTerms.aav_m)} × {counterTerms.years} {counterTerms.years === 1 ? "yr" : "yrs"}
+                  {counterTerms.nmc ? " · NMC" : null}
+                  {!counterTerms.nmc && counterTerms.ntc_mode === "FULL" ? " · NTC" : null}
+                  {!counterTerms.nmc && counterTerms.ntc_mode === "MODIFIED" ? " · M-NTC" : null}
+                  <button type="button" className="nd2-link" disabled={busy} onClick={() => applyCounterToSliders(counterTerms)}>
+                    Use these terms
+                  </button>
+                </p>
+              ) : null}
+              {isPending ? <p>They're comparing the market. Sim a day to hear back.</p> : null}
+              {isRejected ? <p>Change the money, term or protection and try again.</p> : null}
+            </div>
+          ) : null}
+          <details className="nd2-more">
+            <summary>Why they'd stay, and meeting options</summary>
+            <InterestFactors
+              title="Why they'd stay"
+              factors={response?.evaluation?.interest_factors || row?.interest_factors}
+              fit={{
+                ...(response?.evaluation?.destination_fit || row?.destination_fit || {}),
+                fit_premium_pct: response?.evaluation?.fit_premium_pct,
+              }}
+            />
+            <NegotiationMeetingPanel
+              playerId={row?.player_id || row?.id}
+              compact
+              onChanged={() => {
+                runPreview();
+              }}
+            />
+          </details>
         </section>
       </div>
+
+      <footer className="nd2-foot">
+        <dl className="nd2-cap">
+          <div>
+            <dt>Cap hit</dt>
+            <dd>{formatMoneyM(offerCapHitNum)}{offerBonusNum > 0 ? <small> incl. bonus</small> : null}</dd>
+          </div>
+          <div>
+            <dt>{capProj.dealStartsNextYear ? "Space this year" : "Space after"}</dt>
+            <dd className={projectedAfter != null && projectedAfter < 0 ? "is-bad" : ""}>
+              {projectedAfter != null ? formatMoneyM(projectedAfter) : "—"}
+            </dd>
+          </div>
+          <div>
+            <dt>{capProj.dealStartsNextYear ? "Next year after" : inSeasonCap ? "Next year (info)" : "Next season"}</dt>
+            <dd className={projectedNext != null && projectedNext < 0 ? "is-bad" : ""}>
+              {projectedNext != null ? formatMoneyM(projectedNext) : "—"}
+            </dd>
+          </div>
+          {capProj.capBarPct != null ? (
+            <div className="nd2-cap__bar" title="Cap used after this offer">
+              <i
+                className={capProj.capBarPct >= 100 ? "is-over" : capProj.capBarPct >= 95 ? "is-tight" : ""}
+                style={{ width: `${Math.min(100, capProj.capBarPct)}%` }}
+              />
+            </div>
+          ) : null}
+        </dl>
+        {localError ? <p className="nd2-error" role="alert">{localError}</p> : null}
+        <div className="nd2-actions">
+          <button type="button" className="nd-btn nd-btn--primary nd2-primary" disabled={busy || previewPending} onClick={primary.run}>
+            {primary.label}
+          </button>
+          <button type="button" className="nd2-text" disabled={busy || previewPending} onClick={runPreview}>
+            {previewPending ? "Asking…" : "Talk to agent"}
+          </button>
+          <button type="button" className="nd2-text" disabled={busy || previewPending || hometownBusy} onClick={askHometownDiscount}>
+            {hometownBusy ? "Asking…" : "Hometown discount?"}
+          </button>
+          {hasCounter || isPending ? (
+            <button type="button" className="nd2-text" disabled={busy || previewPending} onClick={runSubmit}>
+              Submit my offer instead
+            </button>
+          ) : null}
+        </div>
+      </footer>
+      {capProj.dealStartsNextYear ? <p className="nd2-note nd2-note--foot">Starts next season, so it doesn't touch this year's cap.</p> : null}
     </div>
   );
 }

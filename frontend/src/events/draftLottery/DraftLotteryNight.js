@@ -156,7 +156,10 @@ function ResultsBoard({ picks, userTeamId }) {
               <TeamLogo src={pick.logoSrc} label={pick.team_name} size="md" />
               <div className="dlot-board-team">
                 <div>
-                  <strong>{formatPickOwnershipLabel(pick)}</strong>
+                  <strong>
+                    {pick.team_name}
+                    {pick.is_traded && pick.via_team_name ? <small> via {pick.via_team_name}</small> : null}
+                  </strong>
                   {isUser ? <span>Your team</span> : null}
                 </div>
               </div>

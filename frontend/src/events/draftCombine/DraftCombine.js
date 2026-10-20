@@ -46,7 +46,11 @@ function pctTone(pct, kind) {
 function moverReason(p) {
   const t = p?.combine_stock_test;
   const base = p?.combine_stock_reason || p?.stock_reason || "";
-  if (t && /test/i.test(base)) return `${t.short || t.label} ${t.value} (${t.pct} pct)`;
+  if (t && /test/i.test(base)) return `${t.short || t.label} ${t.value}, ${
+      t.pct >= 99 ? "best in class" : t.pct <= 1 ? "last in class" : t.pct >= 50 ? `top ${100 - t.pct}%` : `bottom ${t.pct}%`
+    }`;
+  // A faller who "met expectations" dropped because others tested past him; say that.
+  if ((!base || /met expectations/i.test(base)) && rankChange(p) < 0) return "Tested fine, others moved past him";
   return base || "Met expectations";
 }
 
@@ -323,7 +327,7 @@ export default function DraftCombine({ franchiseState = {}, eventData = {}, onCo
                 <table className="dcb-test-table">
                   <thead>
                     <tr>
-                      {head("rank", "Rk", "Post-combine rank")}
+                      {head("rank", "Board", "Post-combine rank")}
                       <th className="who">Prospect</th>
                       {head("move", "Move", "Rank change at the combine")}
                       {head("combine", "Ath", "Athletic index percentile")}

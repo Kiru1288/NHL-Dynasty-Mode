@@ -1257,28 +1257,18 @@ function DeployPills({ value, options, onPick }) {
   </span>;
 }
 
-function DeploymentStrip({ group, lines, onShareStart, onShare, onShareEnd, onDeploy }) {
+function DeploymentStrip({ group, lines, onShare, onDeploy }) {
   const defense = group === "defense";
   return <div className="lb-deploy" onClick={(event) => event.stopPropagation()}>
     {lines.map((line, index) => {
       const share = shownShare(line, index, group);
       return <div className="lb-deploy-row" key={line.id}>
         <span className="lb-deploy-name">{defense ? `Pair ${index + 1}` : `Line ${index + 1}`}</span>
-        <label className="lb-deploy-share">
-          <input
-            type="range"
-            min="8"
-            max="60"
-            step="1"
-            value={Math.round(share)}
-            aria-label={`${defense ? "Pair" : "Line"} ${index + 1} ice-time share`}
-            onPointerDown={onShareStart}
-            onChange={(event) => onShare(group, line.id, Number(event.target.value))}
-            onPointerUp={onShareEnd}
-            onBlur={onShareEnd}
-          />
+        <span className="lb-deploy-share" role="group" aria-label={`${defense ? "Pair" : "Line"} ${index + 1} ice-time share`}>
+          <button type="button" className="lb-share-step" onClick={() => onShare(group, line.id, -1)} disabled={share <= 8 || index === lines.length - 1} aria-label="Less ice time" title={index === lines.length - 1 ? "The bottom unit takes whatever is left" : "Give 1% to the bottom unit"}>−</button>
           <span>{Math.round(share)}%</span>
-        </label>
+          <button type="button" className="lb-share-step" onClick={() => onShare(group, line.id, 1)} disabled={share >= 60 || index === lines.length - 1} aria-label="More ice time" title={index === lines.length - 1 ? "The bottom unit takes whatever is left" : "Take 1% from the bottom unit"}>+</button>
+        </span>
         {defense ? (
           <DeployPills
             value={line.pair_role || (index === 0 ? "shutdown" : index === 1 ? "neutral" : "sheltered")}
@@ -1378,7 +1368,7 @@ function FormationBoard({
   selectedUnit, selectedSlotKey, selectedPlayer, locks, showThird, menuKey, clipboard,
   onSelectUnit, onSlotSelect, onDrop, onDragStart, onRemove, onToggleLock, onSlotKeyDown,
   registerSlotRef,   onWarnings, onMenuToggle, actions, onTogglePool, onToggleInspector, rosterEmpty,
-  onShareStart, onShare, onShareEnd, onDeploy,
+  onShare, onDeploy,
 }) {
   const options = [[LINEUP_MODES.ALL, "All"], [LINEUP_MODES.FORWARDS, "Forwards"], [LINEUP_MODES.DEFENSE, "Defence"], [LINEUP_MODES.GOALIES, "Goalies"]];
   const showForwards = mode === LINEUP_MODES.ALL || mode === LINEUP_MODES.FORWARDS;
@@ -1403,7 +1393,7 @@ function FormationBoard({
     {rosterEmpty ? <div className="lb-empty">Roster unavailable</div> : <div className="fm-scroll">
       {showForwards ? <div className="fm-section">
         <SectionHead title="Forwards" note="Ice share is the minutes and the scoring weight" />
-        <DeploymentStrip group="forwards" lines={lineState.forwards} onShareStart={onShareStart} onShare={onShare} onShareEnd={onShareEnd} onDeploy={onDeploy} />
+        <DeploymentStrip group="forwards" lines={lineState.forwards} onShare={onShare} onDeploy={onDeploy} />
         {lineState.forwards.map((line, index) => <React.Fragment key={line.id}>
           <FormationUnit
             {...shared}
@@ -1425,7 +1415,7 @@ function FormationBoard({
 
       {showDefense ? <div className="fm-section">
         <SectionHead title="Defence" note="Shutdown takes the hard minutes. Sheltered hides them." />
-        <DeploymentStrip group="defense" lines={lineState.defense} onShareStart={onShareStart} onShare={onShare} onShareEnd={onShareEnd} onDeploy={onDeploy} />
+        <DeploymentStrip group="defense" lines={lineState.defense} onShare={onShare} onDeploy={onDeploy} />
         {lineState.defense.map((line, index) => <React.Fragment key={line.id}>
           <FormationUnit
             {...shared}
@@ -1899,43 +1889,28 @@ export function EvenStrengthLines(props) {
     return true;
   }, [lineState, locks]);
 
-  const shareBefore = useRef(null);
-  const onShareStart = useCallback(() => {
-    shareBefore.current = snapshot(lineState, locks);
-  }, [lineState, locks]);
-  const onShareMove = useCallback((group, lineId, raw) => {
-    const defaults = group === "defense" ? [46, 34, 20] : [34, 29, 22, 15];
+  // Ice time moves 1% at a time between the chosen unit and the bottom unit only, so
+  // nudging Line 2 never quietly shifts Line 1. The bottom unit absorbs the remainder.
+  const onShareStep = useCallback((group, lineId, delta) => {
+    const defaults = group === "defense" ? DEF_SHARE_DEFAULT : FWD_SHARE_DEFAULT;
     const units = lineState[group] || [];
     const idx = units.findIndex((line) => line.id === lineId);
-    if (idx < 0) return;
-    const current = units.map((line, i) => {
-      const n = Number(line.toi_share);
-      return Number.isFinite(n) ? n : (defaults[i] || 10);
-    });
-    const clamped = Math.max(8, Math.min(60, Math.round(Number(raw))));
-    const rest = Math.max(0, 100 - clamped);
-    const otherSum = current.reduce((sum, value, i) => (i === idx ? sum : sum + value), 0) || 1;
-    const rounded = current.map((value, i) => (i === idx ? clamped : Math.round((rest * value) / otherSum)));
-    let drift = 100 - rounded.reduce((sum, value) => sum + value, 0);
-    const donor = rounded
-      .map((value, i) => [value, i])
-      .filter(([, i]) => i !== idx)
-      .sort((a, b) => b[0] - a[0])[0];
-    if (donor) rounded[donor[1]] += drift;
-    setLineState({
-      ...lineState,
-      [group]: units.map((line, i) => ({ ...line, toi_share: rounded[i] })),
-    });
-  }, [lineState]);
-  const onShareEnd = useCallback(() => {
-    if (!shareBefore.current) return;
-    const before = shareBefore.current;
-    shareBefore.current = null;
-    if (snapshotKey(before) === snapshotKey(snapshot(lineState, locks))) return;
-    setHistory((current) => [...current, before].slice(-HISTORY_LIMIT));
-    setFuture([]);
-    setAnnouncement("Ice time updated.");
-  }, [lineState, locks]);
+    const last = units.length - 1;
+    if (idx < 0 || idx === last) return;
+    const current = units.map((line, i) => shownShare(line, i, group) ?? defaults[i]);
+    const next = [...current];
+    next[idx] += delta;
+    next[last] -= delta;
+    if (next[idx] < 8 || next[idx] > 60 || next[last] < 8 || next[last] > 60) {
+      setAnnouncement(`The bottom ${group === "defense" ? "pair" : "line"} is at its limit.`);
+      return;
+    }
+    commit(
+      { ...lineState, [group]: units.map((line, i) => ({ ...line, toi_share: Math.round(next[i]) })) },
+      locks,
+      "Ice time updated."
+    );
+  }, [lineState, locks, commit]);
   const onDeploy = useCallback((group, lineId, patch) => {
     const next = {
       ...lineState,
@@ -2328,9 +2303,7 @@ export function EvenStrengthLines(props) {
           onTogglePool={() => setPoolOpen((current) => !current)}
           onToggleInspector={() => setInspectorOpen((current) => !current)}
           rosterEmpty={!players.length && !rosterLoading}
-          onShareStart={onShareStart}
-          onShare={onShareMove}
-          onShareEnd={onShareEnd}
+          onShare={onShareStep}
           onDeploy={onDeploy}
         />
         <LineInspector

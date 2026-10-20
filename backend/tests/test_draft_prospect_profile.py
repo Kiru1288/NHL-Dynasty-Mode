@@ -129,3 +129,108 @@ def test_wjc_stats_block_on_profile():
     assert wjc.get("ovrDelta") == 1.2
     assert wjc.get("potentialDelta") == 0.8
     assert profile.get("wjcPerformance") == wjc
+
+
+# --- Scouting intel (outcomes, confidence, translation, character, leaks) ---
+
+from services.draft_prospect_profile import (  # noqa: E402
+    _outcome_distribution_block,
+    _public_ovr,
+    _roster_counts,
+)
+
+
+def test_outcomes_sum_to_100_and_name_likely_and_ceiling():
+    profile = build_prospect_profile(_fixture_row())
+    dist = profile["outcome_distribution"]
+    assert dist["method"] == "heuristic"
+    pcts = [s["pct"] for s in dist["segments"]]
+    assert all(p >= 0 for p in pcts)
+    assert sum(pcts) == 100
+    keys = [s["key"] for s in dist["segments"]]
+    assert keys == ["bust", "ahl", "mid", "top", "star"]
+    assert dist["most_likely"]["key"] in keys
+    assert dist["nhl_share"] == sum(s["pct"] for s in dist["segments"] if s["key"] in ("mid", "top", "star"))
+    assert dist["ceiling_outcome"]["key"] in ("bust", "ahl", "mid", "top", "star")
+
+
+def test_outcomes_respond_to_ceiling_and_hide_when_ceiling_hidden():
+    high = _outcome_distribution_block(_fixture_row(), {"rating": 90}, 86, 92)
+    low = _outcome_distribution_block(_fixture_row(), {"rating": 70}, 66, 72)
+    assert high["nhl_share"] > low["nhl_share"]
+    assert _outcome_distribution_block(_fixture_row(), {"hidden": True}, 80, 88) is None
+    assert _outcome_distribution_block(_fixture_row(), {"rating": 80}, None, None) is None
+
+
+def test_public_ovr_never_reads_unrevealed_true_ovr():
+    row = _fixture_row(true_ovr=91, current_ovr_estimate=None, scouted_overall_estimate=None)
+    assert _public_ovr(row) == 0.0
+    assert _public_ovr({**row, "ovr_revealed": True}) == 91.0
+    profile = build_prospect_profile(row)
+    blob = repr(profile.get("scouting_history")) + repr(profile.get("intel"))
+    assert "91" not in blob
+
+
+def test_confidence_levels_follow_file_sample_and_band():
+    conf = build_prospect_profile(_fixture_row(scouted_percentage=80, gp=60, points=80))["intel"]["confidence"]
+    assert conf["current"]["level"] == "Confirmed"
+    assert conf["translation"]["level"] in ("Reliable", "Usable")
+    early = build_prospect_profile(_fixture_row(scouted_percentage=0, gp=6))["intel"]["confidence"]
+    assert early["current"]["level"] == "Public only"
+    assert early["translation"]["level"] == "Thin"
+    hidden = build_prospect_profile(_fixture_row(ceiling_hidden=True))["intel"]["confidence"]
+    assert hidden["development"]["level"] == "Unknown"
+
+
+def test_character_traits_are_never_invented():
+    row = _fixture_row(leadership=None)
+    read = build_prospect_profile(row)["character_read"]
+    assert read["modelled_count"] == 0
+    assert all(not t["modelled"] and t["tier"] == "Unknown" for t in read["traits"])
+    assert build_prospect_profile(row)["intel"]["confidence"]["character"]["level"] == "Not modelled"
+
+    class _P:
+        attribute_profile = {"hidden": {"coachability": 31.0, "competitiveness": 88.0}}
+
+    read = build_prospect_profile(row, player=_P())["character_read"]
+    by_label = {t["label"]: t for t in read["traits"]}
+    assert by_label["Coachability"]["modelled"] and by_label["Coachability"]["score"] is None
+    assert by_label["Competitive Drive"]["tier"] != "Unknown"
+    assert read["modelled_count"] == 2
+
+
+def test_translation_keeps_observed_and_estimates_apart():
+    row = _fixture_row(gp=40, points=60, league="OHL", analytics={"war": 1.2, "xgf_pct": 55.0})
+    tr = build_prospect_profile(row)["intel"]["translation"]
+    assert tr["observed"]["gp"] == 40 and tr["observed"]["points"] == 60
+    assert tr["estimates_label"] == "Model estimate"
+    assert "war" in tr["estimates"] and "war" not in tr["observed"]
+    none = build_prospect_profile(_fixture_row(gp=0, points=0))["intel"]["translation"]
+    assert none["nhle"] is None and none["context_band"] is None
+
+
+def test_fit_with_empty_roster_and_enum_positions():
+    profile = build_prospect_profile(_fixture_row(), roster_rows=[], team_status={})
+    assert "teamFit" in profile
+    from enum import Enum
+
+    class Pos(Enum):  # plain Enum: str() gives "Pos.C", like the engine's Position
+        C = "C"
+        D = "D"
+
+    class Hand(Enum):
+        R = "R"
+
+    counts = _roster_counts([{"position": Pos.C}, {"position": Pos.D, "handedness": Hand.R}])
+    assert counts["C"] == 1 and counts["D"] == 1 and counts["RHD"] == 1
+
+
+def test_stall_scenario_moves_share_toward_current_ability():
+    row = _fixture_row(gp=50)
+    no_current = _outcome_distribution_block(row, {"rating": 84}, 80, 84)
+    with_current = _outcome_distribution_block(row, {"rating": 84}, 80, 84, 60, 64)
+    low = lambda d: sum(s["pct"] for s in d["segments"] if s["key"] in ("bust", "ahl"))
+    assert low(with_current) > low(no_current)
+    assert sum(s["pct"] for s in with_current["segments"]) == 100
+    risky = _outcome_distribution_block({**row, "character_concerns": True}, {"rating": 84}, 80, 84, 60, 64)
+    assert risky["stall_share"] > with_current["stall_share"]

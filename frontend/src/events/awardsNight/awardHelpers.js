@@ -229,6 +229,19 @@ export const AWARD_CATALOG = {
     stageLine: "Bench leadership.",
     displayMetric: "Ballot points",
   },
+  gm_of_the_year: {
+    label: "GM of the Year",
+    short: "GM",
+    kind: "executive",
+    order: 17,
+    ceremonyOrder: 17,
+    accent: "#fbbf24",
+    glow: "rgba(251,191,36,.28)",
+    trophyTone: "gold",
+    ceremonyTitle: "Executive of the Year",
+    stageLine: "Front office that built the season's biggest overachiever.",
+    displayMetric: "Ballot points",
+  },
   all_star_1: {
     label: "First NHL All-Star Team",
     short: "AS1",
@@ -275,6 +288,7 @@ const AWARD_ALIASES = [
   ["masterton", ["masterton", "bill masterton"]],
   ["messier", ["messier", "mark messier"]],
   ["jack_adams", ["jack adams", "adams"]],
+  ["gm_of_the_year", ["gm of the year", "gm_of_the_year", "general manager of the year"]],
   ["all_star_1", ["first nhl all-star team", "first all-star", "all star first"]],
   ["all_star_2", ["second nhl all-star team", "second all-star", "all star second"]],
 ];
@@ -700,7 +714,8 @@ export function getAwardCatalogEntry(rawName) {
   const id = resolveAwardKey(rawName);
   return (
     AWARD_CATALOG[id] || {
-      label: String(rawName || "Award").trim(),
+      // Unknown keys ("gm_of_the_year") must never reach the screen raw.
+      label: String(rawName || "Award").trim().replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
       short:
         String(rawName || "AWD")
           .replace(/[^A-Za-z]/g, "")
@@ -1044,13 +1059,14 @@ export const CEREMONY_ADDITIONAL_HONOR_KEYS = [
   "masterton",
   "messier",
   "jack_adams",
+  "gm_of_the_year",
   "conn_smythe",
   "all_star_1",
   "all_star_2",
 ];
 
 export const CEREMONY_RAIL_GROUPS = [
-  { id: "team", label: "Team Awards", awardKeys: ["presidents"] },
+  { id: "team", label: "Team Awards", awardKeys: ["presidents", "conference_champions"] },
   {
     id: "player",
     label: "Player Awards",
@@ -1370,7 +1386,7 @@ function buildPreviousWinners(award, franchiseState) {
     history.forEach((row) => {
       const y = row?.season_year;
       const champion = resolveTeamNameById(row?.champion_id, franchiseState);
-      if (y && champion) entries.push({ season: `${y}?${Number(y) + 1}`, winner: champion });
+      if (y && champion) entries.push({ season: `${y}–${Number(y) + 1}`, winner: champion });
     });
   }
 
@@ -2391,9 +2407,12 @@ export function buildAwardsCeremonySlides(awards, franchiseState = null) {
 export function buildAwardsNightSummary(awards) {
   const list = safeArray(awards);
   const stanley = list.find((a) => a.awardKey === "stanley");
-  const hart = list.find((a) => a.awardKey === "hart");
-  const artRoss = list.find((a) => a.awardKey === "art_ross");
-  const vezina = list.find((a) => a.awardKey === "vezina");
+  // An award with no winner (short seasons can leave the Hart unawarded) must not
+  // headline the night as "Not awarded captures ...".
+  const awarded = (a) => a && a.winnerLabel && !/^not awarded$/i.test(String(a.winnerLabel).trim());
+  const hart = list.find((a) => a.awardKey === "hart" && awarded(a));
+  const artRoss = list.find((a) => a.awardKey === "art_ross" && awarded(a));
+  const vezina = list.find((a) => a.awardKey === "vezina" && awarded(a));
   const socialPulse = buildAwardSocialPulse(list, {
     maxTweets: 10,
     tweetsPerAward: 1,

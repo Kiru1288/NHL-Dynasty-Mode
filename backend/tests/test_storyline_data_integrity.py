@@ -201,3 +201,194 @@ def test_prospect_stock_stories_name_the_player_and_are_not_user_team_attributed
     assert up["cause_type"] == "PROSPECT_RISING" and down["cause_type"] == "PROSPECT_FALLING"
     assert up["evidence"]["points"] == 40 and up["evidence"]["league"] == "OHL"
     assert "ghost" not in " ".join(s["headline"] for s in out["storylines"])  # unnameable prospect not published
+
+
+# ----------------------------------------------------------------------------- effects applied once
+def _effects_session():
+    league = SimpleNamespace(teams=[], development_leagues=[])
+    return SimpleNamespace(
+        user_team_id="T1", season_calendar_year=2025, calendar_cursor=40, nhl_calendar=[{"iso": "2025-12-01"}] * 60,
+        team_by_id={}, player_season_stats={}, sim=SimpleNamespace(league=league), universe_players={},
+        storyline_events=[], _storyline_fired={}, standings=None, game_results=[],
+        strength_map={}, pending_decisions=[], _standings_rank_by_team={}, _standings_rank_rev=0, _stats_revision=0,
+    )
+
+
+def test_data_pass_applies_effects_only_to_published_non_cause_stories(monkeypatch):
+    applied = []
+    monkeypatch.setattr(se, "_apply_storyline_effects", lambda s, t, p, fx: applied.append(fx))
+    user_cause = {"headline": "u", "team_id": "T1", "cause_type": "PLAYER_LOW_PRODUCTION", "effects": {"team_morale": -3}}
+    league_kept = {"headline": "k", "team_id": "T9", "cause_type": "WINNING_STREAK", "effects": {"team_morale": 1}}
+    # The daily cap trims everything else; only these two publish.
+    monkeypatch.setattr(se, "select_daily_data_stories", lambda gen, uid, league_cap=7: [user_cause, league_kept])
+    se.run_data_storyline_pass(_effects_session(), calendar_idx=40, day_meta={"iso": "2025-12-01"}, rng=random.Random(1))
+    # User cause story is left to _emit_cause_storyline; only the kept league story applies here.
+    assert applied == [{"team_morale": 1}]
+
+
+def test_trimmed_data_stories_apply_no_effects(monkeypatch):
+    applied = []
+    monkeypatch.setattr(se, "_apply_storyline_effects", lambda s, t, p, fx: applied.append(fx))
+    monkeypatch.setattr(se, "select_daily_data_stories", lambda gen, uid, league_cap=7: [])
+    se.run_data_storyline_pass(_effects_session(), calendar_idx=40, day_meta={"iso": "2025-12-01"}, rng=random.Random(1))
+    assert applied == []
+
+
+def test_cause_path_predicate_matches_routing():
+    assert se._data_story_uses_cause_path({"team_id": "T1", "cause_type": "LOSING_STREAK"}, "T1")
+    assert not se._data_story_uses_cause_path({"team_id": "T1", "cause_type": ""}, "T1")
+    assert not se._data_story_uses_cause_path({"team_id": "T2", "cause_type": "LOSING_STREAK"}, "T1")
+    assert not se._data_story_uses_cause_path({"team_id": "", "cause_type": "X"}, "")
+
+
+# ----------------------------------------------------------------------------- promises end when the player leaves
+def _promise_session(roster_ids):
+    roster = [SimpleNamespace(id=pid, name=pid) for pid in roster_ids]
+    team = SimpleNamespace(roster=roster, ahl_roster=[])
+    return SimpleNamespace(
+        user_team_id="T1", team_by_id={"T1": team}, season_calendar_year=2025, calendar_cursor=50,
+        nhl_calendar=[{"iso": "2025-12-10"}] * 80,
+        universe_players={"p1": {"player_id": "p1", "team_id": "T2", "state": {"gm_trust": 50}}},
+        universe_promises=[{"id": "pr1", "player_id": "p1", "type": "role_opportunity", "status": "active",
+                            "games_remaining": 3, "progress": 0, "required_progress": 5, "description": "More ice"}],
+    )
+
+
+def test_promise_voids_without_penalty_when_player_left_the_org():
+    sess = _promise_session(["p9"])  # p1 traded away
+    counts = se._u_tick_promises(sess)
+    promise = sess.universe_promises[0]
+    assert promise["status"] == "void" and counts["void"] == 1
+    assert sess.universe_players["p1"]["state"]["gm_trust"] == 50  # no broken-promise penalty
+    assert sess.universe_players["p1"]["open_promise_types"] == []
+
+
+def test_promise_stays_active_while_player_is_on_the_club():
+    sess = _promise_session(["p1"])
+    se._u_tick_promises(sess)
+    assert sess.universe_promises[0]["status"] == "active"
+
+
+# ----------------------------------------------------------------------------- bulk sims advance timers by elapsed days
+def test_readiness_modifiers_tick_by_elapsed_days():
+    sess = SimpleNamespace(universe_readiness_modifiers={
+        "p1": [{"id": "a", "days_remaining": 5}, {"id": "b", "days_remaining": 12}],
+    })
+    expired = se._u_tick_readiness_modifiers(sess, 7)  # one bulk pass covering a week
+    assert expired == 1
+    assert [r["days_remaining"] for r in sess.universe_readiness_modifiers["p1"]] == [5]
+    se._u_tick_readiness_modifiers(sess)  # normal single day still steps by one
+    assert sess.universe_readiness_modifiers["p1"][0]["days_remaining"] == 4
+
+
+def test_availability_days_tick_by_elapsed_days():
+    sess = SimpleNamespace(universe_player_availability={
+        "p1": {"player_id": "p1", "status": "investigative_leave", "days_remaining": 6, "games_remaining": 0, "active": True},
+        "p2": {"player_id": "p2", "status": "suspended", "days_remaining": 0, "games_remaining": 5, "active": True},
+    })
+    cleared = se._u_tick_player_availability_days(sess, 7)
+    assert cleared == 1 and sess.universe_player_availability["p1"]["status"] == "available"
+    assert sess.universe_player_availability["p2"]["active"]  # game-counted bans don't age by days
+
+
+# ----------------------------------------------------------------------------- P1 fixes
+def _life_session(vol=50.0):
+    player = SimpleNamespace(id="p1", name="Life Guy")
+    team = SimpleNamespace(roster=[player], ahl_roster=[])
+    entity = {"player_id": "p1", "player_name": "Life Guy", "personality": {"volatility": vol},
+              "life": {"last_minor_event_day": 0}, "state": {}}
+    return SimpleNamespace(user_team_id="T1", team_by_id={"T1": team}, universe_players={"p1": entity},
+                           calendar_cursor=40, nhl_calendar=[{"iso": "2025-12-01"}] * 60, season_calendar_year=2025)
+
+
+class _FixedRng(random.Random):
+    def __init__(self, value):
+        super().__init__(0)
+        self._v = value
+
+    def random(self):
+        return self._v
+
+
+def test_life_event_odds_compound_over_a_bulk_span(monkeypatch):
+    from app.sim_engine.franchise import storyline_procedural as sp
+
+    rolled = []
+    monkeypatch.setattr(sp, "evaluate_life_event_rules", lambda e, r, positive: rolled.append(1))
+    # Daily chance for vol 50 on the user club is 0.07 × 1.25 = 8.75%; a 0.30 roll misses it…
+    se._u_generate_minor_life_events(_life_session(), _FixedRng(0.30), days=1)
+    assert rolled == []
+    # …but 7 days compound to 1 − 0.9125^7 ≈ 47%, so the same roll now passes.
+    se._u_generate_minor_life_events(_life_session(), _FixedRng(0.30), days=7)
+    assert rolled == [1]
+
+
+def test_storyline_agent_follows_the_contract_engine_agent():
+    player = SimpleNamespace(id="p1", name="A", agent_profile={"id": "walsh"})
+    sess = SimpleNamespace(team_by_id={"T1": SimpleNamespace(roster=[player], ahl_roster=[])},
+                           agent_relationships={"p1": {"agent_id": "carter", "trust": 0.6}})
+    agent = se._agent_for_player(sess, "p1", random.Random(1))
+    assert agent["id"] == "walsh"
+    assert sess.agent_relationships["p1"] == {"agent_id": "walsh", "trust": 0.6}  # trust kept, id repaired
+
+
+def test_contract_satisfaction_uses_term_and_pay():
+    sess = SimpleNamespace(sim=None)
+    ent = {"personality": {"money_focus": 45, "ambition": 50}}
+
+    def p(years, aav):
+        return SimpleNamespace(id="x", contract={"years_remaining": years, "cap_hit_m": aav}, ovr=86, overall=86, age=27, position="C")
+
+    long_fair = se._u_contract_satisfaction(sess, p(4, 7.0), ent, 2025)
+    short_fair = se._u_contract_satisfaction(sess, p(1, 7.0), ent, 2025)
+    long_cheap = se._u_contract_satisfaction(sess, p(4, 1.0), ent, 2025)
+    assert long_fair["satisfaction"] > short_fair["satisfaction"]
+    assert long_cheap["satisfaction"] < long_fair["satisfaction"]  # underpaid is no longer "satisfied"
+    assert long_cheap["market_gap"] < 0
+
+
+def test_small_samples_do_not_clear_the_evidence_gate():
+    # OVR 86 forward, 6 GP: expected ≈ 3.2 points. One point is noise, zero is a story.
+    exp_pts = se._expected_points_per_game(86, "C", 27, False) * 6
+    assert se._points_z(1, exp_pts) > se.POINTS_Z_MINOR
+    assert se._points_z(0, exp_pts) <= se.POINTS_Z_MINOR
+    # .880 on 90 shots vs an expected .897 is well inside one standard error.
+    assert se._save_pct_z(0.880, 0.897, 90) > se.SAVE_Z_MELTDOWN
+    assert se._save_pct_z(0.850, 0.897, 600) <= se.SAVE_Z_MELTDOWN
+
+
+def test_winning_promise_needs_a_real_core_upgrade(monkeypatch):
+    promise = {"player_id": "p1", "type": "winning_commitment", "baseline": {"core_ovr": 80.0, "roster_ids": []}}
+    monkeypatch.setattr(se, "_u_promise_snapshot", lambda s, pid: {"core_ovr": 80.3, "roster_ids": ["new80"]})
+    se._u_promise_progress_tick(SimpleNamespace(), promise)
+    assert int(promise.get("progress") or 0) == 0  # a lateral 80-OVR add no longer counts
+    monkeypatch.setattr(se, "_u_promise_snapshot", lambda s, pid: {"core_ovr": 80.8, "roster_ids": []})
+    se._u_promise_progress_tick(SimpleNamespace(), promise)
+    assert promise["progress"] == 1
+
+
+def test_team_core_ovr_uses_dressed_core():
+    roster = [SimpleNamespace(id=f"f{i}", position="C", ovr=80) for i in range(14)]
+    roster += [SimpleNamespace(id=f"d{i}", position="D", ovr=78) for i in range(7)]
+    roster += [SimpleNamespace(id="g1", position="G", ovr=85), SimpleNamespace(id="g2", position="G", ovr=70)]
+    core = se._team_core_ovr(SimpleNamespace(roster=roster))
+    assert core == round((12 * 80 + 6 * 78 + 85) / 19, 2)
+
+
+def test_conduct_incidents_target_risk_not_random_players():
+    low = se._u_conduct_risk({"personality": {"character": 30, "volatility": 80}, "state": {"media_stress": 60}}, None)
+    high = se._u_conduct_risk({"personality": {"character": 85, "volatility": 30}, "state": {"media_stress": 20}}, None)
+    assert low > high * 10 and high >= 0.02
+
+
+def test_first_private_trade_rejection_is_softer_than_repeat_exposure():
+    def player():
+        return SimpleNamespace(id="p1", character=50)
+
+    sess = SimpleNamespace(universe_players={})
+    quiet = se._trade_fallout_magnitude(sess, player(), 1)
+    loud_player = player()
+    se._ensure_player_storyline_state(loud_player)["trade_rumor_heat"] = 60
+    loud = se._trade_fallout_magnitude(sess, loud_player, 1)
+    assert quiet[2] <= 1 and quiet[4] <= 14  # OVR modifier and recovery days
+    assert loud[2] >= quiet[2] and loud[1] > quiet[1]

@@ -16,7 +16,7 @@ import { flagApiUrl, resolveCountryCode } from "../../utils/countryFlags";
 import { buildDraftFanTweets, buildDraftPickReactionTweet } from "../awardsNight/awardHelpers";
 import { resolveWjcDossierBlock } from "../../screens/prospectDossierHelpers";
 import { buildProspectDossierModel } from "../../components/dossier/prospectDossierModel";
-import { DossierLayoutStyles, DossierSkillProfile, DossierVerdict } from "../../components/dossier/ProspectDossierView";
+import { DossierCommandSheet, DossierLayoutStyles } from "../../components/dossier/ProspectDossierView";
 import {
   formatPick,
   getPlayerName,
@@ -27,8 +27,6 @@ import {
 import { uiPortalTarget } from "../../utils/fluidUiScale";
 import {
   CertaintyChip,
-  ClassIndicators,
-  OutcomeDonut,
   ProspectClassContext,
   ProspectVisualStyles,
   certaintyTier,
@@ -519,36 +517,6 @@ function formatCurrentOvr(p) {
   return resolveCurrentOvrLabel(p);
 }
 
-function readinessFromScore(n) {
-  if (n >= 78) return "NHL Ready";
-  if (n >= 68) return "Close";
-  if (n >= 55) return "Developing";
-  if (n >= 40) return "Long-term project";
-  return "At Risk";
-}
-
-function formatNhlReadiness(p) {
-  const ready = p?.nhl_readiness ?? p?.dossier?.nhl_readiness ?? p?.dossier?.readiness;
-  if (ready != null && ready !== "") {
-    if (typeof ready === "object") {
-      if (ready.label) return String(ready.label);
-      if (ready.score != null && Number.isFinite(Number(ready.score))) {
-        return readinessFromScore(Number(ready.score));
-      }
-    }
-    const n = Number(ready);
-    if (Number.isFinite(n)) {
-      if (n > 1.5 && n <= 100) return readinessFromScore(n);
-      if (n <= 0) return "NHL Ready";
-      if (n <= 8) return `${Math.round(n)} Years Away`;
-    }
-    const s = String(ready);
-    if (/ready|close|develop|project|risk/i.test(s)) return s;
-  }
-  const label = p?.dossier?.readinessLabel || p?.readinessLabel;
-  return label ? String(label) : null;
-}
-
 function formatNhlArrivalEta(p) {
   const etaObj = p?.dossier?.eta;
   if (etaObj && typeof etaObj === "object") {
@@ -672,14 +640,6 @@ function resolvePotentialOvrLabel(p) {
 }
 
 /** First `count` sentences of a scouting paragraph (the dossier was a wall of text). */
-function firstSentences(text, count = 2) {
-  const t = String(text || "").trim();
-  if (!t) return "";
-  const parts = t.match(/[^.!?]+[.!?]+/g);
-  if (!parts || parts.length <= count) return t;
-  return parts.slice(0, count).join(" ").trim();
-}
-
 /** Staff certainty on this prospect's OVR and potential (see ProspectVisuals). */
 function getProspectCertainty(p) {
   if (!p) return { ovr: 0, pot: 0 };
@@ -751,7 +711,8 @@ function formatStatCell(label, value) {
   if (label === "SV%") {
     const n = Number(value);
     if (!Number.isFinite(n)) return null;
-    return n > 1 ? n.toFixed(1) : (n * 100).toFixed(1);
+    const frac = n > 1 ? n / 100 : n;
+    return frac.toFixed(3).replace(/^0/, "");
   }
   if (label === "GAA" || label === "P/GP") {
     const n = Number(value);
@@ -1526,7 +1487,7 @@ const SHEET = `
 }
 
 .edraft-dossier-grid{
-  flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) minmax(180px,.75fr);gap:12px;align-items:stretch;
+  flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr);gap:12px;align-items:stretch;
 }
 .edraft-dossier-main,.edraft-dossier-side{display:flex;flex-direction:column;gap:14px;min-height:0;height:100%;}
 .edraft-dossier-main .edraft-sec:last-child{flex:1;display:flex;flex-direction:column;min-height:0;}
@@ -1538,6 +1499,49 @@ const SHEET = `
 .edraft-fact.tone-warn strong{color:var(--orange);}
 .edraft-sheet--dossier .edraft-sheet-body{max-height:min(82vh,920px);overflow:auto;}
 .edraft-sheet--dossier .edraft-dossier{padding-top:4px;}
+.edraft-dossier > .edraft-idband{display:none;}
+/* Prospect file: editorial pass. Spacing and type separate sections; borders only where they explain a relationship. */
+.edraft-scrim .edraft-sheet--dossier{background:var(--dd-stage-deep,#050c2c);border:1px solid rgba(158,180,198,.16);}
+.edraft-sheet--dossier .edraft-sheet-head{background:transparent;border-bottom:0;padding:14px 24px 0;}
+.edraft-sheet--dossier .edraft-sheet-head h2{font-family:var(--dd-font-ui);font-size:13px;font-weight:700;letter-spacing:0;text-transform:none;color:#9eb4c6;}
+.edraft-sheet--dossier .edraft-sheet-head p{font-size:12px;font-weight:600;letter-spacing:0;text-transform:none;color:#9eb4c6;}
+.edraft-sheet--dossier .edraft-sheet-body{padding:0 24px 28px;scrollbar-color:rgba(158,180,198,.25) transparent;}
+.edraft-scrim .edraft-sheet--dossier *::-webkit-scrollbar-thumb{background:rgba(158,180,198,.25)!important;border:0!important;box-shadow:none!important;}
+.edraft-scrim .edraft-sheet--dossier *::-webkit-scrollbar-track{background:transparent!important;}
+.edraft-dossier .edraft-dossier-main,.edraft-dossier .dd-skills{gap:28px;}
+.edraft-dossier .edraft-sec{gap:10px;}
+.edraft-dossier .edraft-sec-head{border-bottom:0;padding:0;}
+.edraft-dossier .edraft-sec-head .edraft-action-icon{display:none;}
+.edraft-dossier .edraft-sec-head h4,.edraft-dossier .dd-h h3{font-family:var(--dd-font-ui);font-size:15px;font-weight:800;letter-spacing:0;text-transform:none;color:#fff;}
+.edraft-dossier .edraft-sec-head em,.edraft-dossier .edraft-sec-meta,.edraft-dossier .dd-h span{font-size:12px;letter-spacing:0;text-transform:none;color:#9eb4c6;}
+.edraft-dossier .dd-card{background:transparent;border:0;padding:0;}
+.edraft-dossier .dd-notes li{font-size:15px;}
+.edraft-dossier .dd-split-notes .dd-h h3{font-size:13px;color:#9eb4c6;}
+.edraft-dossier .edraft-report{border:0;background:transparent;padding:0;font-size:15px;line-height:1.55;color:var(--dd-cream,#ffe7c4);}
+.edraft-dossier .edraft-facts{background:transparent;gap:14px 24px;}
+.edraft-dossier .edraft-fact{background:transparent;padding:0;}
+.edraft-dossier .edraft-fact span,.edraft-dossier .edraft-fact-label{font-size:12px;letter-spacing:0;text-transform:none;font-weight:600;color:#9eb4c6;}
+.edraft-dossier .edraft-fact strong,.edraft-dossier .edraft-fact-value,.edraft-dossier .edraft-fact-value.edraft-text-pop{font-size:15px;letter-spacing:0;text-transform:none;color:#fff;text-shadow:none;}
+.edraft-dossier .edraft-prod-strip{gap:24px;}
+.edraft-dossier .edraft-prod-cell{border:0;background:transparent;padding:0;text-align:left;align-items:flex-start;}
+.edraft-dossier .edraft-prod-cell span,.edraft-dossier .edraft-prod-cell > span{font-size:12px;letter-spacing:0;text-transform:none;color:#9eb4c6;}
+.edraft-dossier .edraft-prod-cell strong,.edraft-dossier .edraft-num-pop{font-family:var(--dd-font-ui);font-size:24px;font-weight:800;color:#fff!important;text-shadow:none!important;}
+.edraft-sheet--dossier .edraft-sheet-foot{background:var(--dd-stage-deep,#050c2c);border-top:1px solid rgba(158,180,198,.16);padding:12px 24px;}
+.edraft-scrim .edraft-sheet--dossier .edraft-sheet-foot .nhlcal-advance-button:not(.nhlcal-advance-button-secondary){background:var(--dd-gold-hi,#f8d58a)!important;color:#1a0d05!important;border:0!important;border-radius:6px!important;box-shadow:none!important;text-shadow:none!important;font-family:var(--dd-font-ui)!important;font-weight:800!important;font-size:14px!important;letter-spacing:0!important;text-transform:none!important;padding:10px 20px!important;clip-path:none!important;}
+.edraft-scrim .edraft-sheet--dossier .edraft-sheet-foot .nhlcal-advance-button:not(.nhlcal-advance-button-secondary) *{color:inherit!important;}
+.edraft-scrim .edraft-sheet--dossier,.edraft-scrim .edraft-sheet--dossier *{scrollbar-color:rgba(158,180,198,.3) transparent!important;}
+.edraft-dossier .pv-card,.edraft-dossier .pv-donut{background:transparent!important;border:0!important;box-shadow:none!important;padding:0!important;}
+.edraft-dossier .pv-card__head h4{font-family:var(--dd-font-ui);font-size:15px;font-weight:800;letter-spacing:0;text-transform:none;color:#fff;}
+.edraft-dossier .pv-ring span,.edraft-dossier .pv-ring small{text-transform:none;letter-spacing:0;}
+.edraft-dossier .pv-bar__track i{background:var(--dd-cream,#ffe7c4)!important;opacity:.85;}
+.edraft-dossier .pv-bar.is-soft .pv-bar__track i{opacity:.45;}
+.edraft-dossier .pv-bar__label{font-size:14px;letter-spacing:0;text-transform:none;color:#fff;}
+.edraft-dossier .pv-tier{background:transparent!important;border:0!important;padding:0!important;font-size:12px!important;letter-spacing:0!important;text-transform:lowercase!important;display:inline-block;}
+.edraft-dossier .pv-tier::first-letter{text-transform:uppercase;}
+.edraft-dossier .pv-bar__pct{font-size:12px;color:#9eb4c6;}
+.edraft-dossier .edraft-fact-value.edraft-text-pop,.edraft-dossier .edraft-fact strong{text-transform:none!important;}
+.edraft-dossier .edraft-prod-cell span{text-transform:none;}
+
 .edraft-sheet--dossier .edraft-dossier > .edraft-idband,
 .edraft-sheet--dossier-body .edraft-dossier > .edraft-idband{display:none;}
 .edraft-dossier-main .edraft-sec:last-child{flex:0;}
@@ -1927,6 +1931,11 @@ const SHEET = `
   backdrop-filter:blur(3px);
 }
 .edraft-scrim.is-stack{z-index:15000;}
+/* Prospect file docks to the right so the board, the clock and our pick stay in view. */
+.edraft-scrim.is-dock{justify-content:flex-end;align-items:stretch;padding:0;background:linear-gradient(90deg,rgba(5,12,44,0) 0%,rgba(5,12,44,.35) 38%);backdrop-filter:none;}
+.edraft-scrim.is-dock .edraft-sheet--dossier{width:min(74vw,1120px);max-width:100%;max-height:none;height:100%;border-width:0 0 0 3px;border-style:solid;border-color:#ff8a1f;box-shadow:-24px 0 48px rgba(0,0,0,.45);}
+.edraft-scrim.is-dock .edraft-sheet--dossier .edraft-sheet-body{max-height:none;}
+@media (max-width:820px){.edraft-scrim.is-dock .edraft-sheet--dossier{width:100%;border-left-width:0;}}
 .edraft-sheet{
   width:min(1080px,100%);max-height:88vh;display:flex;flex-direction:column;
   background:
@@ -3464,7 +3473,7 @@ function DossierPopup({
   if (!prospect) return null;
   return createPortal(
     <div
-      className={`${PREFIX}-scrim${stacked ? " is-stack" : ""}`}
+      className={`${PREFIX}-scrim is-dock${stacked ? " is-stack" : ""}`}
       role="dialog"
       aria-modal="true"
       aria-label="Prospect file"
@@ -3473,19 +3482,18 @@ function DossierPopup({
       <div className={`${PREFIX}-sheet ${PREFIX}-sheet--dossier`} onClick={(e) => e.stopPropagation()}>
         <header className={`${PREFIX}-sheet-head`}>
           <div>
-            <h2>{prospect.prospect_name || getPlayerName(prospect)}</h2>
-            <p>
-              {[
-                prospect.position || getPlayerPosition(prospect),
-                prospect.junior_team || prospect.dossier?.team || prospect.dossier?.club,
-                prospect.nhl_team_name || (prospect.overall_pick != null ? prospect.team_name : null),
-                prospect.overall_pick != null ? formatPick(prospect.overall_pick) : null,
-                getRank(prospect) != null ? `Board #${getRank(prospect)}` : null,
-              ].filter(Boolean).join(" · ")}
-            </p>
+            <h2>Prospect file</h2>
+            {prospect.overall_pick != null ? (
+              <p>
+                {[
+                  prospect.nhl_team_name || prospect.team_name,
+                  formatPick(prospect.overall_pick),
+                ].filter(Boolean).join(" · ")}
+              </p>
+            ) : null}
           </div>
           <button type="button" className="nhlcal-advance-button-secondary edraft-sheet-close" onClick={onClose}>
-            <Icon name="close" size={12} /> Close
+            <Icon name="close" size={12} /> {stacked ? "Back to board" : "Close"}
           </button>
         </header>
         <div className={`${PREFIX}-sheet-body`}>
@@ -3627,48 +3635,29 @@ function StageDossier({
   const weight = (prospect.weight || d.weight) ? `${roundInt(prospect.weight || d.weight)} lb` : null;
 
   const pub = getRank(prospect);
-  const tb = getTeamRank(prospect);
   const dossierModel = buildProspectDossierModel(prospect, d, {
     allProspects: classPool,
     userScoutPct: num(prospect.scouted_percentage ?? prospect.dedicatedScoutingPct ?? d.userScoutPct) ?? 0,
   });
 
-  const projection = d.projection || {};
   const archetypeObj = d.archetype && typeof d.archetype === "object" ? d.archetype : null;
   const archetype = archetypeObj?.label || d.player_comparison?.archetype || getDefiningTrait(prospect) || null;
   const archetypeBlurb = archetypeObj?.blurb || d.micro_summary || null;
   const playStyle = d.play_style_block?.label || d.playStyle || d.play_style || null;
-  const readiness = formatNhlReadiness(prospect);
   const etaLabel = (d.eta && typeof d.eta === "object" ? d.eta.label : d.eta) || d.estimatedNhlArrival || null;
   const scoutReport = d.scout_report || d.micro_summary || prospect.storyline || null;
-  const projectionNotes = safeArray(d.projectionNotes || d.projection_notes).slice(0, 3);
-  const intelLabel = d.intel_label || d.intelLabel || null;
+  const projectionNotes = safeArray(d.projectionNotes || d.projection_notes)
+    .map((n) => (typeof n === "string" ? n : n?.text || n?.note || ""))
+    .filter((n) => String(n).trim())
+    .slice(0, 3);
   const character = d.character_read || null;
   const comparison = d.player_comparison && typeof d.player_comparison === "object" ? d.player_comparison : null;
-  const analytics = (d.analytics && typeof d.analytics === "object" ? d.analytics : null)
-    || (prospect.analytics && typeof prospect.analytics === "object" ? prospect.analytics : null)
-    || (d.stats?.analytics && typeof d.stats.analytics === "object" ? d.stats.analytics : null);
   const rights = prospect.rights_card && typeof prospect.rights_card === "object" ? prospect.rights_card : {};
   const wjcBlock = resolveWjcDossierBlock({ ...d, wjcStats: d.wjcStats || d.wjcPerformance || prospect.wjc_stats }, goalie);
   const playoff = d.playoffStats && Number(d.playoffStats.games) > 0 ? d.playoffStats : null;
   const { tag: pickTag, tone: pickTone } = drafted ? getPickDisplayTag(prospect) : { tag: null, tone: "default" };
   const prod = resolveProductionStats(prospect, d.stats);
   const hasBox = prod.games != null && Number(prod.games) > 0;
-  const productionRows = goalie
-    ? [
-        hasBox ? ["GP", prod.games] : null,
-        prod.savePct != null ? ["SV%", prod.savePct] : null,
-        prod.gaa != null ? ["GAA", prod.gaa] : null,
-        prod.wins != null ? ["W", prod.wins] : null,
-        prod.shutouts != null ? ["SO", prod.shutouts] : null,
-      ].filter(Boolean)
-    : [
-        hasBox ? ["GP", prod.games] : null,
-        hasBox && prod.goals != null ? ["G", prod.goals] : null,
-        hasBox && prod.assists != null ? ["A", prod.assists] : null,
-        hasBox && prod.points != null ? ["PTS", prod.points] : null,
-        hasBox && prod.ppg != null ? ["P/GP", prod.ppg] : null,
-      ].filter(Boolean);
 
   const reachDelta = pub != null && currentPickOverall != null ? currentPickOverall - pub : null;
   const identityLine = [
@@ -3681,6 +3670,35 @@ function StageDossier({
   ].filter(Boolean).join(" · ");
 
   const showActions = onShortlist || onPin || onFullReport;
+  const slotNote = pickTag
+    || (reachDelta == null ? null : reachDelta > 0 ? `Fell ${reachDelta}` : reachDelta < 0 ? `Reach ${Math.abs(reachDelta)}` : "On board");
+
+  const productionLine = !hasBox ? null : goalie
+    ? {
+        line: [
+          prod.savePct != null ? `${formatStatCell("SV%", prod.savePct)} SV%` : null,
+          prod.gaa != null ? `${formatStatCell("GAA", prod.gaa)} GAA` : null,
+        ].filter(Boolean).join(" · ") || `${prod.games} GP`,
+        context: [`${prod.games} GP`, prod.wins != null ? `${prod.wins} W` : null, prod.shutouts ? `${prod.shutouts} SO` : null, league]
+          .filter(Boolean).join(" · "),
+      }
+    : {
+        line: `${prod.goals ?? 0}G–${prod.assists ?? 0}A–${prod.points ?? 0}P${prod.ppg != null ? ` · ${Number(prod.ppg).toFixed(2)} P/GP` : ""}`,
+        context: [`${prod.games} GP`, league, d.stats?.sampleNote && !/\bGP sample\b/i.test(d.stats.sampleNote) ? d.stats.sampleNote : null]
+          .filter(Boolean).join(" · "),
+      };
+  const rightsLine = [
+    rights.expected_role,
+    rights.returning_to || rights.development_path || null,
+    rights.rights_status,
+    rights.elc_decision ? `ELC ${String(rights.elc_decision).toLowerCase()}` : null,
+    rights.rights_through ? `through ${rights.rights_through}` : null,
+  ].filter(Boolean).join(" · ") || null;
+  const hasMore = Boolean(
+    archetypeBlurb || scoutReport || wjcBlock || playoff || projectionNotes.length || character?.interview_notes
+    || comparison?.name || comparison?.label || comparison?.blurb
+    || (drafted && (prospect.pick_reason || getBackendWhyWorks(prospect) || getBackendWhyFails(prospect))),
+  );
 
   return (
     <div className={`${PREFIX}-dossier`}>
@@ -3695,53 +3713,28 @@ function StageDossier({
         </div>
       </header>
 
-      <div className={`${PREFIX}-bio`}>
-        <Fact label="Age" value={ageRaw != null ? (roundInt(ageRaw) ?? ageRaw) : "—"} />
-        <Fact label={goalie ? "Catches" : "Shoots"} value={shoots || "—"} />
-        <Fact label="Height" value={height || "—"} />
-        <Fact label="Weight" value={weight || "—"} />
-        <Fact label="Club" value={club || "—"} />
-        <Fact label="League" value={league || "—"} />
-      </div>
-
       <ProspectVisualStyles />
       <DossierLayoutStyles />
-      <DossierVerdict model={dossierModel} compact />
+      <DossierCommandSheet
+        model={dossierModel}
+        tag={drafted ? [nhlClub, prospect.overall_pick != null ? formatPick(prospect.overall_pick) : null].filter(Boolean).join(" · ") : null}
+        portrait={<ProspectFlag country={nationality} code={natCode} width={36} />}
+        slotNote={slotNote}
+        eta={etaLabel || formatNhlArrivalEta(prospect)}
+        playStyle={playStyle || archetype}
+        production={productionLine}
+        currentPick={currentPickOverall}
+        footnote={rightsLine}
+      />
 
-      <ClassIndicators indicators={prospect.class_indicators || prospect.classIndicators || d.classIndicators} />
-
-      {archetype || playStyle || scoutReport ? (
-        <section className={`${PREFIX}-sec`}>
-          <SectionHead title={archetype || "Scouting file"} meta={playStyle ? `Play style · ${playStyle}` : intelLabel} icon="book" tone="blue" />
+      {hasMore ? (
+        <details className="cs-more" open={drafted}>
+          <summary>{drafted ? "Pick notes, history and full report" : "Full report, history and notes"}</summary>
           {archetypeBlurb || scoutReport ? (
-            <p className={`${PREFIX}-report`}>{firstSentences(archetypeBlurb || scoutReport, 2)}</p>
+            <p className={`${PREFIX}-report`}>{archetypeBlurb || scoutReport}</p>
           ) : null}
-        </section>
-      ) : null}
-
       <div className={`${PREFIX}-dossier-grid`}>
         <div className={`${PREFIX}-dossier-main`}>
-          <DossierSkillProfile model={dossierModel} />
-          {dossierModel.role.outcomes?.length ? <OutcomeDonut segments={dossierModel.role.outcomes} /> : null}
-
-          {productionRows.length ? (
-            <section className={`${PREFIX}-sec`}>
-              <SectionHead title="Junior production" meta={league || club || "Season ledger"} icon="chart" tone="blue" />
-              <div className={`${PREFIX}-prod-strip`}>
-                {productionRows.map(([label, value]) => {
-                  const formatted = formatStatCell(label, value);
-                  if (formatted == null) return null;
-                  return (
-                    <div key={label} className={`${PREFIX}-prod-cell`}>
-                      <span>{label}</span>
-                      <strong className={`${PREFIX}-tabular ${PREFIX}-num-pop tone-cyan`}>{formatted}</strong>
-                    </div>
-                  );
-                })}
-              </div>
-              {d.stats?.sampleNote ? <p className={`${PREFIX}-muted`}>{d.stats.sampleNote}</p> : null}
-            </section>
-          ) : null}
 
           {wjcBlock ? (
             <section className={`${PREFIX}-sec`}>
@@ -3784,39 +3777,11 @@ function StageDossier({
             </section>
           ) : null}
 
-          {analytics && (analytics.war != null || analytics.xgf_pct != null || analytics.cf_pct != null || analytics.shot_rate != null) ? (
-            <section className={`${PREFIX}-sec`}>
-              <SectionHead title="Translation metrics" icon="chart" />
-              <div className={`${PREFIX}-facts`}>
-                <Fact label="WAR" value={analytics.war != null ? Number(analytics.war).toFixed(1) : null} />
-                <Fact label="Off WAR" value={analytics.offensive_war != null ? Number(analytics.offensive_war).toFixed(1) : null} />
-                <Fact label="Def WAR" value={analytics.defensive_war != null ? Number(analytics.defensive_war).toFixed(1) : null} />
-                <Fact label="xGF%" value={analytics.xgf_pct != null ? `${Number(analytics.xgf_pct).toFixed(1)}%` : null} />
-                <Fact label="CF%" value={analytics.cf_pct != null ? `${Number(analytics.cf_pct).toFixed(1)}%` : null} />
-                <Fact label="Shot rate" value={analytics.shot_rate != null ? Number(analytics.shot_rate).toFixed(1) : null} />
-              </div>
-            </section>
-          ) : null}
-
-          {character?.headline || character?.interview_notes ? (
-            <section className={`${PREFIX}-sec`}>
-              <SectionHead
-                title="Character read"
-                meta={character.confidence ? (
-                  <span className={`${PREFIX}-num-pop tone-cyan ${PREFIX}-tabular`}>{character.confidence}%</span>
-                ) : null}
-                icon="shield"
-              />
-              {character.headline ? <p className={`${PREFIX}-report`}>{character.headline}</p> : null}
-              {character.interview_notes ? <p className={`${PREFIX}-callout`}>{character.interview_notes}</p> : null}
-            </section>
-          ) : null}
-
           {projectionNotes.length ? (
             <section className={`${PREFIX}-sec`}>
               <SectionHead title="Projection notes" icon="book" />
               <ul className={`${PREFIX}-list`}>
-                {projectionNotes.map((n, i) => <li key={`n-${i}`}>{typeof n === "string" ? n : n.text || n.note}</li>)}
+                {projectionNotes.map((n, i) => <li key={`n-${i}`}>{n}</li>)}
               </ul>
             </section>
           ) : null}
@@ -3831,14 +3796,10 @@ function StageDossier({
             </section>
           ) : null}
 
-          {dossierModel.character.visible ? (
+          {character?.interview_notes ? (
             <section className={`${PREFIX}-sec`}>
-              <SectionHead title="Character" icon="shield" />
-              <div className={`${PREFIX}-facts`}>
-                {dossierModel.character.traits.map((trait) => (
-                  <Fact key={trait.key} label={trait.label} value={trait.tier.label} />
-                ))}
-              </div>
+              <SectionHead title="Interview notes" />
+              <p className={`${PREFIX}-report`}>{character.interview_notes}</p>
             </section>
           ) : null}
 
@@ -3855,46 +3816,10 @@ function StageDossier({
             </section>
           ) : null}
 
-          {rights.expected_role || rights.development_path || rights.rights_status ? (
-            <section className={`${PREFIX}-sec`}>
-              <SectionHead title="Rights & development" icon="shield" />
-              <div className={`${PREFIX}-facts`}>
-                <Fact label="Org role" value={rights.expected_role} />
-                <Fact label="Returning to" value={rights.returning_to || rights.development_path || prospect.development_path} />
-                <Fact label="Rights status" value={rights.rights_status} />
-                <Fact label="ELC" value={rights.elc_decision} />
-                <Fact label="Through" value={rights.rights_through} />
-              </div>
-            </section>
-          ) : null}
         </div>
-
-        <aside className={`${PREFIX}-dossier-side`}>
-          <div className={`${PREFIX}-facts ${PREFIX}-facts--stack`}>
-            <Fact label={goalie ? "Starter path" : "Projected role"} value={dossierModel.role.projected || projection.label || archetype} />
-            <Fact label="NHL readiness" value={dossierModel.role.readiness || readiness} />
-            <Fact label="ETA" value={dossierModel.role.eta || etaLabel || formatNhlArrivalEta(prospect)} />
-            <Fact label="NHL odds" value={dossierModel.display.nhlOdds} />
-            <Fact label="Public board" value={pub != null ? `#${pub}` : null} />
-            <Fact label="Your board" value={tb != null ? `#${tb}` : null} />
-            <Fact
-              label="Value vs slot"
-              tone={pickTone === "steal" || pickTone === "value" ? "good" : pickTone === "reach" || pickTone === "early" ? "warn" : (reachDelta == null ? undefined : reachDelta < 0 ? "warn" : reachDelta > 0 ? "good" : undefined)}
-              value={
-                pickTag
-                  || (reachDelta == null
-                    ? null
-                    : reachDelta > 0
-                      ? `Fell ${reachDelta}`
-                      : reachDelta < 0
-                        ? `Reach ${Math.abs(reachDelta)}`
-                        : "On board")
-              }
-            />
-            <Fact label="NHL club" value={nhlClub} />
-          </div>
-        </aside>
       </div>
+        </details>
+      ) : null}
 
       {showActions ? (
         <div className={`${PREFIX}-dossier-actions`}>

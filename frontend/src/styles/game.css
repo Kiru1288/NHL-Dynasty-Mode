@@ -31967,3 +31967,534 @@ h1:not([class*="replay"] *){font-family:var(--dd-font-display)!important;font-we
 /* Big monitors: the 3D wall scales with the window, so the HUD scales too */
 @media (min-width:1700px){.office-broadcast,.office-urgent-desk,.hub-alert,.hub-console,.office-control-bar,.office-edge,.office-wire-ticker{zoom:1.25}}
 @media (min-width:2300px){.office-broadcast,.office-urgent-desk,.hub-alert,.hub-console,.office-control-bar,.office-edge,.office-wire-ticker{zoom:1.5}}
+
+/* ==========================================================================
+   SECTION: Command-sheet layer — offseason player desks
+   Same language as the prospect dossier (components/dossier/ProspectDossierView.js,
+   DossierCommandSheet): cream identity band, orange decision block, lime for
+   positives, coral for risk, sentence case, spacing instead of nested rims.
+   ========================================================================== */
+:root{--cs-ink:#071233;--cs-deep:#050c2c;--cs-region:#0d1d4d;--cs-cream:var(--dd-cream,#ffe7c4);--cs-orange:#ff8a1f;--cs-lime:#9be564;--cs-coral:#ff6b5c;--cs-blue:#5aa2ff;--cs-cyan:#3ee6ff;--cs-soft:#a9bfdc}
+
+/* Re-sign desk: table beside the player panel, no rims, one scroll. */
+.resign-root .resign-table-layout:not(.is-negotiating){grid-template-columns:minmax(0,1fr) 340px!important;gap:0!important;align-items:stretch}
+@media (max-width:900px){.resign-root .resign-table-layout:not(.is-negotiating){grid-template-columns:1fr!important}}
+.resign-root .resign-table-wrap{margin:0!important;border:0!important;border-radius:0!important;box-shadow:none!important;background:rgba(5,12,44,.6)!important}
+.resign-root .resign-table thead th{font-size:11px!important;letter-spacing:0!important;text-transform:none!important;color:var(--cs-soft)!important}
+.resign-root .resign-table tbody tr.is-selected td{background:rgba(255,231,196,.08)!important}
+.resign-root .resign-table tbody tr.is-actionable td:first-child{box-shadow:inset 4px 0 0 var(--cs-orange)!important}
+.resign-root .resign-row-action{border-radius:4px!important;border:0!important;background:var(--cs-orange)!important;color:#2a1200!important;font-weight:900!important;box-shadow:none!important;text-transform:none!important}
+.resign-root .resign-row-action:hover{background:var(--cs-cream)!important;color:var(--cs-ink)!important}
+.resign-root .resign-detail-panel{margin:0!important;padding:0!important;border:0!important;border-radius:0!important;box-shadow:-12px 0 24px rgba(0,0,0,.35)!important;background:var(--cs-deep)!important;display:flex;flex-direction:column;overflow:visible!important;min-height:0}
+.resign-root .resign-identity{display:grid!important;grid-template-columns:60px minmax(0,1fr)!important;gap:12px!important;align-items:center!important;margin:0!important;padding:16px!important;background:var(--cs-cream)!important;color:var(--cs-ink)!important;border:0!important;box-shadow:none!important;border-radius:0!important}
+.resign-root .resign-identity-shot{width:60px!important;height:60px!important;overflow:hidden!important;position:relative;background:var(--cs-ink);clip-path:polygon(0 0,100% 0,100% 76%,76% 100%,0 100%);display:grid;place-items:center}
+.resign-root .resign-identity-shot .player-headshot{zoom:.5}
+.resign-root .resign-identity-copy{min-width:0}
+.resign-root .resign-identity-copy h3{margin:2px 0 0!important;font-family:var(--dd-font-ui)!important;font-size:22px!important;font-weight:900!important;line-height:1.05!important;letter-spacing:-.01em!important;color:var(--cs-ink)!important;text-shadow:none!important;-webkit-text-stroke:0!important;overflow-wrap:anywhere}
+.resign-root .resign-identity-copy p{margin:3px 0 0!important;font-size:13px!important;font-weight:700!important;color:#24315a!important}
+.resign-root .resign-ovr-badge{display:inline-flex!important;align-items:baseline;gap:4px;padding:0!important;background:none!important;border:0!important;box-shadow:none!important;font-size:26px!important;font-weight:900!important;line-height:1!important;color:var(--cs-ink)!important}
+.resign-root .resign-ovr-badge em{font-style:normal;font-size:11px!important;font-weight:800;color:#4b5a82!important}
+.resign-root .resign-detail-tabs{display:grid!important;grid-template-columns:1fr 1fr!important;gap:0!important;margin:0!important;background:var(--cs-region)!important;border:0!important}
+.resign-root .resign-detail-tabs button{border:0!important;border-radius:0!important;background:none!important;box-shadow:none!important;padding:9px 0!important;font-family:var(--dd-font-ui)!important;font-size:13px!important;font-weight:900!important;letter-spacing:0!important;text-transform:none!important;color:var(--cs-soft)!important;border-bottom:3px solid transparent!important}
+.resign-root .resign-detail-tabs button.is-active{color:#fff!important;border-bottom-color:var(--cs-orange)!important}
+.resign-root .resign-detail-tabs button:disabled{opacity:.45}
+.resign-root .resign-detail-body{padding:14px 16px 16px!important;max-height:none!important;overflow:visible!important;display:flex;flex-direction:column;gap:12px}
+.resign-root .resign-dossier-grid{display:grid!important;grid-template-columns:1fr 1fr!important;gap:12px 18px!important;margin:0!important}
+.resign-root .resign-dossier-grid > div{padding:0!important;background:none!important;border:0!important;box-shadow:none!important;border-radius:0!important;min-width:0}
+.resign-root .resign-dossier-grid span:not([class*="pill"]){display:block;font-size:11px!important;font-weight:800!important;letter-spacing:0!important;text-transform:none!important;color:var(--cs-soft)!important}
+.resign-root .resign-dossier-grid strong{display:block;font-size:16px!important;font-weight:900!important;color:#fff!important;font-variant-numeric:tabular-nums}
+.resign-root .resign-context{margin:0!important;font-size:12px!important;font-weight:700;color:var(--cs-cream)!important}
+.resign-root .resign-interest-pill{background:none!important;border:0!important;padding:0!important;box-shadow:none!important;font-weight:900!important}
+.resign-root .resign-interest-pill.tone-good,.resign-root .resign-interest-pill.tone-high{color:var(--cs-lime)!important}
+.resign-root .resign-interest-pill.tone-warn,.resign-root .resign-interest-pill.tone-medium{color:var(--cs-cream)!important}
+.resign-root .resign-interest-pill.tone-bad,.resign-root .resign-interest-pill.tone-low{color:var(--cs-coral)!important}
+.resign-root .resign-decision-list,.resign-root .resign-special-actions{display:grid!important;gap:6px!important;margin:0!important;padding:12px!important;background:var(--cs-orange)!important;border:0!important;border-radius:0!important}
+.resign-root .resign-special-actions{margin-top:-12px!important;padding-top:0!important}
+.resign-root .resign-decision-btn{display:flex!important;justify-content:space-between;align-items:center;gap:8px;width:100%;padding:9px 12px!important;border:0!important;border-radius:4px!important;box-shadow:none!important;background:rgba(7,18,51,.12)!important;color:#2a1200!important;font-family:var(--dd-font-ui)!important;font-size:14px!important;font-weight:900!important;letter-spacing:0!important;text-transform:none!important;text-align:left}
+.resign-root .resign-decision-btn.is-recommended{background:var(--cs-ink)!important;color:var(--cs-cream)!important}
+.resign-root .resign-decision-btn:hover:not(:disabled){background:var(--cs-cream)!important;color:var(--cs-ink)!important}
+.resign-root .resign-decision-btn:disabled{opacity:.5}
+.resign-root .resign-decision-meta{font-size:11px!important;font-weight:700!important;opacity:.85}
+.resign-root .resign-warn{margin:0!important;font-size:12px!important;font-weight:800;color:var(--cs-coral)!important}
+/* The decision comes first, like the dossier verdict; the panel scrolls as one column. */
+.resign-root .resign-detail-panel{overflow-y:auto!important}
+.resign-root .resign-detail-body .resign-decision-list{order:-2}
+.resign-root .resign-detail-body .resign-special-actions{order:-1;margin-top:-12px!important}
+
+/* Draft review: cream identity band for the selected pick, the class grade as the
+   orange decision block, open sections instead of boxed cards, sentence-case labels. */
+.draftreview-root .draftreview-workspace{gap:14px!important}
+.draftreview-root :is(.draftreview-kicker,.draftreview-hero-kicker,.draftreview-section-label,.draftreview-road-step-label,.draftreview-meter-head,.draftreview-org-kv,.draftreview-broadcast-show,.draftreview-broadcast-seg,.draftreview-ticker-tab,.draftreview-more-toggle,.draftreview-phase-text,.draftreview-haul-chip,.draftreview-value-banner,.draftreview-scout-col,.draftreview-prod-stat){text-transform:none!important;letter-spacing:0!important}
+.draftreview-root .draftreview-haul-banner{background:var(--cs-orange)!important;color:#2a1200!important;border:0!important;border-radius:0!important;box-shadow:none!important;padding:10px 14px!important}
+.draftreview-root .draftreview-haul-banner *{color:#2a1200!important;text-shadow:none!important}
+.draftreview-root .draftreview-haul-banner-grade{background:var(--cs-ink)!important;border:0!important;border-radius:0!important;box-shadow:none!important;clip-path:polygon(0 0,100% 0,100% 76%,76% 100%,0 100%)}
+.draftreview-root .draftreview-haul-banner-grade,.draftreview-root .draftreview-haul-banner-grade *{color:var(--cs-cream)!important}
+.draftreview-root .draftreview-haul-chip{background:rgba(7,18,51,.14)!important;border:0!important;border-radius:3px!important;font-weight:900!important}
+.draftreview-root .draftreview-draft-card{background:var(--cs-cream)!important;border:0!important;border-radius:0!important;box-shadow:none!important;padding:14px 16px!important}
+.draftreview-root .draftreview-draft-card :is(p,span,div,h2){color:var(--cs-ink)!important;text-shadow:none!important;-webkit-text-stroke:0!important}
+.draftreview-root .draftreview-hero-name{font-family:var(--dd-font-ui)!important;font-size:28px!important;font-weight:900!important;letter-spacing:-.01em!important}
+.draftreview-root .draftreview-hero-kicker,.draftreview-root .draftreview-hero-meta{color:#4b5a82!important;font-weight:700!important}
+.draftreview-root .draftreview-pos-mark{background:var(--cs-ink)!important;border:0!important;border-radius:0!important;box-shadow:none!important;clip-path:polygon(0 0,100% 0,100% 76%,76% 100%,0 100%)}
+.draftreview-root .draftreview-pos-mark,.draftreview-root .draftreview-pos-mark *{color:var(--cs-cream)!important}
+.draftreview-root .draftreview-value-banner{display:inline-block;background:var(--cs-ink)!important;border:0!important;border-radius:0!important;color:#fff!important;font-weight:900!important;transform:rotate(-2deg)}
+.draftreview-root .draftreview-grade-shield{background:var(--cs-orange)!important;border:0!important;border-radius:0!important;box-shadow:none!important;clip-path:polygon(12% 0,100% 0,88% 100%,0 100%)}
+.draftreview-root .draftreview-grade-shield,.draftreview-root .draftreview-grade-shield *{color:#2a1200!important}
+.draftreview-root :is(.draftreview-projection-card,.draftreview-prod-card,.draftreview-roadmap-card,.draftreview-bottom-band){background:transparent!important;border:0!important;border-radius:0!important;box-shadow:none!important;padding:0!important}
+.draftreview-root .draftreview-section-label,.draftreview-root .draftreview-kicker{font-size:12px!important;font-weight:800!important;color:var(--cs-soft)!important}
+.draftreview-root .draftreview-projection-role{font-size:18px!important;font-weight:900!important;color:#fff!important}
+.draftreview-root .draftreview-projection-eta{color:var(--cs-cream)!important;font-weight:800!important}
+.draftreview-root .draftreview-meter-track{background:rgba(169,191,220,.18)!important;border:0!important}
+.draftreview-root .draftreview-meter-fill{background:var(--cs-cream)!important;box-shadow:none!important}
+.draftreview-root .draftreview-prod-hero,.draftreview-root .draftreview-prod-hero *{color:var(--cs-cream)!important;text-shadow:none!important}
+.draftreview-root .draftreview-prod-stat{color:var(--cs-soft)!important}
+.draftreview-root .draftreview-prod-stat :is(strong,b,span:last-child){color:#fff!important}
+.draftreview-root .draftreview-road-step{background:var(--cs-region)!important;border:0!important;border-radius:0!important;box-shadow:none!important}
+.draftreview-root .draftreview-road-step:first-child{border-left:4px solid var(--cs-cream)!important}
+.draftreview-root .draftreview-road-step:last-child{border-left:4px solid var(--cs-lime)!important}
+.draftreview-root .draftreview-road-step-eta{color:var(--cs-orange)!important;font-weight:900!important}
+.draftreview-root .draftreview-scout-col{padding:8px 10px!important;border-radius:0!important;border:0!important;color:var(--cs-ink)!important}
+.draftreview-root .draftreview-scout-col:first-of-type{background:var(--cs-lime)!important}
+.draftreview-root .draftreview-scout-col:nth-of-type(2){background:var(--cs-coral)!important}
+.draftreview-root .draftreview-scout-col *{color:var(--cs-ink)!important;font-weight:800}
+.draftreview-root .draftreview-scout-item::before{color:var(--cs-ink)!important}
+.draftreview-root .draftreview-depth-track{background:rgba(169,191,220,.18)!important}
+.draftreview-root .draftreview-depth-fill{background:var(--cs-cream)!important;box-shadow:none!important}
+.draftreview-root .draftreview-org-kv{color:var(--cs-soft)!important}
+.draftreview-root .draftreview-org-kv :is(strong,b){color:#fff!important}
+.draftreview-root .draftreview-panel{background:rgba(5,12,44,.7)!important;border:0!important;border-radius:0!important;box-shadow:none!important}
+.draftreview-root .draftreview-haul-card{border-radius:0!important;border:0!important;box-shadow:none!important;background:transparent!important}
+.draftreview-root .draftreview-rail-btn[aria-pressed="true"] .draftreview-haul-card,.draftreview-root .draftreview-rail-btn.is-active .draftreview-haul-card{background:rgba(255,231,196,.1)!important;box-shadow:inset 4px 0 0 var(--cs-orange)!important}
+.draftreview-root .draftreview-ticker-tab{color:var(--cs-soft)!important;font-weight:900!important}
+.draftreview-root .draftreview-ticker-tab.is-active,.draftreview-root .draftreview-ticker-tab[aria-selected="true"]{color:#fff!important;box-shadow:inset 0 -3px 0 var(--cs-orange)!important}
+.draftreview-root .draftreview-more-toggle{color:var(--cs-cyan)!important;font-weight:900!important}
+.draftreview-root .draftreview-draft-card .draftreview-value-banner{color:#fff!important;padding:2px 8px!important;margin-top:4px}
+.draftreview-root .draftreview-haul-banner .draftreview-kicker{color:#4a1f02!important}
+.draftreview-root .draftreview-projection-card,.draftreview-root .draftreview-prod-card{height:auto!important;min-height:0!important;overflow:visible!important}
+.draftreview-root .draftreview-stage-grid{align-items:start!important;row-gap:16px!important}
+.draftreview-root .draftreview-stage-grid{grid-template-rows:none!important;grid-auto-rows:auto!important;height:auto!important}
+.draftreview-root .draftreview-workspace{overflow-y:auto!important}.draftreview-root .draftreview-review-main{overflow:visible!important;height:auto!important}
+.draftreview-root .draftreview-review-main{flex:none!important}.draftreview-root .draftreview-review-main > *,.draftreview-root .draftreview-workspace > *{flex-shrink:0!important}
+
+/* Prospect rights: cream identity band, open facts, contract terms stacked one per
+   row (they overflowed a two-column grid), signing options as the orange decision. */
+.prospectrights-root :is(.prospectrights-kicker,.prospectrights-phase-text,.prospectrights-offer-label,.prospectrights-rail-priority,.prospectrights-offer-tag,.prospectrights-accept-meter-head,.prospectrights-contract-doc-head,.prospectrights-impact-card,.prospectrights-stat-cell){text-transform:none!important;letter-spacing:0!important}
+.prospectrights-root .prospectrights-impact-card{background:transparent!important;border:0!important;border-radius:0!important;box-shadow:none!important;border-left:3px solid rgba(169,191,220,.25)!important}
+.prospectrights-root .prospectrights-impact-card :is(strong,b){color:#fff!important}
+.prospectrights-root .prospectrights-player-card{background:transparent!important;border:0!important;border-radius:0!important;box-shadow:none!important;padding:0!important}
+.prospectrights-root .prospectrights-player-card-top{display:grid!important;grid-template-columns:60px minmax(0,1fr) auto!important;align-items:center;gap:12px;padding:14px 16px!important;background:var(--cs-cream)!important;border:0!important;border-radius:0!important;height:auto!important}
+.prospectrights-root .prospectrights-player-card-top :is(p,span,h2,h3,strong,div){color:var(--cs-ink)!important;text-shadow:none!important}
+.prospectrights-root .prospectrights-player-card-top .player-headshot{zoom:.5}
+.prospectrights-root .prospectrights-player-card-top > :first-child{width:60px;height:60px;overflow:hidden;background:var(--cs-ink);clip-path:polygon(0 0,100% 0,100% 76%,76% 100%,0 100%);display:grid;place-items:center}
+.prospectrights-root .prospectrights-pos-badge{background:var(--cs-ink)!important;border:0!important;border-radius:0!important;box-shadow:none!important}
+.prospectrights-root .prospectrights-pos-badge,.prospectrights-root .prospectrights-pos-badge *{color:var(--cs-cream)!important}
+.prospectrights-root .prospectrights-stat-grid{gap:10px 16px!important;padding:12px 16px!important}
+.prospectrights-root .prospectrights-stat-cell{background:none!important;border:0!important;box-shadow:none!important;padding:0!important;text-align:left!important;color:var(--cs-soft)!important;font-size:11px!important;font-weight:800!important}
+.prospectrights-root .prospectrights-stat-cell :is(strong,b,span:last-child){display:block;color:#fff!important;font-size:16px!important;font-weight:900!important}
+.prospectrights-root .prospectrights-context{padding:0 16px;color:var(--cs-cream)!important}
+.prospectrights-root .prospectrights-contract-doc{background:var(--cs-deep)!important;border:0!important;border-radius:0!important;box-shadow:none!important;border-top:4px solid var(--cs-orange)!important}
+.prospectrights-root .prospectrights-contract-doc-head{color:var(--cs-soft)!important;font-weight:900!important}
+.prospectrights-root .prospectrights-offer-tag{background:var(--cs-lime)!important;color:var(--cs-ink)!important;border:0!important;border-radius:0!important;font-weight:900!important}
+.prospectrights-root .prospectrights-contract-hero,.prospectrights-root .prospectrights-contract-hero *{color:var(--cs-cream)!important}
+.prospectrights-root .prospectrights-contract-rows{display:grid!important;grid-template-columns:minmax(0,1fr)!important;gap:6px!important;width:100%;min-width:0}
+.prospectrights-root .prospectrights-contract-row{display:grid!important;grid-template-columns:96px minmax(0,1fr) auto!important;align-items:center;gap:8px;min-width:0}
+.prospectrights-root .prospectrights-contract-row > span:first-child{font-size:12px;font-weight:800;color:var(--cs-soft)}
+.prospectrights-root .prospectrights-contract-row strong{white-space:nowrap;color:#fff!important;text-align:right}
+.prospectrights-root .prospectrights-contract-row :is(select,input){min-width:0;width:100%}
+.prospectrights-root .prospectrights-meter{background:rgba(169,191,220,.18)!important}
+.prospectrights-root .prospectrights-meter > *{background:var(--cs-lime)!important}
+.prospectrights-root .prospectrights-offer-label{font-size:12px!important;font-weight:900!important;color:var(--cs-soft)!important}
+.prospectrights-root .prospectrights-offer-list{background:var(--cs-orange)!important;padding:10px!important;gap:6px!important}
+.prospectrights-root .prospectrights-offer-btn{background:rgba(7,18,51,.12)!important;border:0!important;border-radius:4px!important;box-shadow:none!important;color:#2a1200!important}
+.prospectrights-root .prospectrights-offer-btn *{color:#2a1200!important}
+.prospectrights-root .prospectrights-offer-btn:is(.is-active,.is-selected,[aria-pressed="true"]){background:var(--cs-ink)!important}
+.prospectrights-root .prospectrights-offer-btn:is(.is-active,.is-selected,[aria-pressed="true"]) *{color:var(--cs-cream)!important}
+.prospectrights-root .prospectrights-decision-apply{background:var(--cs-ink)!important;color:var(--cs-cream)!important;border:0!important;border-radius:4px!important;box-shadow:none!important;text-transform:none!important;font-weight:900!important}
+.prospectrights-root .prospectrights-panel{background:rgba(5,12,44,.7)!important;border:0!important;border-radius:0!important;box-shadow:none!important}
+.prospectrights-root .prospectrights-haul-card{border:0!important;border-radius:0!important;box-shadow:none!important;background:transparent!important}
+.prospectrights-root .prospectrights-rail-priority{color:var(--cs-orange)!important;font-weight:900!important}
+.prospectrights-root .prospectrights-player-card-top{grid-template-columns:auto auto minmax(0,1fr)!important;justify-items:start}
+.prospectrights-root .prospectrights-player-card-top > :last-child{text-align:left!important;justify-self:stretch}
+.prospectrights-root .prospectrights-player-card-top > :last-child :is(h2,h3,strong){font-size:24px!important;font-weight:900!important;font-family:var(--dd-font-ui)!important}
+.prospectrights-root .prospectrights-player-card-top .player-headshot{zoom:.9}
+.prospectrights-root .prospectrights-player-card-top .prospectrights-pos-badge,.prospectrights-root .prospectrights-player-card-top .prospectrights-pos-badge *{color:var(--cs-cream)!important}
+
+/* Free agency: the market list and the player desk get the height (they were squeezed
+   to ~140px by the signings feed at 768px tall); cream identity band for the selected
+   player, open sections, the offer controls as the orange decision area. */
+.fa-root.fa-root--market .fa-stage{grid-template-rows:minmax(0,1fr) auto!important}
+.fa-root.fa-root--market .fa-panel{max-height:118px!important;min-height:0!important}
+.fa-root.fa-root--market .fa-panel .fa-rail{max-height:84px!important}
+.fa-root .fa-fa-bar{border:0!important;box-shadow:none!important;border-radius:0!important;background:var(--cs-region)!important}
+.fa-root .fa-fa-identity *{text-transform:none!important}
+.fa-root .fa-fa-tools{gap:6px!important}
+.fa-root .fa-fa-layout{flex:1 1 auto!important;min-height:0!important}
+.fa-root :is(.fa-fa-list,.fa-fa-desk){border:0!important;border-radius:0!important;box-shadow:none!important;margin:0!important;background:rgba(5,12,44,.6)!important}
+.fa-root .fa-fa-desk{background:var(--cs-deep)!important;padding:0!important;overflow-y:auto!important}
+.fa-root .fa-fa-count,.fa-root .fa-mini-label,.fa-root .fa-nego-meter-head{text-transform:none!important;letter-spacing:0!important}
+.fa-root .fa-fa-row{border:0!important;border-radius:0!important;box-shadow:none!important;background:transparent!important;border-bottom:1px solid rgba(169,191,220,.12)!important}
+.fa-root .fa-fa-row.is-selected{background:rgba(255,231,196,.08)!important;box-shadow:inset 4px 0 0 var(--cs-orange)!important}
+.fa-root .fa-fa-rating > *{background:transparent!important;border:0!important;box-shadow:none!important}
+.fa-root .fa-fa-ask{color:var(--cs-cream)!important;font-weight:900!important}
+.fa-root .fa-fa-identity{background:var(--cs-cream)!important;padding:14px 16px!important;margin:0!important;border:0!important;border-radius:0!important;box-shadow:none!important}
+.fa-root .fa-fa-identity :is(p,span:not(.fa-rights-badge),div,h2,h3,strong){color:var(--cs-ink)!important;text-shadow:none!important;-webkit-text-stroke:0!important}
+.fa-root .fa-fa-identity :is(h2,h3){font-family:var(--dd-font-ui)!important;font-weight:900!important;text-transform:none!important;letter-spacing:-.01em!important}
+.fa-root .fa-fa-shot{overflow:hidden!important;background:var(--cs-ink)!important;border:0!important;border-radius:0!important;clip-path:polygon(0 0,100% 0,100% 76%,76% 100%,0 100%)}
+.fa-root .fa-fa-shot .player-headshot{zoom:.55}
+.fa-root .fa-fa-ovr{color:var(--cs-ink)!important;font-size:22px!important;font-weight:900!important}
+.fa-root .fa-rights-badge{background:var(--cs-ink)!important;color:var(--cs-cream)!important;border:0!important;border-radius:0!important}
+.fa-root :is(.fa-nego-meter,.fa-fa-offers,.fa-fa-scout,.fa-fa-capbar){background:transparent!important;border:0!important;border-radius:0!important;box-shadow:none!important;margin:0 16px!important}
+.fa-root .fa-nego-meter-track,.fa-root .fa-fa-captrack,.fa-root .fa-fa-pctile-track{background:rgba(169,191,220,.18)!important;border:0!important}
+.fa-root .fa-nego-meter-fill{background:var(--cs-lime)!important;box-shadow:none!important}
+.fa-root .fa-fa-offer{background:var(--cs-region)!important;border:0!important;border-radius:0!important}
+.fa-root .fa-fa-controls{background:var(--cs-orange)!important;border:0!important;border-radius:0!important;box-shadow:none!important;padding:12px 16px!important;margin:12px 0 0!important;color:#2a1200!important}
+.fa-root .fa-fa-controls :is(label,span,p,small,strong,legend){color:#2a1200!important;text-shadow:none!important}
+.fa-root .fa-fa-controls :is(select,input[type="number"],input[type="text"]){background:#fff!important;color:var(--cs-ink)!important;border:0!important;border-radius:4px!important}
+.fa-root .fa-fa-controls .fa-fa-capbar{margin:0!important}
+.fa-root .fa-fa-controls :is(strong,b,span){color:#2a1200!important}
+.fa-root .fa-fa-controls button:not([class*="submit"]):not([class*="cta"]):not(.nd-btn--primary){background:rgba(7,18,51,.14)!important;color:#2a1200!important;border:0!important;border-radius:4px!important;box-shadow:none!important;font-family:var(--dd-font-ui)!important;font-weight:900!important;text-transform:none!important;letter-spacing:0!important;text-shadow:none!important}
+.fa-root .fa-fa-controls button:not([class*="submit"]):not([class*="cta"]):not(.nd-btn--primary):is(.is-active,.is-selected,[aria-pressed="true"]){background:var(--cs-ink)!important;color:var(--cs-cream)!important}
+.fa-root .fa-fa-controls :is(button[class*="submit"],button[class*="cta"],.nhlcal-advance-button){background:var(--cs-ink)!important;color:var(--cs-cream)!important;border:0!important;border-radius:4px!important;box-shadow:none!important;clip-path:none!important;font-family:var(--dd-font-ui)!important;font-weight:900!important;text-transform:none!important;letter-spacing:0!important;text-shadow:none!important}
+.fa-root .fa-fa-controls :is(button[class*="submit"],button[class*="cta"],.nhlcal-advance-button) *{color:var(--cs-cream)!important}
+.fa-root .fa-fa-controls .fa-fa-captrack > *{background:var(--cs-ink)!important}
+.fa-root .fa-fa-controls button.nd-btn--primary{background:var(--cs-ink)!important;color:var(--cs-cream)!important;padding:10px 14px!important}
+.fa-root .fa-fa-controls button.nd-btn--primary *{color:var(--cs-cream)!important}
+.fa-root .fa-fa-controls button.nd-btn--primary:hover:not(:disabled){background:var(--cs-cream)!important;color:var(--cs-ink)!important}
+
+/* Draft review, restructured (DraftReviewEventMenu, .dr-*). Reading order: class verdict,
+   the pick and what he did (observed), what scouts expect (projection), the case for and
+   against, fit with the club. */
+.draftreview-root .dr{display:flex;flex-direction:column;gap:12px;padding:2px 2px 8px;font-family:var(--dd-font-ui);color:#eef4ff}
+.dr .dr-label{margin:0 0 4px;font-size:12px;font-weight:800;color:var(--cs-soft);text-transform:none;letter-spacing:0}
+.dr .dr-note{margin:4px 0 0;font-size:12px;color:#c9d6ea}
+.dr-verdict{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:14px;align-items:center;padding:10px 14px;background:var(--cs-orange);color:#2a1200}
+.dr-verdict__grade{display:grid;place-items:center;width:62px;height:62px;background:var(--cs-ink);clip-path:polygon(0 0,100% 0,100% 76%,76% 100%,0 100%)}
+.dr-verdict__grade strong{font-family:var(--dd-font-display);font-size:30px;line-height:1;color:var(--cs-cream)}
+.dr-verdict__grade span{font-size:10px;font-weight:800;color:var(--cs-cream);margin-top:-6px}
+.dr-verdict__copy strong{display:block;font-size:20px;font-weight:900;line-height:1.1}
+.dr-verdict__copy p{margin:2px 0 0;font-size:13px;font-weight:700}
+.dr-verdict__copy .dr-verdict__mix{font-weight:900;color:#4a1f02}
+.dr-verdict__facts{margin:0;display:grid;gap:4px;text-align:right}
+.dr-verdict__facts dt{font-size:11px;font-weight:800;color:#4a1f02!important;text-transform:none!important;letter-spacing:0!important}
+.dr-verdict__facts dd{margin:0;font-size:14px;font-weight:900}
+.dr-main{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:0;align-items:stretch}
+.dr-pick{background:var(--cs-cream);color:var(--cs-ink);display:flex;flex-direction:column;clip-path:polygon(0 0,100% 0,calc(100% - 14px) 100%,0 100%);padding-right:14px}
+.dr-pick__id{display:flex;gap:12px;align-items:center;padding:14px 16px 10px}
+.dr-pick__mark{flex:none;display:grid;place-items:center;width:56px;height:56px;background:var(--cs-ink);clip-path:polygon(0 0,100% 0,100% 76%,76% 100%,0 100%)}
+.dr-pick__mark strong{font-size:20px;font-weight:900;color:var(--cs-cream);line-height:1}
+.dr-pick__mark span{font-size:10px;font-weight:800;color:var(--cs-cream);margin-top:-8px}
+.dr-pick__copy{min-width:0}
+.dr-pick__copy h2{margin:0;font-family:var(--dd-font-ui);font-size:30px;font-weight:900;line-height:1.02;letter-spacing:-.015em;color:var(--cs-ink);text-transform:none;text-shadow:none;-webkit-text-stroke:0;overflow-wrap:anywhere}
+.dr-pick__copy p{margin:3px 0 0;font-size:13px;font-weight:700;color:#24315a}
+.dr-pick__copy .dr-pick__slot{margin:0 0 2px;font-size:12px;font-weight:900;color:#a8300f}
+.dr-pick__copy .dr-pick__club{font-weight:600;color:#4b5a82}
+.dr-pick__verdict{display:flex;gap:10px;align-items:flex-start;margin:0 16px;padding:8px 10px;background:var(--cs-ink);color:var(--cs-cream)}
+.dr-pick__grade{font-family:var(--dd-font-display);font-size:26px;line-height:1;color:var(--cs-cream)}
+.dr-pick__verdict.tone-a .dr-pick__grade,.dr-pick__verdict.tone-good .dr-pick__grade{color:var(--cs-lime)}
+.dr-pick__verdict.tone-c .dr-pick__grade,.dr-pick__verdict.tone-d .dr-pick__grade,.dr-pick__verdict.tone-bad .dr-pick__grade{color:var(--cs-coral)}
+.dr-pick__verdict span{display:block;font-size:12px;font-weight:900}
+.dr-pick__verdict p{margin:2px 0 0;font-size:12px;font-weight:600;color:#d6e2f4}
+.dr-observed{padding:10px 16px 14px;margin-top:auto}
+.dr-observed .dr-label{color:#4b5a82}
+.dr-observed__row{display:flex;flex-wrap:wrap;align-items:flex-end;gap:6px 18px}
+.dr-observed__hero strong{display:block;font-size:30px;font-weight:900;line-height:1;color:var(--cs-ink);font-variant-numeric:tabular-nums}
+.dr-observed__hero span,.dr-observed__stat span{display:block;font-size:11px;font-weight:800;color:#4b5a82}
+.dr-observed__stat strong{display:block;font-size:18px;font-weight:900;color:var(--cs-ink);font-variant-numeric:tabular-nums}
+.dr-observed__headline{margin:0;font-weight:800}
+.dr-observed .dr-note{color:#4b5a82}
+.dr-proj{padding:12px 4px 12px 22px;display:flex;flex-direction:column;gap:6px;min-width:0}
+.dr-proj__role{margin:0;font-size:19px;font-weight:900;line-height:1.15;color:#fff}
+.dr-proj__eta{margin:0;font-size:13px;font-weight:900;color:var(--cs-orange)}
+.dr-road{list-style:none;margin:6px 0 2px;padding:0;display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:0;position:relative}
+.dr-road::before{content:"";position:absolute;left:6px;right:6px;top:5px;height:2px;background:rgba(169,191,220,.35)}
+.dr-road li{position:relative;padding:16px 8px 0 0;min-width:0}
+.dr-road li::before{content:"";position:absolute;left:0;top:0;width:12px;height:12px;border-radius:50%;background:var(--cs-region);border:2px solid var(--cs-soft)}
+.dr-road li.is-next::before{background:var(--cs-cream);border-color:var(--cs-cream)}
+.dr-road li.is-projection::before{background:var(--cs-lime);border-color:var(--cs-lime)}
+.dr-road__when{display:block;font-size:11px;font-weight:800;color:var(--cs-soft)}
+.dr-road strong{display:block;font-size:14px;font-weight:900;color:#fff}
+.dr-road__what{display:block;font-size:11px;color:#c9d6ea;overflow-wrap:anywhere}
+.dr-reads{list-style:none;margin:6px 0 0;padding:0;display:grid;grid-template-columns:1fr 1fr;gap:4px 14px}
+.dr-reads li{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:0 6px;align-items:center;font-size:11px;font-weight:800;color:var(--cs-soft)}
+.dr-reads li i{display:flex;gap:2px;grid-row:2}
+.dr-reads li i b{width:14px;height:5px;background:rgba(169,191,220,.2)}
+.dr-reads li em{grid-row:2;font-style:normal;color:#fff}
+.dr-reads li.is-up i b.is-on{background:var(--cs-lime)}
+.dr-reads li.is-mid i b.is-on{background:var(--cs-cream)}
+.dr-reads li.is-down i b.is-on{background:var(--cs-coral)}
+.dr-case{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:22px;padding-top:10px;border-top:1px solid rgba(169,191,220,.18)}
+.dr-evidence{display:grid;gap:6px;align-content:start}
+.dr-evidence p{margin:0;display:grid;grid-template-columns:18px minmax(0,1fr);gap:4px;font-size:13px;font-weight:700;color:#eef4ff}
+.dr-evidence p b{font-weight:900;text-align:center}
+.dr-evidence p.is-up b{color:var(--cs-lime)}
+.dr-evidence p.is-down b{color:var(--cs-coral)}
+.dr-fit__line{margin:0;font-size:15px;font-weight:900;color:#fff}
+.dr-fit__depth{margin:2px 0 0;font-size:13px;font-weight:800;color:var(--cs-cream)}
+.dr-fit__rights{margin:4px 0 0;font-size:12px;font-weight:800;color:var(--cs-orange)}
+.dr-more button{background:none;border:0;padding:4px 0;color:var(--cs-cyan);font-weight:900;font-size:13px;cursor:pointer}
+.dr-more__panel p{margin:0 0 4px;font-size:12px;color:#c9d6ea}
+/* The pick list is part of the same desk: same surface, orange marks the open pick. */
+.draftreview-root .draftreview-haul-card.is-active{background:rgba(255,231,196,.1)!important;box-shadow:inset 4px 0 0 var(--cs-orange)!important}
+/* Primary action sized to the task, not a mobile purchase button. */
+.draftreview-root .draftreview-cta-btn,.prospectrights-root .prospectrights-cta-btn{background:var(--cs-orange)!important;color:#2a1200!important;border:0!important;border-radius:4px!important;box-shadow:none!important;clip-path:none!important;font-family:var(--dd-font-ui)!important;font-size:15px!important;font-weight:900!important;letter-spacing:0!important;text-transform:none!important;text-shadow:none!important;padding:10px 22px!important;min-height:0!important;height:auto!important}
+.draftreview-root .draftreview-cta-btn *,.prospectrights-root .prospectrights-cta-btn *{color:#2a1200!important}
+@media (max-width:900px){.dr-main,.dr-case{grid-template-columns:minmax(0,1fr)}.dr-pick{clip-path:none;padding-right:0}.dr-proj{padding-left:4px}}
+
+/* Retirements: one row per player, open stats instead of boxed cells, the final rating as
+   a plain number, the reason in the player's own line. */
+.retirement-page .retirement-row{background:transparent!important;border:0!important;border-radius:0!important;box-shadow:none!important;border-bottom:1px solid rgba(169,191,220,.14)!important}
+.retirement-page .retirement-row:first-child{border-left:4px solid var(--cs-cream)!important}
+.retirement-page .retirement-headshot{width:56px!important;height:56px!important;overflow:hidden!important;background:var(--cs-ink)!important;clip-path:polygon(0 0,100% 0,100% 76%,76% 100%,0 100%);border:0!important;border-radius:0!important}
+.retirement-page .retirement-headshot .player-headshot{zoom:.6}
+.retirement-page .retirement-player-name{font-family:var(--dd-font-ui)!important;font-size:18px!important;font-weight:900!important;color:var(--cs-cream)!important;text-transform:none!important}
+.retirement-page .retirement-player-team{color:#fff!important;font-weight:800!important}
+.retirement-page .retirement-player-tags{color:var(--cs-soft)!important;font-weight:700!important;text-transform:none!important}
+.retirement-page .retirement-player-reason{display:block;margin-top:2px;font-size:12px;font-weight:700;color:var(--cs-orange)}
+.retirement-page .retirement-ovr{background:transparent!important;border:0!important;box-shadow:none!important}
+.retirement-page .retirement-ovr span{font-size:11px!important;font-weight:800!important;color:var(--cs-soft)!important;text-transform:none!important;letter-spacing:0!important}
+.retirement-page .retirement-ovr strong{font-size:30px!important;font-weight:900!important;color:#fff!important}
+.retirement-page .retirement-stat-group h3{font-size:12px!important;font-weight:800!important;color:var(--cs-soft)!important;text-transform:none!important;letter-spacing:0!important}
+.retirement-page .retirement-stat-cell{background:transparent!important;border:0!important;border-radius:0!important;box-shadow:none!important;padding:0 10px 0 0!important;text-align:left!important}
+.retirement-page .retirement-stat-cell span{font-size:11px!important;color:var(--cs-soft)!important;text-transform:none!important;letter-spacing:0!important}
+.retirement-page .retirement-stat-cell strong{font-size:16px!important;font-weight:900!important;color:#fff!important}
+.retirement-page .retirement-continue-btn{background:var(--cs-orange)!important;color:#2a1200!important;border:0!important;border-radius:4px!important;box-shadow:none!important;clip-path:none!important;font-family:var(--dd-font-ui)!important;font-size:15px!important;font-weight:900!important;letter-spacing:0!important;text-transform:none!important;text-shadow:none!important;padding:10px 22px!important}
+
+/* Board of Governors: the meeting floor kept its three columns only above 1100px; at
+   1024 it stacked into three 208px boxes that each scrolled. Keep columns to 900px. */
+@media (min-width:900px) and (max-width:1100px){.bog-floor{grid-template-columns:minmax(190px,220px) minmax(0,1fr) minmax(210px,240px)!important}}
+@media (max-width:899px){.bog-floor > .bog-panel{max-height:none!important;overflow:visible!important}.bog-root{overflow-y:auto!important}}
+
+/* ==========================================================================
+   Negotiation desk, restructured (components/contracts/CapContractNegotiation.js, .nd2)
+   Cream hero with the player and the gap between the two sides, one deal-interest
+   gauge, your terms beside the agent, cap consequence next to the single primary
+   action. Same colour language as the dossier: orange = decision, lime = yes,
+   coral = no / over the cap, cream = the player and his numbers.
+   ========================================================================== */
+.nd.nd2{display:flex;flex-direction:column;gap:0;background:var(--cs-deep)!important;border:0!important;border-radius:0!important;box-shadow:none!important;padding:0!important;font-family:var(--dd-font-ui);color:#eef4ff;min-width:0}
+.nd2 *{text-transform:none;letter-spacing:0}
+.nd2-hero{display:grid;grid-template-columns:auto 56px minmax(0,1fr) auto;gap:12px;align-items:center;padding:14px 16px;background:var(--cs-cream);color:var(--cs-ink)}
+.nd2-back{width:30px;height:30px;border:0;border-radius:4px;background:var(--cs-ink);color:var(--cs-cream);font-size:16px;font-weight:900;cursor:pointer}
+.nd2-face{width:56px;height:56px;overflow:hidden;background:var(--cs-ink);clip-path:polygon(0 0,100% 0,100% 76%,76% 100%,0 100%);display:grid;place-items:center}
+.nd2-face .player-headshot{zoom:.62}
+.nd2-who{min-width:0}
+.nd2-who h3{margin:0;font-family:var(--dd-font-ui);font-size:22px;font-weight:900;line-height:1.05;color:var(--cs-ink);text-shadow:none;-webkit-text-stroke:0;overflow-wrap:anywhere}
+.nd2-who p{margin:2px 0 0;font-size:12px;font-weight:700;color:#24315a}
+.nd2-agent{color:#4b5a82!important}
+.nd2-agent b{font-weight:900}
+.nd2-agent.tone-good b,.nd2-agent.tone-easy b{color:#2f7d16}
+.nd2-agent.tone-bad b,.nd2-agent.tone-hard b,.nd2-agent.tone-danger b{color:#a8300f}
+.nd2-gap{display:grid;grid-template-columns:auto auto auto;align-items:center;gap:10px;text-align:right}
+.nd2-gap > div span{display:block;font-size:11px;font-weight:800;color:#4b5a82}
+.nd2-gap > div strong{display:block;font-size:22px;font-weight:900;line-height:1;color:var(--cs-ink);font-variant-numeric:tabular-nums}
+.nd2-gap > div em{display:block;font-style:normal;font-size:11px;font-weight:800;color:#4b5a82}
+.nd2-gap > div.is-you strong{color:#a8300f}
+.nd2-gap > i{font-style:normal;font-size:12px;font-weight:900;padding:2px 6px;background:var(--cs-ink);color:var(--cs-cream)}
+.nd2-gap > i.is-down{background:#a8300f;color:#fff}
+.nd2-gauge{display:grid;grid-template-columns:auto minmax(0,1fr);gap:14px;align-items:center;padding:12px 16px;background:var(--cs-region)}
+.nd2-gauge > strong{font-size:36px;font-weight:900;line-height:1;color:var(--cs-cream);font-variant-numeric:tabular-nums}
+.nd2-gauge.will-accept > strong{color:var(--cs-lime)}
+.nd2-gauge.tone-low > strong,.nd2-gauge.tone-bad > strong{color:var(--cs-coral)}
+.nd2-gauge__body span{display:block;font-size:14px;font-weight:900;color:#fff}
+.nd2-gauge.will-accept .nd2-gauge__body span{color:var(--cs-lime)}
+.nd2-gauge__track{position:relative;height:10px;margin:6px 0 4px;background:rgba(169,191,220,.18)}
+.nd2-gauge__fill{position:absolute;left:0;top:0;bottom:0;background:var(--cs-cream)}
+.nd2-gauge.will-accept .nd2-gauge__fill{background:var(--cs-lime)}
+.nd2-gauge.tone-low .nd2-gauge__fill,.nd2-gauge.tone-bad .nd2-gauge__fill{background:var(--cs-coral)}
+.nd2-gauge__mark{position:absolute;top:-4px;bottom:-4px;width:2px;margin-left:-1px;background:#fff}
+.nd2-gauge__body small{font-size:11px;font-weight:700;color:var(--cs-soft)}
+.nd2-body{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:0}
+.nd2-offer{padding:12px 16px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.nd2-talk{padding:12px 16px;border-left:1px solid rgba(169,191,220,.16);display:flex;flex-direction:column;gap:10px;min-width:0}
+.nd2-field__head{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:4px}
+.nd2-field__head span,.nd2-field--row > span{font-size:12px;font-weight:800;color:var(--cs-soft)}
+.nd2-field__head strong{font-size:18px;font-weight:900;color:var(--cs-cream);font-variant-numeric:tabular-nums}
+.nd2-field--row{display:grid;grid-template-columns:78px minmax(0,1fr);gap:8px;align-items:center}
+.nd2-scale{display:flex;justify-content:space-between;font-size:10px;font-weight:700;color:var(--cs-soft);margin-top:2px}
+.nd2 .nd-range{position:relative}
+.nd2 .nd-range input[type="range"]{width:100%;accent-color:var(--cs-orange)}
+.nd2 .nd-range__ask{position:absolute;top:2px;bottom:2px;width:2px;background:#fff;pointer-events:none}
+.nd2 .nd-seg{display:flex;flex-wrap:wrap;gap:4px;background:none!important;border:0!important;box-shadow:none!important;padding:0!important}
+.nd2 .nd-seg button{min-width:32px;padding:5px 9px!important;border:0!important;border-radius:4px!important;background:rgba(169,191,220,.12)!important;color:#d6e2f4!important;font-family:var(--dd-font-ui)!important;font-size:13px!important;font-weight:900!important;box-shadow:none!important;text-shadow:none!important;cursor:pointer}
+.nd2 .nd-seg button.is-active{background:var(--cs-cream)!important;color:var(--cs-ink)!important}
+.nd2 .nd-seg button em{font-style:normal;font-size:10px;font-weight:800;margin-left:4px;color:var(--cs-orange)}
+.nd2 .nd-seg button.is-active em{color:#a8300f}
+.nd2 .nd-seg button:disabled{opacity:.45}
+.nd2-note{margin:2px 0 0;font-size:11px;font-weight:700;color:var(--cs-soft)}
+.nd2-thread{display:flex;flex-direction:column;gap:6px;max-height:180px;overflow-y:auto}
+.nd2-bubble{margin:0;padding:8px 10px;background:var(--cs-region);font-size:13px;font-weight:600;line-height:1.35;color:#eef4ff;border-left:3px solid var(--cs-cream)}
+.nd2-bubble.is-mood{border-left-color:var(--cs-soft);color:#c9d6ea}
+.nd2-verdict{padding:8px 10px;background:var(--cs-ink)}
+.nd2-verdict strong{display:block;font-size:13px;font-weight:900;color:var(--cs-cream)}
+.nd2-verdict.is-accepted strong,.nd2-verdict.is-signed strong{color:var(--cs-lime)}
+.nd2-verdict.is-rejected strong{color:var(--cs-coral)}
+.nd2-verdict.is-countered strong{color:var(--cs-orange)}
+.nd2-verdict p{margin:4px 0 0;font-size:12px;font-weight:700;color:#d6e2f4}
+.nd2-link{margin-left:8px;background:none;border:0;padding:0;color:var(--cs-cyan);font-weight:900;cursor:pointer}
+.nd2-more > summary{cursor:pointer;list-style:none;font-size:12px;font-weight:900;color:var(--cs-cyan)}
+.nd2-more > summary::-webkit-details-marker{display:none}
+.nd2-more[open] > summary{margin-bottom:6px}
+.nd2-foot{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:14px;align-items:center;padding:10px 16px;background:var(--cs-region);border-top:3px solid var(--cs-orange)}
+.nd2-cap{margin:0;display:flex;flex-wrap:wrap;gap:6px 18px;align-items:flex-end}
+.nd2-cap dt{font-size:11px;font-weight:800;color:var(--cs-soft)!important;text-transform:none!important;letter-spacing:0!important}
+.nd2-cap dd{margin:0;font-size:16px;font-weight:900;color:#fff;font-variant-numeric:tabular-nums}
+.nd2-cap dd small{font-size:10px;font-weight:700;color:var(--cs-soft)}
+.nd2-cap dd.is-bad{color:var(--cs-coral)}
+.nd2-cap__bar{flex:1 1 100%;height:4px;background:rgba(169,191,220,.18)}
+.nd2-cap__bar i{display:block;height:100%;background:var(--cs-cream)}
+.nd2-cap__bar i.is-tight{background:var(--cs-orange)}
+.nd2-cap__bar i.is-over{background:var(--cs-coral)}
+.nd2-error{grid-column:1 / -1;margin:0;font-size:12px;font-weight:800;color:var(--cs-coral)}
+.nd2-actions{display:flex;flex-direction:column;align-items:flex-end;gap:4px}
+.nd2 .nd2-primary{background:var(--cs-orange)!important;color:#2a1200!important;border:0!important;border-radius:4px!important;box-shadow:none!important;clip-path:none!important;font-family:var(--dd-font-ui)!important;font-size:15px!important;font-weight:900!important;text-shadow:none!important;padding:10px 18px!important;white-space:nowrap}
+.nd2 .nd2-primary:hover:not(:disabled){background:var(--cs-cream)!important}
+.nd2-text{background:none;border:0;padding:0;color:var(--cs-cyan);font-family:var(--dd-font-ui);font-size:12px;font-weight:900;cursor:pointer}
+.nd2-text:disabled,.nd2 .nd2-primary:disabled{opacity:.5;cursor:default}
+.nd2-note--foot{padding:0 16px 8px;background:var(--cs-region);margin:0}
+@container (max-width:620px){.nd2-hero{grid-template-columns:auto 48px minmax(0,1fr)}.nd2-gap{grid-column:1 / -1;justify-content:start;text-align:left}.nd2-body,.nd2-foot{grid-template-columns:minmax(0,1fr)}.nd2-talk{border-left:0;border-top:1px solid rgba(169,191,220,.16)}.nd2-actions{align-items:stretch}}
+@media (max-width:860px){.nd2-hero{grid-template-columns:auto 48px minmax(0,1fr)}.nd2-gap{grid-column:1 / -1;justify-content:start;text-align:left}.nd2-body,.nd2-foot{grid-template-columns:minmax(0,1fr)}.nd2-talk{border-left:0;border-top:1px solid rgba(169,191,220,.16)}}
+.nd2-agent.tone-green b{color:#2f7d16}
+.nd2-agent.tone-gold b{color:#a8300f}
+.nd2-gauge.tone-instant > strong,.nd2-gauge.tone-good > strong{color:var(--cs-lime)}
+
+/* Free agency uses the same desk (nd2--fa): the right column is the market. */
+.nd2--fa .nd2-hero{grid-template-columns:0 56px minmax(0,1fr) auto}
+.nd2--fa .nd2-who h3 [class*="rights-badge"]{font-size:11px;vertical-align:middle}
+.nd2-market{display:grid;gap:6px}
+.nd2-market__label{display:block;font-size:12px;font-weight:800;color:var(--cs-soft)}
+.nd2-market__row{display:grid;grid-template-columns:20px minmax(0,1fr) auto;gap:8px;align-items:center;font-size:13px}
+.nd2-market__row strong{font-weight:900;color:#fff}
+.nd2-market__row em{font-style:normal;font-weight:900;color:var(--cs-cream);font-variant-numeric:tabular-nums}
+.nd2-market__row.is-you strong,.nd2-market__row.is-you em{color:var(--cs-orange)}
+.nd2-market__logos{display:flex;flex-wrap:wrap;gap:6px}
+.nd2-warn{color:var(--cs-coral)!important}
+.nd2-stats{margin:6px 0;display:flex;flex-wrap:wrap;gap:4px 16px}
+.nd2-stats dt{font-size:11px;font-weight:800;color:var(--cs-soft)!important;text-transform:none!important;letter-spacing:0!important}
+.nd2-stats dd{margin:0;font-size:15px;font-weight:900;color:#fff}
+.nd2-pctile{display:grid;grid-template-columns:90px minmax(0,1fr) 44px;gap:8px;align-items:center;font-size:12px;margin-top:3px}
+.nd2-pctile span{color:#d6e2f4;font-weight:700}
+.nd2-pctile i{display:block;height:5px;background:rgba(169,191,220,.18)}
+.nd2-pctile i b{display:block;height:100%;background:var(--cs-blue)}
+.nd2-pctile strong{text-align:right;font-weight:900;color:var(--cs-blue)}
+.nd2-history p{margin:3px 0 0;font-size:12px;color:#c9d6ea}
+.nd2-history strong{color:#fff}
+.fa-root .fa-fa-desk{background:var(--cs-deep)!important;padding:0!important}
+
+/* Prospect rights, restructured: one option list for sign / path / hold, ELC terms under it. */
+.prospectrights-root .pr{display:flex;flex-direction:column;gap:8px;padding:2px}
+.pr-alert{margin:0;padding:6px 12px;background:var(--cs-coral);color:#2a0702;font-size:13px;font-weight:900}
+.nd2--rights .nd2-hero{grid-template-columns:0 56px minmax(0,1fr) auto}
+.pr-group{display:grid;gap:4px}
+.pr-options{display:grid;gap:3px}
+.pr-option{display:grid;grid-template-columns:18px minmax(0,1fr);gap:8px;align-items:start;text-align:left;padding:7px 10px;border:0;border-radius:0;background:transparent;color:#eef4ff;font-family:var(--dd-font-ui);cursor:pointer;border-left:3px solid transparent}
+.pr-option:hover:not(:disabled){background:rgba(255,231,196,.06)}
+.pr-option i{font-style:normal;color:var(--cs-soft);font-size:13px;line-height:1.3}
+.pr-option strong{display:block;font-size:14px;font-weight:900}
+.pr-option strong em{font-style:normal;margin-left:8px;font-size:11px;font-weight:800;color:var(--cs-lime)}
+.pr-option small{display:block;font-size:12px;font-weight:600;color:var(--cs-soft)}
+.pr-option.is-active{background:rgba(255,138,31,.12);border-left-color:var(--cs-orange)}
+.pr-option.is-active i{color:var(--cs-orange)}
+.pr-option:disabled{opacity:.45;cursor:default}
+.pr-terms{display:grid;gap:10px;padding-top:8px;border-top:1px solid rgba(169,191,220,.16)}
+.pr-select{width:100%;min-width:0;padding:5px 8px;border:0;border-radius:4px;background:var(--cs-cream);color:var(--cs-ink);font-family:var(--dd-font-ui);font-weight:800}
+.pr-result{margin:0;display:grid;grid-template-columns:1fr 1fr;gap:8px 14px}
+.pr-result dt{font-size:11px;font-weight:800;color:var(--cs-soft)!important;text-transform:none!important;letter-spacing:0!important}
+.pr-result dd{margin:0;font-size:14px;font-weight:900;color:#fff}
+.pr-road li.pr-deadline::before{background:var(--cs-coral)!important;border-color:var(--cs-coral)!important}
+.pr-ok{color:var(--cs-lime)!important;grid-column:1 / -1}
+.prospectrights-root .prospectrights-haul-card{grid-template-columns:auto minmax(0,1fr)!important}
+/* The decision stays in reach: the cap/action footer sticks to the bottom of the desk. */
+.nd2 .nd2-foot{position:sticky;bottom:0;z-index:3;box-shadow:0 -10px 18px rgba(5,12,44,.55)}
+/* While negotiating, the desk hero replaces the panel identity and tabs. */
+.resign-root .resign-table-layout.is-negotiating .resign-detail-panel > :is(.resign-identity,.resign-detail-tabs){display:none!important}
+.resign-root .resign-table-layout.is-negotiating .resign-detail-panel{box-shadow:none!important;background:transparent!important}
+/* Desks respond to the column they sit in (free agency puts the desk in a ~420px column). */
+.fa-root .fa-fa-desk,.resign-root .resign-detail-panel,.prospectrights-root .pr{container-type:inline-size}
+@container (max-width:620px){.nd2--fa .nd2-hero,.nd2--rights .nd2-hero{grid-template-columns:0 48px minmax(0,1fr)}}
+
+/* The hub's first-run tour belongs to the hub; it was drawing over offseason screens. */
+:root:has(.nhldev-root,.draftreview-root,.prospectrights-root,.resign-root,.fa-root,.cap-report-page,.bog-root,.an-root,.retirement-page,.nextseason-root,.dlot-root,.cleanup-root) .office-tour{display:none!important}
+
+/* Development report: open rows, the rating change as the headline number, lime for
+   gains and coral for drops, the reason as the player's own line. */
+.nhldev-root .nhldev-prospect-row{background:transparent!important;border:0!important;border-radius:0!important;box-shadow:none!important;border-bottom:1px solid rgba(169,191,220,.14)!important}
+.nhldev-root .nhldev-avatar{background:var(--cs-ink)!important;border:0!important;border-radius:0!important;clip-path:polygon(0 0,100% 0,100% 76%,76% 100%,0 100%);overflow:hidden}
+.nhldev-root .nhldev-row-head strong,.nhldev-root .nhldev-row-head h3,.nhldev-root .nhldev-row-head h4{color:var(--cs-cream)!important;font-family:var(--dd-font-ui)!important;font-weight:900!important;text-transform:none!important}
+.nhldev-root .nhldev-row-ovr{color:#fff!important;font-weight:900!important}
+.nhldev-root .nhldev-row-meta{color:var(--cs-soft)!important;text-transform:none!important;letter-spacing:0!important}
+.nhldev-root .nhldev-ovr-shift{color:#fff!important;font-weight:900!important}
+.nhldev-root .nhldev-delta-pill{background:transparent!important;border:0!important;box-shadow:none!important;padding:0 0 0 6px!important;font-weight:900!important;color:var(--cs-lime)!important}
+.nhldev-root .nhldev-delta-pill:is(.is-down,.tone-down,.is-negative,.is-regressed){color:var(--cs-coral)!important}
+.nhldev-root .nhldev-reason-text{color:#d6e2f4!important;font-weight:700!important}
+.nhldev-root .nhldev-group-head{background:transparent!important;border:0!important;box-shadow:none!important;text-transform:none!important;letter-spacing:0!important;color:#fff!important;font-weight:900!important}
+.nhldev-root .nhldev-summary-line{text-transform:none!important;letter-spacing:0!important}
+.nhldev-root .nhldev-delta-pill.down{color:var(--cs-coral)!important}
+.nhldev-root .nhldev-delta-pill.neutral{color:var(--cs-soft)!important}
+
+/* Draft lottery board: open rows in the command-sheet language. The pick number is the
+   headline, the team in cream, lime for a jump, coral for a drop, your club in orange. */
+.dlot-root .dlot-board{gap:0;container-type:inline-size}
+.dlot-root .dlot-board-row{grid-template-columns:52px 40px minmax(0,1fr) 84px 110px;gap:10px;padding:6px 8px;border:0!important;border-bottom:1px solid rgba(169,191,220,.14)!important;border-radius:0;background:transparent!important}
+.dlot-root .dlot-board-row.is-user{box-shadow:inset 3px 0 0 var(--cs-orange);background:rgba(255,138,31,.08)!important}
+.dlot-root .dlot-board-row.is-jump .dlot-board-pick{color:var(--cs-lime)}
+.dlot-root .dlot-board-row .dlot-logo.md{width:36px;height:36px}
+.dlot-root .dlot-board-pick{font-variant-numeric:tabular-nums}
+.dlot-root .dlot-board-team strong{color:var(--cs-cream)}
+.dlot-root .dlot-board-team strong small{font-size:.75rem;font-weight:700;color:var(--cs-soft)}
+.dlot-root .dlot-board-row.is-user .dlot-board-team span{color:var(--cs-orange);font-weight:800}
+.dlot-root .dlot-board-col{color:var(--cs-soft);font-variant-numeric:tabular-nums}
+@container (max-width:520px){.dlot-root .dlot-board-row{grid-template-columns:40px 32px minmax(0,1fr) auto}.dlot-root .dlot-board-row > .dlot-board-col:nth-last-child(2){display:none}}
+.dlot-root .dlot-chip.tone-up{color:var(--cs-lime)!important}
+.dlot-root .dlot-chip.tone-down{color:var(--cs-coral)!important}
+.dlot-root .dlot-chip.tone-hold{color:var(--cs-soft)!important}
+.dlot-root .dlot-board .dlot-chip{background:transparent!important;border:0!important;padding:0!important;font-weight:900}
+
+/* Combine leaders strip: a thin, quiet scrollbar instead of the global orange one. */
+.dcb-leaders{scrollbar-width:thin;scrollbar-color:rgba(169,191,220,.35) transparent}
+.dcb-leaders::-webkit-scrollbar{height:4px}
+.dcb-leaders::-webkit-scrollbar-thumb{background:rgba(169,191,220,.35);border-radius:0}
+.dcb-leaders::-webkit-scrollbar-track,.dcb-leaders::-webkit-scrollbar-button{background:transparent;display:none}
+
+/* Roster check chips: plain counts, coral only where a rule is broken. */
+.cleanup-root .cleanup-chip{text-transform:none!important;letter-spacing:0!important;color:var(--cs-cream)!important}
+.cleanup-root .cleanup-chip.is-blocked{color:var(--cs-coral)!important;border-color:rgba(255,107,92,.5)!important}
+.cleanup-root .cleanup-chip.is-ready{color:var(--cs-lime)!important}
+
+/* Development report sat on an 8%-alpha gradient, so the hub showed through. Solid navy base. */
+.nhldev-root{background-color:var(--cs-deep,#0b1730)!important}
+.dlot-root .dlot-board-col{background:transparent!important;border:0!important;box-shadow:none!important;padding:0!important}
+.dcb-root :is(.dcb-leaders,.dcb-table-wrap,.dcb-timeline-wrap),:is(.dcb-leaders,.dcb-table-wrap,.dcb-timeline-wrap){scrollbar-width:thin!important;scrollbar-color:rgba(169,191,220,.35) transparent!important}
+:is(.dcb-leaders,.dcb-table-wrap,.dcb-timeline-wrap)::-webkit-scrollbar{height:4px!important;width:4px!important}
+:is(.dcb-leaders,.dcb-table-wrap,.dcb-timeline-wrap)::-webkit-scrollbar-thumb{background:rgba(169,191,220,.35)!important;border:0!important;border-radius:0!important}
+:is(.dcb-leaders,.dcb-table-wrap,.dcb-timeline-wrap)::-webkit-scrollbar-track{background:transparent!important}
+
+/* Line ice-time steppers (replaces the range slider whose thumb the global range skin broke). */
+.lb-deploy-share{min-width:0!important;gap:4px!important}
+.lb-share-step{width:24px;height:24px;border:1px solid rgba(255,255,255,.2);border-radius:4px;background:rgba(255,255,255,.06);color:#fff;font-size:15px;font-weight:900;line-height:1;cursor:pointer;padding:0}
+.lb-share-step:hover:not(:disabled){background:#2ee6d6;color:#062036}
+.lb-share-step:disabled{opacity:.3;cursor:default}
+.lb-deploy-share > span{text-align:center}
+
+/* Storylines player file: how he feels and his life in the room. Lime = good, coral = bad. */
+.sl-feel{margin:10px 0;padding:10px 14px;background:rgba(8,18,46,.55);border-left:3px solid var(--cs-soft,#a9bfdc)}
+.sl-feel--good{border-left-color:var(--cs-lime,#9be564)}
+.sl-feel--warn{border-left-color:var(--cs-orange,#ff8a1f)}
+.sl-feel--bad{border-left-color:var(--cs-coral,#ff6b5c)}
+.sl-feel__head{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 12px}
+.sl-feel__head span{font-size:12px;font-weight:800;color:var(--cs-soft,#a9bfdc)}
+.sl-feel__head strong{font-size:20px;font-weight:900;color:#fff}
+.sl-feel--good .sl-feel__head strong{color:var(--cs-lime,#9be564)}
+.sl-feel--bad .sl-feel__head strong{color:var(--cs-coral,#ff6b5c)}
+.sl-feel--warn .sl-feel__head strong{color:var(--cs-orange,#ff8a1f)}
+.sl-feel__head em{font-style:normal;font-size:12px;font-weight:700;color:var(--cs-soft,#a9bfdc)}
+.sl-feel__why{margin:6px 0 0;padding-left:18px;font-size:13px;font-weight:600;color:#d6e2f4}
+.sl-life__bonds h4{margin:0 0 6px;font-size:13px;color:var(--cs-soft,#a9bfdc)}
+.sl-life__bonds ul{list-style:none;margin:0 0 10px;padding:0;display:flex;flex-wrap:wrap;gap:6px 16px}
+.sl-life__bonds li span{font-weight:800;color:var(--cs-cream,#fff3d6)}
+.sl-life__bonds li em{font-style:normal;margin-left:6px;font-size:12px;font-weight:700;color:var(--cs-lime,#9be564)}
+.sl-life__bonds li.is-friction em{color:var(--cs-coral,#ff6b5c)}
+.sl-life__feed{list-style:none;margin:0;padding:0}
+.sl-life__feed li{padding:8px 0 8px 10px;border-bottom:1px solid rgba(169,191,220,.14);border-left:3px solid rgba(169,191,220,.3)}
+.sl-life__feed li.is-good{border-left-color:var(--cs-lime,#9be564)}
+.sl-life__feed li.is-bad{border-left-color:var(--cs-coral,#ff6b5c)}
+.sl-life__feed li span{font-size:11px;font-weight:800;color:var(--cs-soft,#a9bfdc)}
+.sl-life__feed li p{margin:2px 0 0;font-size:13px;font-weight:600;line-height:1.4;color:#eef4ff}

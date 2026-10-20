@@ -833,13 +833,14 @@ export function GameUIProvider({ children }) {
       includeDraftClassRankings = true,
       includeDraftClassHud = true,
       includeNhlCalendarFull = false,
+      forceRosterBrowser = false,
     } = {}) => {
       if (!getFranchiseSessionId()) return null;
       let skipRoster = false;
       let skipDraft = false;
       let skipCalendar = false;
       setFranchiseState((prev) => {
-        if (includeRosterBrowser && prev?.roster_browser) skipRoster = true;
+        if (includeRosterBrowser && prev?.roster_browser && !forceRosterBrowser) skipRoster = true;
         if (includeDraftClassRankings && prev?.draft_class_rankings) {
           const boardRev = Number(
             prev.draft_class_rankings.prospect_revision ?? prev.draft_class_rankings.revision ?? NaN

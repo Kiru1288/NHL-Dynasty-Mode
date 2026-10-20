@@ -484,6 +484,16 @@ def get_team_draft_philosophy(session: FranchiseSession, team_id: str) -> Dict[s
     }
 
 
+def _pos_code(player: Any) -> str:
+    """Position as a plain code ("C", "LW", "D"...). Positions are enums on Player objects,
+    so str() alone gives "POSITION.C" and never matches a code."""
+    raw = getattr(player, "position", None)
+    if raw is None:
+        raw = getattr(getattr(player, "identity", None), "position", None)
+    raw = getattr(raw, "value", raw)
+    return str(raw or "").upper()
+
+
 def calculate_team_needs(session: FranchiseSession, team_id: str) -> List[Dict[str, Any]]:
     team = session.team_by_id.get(str(team_id))
     if not team:
@@ -492,13 +502,14 @@ def calculate_team_needs(session: FranchiseSession, team_id: str) -> List[Dict[s
     pool = list(getattr(team, "prospect_pool", None) or getattr(team, "prospects", None) or [])
 
     def count_pos(players, pos):
-        return sum(1 for p in players if str(getattr(p, "position", "") or "").upper() == pos)
+        return sum(1 for p in players if _pos_code(p) == pos)
 
     def count_rhd(players):
         n = 0
         for p in players:
-            pos = str(getattr(p, "position", "") or "").upper()
-            shoots = str(getattr(getattr(p, "identity", None), "shoots", "") or getattr(p, "shoots", "") or "").upper()
+            pos = _pos_code(p)
+            shoots_raw = getattr(getattr(p, "identity", None), "shoots", None) or getattr(p, "shoots", None) or ""
+            shoots = str(getattr(shoots_raw, "value", shoots_raw)).upper()
             is_d = pos in ("D", "LD", "RD", "LHD", "RHD") or pos.endswith("D")
             is_right = shoots.startswith("R") or pos in ("RD", "RHD")
             if is_d and is_right:
@@ -2270,8 +2281,10 @@ def get_entry_draft_payload(
             getattr(user_team, "prospect_pool", None) or getattr(user_team, "prospects", None) or []
         ):
             roster_rows.append({
-                "position": getattr(p, "position", None),
-                "handedness": getattr(getattr(p, "identity", None), "shoots", None) or getattr(p, "shoots", None),
+                "position": _pos_code(p),
+                "handedness": getattr(getattr(getattr(p, "identity", None), "shoots", None), "value", None)
+                or getattr(getattr(p, "identity", None), "shoots", None)
+                or getattr(p, "shoots", None),
                 "age": getattr(getattr(p, "identity", None), "age", None) or getattr(p, "age", None),
             })
         try:
@@ -2335,7 +2348,7 @@ def get_entry_draft_payload(
                 except Exception:
                     scouted = {}
                 try:
-                    dossier = build_prospect_profile(row, roster_rows=roster_rows, team_status=team_status)
+                    dossier = build_prospect_profile(row, roster_rows=roster_rows, team_status=team_status, player=player)
                 except Exception:
                     dossier = {}
                 deep_cache[pid] = {

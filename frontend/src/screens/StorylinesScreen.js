@@ -3189,6 +3189,24 @@ function PlayerMeetingsPanel({
         </header>
 
         <MeetingRelationshipPanel relationship={rel} />
+        {playerDetail?.emotion ? (
+          <section className={`sl-feel sl-feel--${str(playerDetail.emotion.tone)}`} aria-label="How he feels">
+            <div className="sl-feel__head">
+              <span>How he feels</span>
+              <strong>{str(playerDetail.emotion.feeling)}</strong>
+              <em>
+                Morale {playerDetail.emotion.morale} · Confidence {playerDetail.emotion.confidence}
+              </em>
+            </div>
+            {asArray(playerDetail.emotion.why).length ? (
+              <ul className="sl-feel__why">
+                {asArray(playerDetail.emotion.why).map((w, i) => (
+                  <li key={i}>{str(w)}</li>
+                ))}
+              </ul>
+            ) : null}
+          </section>
+        ) : null}
         {asArray(selected.issues).length || asArray(selected.openings).length ? (
           <section className="md-desk md-player-issues">
             {asArray(selected.issues).length ? (
@@ -3261,17 +3279,47 @@ function PlayerMeetingsPanel({
         ))}
 
         <nav className="sl-subtabs">
-          {["talk", "promises", "history"].map((tab) => (
+          {["talk", "life", "promises", "history"].map((tab) => (
             <button
               key={tab}
               type="button"
               className={playerTab === tab ? "is-active" : ""}
               onClick={() => setPlayerTab(tab)}
             >
-              {tab === "talk" ? "Talk" : tab === "promises" ? "Promises" : "History"}
+              {tab === "talk" ? "Talk" : tab === "life" ? "Life" : tab === "promises" ? "Promises" : "History"}
             </button>
           ))}
         </nav>
+
+        {playerTab === "life" ? (
+          <div className="sl-stack sl-life">
+            {asArray(playerDetail?.closest_teammates).length ? (
+              <div className="sl-life__bonds">
+                <h4>In the room</h4>
+                <ul>
+                  {asArray(playerDetail.closest_teammates).map((t) => (
+                    <li key={str(t.player_id)} className={Number(t.bond) <= 40 ? "is-friction" : "is-close"}>
+                      <span>{str(t.name)}</span>
+                      <em>{Number(t.bond) <= 40 ? "friction" : Number(t.bond) >= 70 ? "close friend" : "gets along"}</em>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {asArray(playerDetail?.life_feed).length ? (
+              <ol className="sl-life__feed">
+                {asArray(playerDetail.life_feed).map((row, i) => (
+                  <li key={i} className={`is-${str(row.tone)}`}>
+                    <span>{str(row.iso)}</span>
+                    <p>{str(row.text)}</p>
+                  </li>
+                ))}
+              </ol>
+            ) : (
+              <p className="sl-muted">Nothing yet. Teammates talk as the days go by; check back after a few sim days.</p>
+            )}
+          </div>
+        ) : null}
 
         {playerTab === "promises" ? (
           <div className="sl-stack">
@@ -3289,7 +3337,11 @@ function PlayerMeetingsPanel({
                         }`
                       : str(p.status) === "kept"
                         ? "Kept ✓"
-                        : "Broken ✕"}
+                        : str(p.status) === "void"
+                          ? "Ended — left the club"
+                          : str(p.status) === "waived"
+                            ? "Waived — he couldn't play"
+                            : "Broken ✕"}
                   </span>
                   {str(p.status || "active") === "active" && (p.navigate || p.how_to) ? (
                     <button

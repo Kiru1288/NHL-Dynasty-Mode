@@ -60,6 +60,12 @@ def update_after_team_result(
         delta -= 1.0 + 0.3 * max(0, min(4, -goal_diff_for_team))
     delta += (float(role_satisfaction_proxy) - 0.5) * 0.4
     delta *= 0.9 + 0.12 * rng.random()
+    # Diminishing returns: a hot streak lifts a content room less and less, and a slump
+    # weighs less on a player who is already down. Keeps winners in the 70s, not 100.
+    if delta > 0:
+        delta *= max(0.0, (82.0 - m) / 32.0) if m > 50.0 else 1.0
+    elif delta < 0:
+        delta *= max(0.0, (m - 15.0) / 35.0) if m < 50.0 else 1.0
     push_to_psych(player, m + delta)
 
 

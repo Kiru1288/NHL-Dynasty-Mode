@@ -631,6 +631,43 @@ function isUserOwnedProspect(raw, userTeamId, { honorUserFlags = true } = {}) {
   return rightsFields.some((field) => safeStr(field, "").toLowerCase() === uid);
 }
 
+const ORG_ROSTER_KEYS = ["nhl", "ahl", "echl", "prospects"];
+
+/** Move one player between the user's organization lists in a roster_browser payload. */
+function applyLocalRosterMove(rb, userTeamId, playerId, dest) {
+  const pid = String(playerId || "");
+  const uid = safeStr(userTeamId, "").toLowerCase();
+  let moved = null;
+  const strip = (list) =>
+    (list || EMPTY_ARRAY).filter((p) => {
+      if (getPlayerId(p, "") !== pid) return true;
+      moved = moved || p;
+      return false;
+    });
+
+  const organizations = (rb?.organizations || EMPTY_ARRAY).map((org) => {
+    const next = { ...org };
+    ORG_ROSTER_KEYS.forEach((key) => {
+      if (Array.isArray(org?.[key])) next[key] = strip(org[key]);
+    });
+    return next;
+  });
+  const development_leagues = (rb?.development_leagues || EMPTY_ARRAY).map((league) => ({
+    ...league,
+    teams: (league?.teams || EMPTY_ARRAY).map((team) => ({ ...team, players: strip(team?.players) })),
+  }));
+
+  // "junior" and unknown destinations reappear on the background refresh.
+  const destKey = ["nhl", "ahl", "echl"].includes(dest) ? dest : dest ? "" : "prospects";
+  if (moved && destKey) {
+    const org = organizations.find(
+      (o) => [o?.team_id, o?.id, o?.abbr].some((v) => safeStr(v, "").toLowerCase() === uid)
+    );
+    if (org) org[destKey] = [...(org[destKey] || EMPTY_ARRAY), { ...moved, league: destKey === "prospects" ? moved.league : destKey.toUpperCase() }];
+  }
+  return { ...rb, organizations, development_leagues };
+}
+
 function collectMyProspectRawPlayers(rb, franchiseState, userTeamId, userOrganization, { isUserTeam = true } = {}) {
   const rows = [];
   const seen = new Set();
@@ -658,6 +695,14 @@ function collectMyProspectRawPlayers(rb, franchiseState, userTeamId, userOrganiz
   };
 
   const orgName = userOrganization?.name || franchiseState?.team?.name || "Organization";
+
+  // Anyone already on the NHL/AHL/ECHL roster (e.g. just signed to an ELC) has left the rights list.
+  ["nhl", "ahl", "echl"].forEach((key) => {
+    (userOrganization?.[key] || EMPTY_ARRAY).forEach((player) => {
+      const id = getPlayerId(player, "");
+      if (id) seen.add(id);
+    });
+  });
 
   // Rights Held = unsigned / junior pipeline only — not AHL or ECHL (use Organization → AHL/ECHL).
   (userOrganization?.prospects || EMPTY_ARRAY).forEach((player) => {
@@ -4741,7 +4786,15 @@ function UsagePanel({ player, onRefresh, canManage = true }) {
     setElcBusy(true);
     setElcResult(null);
     try {
-      const res = await submitElcOffer({ player_id: playerId, template_id: "standard_elc" });
+      // AHL-eligible signees go straight to the farm club instead of sitting in Rights Held.
+      const ahlOk = (elcPreview?.legal_terms?.assignment_options || EMPTY_ARRAY).some(
+        (o) => o?.id === "assign_ahl" && o?.enabled !== false
+      );
+      const res = await submitElcOffer({
+        player_id: playerId,
+        template_id: "standard_elc",
+        ...(ahlOk ? { assignment_plan: "assign_ahl" } : {}),
+      });
       const d = res?.decision || {};
       const signed = Boolean(res?.signed || d.accepted);
       setElcResult({
@@ -4752,7 +4805,8 @@ function UsagePanel({ player, onRefresh, canManage = true }) {
       });
       if (signed) {
         setElcPreview(null);
-        if (typeof onRefresh === "function") onRefresh();
+        const inAhl = res?.assignment?.organizational_status === "signed_ahl" && res?.assignment_ok !== false;
+        if (typeof onRefresh === "function") onRefresh(inAhl ? { playerId, dest: "ahl" } : undefined);
       }
     } catch (err) {
       setElcResult({ signed: false, text: err?.response?.data?.detail || err?.message || "Signing failed" });
@@ -4798,7 +4852,8 @@ function UsagePanel({ player, onRefresh, canManage = true }) {
           .join(" · ")
       );
       setMoves(Array.isArray(result.available_moves) ? result.available_moves : EMPTY_ARRAY);
-      if (typeof onRefresh === "function") onRefresh();
+      const dest = String(result.moved || "").split("_to_")[1] || "";
+      if (typeof onRefresh === "function") onRefresh({ playerId, dest });
     } catch (err) {
       setError(err?.message || "Move failed");
     } finally {
@@ -6016,7 +6071,7 @@ export function RosterScreen() {
 
   const {
     franchiseState,
-    
+    setFranchiseState,
     setRosterRowIndex,
     setScreen,
     refreshFranchise,
@@ -6766,11 +6821,29 @@ export function RosterScreen() {
 
   const canRefresh = typeof refreshFranchise === "function";
 
-  const handleRefresh = useCallback(() => {
-    if (canRefresh) {
-      refreshFranchise();
-    }
-  }, [canRefresh, refreshFranchise]);
+  const handleRefresh = useCallback(
+    (move) => {
+      // Roster move / signing: patch the local roster browser now so the player shows up in the
+      // right list instantly, then pull the authoritative browser in the background.
+      if (move?.playerId && typeof setFranchiseState === "function") {
+        setFranchiseState((prev) =>
+          prev?.roster_browser
+            ? { ...prev, roster_browser: applyLocalRosterMove(prev.roster_browser, userTeamId, move.playerId, move.dest) }
+            : prev
+        );
+        hydrateFranchiseHeavyState?.({
+          includeRosterBrowser: true,
+          includeDraftClassRankings: false,
+          includeDraftClassHud: false,
+          forceRosterBrowser: true,
+        });
+      }
+      if (canRefresh) {
+        refreshFranchise();
+      }
+    },
+    [canRefresh, refreshFranchise, setFranchiseState, hydrateFranchiseHeavyState, userTeamId]
+  );
 
 
   const openScreen = useCallback(

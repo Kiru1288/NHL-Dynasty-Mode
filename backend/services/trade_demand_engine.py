@@ -1014,6 +1014,10 @@ def open_trade_demand(
         _enqueue_demand_surfaces(session, row, team)
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
+    if tid != str(getattr(session, "user_team_id", "") or ""):
+        # CPU clubs usually move a good player within a week of his demand, so the
+        # buying window opens now, not at stage 2.
+        _maybe_offer_trade_opportunity(session, row, player, team, 1, float(before), float(after))
     return row
 
 
@@ -1121,8 +1125,80 @@ def _age_cpu_demands(session: Any, calendar_idx: int) -> Dict[str, int]:
                 setattr(player, "_trade_demand_destinations", list(row.get("preferred_destinations") or []))
             except Exception:
                 _swallowed_log.debug("suppressed exception", exc_info=True)
+            _maybe_offer_trade_opportunity(session, row, player, cur_team, stage, base_before, after)
         out["aged"] += 1
     return out
+
+
+# A CPU player whose demand has dragged his value down is a real buying chance. Only
+# players worth acting on (a lineup upgrade) raise it, once per stage, and it pauses
+# week / month sims so the window is not simmed past.
+OPPORTUNITY_MIN_OVR = 78.0
+OPPORTUNITY_MIN_DROP = 0.05
+
+
+def _maybe_offer_trade_opportunity(
+    session: Any, row: Dict[str, Any], player: Any, team: Any, stage: int, before: float, after: float
+) -> None:
+    try:
+        if stage < 1 or before <= 0:
+            return
+        drop = (float(before) - float(after)) / float(before)
+        if drop < OPPORTUNITY_MIN_DROP or _player_ovr(player) < OPPORTUNITY_MIN_OVR:
+            return
+        pid = _player_id(player)
+        key = f"trade_opp_{pid}_{stage}"
+        pending = list(getattr(session, "pending_ui_popups", None) or [])
+        if any(isinstance(p, dict) and p.get("id") == key for p in pending):
+            return
+        name = _player_name(player)
+        abbr = _team_abbr(team)
+        reason = str(row.get("reason") or row.get("primary_reason") or "").replace("_", " ")
+        contract = getattr(player, "contract", None)
+        years = _get(contract, "years_remaining", None) or _get(contract, "years_left", None)
+        terms = []
+        try:
+            from app.sim_engine.economy.cap_engine import player_cap_hit_millions  # noqa: WPS433
+
+            aav_m = float(player_cap_hit_millions(player) or 0.0)
+            if aav_m > 0:
+                terms.append(f"${aav_m:.2f}M cap hit")
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+        if years:
+            terms.append(f"{years} yr{'s' if str(years) != '1' else ''} left")
+        body = (
+            f"{name} ({int(round(_player_ovr(player)))} OVR) wants out of {abbr}"
+            + (f" over {reason}" if reason and reason != "general" else "")
+            + (
+                f". Now that he has asked out, his price is down about {int(round(drop * 100))}% and his club "
+                "usually moves him within a week or two."
+                if stage <= 1
+                else f". His value has fallen about {int(round(drop * 100))}% while the demand drags on, "
+                "so the asking price is below what he is worth on the ice."
+            )
+            + (f" {', '.join(terms)}." if terms else "")
+        )
+        popup = {
+            "id": key,
+            "kind": "storyline",
+            "presentation_type": "trade_opportunity",
+            "theme": "info",
+            "source_label": "Pro scouting",
+            "headline": f"Buying chance: {name} is available below value",
+            "body": body,
+            "player_id": pid,
+            "player_name": name,
+            "team_id": str(_get(team, "team_id", "") or _get(team, "id", "") or ""),
+            "value_drop_pct": round(drop * 100, 1),
+            "actions": [{"id": "tradehub", "label": "Open Trade Desk"}],
+            "priority": "HIGH",
+        }
+        pending.append(popup)
+        session.pending_ui_popups = pending[-80:]
+        _push_notification(session, {"headline": popup["headline"], "body": body, "player_id": pid, "kind": "trade_opportunity"})
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def process_trade_demand_day(session: Any, calendar_idx: int, day_meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -1386,7 +1462,7 @@ _COMPLAINT_FIX = {
     "broken_promise": "delivering on the promise you made",
     "performance": "usage that matches his production",
     "organizational": "a clear plan for where the team is going",
-    "temperament": "settling the friction in the room",
+    "temperament": "giving him a role he accepts, or a winning run to calm him",
 }
 
 

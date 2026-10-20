@@ -30,11 +30,14 @@ function StatCell({ label, value }) {
 }
 
 function StatGrid({ title, columns, goalie = false }) {
+  // Only stats the save actually tracked; a row of dashes says nothing.
+  const shown = columns.filter((col) => col.value !== "—");
+  if (!shown.length) return null;
   return (
     <div className="retirement-stat-group">
       <h3>{title}</h3>
       <div className={`retirement-stat-grid${goalie ? " is-goalie" : ""}`}>
-        {columns.map((col) => (
+        {shown.map((col) => (
           <StatCell key={`${title}-${col.label}`} label={col.label} value={col.value} />
         ))}
       </div>
@@ -89,20 +92,26 @@ function RetirementRow({ row, index }) {
             {team}
           </span>
           <span className="retirement-player-tags">
-            {position}
-            {age != null ? ` · Age ${age}` : ""}
+            {[
+              position,
+              age != null ? `Age ${age}` : null,
+              row.seasons_played ? `${row.seasons_played} pro seasons` : null,
+              row.legacy_tier ? String(row.legacy_tier).replace(/_/g, " ") : null,
+            ].filter(Boolean).join(" · ")}
           </span>
+          {row.retirement_reason ? <span className="retirement-player-reason">{row.retirement_reason}</span> : null}
         </div>
       </div>
 
       <div className="retirement-ovr" aria-label={`Overall ${overall ?? "unknown"}`}>
-        <span>OVR</span>
+        <span>Final</span>
         <strong>{overall ?? "—"}</strong>
       </div>
 
       <div className="retirement-stats-wrap">
-        <StatGrid title="NHL Career" columns={statCols(nhl)} goalie={goalie} />
-        <StatGrid title="AHL Career" columns={statCols(ahl)} goalie={goalie} />
+        {/* Totals only cover seasons played in this save, not the full real career. */}
+        <StatGrid title="NHL in this save" columns={statCols(nhl)} goalie={goalie} />
+        <StatGrid title="AHL in this save" columns={statCols(ahl)} goalie={goalie} />
       </div>
     </article>
   );

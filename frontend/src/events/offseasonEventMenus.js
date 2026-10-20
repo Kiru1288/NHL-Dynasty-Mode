@@ -848,7 +848,7 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
                       <span className={`${prefix}-ovr-badge tone-${resignOvrTone(selectedOvr)}`}>
                         {selectedOvr ?? "—"} <em>OVR</em>
                       </span>
-                      <h3>{String(selected.name || getPlayerName(selected) || "").toUpperCase()}</h3>
+                      <h3>{String(selected.name || getPlayerName(selected) || "")}</h3>
                       <p>
                         {[
                           selected.position || getPlayerPosition(selected),
@@ -1396,7 +1396,7 @@ export function FreeAgencyEventMenu({
     phase === "offseason" && String(franchiseState?.offseason_stage || "") === "free_agency";
   const ctaLabel =
     ctaLabelProp ||
-    (standalone || !inOffseasonWire ? "Back to Hub" : "Continue to Roster Cleanup");
+    (standalone || !inOffseasonWire ? "Back to Hub" : "Continue to New Season");
   const continueHandler =
     typeof onContinue === "function"
       ? onContinue
@@ -2249,9 +2249,10 @@ export function FreeAgencyEventMenu({
                     : "Select a free agent to open the signing desk."}
                 </p>
               ) : (
-                <>
-                  <div className={`${prefix}-fa-identity`}>
-                    <div className={`${prefix}-fa-shot`}>
+                <div className="nd nd2 nd2--fa">
+                  <header className="nd2-hero">
+                    <span aria-hidden="true" />
+                    <div className="nd2-face">
                       <PlayerHeadshot
                         player={ensurePlayerHeadshotFields({
                           ...deskPlayer,
@@ -2262,374 +2263,361 @@ export function FreeAgencyEventMenu({
                           age: deskPlayer.age,
                           nationality: deskPlayer.nationality,
                         })}
-                        size="xs"
+                        size="md"
+                        showFlag={false}
                       />
                     </div>
-                    <div>
-                      <span className={`${prefix}-fa-ovr`}>{getPlayerOverall(deskPlayer) ?? "—"} OVR</span>
+                    <div className="nd2-who">
                       <h3>
-                        {String(getPlayerName(deskPlayer) || "").toUpperCase()}{" "}
-                        <RightsBadge prefix={prefix} row={deskPlayer} />
+                        {getPlayerName(deskPlayer)} <RightsBadge prefix={prefix} row={deskPlayer} />
                       </h3>
                       <p>
                         {[
                           getPlayerPosition(deskPlayer),
-                          deskPlayer.age != null ? `Age ${deskPlayer.age}` : null,
-                          deskPlayer.potential != null ? `POT ${deskPlayer.potential}` : null,
+                          getPlayerOverall(deskPlayer) != null ? `${getPlayerOverall(deskPlayer)} OVR` : null,
+                          deskPlayer.age != null ? `age ${deskPlayer.age}` : null,
+                          deskPlayer.potential != null ? `potential ${deskPlayer.potential}` : null,
                           deskPlayer.role,
-                        ]
-                          .filter(Boolean)
-                          .join(" · ")}
+                        ].filter(Boolean).join(" · ")}
                       </p>
-                      {!isOfferSheet ? (
-                        <p className={`${prefix}-fa-prev-line`}>
-                          Asking {formatMoney(deskPlayer.askingAav ?? deskPlayer.ask_aav_m)} ×{" "}
-                          {deskPlayer.askingTerm ?? deskPlayer.asking_term ?? "—"}y
-                          {deskPlayer.wants_clause && deskPlayer.wants_clause !== "None"
-                            ? ` · Wants ${deskPlayer.wants_clause}`
-                            : ""}
-                          {deskPlayer.bonus_demand_label ? ` · ${deskPlayer.bonus_demand_label}` : ""}
-                        </p>
-                      ) : null}
-                      <p className={`${prefix}-fa-prev-line`}>
-                        {isOfferSheet ? "Rights held by" : "Former"} ·{" "}
-                        {deskPlayer.rights_team_name || deskPlayer.previous_team || deskPlayer.current_team || deskPlayer.nhl_team || "Unsigned"}
+                      <p className="nd2-agent">
+                        {isOfferSheet ? "Rights held by " : "Last with "}
+                        {deskPlayer.rights_team_name || deskPlayer.previous_team || deskPlayer.current_team || deskPlayer.nhl_team || "no club"}
                         {deskPlayer.nationality ? ` · ${deskPlayer.nationality}` : ""}
                       </p>
                     </div>
-                  </div>
-
-                  {isOfferSheet ? (
-                    <div className={`${prefix}-nego-meter`}>
-                      <div className={`${prefix}-nego-meter-head`}>
-                        <span>Offer sheet</span>
-                        <strong>{offerSheetCompensation(offerSheetInfo.tiers, offerCapHitNum)}</strong>
-                      </div>
-                      <p className={`${prefix}-nego-meter-note`}>
-                        Draft-pick compensation you owe if{" "}
-                        {selected.rights_team_name || selected.rights_team_abbrev || "his club"} declines to match.
-                        Market value {formatMoney(selected.market_value_m)} · Previous AAV{" "}
-                        {formatMoney(selected.previous_aav_m)}. Clubs usually match offers near market value.
-                      </p>
-                      {selected.offer_sheet_pending ? (
-                        <p className={`${prefix}-warn`}>
-                          {selected.offer_sheet_by_user
-                            ? "Your offer sheet is already on the table."
-                            : "Another club already has an offer sheet pending on this player."}
-                        </p>
-                      ) : null}
-                    </div>
-                  ) : (
-                  <div className={`${prefix}-nego-meter`}>
-                    <div className={`${prefix}-nego-meter-head`}>
-                      <span>Deal interest</span>
-                      <strong>{negoInterest ? Math.round(negoInterest) : "—"}</strong>
-                    </div>
-                    <div className={`${prefix}-nego-meter-track`}>
-                      <span
-                        className={`${prefix}-nego-meter-fill tone-${
-                          negoInterest >= 88
-                            ? "instant"
-                            : negoInterest >= 62
-                              ? "good"
-                              : negoInterest >= 40
-                                ? "mid"
-                                : "bad"
-                        }`}
-                        style={{ width: `${Math.max(4, Math.min(100, negoInterest || 4))}%` }}
-                      />
-                    </div>
-                    <p className={`${prefix}-nego-meter-note`}>
-                      {negoFeedback ||
-                        `Your club interest ${selected.interest_to_user_label || "—"} (${
-                          selected.interest_to_user != null ? Math.round(selected.interest_to_user) : "—"
-                        }) · Sign likelihood ${
-                          selected.sign_likelihood != null
-                            ? `${Math.round(Number(selected.sign_likelihood) * 100)}%`
-                            : "—"
-                        }`}
-                    </p>
-                  </div>
-                  )}
-
-                  {competing.length ? (
-                    <div className={`${prefix}-fa-offers`}>
-                      <span className={`${prefix}-mini-label`}>Offers received</span>
-                      {competing.slice(0, 5).map((o) => (
-                        <div key={`${o.team_id}-${o.aav_m}`} className={`${prefix}-fa-offer`}>
-                          <TeamLogoBadge
-                            teamLogo={resolveFranchiseTeamLogo(
-                              {
-                                abbrev: o.team_abbrev,
-                                team_abbrev: o.team_abbrev,
-                                name: o.team_name,
-                              },
-                              o.team_name || o.team_abbrev
-                            )}
-                            teamName={o.team_name || o.team_abbrev}
-                            size={22}
-                            variant="circle"
-                          />
-                          <strong>{o.team_abbrev || o.team_name}</strong>
+                    <div className="nd2-gap" aria-label="Their ask against your offer">
+                      {isOfferSheet ? (
+                        <div>
+                          <span>Compensation if unmatched</span>
+                          <strong>{offerSheetCompensation(offerSheetInfo.tiers, offerCapHitNum)}</strong>
+                          <em>market {formatMoney(selected.market_value_m)}</em>
+                        </div>
+                      ) : (
+                        <div>
+                          <span>They want</span>
+                          <strong>{formatMoney(deskPlayer.askingAav ?? deskPlayer.ask_aav_m)}</strong>
                           <em>
-                            {formatMoney(o.aav_m)} · {o.years}y
-                            {o.is_user ? " · YOU" : ""}
+                            {deskPlayer.askingTerm ?? deskPlayer.asking_term ?? "—"} yrs
+                            {deskPlayer.wants_clause && deskPlayer.wants_clause !== "None" ? ` · ${deskPlayer.wants_clause}` : ""}
                           </em>
                         </div>
-                      ))}
-                    </div>
-                  ) : interested.length ? (
-                    <div className={`${prefix}-fa-offers`}>
-                      <span className={`${prefix}-mini-label`}>Clubs circling</span>
-                      <div className={`${prefix}-fa-logos is-large`}>
-                        {interested.map((t) => (
-                          <TeamLogoBadge
-                            key={t.team_id || t.team_abbrev}
-                            teamLogo={resolveFranchiseTeamLogo(
-                              {
-                                abbrev: t.team_abbrev,
-                                team_abbrev: t.team_abbrev,
-                                name: t.team_name,
-                              },
-                              t.team_name || t.team_abbrev
-                            )}
-                            teamName={t.team_name || t.team_abbrev}
-                            size={26}
-                            variant="circle"
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-
-                  <div className={`${prefix}-fa-controls`}>
-                    {isOfferSheet ? null : (
-                      <div className="nd-field">
-                        <div className="nd-field__head"><span>Contract type</span></div>
-                        <div className="nd-seg" role="group" aria-label="Contract type">
-                          {[
-                            ["nhl_one_way", "One-way"],
-                            ["nhl_two_way", "Two-way"],
-                            ["ahl", "AHL"],
-                            ["pto", "PTO"],
-                          ].map(([id, label]) => (
-                            <button
-                              key={id}
-                              type="button"
-                              className={contractCategory === id ? "is-active" : ""}
-                              aria-pressed={contractCategory === id}
-                              disabled={busy}
-                              onClick={() => setContractCategory(id)}
-                            >
-                              {label}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                    <div className="nd-field">
-                      <div className="nd-field__head">
-                        <span>Cap hit per year</span>
+                      )}
+                      <i aria-hidden="true">vs</i>
+                      <div className="is-you">
+                        <span>You offer</span>
                         <strong>{formatMoney(offerAavNum)}</strong>
-                      </div>
-                      <div className="nd-range">
-                        <input
-                          type="range"
-                          aria-label="Offer cap hit"
-                          min={minSalaryM}
-                          max={Math.min(Number(bonus.max_salary_m || 99), Math.max(12, offerAavNum * 1.35, Number(selected.ask_aav_m || selected.askingAav || 4) * 1.4))}
-                          step="0.025"
-                          value={Math.min(
-                            Math.min(Number(bonus.max_salary_m || 99), Math.max(12, offerAavNum * 1.35, Number(selected.ask_aav_m || selected.askingAav || 4) * 1.4)),
-                            Math.max(minSalaryM, offerAavNum || minSalaryM)
-                          )}
-                          disabled={busy}
-                          onChange={(e) => setOfferAav(Number(e.target.value).toFixed(3))}
-                        />
+                        <em>
+                          {offerYearsNum} yrs
+                          {offerNmc ? " · NMC" : offerNtc ? (offerNtcModified ? " · M-NTC" : " · NTC") : ""}
+                        </em>
                       </div>
                     </div>
-                    <div className="nd-field">
-                      <div className="nd-field__head"><span>Years</span></div>
-                      <div className="nd-seg" role="group" aria-label="Contract years">
-                        {termOptionsUfa.map((y) => (
-                          <button
-                            key={y}
-                            type="button"
-                            className={offerYearsNum === y ? "is-active" : ""}
-                            aria-pressed={offerYearsNum === y}
-                            disabled={busy}
-                            onClick={() => setOfferYears(String(y))}
-                          >
-                            {y}
-                          </button>
-                        ))}
+                  </header>
+
+                  {isOfferSheet ? (
+                    <section className="nd2-gauge" aria-label="Offer sheet">
+                      <strong>{"⇄"}</strong>
+                      <div className="nd2-gauge__body">
+                        <span>
+                          {selected.rights_team_name || selected.rights_team_abbrev || "His club"} can match. Clubs usually match offers near market value.
+                        </span>
+                        <small>Previous AAV {formatMoney(selected.previous_aav_m)}</small>
+                        {selected.offer_sheet_pending ? (
+                          <small className="nd2-warn">
+                            {selected.offer_sheet_by_user
+                              ? "Your offer sheet is already on the table."
+                              : "Another club already has an offer sheet pending on this player."}
+                          </small>
+                        ) : null}
                       </div>
-                    </div>
-                    {isOfferSheet ? null : (
-                      <div className="nd-field">
-                        <div className="nd-field__head"><span>Protection</span></div>
-                        <div className="nd-seg" role="group" aria-label="Contract clauses">
-                          {[
-                            ["none", "None", !offerNtc && !offerNmc],
-                            ["ntc", "NTC", offerNtc && !offerNtcModified && !offerNmc],
-                            ["mntc", "M-NTC", offerNtc && offerNtcModified && !offerNmc],
-                            ["nmc", "NMC", offerNmc],
-                          ].map(([id, label, on]) => (
-                            <button
-                              key={id}
-                              type="button"
-                              className={on ? "is-active" : ""}
-                              aria-pressed={on}
-                              disabled={busy}
-                              onClick={() => {
-                                setOfferNmc(id === "nmc");
-                                setOfferNtc(id === "ntc" || id === "mntc" || id === "nmc");
-                                setOfferNtcModified(id === "mntc");
-                              }}
-                            >
-                              {label}
-                              {label !== "None" && deskPlayer.wants_clause === label ? <em>asked</em> : null}
-                            </button>
-                          ))}
+                    </section>
+                  ) : (
+                    <section
+                      className={`nd2-gauge tone-${negoInterest >= 88 ? "instant" : negoInterest >= 62 ? "good" : negoInterest >= 40 ? "mid" : "bad"}${negoInterest >= 62 ? " will-accept" : ""}`}
+                      aria-label="Deal interest"
+                    >
+                      <strong>{negoInterest ? Math.round(negoInterest) : "—"}</strong>
+                      <div className="nd2-gauge__body">
+                        <span>{negoInterest >= 62 ? "They'd take this" : "Not enough to sign yet"}</span>
+                        <div className="nd2-gauge__track">
+                          <i className="nd2-gauge__fill" style={{ width: `${Math.max(4, Math.min(100, negoInterest || 4))}%` }} />
+                          <i className="nd2-gauge__mark" style={{ left: "62%" }} title="Accept line" />
                         </div>
+                        <small>
+                          {negoFeedback ||
+                            [
+                              selected.interest_to_user_label ? `${selected.interest_to_user_label} interest in your club` : null,
+                              selected.sign_likelihood != null ? `${Math.round(Number(selected.sign_likelihood) * 100)}% likely to sign somewhere this window` : null,
+                            ].filter(Boolean).join(" · ")}
+                        </small>
                       </div>
-                    )}
-                    <div className="nd-field">
-                      <div className="nd-field__head">
-                        <span>Signing bonus</span>
-                        <strong>{bonusAllowed ? formatMoney(offerBonusNum) : "Not available"}</strong>
-                      </div>
-                      {bonusAllowed ? (
+                    </section>
+                  )}
+
+                  <div className="nd2-body">
+                    <section className="nd2-offer" aria-label="Your offer">
+                      {isOfferSheet ? null : (
+                        <div className="nd2-field nd2-field--row">
+                          <span>Contract</span>
+                          <div className="nd-seg" role="group" aria-label="Contract type">
+                            {[
+                              ["nhl_one_way", "One-way"],
+                              ["nhl_two_way", "Two-way"],
+                              ["ahl", "AHL"],
+                              ["pto", "PTO"],
+                            ].map(([id, label]) => (
+                              <button
+                                key={id}
+                                type="button"
+                                className={contractCategory === id ? "is-active" : ""}
+                                aria-pressed={contractCategory === id}
+                                disabled={busy}
+                                onClick={() => setContractCategory(id)}
+                              >
+                                {label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      <div className="nd2-field">
+                        <div className="nd2-field__head">
+                          <span>Cap hit per year</span>
+                          <strong>{formatMoney(offerAavNum)}</strong>
+                        </div>
                         <div className="nd-range">
                           <input
                             type="range"
-                            aria-label="Signing bonus"
-                            min={0}
-                            max={bonusCapM}
+                            aria-label="Offer cap hit"
+                            min={minSalaryM}
+                            max={Math.min(Number(bonus.max_salary_m || 99), Math.max(12, offerAavNum * 1.35, Number(selected.ask_aav_m || selected.askingAav || 4) * 1.4))}
                             step="0.025"
-                            value={offerBonusNum}
+                            value={Math.min(
+                              Math.min(Number(bonus.max_salary_m || 99), Math.max(12, offerAavNum * 1.35, Number(selected.ask_aav_m || selected.askingAav || 4) * 1.4)),
+                              Math.max(minSalaryM, offerAavNum || minSalaryM)
+                            )}
                             disabled={busy}
-                            onChange={(e) => setOfferBonus(Number(e.target.value).toFixed(3))}
+                            onChange={(e) => setOfferAav(Number(e.target.value).toFixed(3))}
                           />
                         </div>
-                      ) : (
-                        <p className="nd-note">
-                          {bonus.label || `Signing bonuses need club revenue of $${Math.round(Number(bonus.floor_m) || 155)}M or more.`}
-                        </p>
+                      </div>
+                      <div className="nd2-field nd2-field--row">
+                        <span>Years</span>
+                        <div className="nd-seg" role="group" aria-label="Contract years">
+                          {termOptionsUfa.map((y) => (
+                            <button
+                              key={y}
+                              type="button"
+                              className={offerYearsNum === y ? "is-active" : ""}
+                              aria-pressed={offerYearsNum === y}
+                              disabled={busy}
+                              onClick={() => setOfferYears(String(y))}
+                            >
+                              {y}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      {isOfferSheet ? null : (
+                        <div className="nd2-field nd2-field--row">
+                          <span>Protection</span>
+                          <div className="nd-seg" role="group" aria-label="Contract clauses">
+                            {[
+                              ["none", "None", !offerNtc && !offerNmc],
+                              ["ntc", "NTC", offerNtc && !offerNtcModified && !offerNmc],
+                              ["mntc", "M-NTC", offerNtc && offerNtcModified && !offerNmc],
+                              ["nmc", "NMC", offerNmc],
+                            ].map(([id, label, on]) => (
+                              <button
+                                key={id}
+                                type="button"
+                                className={on ? "is-active" : ""}
+                                aria-pressed={on}
+                                disabled={busy}
+                                onClick={() => {
+                                  setOfferNmc(id === "nmc");
+                                  setOfferNtc(id === "ntc" || id === "mntc" || id === "nmc");
+                                  setOfferNtcModified(id === "mntc");
+                                }}
+                              >
+                                {label}
+                                {label !== "None" && deskPlayer.wants_clause === label ? <em>asked</em> : null}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
                       )}
-                    </div>
-                  <div className={`${prefix}-fa-capbar`}>
-                    <div>
-                      <span>Cap before</span>
-                      <strong>{formatMoney(capSpace)}</strong>
-                    </div>
-                    <div>
-                      <span>After offer</span>
-                      <strong className={projectedSpace != null && projectedSpace < 0 ? "is-red" : "is-green"}>
-                        {projectedSpace != null ? formatMoney(projectedSpace) : "—"}
-                      </strong>
-                    </div>
-                    <div className={`${prefix}-fa-captrack`}>
-                      <span
-                        style={{
-                          width: `${Math.max(0, Math.min(100, capProj.capBarPct ?? 0))}%`,
-                        }}
-                      />
-                    </div>
+                      <div className="nd2-field">
+                        <div className="nd2-field__head">
+                          <span>Signing bonus</span>
+                          <strong>{bonusAllowed ? formatMoney(offerBonusNum) : "Not available"}</strong>
+                        </div>
+                        {bonusAllowed ? (
+                          <div className="nd-range">
+                            <input
+                              type="range"
+                              aria-label="Signing bonus"
+                              min={0}
+                              max={bonusCapM}
+                              step="0.025"
+                              value={offerBonusNum}
+                              disabled={busy}
+                              onChange={(e) => setOfferBonus(Number(e.target.value).toFixed(3))}
+                            />
+                          </div>
+                        ) : (
+                          <p className="nd2-note">
+                            {bonus.label || `Signing bonuses need club revenue of $${Math.round(Number(bonus.floor_m) || 155)}M or more.`}
+                          </p>
+                        )}
+                      </div>
+                    </section>
+
+                    <section className="nd2-talk" aria-label="The market">
+                      {competing.length ? (
+                        <div className="nd2-market">
+                          <span className="nd2-market__label">Offers on the table</span>
+                          {competing.slice(0, 5).map((o) => (
+                            <div key={`${o.team_id}-${o.aav_m}`} className={`nd2-market__row${o.is_user ? " is-you" : ""}`}>
+                              <TeamLogoBadge
+                                teamLogo={resolveFranchiseTeamLogo(
+                                  { abbrev: o.team_abbrev, team_abbrev: o.team_abbrev, name: o.team_name },
+                                  o.team_name || o.team_abbrev
+                                )}
+                                teamName={o.team_name || o.team_abbrev}
+                                size={20}
+                                variant="circle"
+                              />
+                              <strong>{o.is_user ? "You" : o.team_abbrev || o.team_name}</strong>
+                              <em>{formatMoney(o.aav_m)} × {o.years}</em>
+                            </div>
+                          ))}
+                        </div>
+                      ) : interested.length ? (
+                        <div className="nd2-market">
+                          <span className="nd2-market__label">Clubs circling</span>
+                          <div className="nd2-market__logos">
+                            {interested.map((t) => (
+                              <TeamLogoBadge
+                                key={t.team_id || t.team_abbrev}
+                                teamLogo={resolveFranchiseTeamLogo(
+                                  { abbrev: t.team_abbrev, team_abbrev: t.team_abbrev, name: t.team_name },
+                                  t.team_name || t.team_abbrev
+                                )}
+                                teamName={t.team_name || t.team_abbrev}
+                                size={24}
+                                variant="circle"
+                              />
+                            ))}
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="nd2-note">No other club has made an offer yet.</p>
+                      )}
+                      <details className="nd2-more">
+                        <summary>Why he'd sign here{isOfferSheet ? "" : ", and meeting options"}</summary>
+                        <InterestFactors
+                          factors={response?.evaluation?.interest_factors || selected.interest_factors}
+                          fit={{
+                            ...(response?.evaluation?.destination_fit || selected.destination_fit || {}),
+                            fit_premium_pct: response?.evaluation?.fit_premium_pct,
+                          }}
+                        />
+                        {isOfferSheet ? null : (
+                          <NegotiationMeetingPanel
+                            playerId={selected.player_id || selected.id}
+                            onChanged={() => setFaMeetingRev((v) => v + 1)}
+                          />
+                        )}
+                      </details>
+                      <details className="nd2-more">
+                        <summary>Scouting report</summary>
+                        {faDetailLoading ? <p className="nd2-note">Loading Stats Central…</p> : null}
+                        <dl className="nd2-stats">
+                          {[
+                            ["GP", seasonStats.gp],
+                            ["G", seasonStats.g ?? seasonStats.goals],
+                            ["A", seasonStats.a ?? seasonStats.assists],
+                            ["P", seasonStats.points ?? seasonStats.pts],
+                            ["WAR", sc.war ?? seasonStats.war ?? deskPlayer.war],
+                            ["+/-", seasonStats.plus_minus ?? seasonStats.pm],
+                          ]
+                            .filter(([, v]) => v != null && v !== "")
+                            .map(([k, v]) => (
+                              <div key={k}>
+                                <dt>{k}</dt>
+                                <dd>{k === "WAR" ? fmtWar(v) : fmtStat(v, 0)}</dd>
+                              </div>
+                            ))}
+                        </dl>
+                        {percentiles.length ? (
+                          <div className="nd2-pctiles">
+                            <span className="nd2-market__label">Against {sc.pool_size || percentiles.length} peers</span>
+                            {percentiles.map((row) => (
+                              <div key={row.key || row.label} className="nd2-pctile">
+                                <span>{row.label}</span>
+                                <i><b style={{ width: `${Math.max(2, Number(row.percentile) || 0)}%` }} /></i>
+                                <strong>{fmtPctile(row.percentile)}</strong>
+                              </div>
+                            ))}
+                          </div>
+                        ) : null}
+                        {previousTeams.length ? (
+                          <div className="nd2-history">
+                            <span className="nd2-market__label">Previous teams</span>
+                            {previousTeams.slice(0, 4).map((t, i) => {
+                              const st = t.stats || {};
+                              const line = st.is_goalie
+                                ? `${st.gp ?? "—"} GP · ${st.save_pct != null ? Number(st.save_pct).toFixed(3) : "—"} SV%`
+                                : `${st.gp ?? "—"} GP · ${st.pts ?? st.points ?? "—"} PTS${st.war != null ? ` · ${fmtWar(st.war)} WAR` : ""}`;
+                              return (
+                                <p key={`${t.team || "club"}-${i}`}>
+                                  <strong>{t.team || t.league || "—"}</strong> {[t.label, t.league, t.season].filter(Boolean).join(" · ")} · {line}
+                                </p>
+                              );
+                            })}
+                          </div>
+                        ) : null}
+                      </details>
+                    </section>
                   </div>
 
-                    <div className="nd-actions">
+                  <footer className="nd2-foot">
+                    <dl className="nd2-cap">
+                      <div>
+                        <dt>Cap hit</dt>
+                        <dd>{formatMoney(offerCapHitNum)}</dd>
+                      </div>
+                      <div>
+                        <dt>Space now</dt>
+                        <dd>{formatMoney(capSpace)}</dd>
+                      </div>
+                      <div>
+                        <dt>Space after</dt>
+                        <dd className={projectedSpace != null && projectedSpace < 0 ? "is-bad" : ""}>
+                          {projectedSpace != null ? formatMoney(projectedSpace) : "—"}
+                        </dd>
+                      </div>
+                      <div className="nd2-cap__bar" title="Cap used after this offer">
+                        <i
+                          className={(capProj.capBarPct ?? 0) >= 100 ? "is-over" : (capProj.capBarPct ?? 0) >= 95 ? "is-tight" : ""}
+                          style={{ width: `${Math.max(0, Math.min(100, capProj.capBarPct ?? 0))}%` }}
+                        />
+                      </div>
+                    </dl>
+                    <div className="nd2-actions">
                       <button
                         type="button"
-                        className="nd-btn nd-btn--primary"
+                        className="nd-btn nd-btn--primary nd2-primary"
                         disabled={busy || (isOfferSheet && selected.offer_sheet_pending)}
                         onClick={isOfferSheet ? submitSheet : submitSign}
                       >
                         {busy ? "Working…" : isOfferSheet ? "Tender offer sheet" : "Submit offer"}
                       </button>
                     </div>
-                  </div>
-                  <InterestFactors
-                    factors={response?.evaluation?.interest_factors || selected.interest_factors}
-                    fit={{
-                      ...(response?.evaluation?.destination_fit || selected.destination_fit || {}),
-                      fit_premium_pct: response?.evaluation?.fit_premium_pct,
-                    }}
-                  />
-
-                  {isOfferSheet ? null : (
-                    <NegotiationMeetingPanel
-                      playerId={selected.player_id || selected.id}
-                      onChanged={() => setFaMeetingRev((v) => v + 1)}
-                    />
-                  )}
-
-                  <details className={`${prefix}-fa-scout`}>
-                    <summary>Scouting report</summary>
-                  {faDetailLoading ? (
-                    <p className={`${prefix}-context`}>Loading Stats Central…</p>
-                  ) : null}
-
-                  <div className={`${prefix}-fa-stats`}>
-                    {[
-                      ["GP", seasonStats.gp],
-                      ["G", seasonStats.g ?? seasonStats.goals],
-                      ["A", seasonStats.a ?? seasonStats.assists],
-                      ["P", seasonStats.points ?? seasonStats.pts],
-                      ["WAR", sc.war ?? seasonStats.war ?? deskPlayer.war],
-                      ["+/-", seasonStats.plus_minus ?? seasonStats.pm],
-                    ]
-                      .filter(([, v]) => v != null && v !== "")
-                      .map(([k, v]) => (
-                        <div key={k}>
-                          <span>{k}</span>
-                          <strong>{k === "WAR" ? fmtWar(v) : fmtStat(v, k === "+/-" ? 0 : 0)}</strong>
-                        </div>
-                      ))}
-                  </div>
-
-                  {percentiles.length ? (
-                    <div className={`${prefix}-fa-pctiles`}>
-                      <span className={`${prefix}-mini-label`}>
-                        Stats Central · {sc.pool_size || percentiles.length} peers
-                      </span>
-                      {percentiles.map((row) => (
-                        <div key={row.key || row.label} className={`${prefix}-fa-pctile`}>
-                          <span>{row.label}</span>
-                          <div className={`${prefix}-fa-pctile-track`}>
-                            <i style={{ width: `${Math.max(2, Number(row.percentile) || 0)}%` }} />
-                          </div>
-                          <strong>{fmtPctile(row.percentile)}</strong>
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-
-                  {previousTeams.length ? (
-                    <div className={`${prefix}-fa-history`}>
-                      <span className={`${prefix}-mini-label`}>Previous teams</span>
-                      {previousTeams.slice(0, 4).map((t, i) => {
-                        const st = t.stats || {};
-                        const line = st.is_goalie
-                          ? `${st.gp ?? "—"} GP · ${st.save_pct != null ? Number(st.save_pct).toFixed(3) : "—"} SV%`
-                          : `${st.gp ?? "—"} GP · ${st.pts ?? st.points ?? "—"} PTS${
-                              st.war != null ? ` · ${fmtWar(st.war)} WAR` : ""
-                            }`;
-                        return (
-                          <div key={`${t.team || "club"}-${i}`} className={`${prefix}-fa-history-row`}>
-                            <strong>{t.team || t.league || "—"}</strong>
-                            <em>
-                              {[t.label, t.league, t.season].filter(Boolean).join(" · ")}
-                            </em>
-                            <span>{line}</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : null}
-
-                  </details>
-                </>
+                  </footer>
+                </div>
               )}
             </aside>
           </div>
@@ -2829,17 +2817,17 @@ export function RosterCleanupEventMenu({ franchiseState = {}, eventData = {}, on
       heroContent={
         <div className={`${prefix}-meta`}>
           <span className={`${prefix}-chip`} title="Active NHL roster (excludes buried, IR, LTIR)">
-            Active NHL {nhlCount ?? "—"}/{nhlMin}–{nhlMax}
+            Active roster {nhlCount ?? "—"} (needs {nhlMin}–{nhlMax})
           </span>
-          <span className={`${prefix}-chip`}>
-            F {forwards ?? "—"}/{minF}
-          </span>
-          <span className={`${prefix}-chip`}>
-            D {defense ?? "—"}/{minD}
-          </span>
-          <span className={`${prefix}-chip`}>
-            G {goalies ?? "—"}/{minG}
-          </span>
+          {[
+            ["Forwards", forwards, minF],
+            ["Defence", defense, minD],
+            ["Goalies", goalies, minG],
+          ].map(([label, have, need]) => (
+            <span key={label} className={`${prefix}-chip${have != null && have < need ? " is-blocked" : ""}`}>
+              {label} {have ?? "—"} (needs {need})
+            </span>
+          ))}
           {irCount != null || ltirCount != null ? (
             <span className={`${prefix}-chip`}>
               IR {irCount ?? 0} · LTIR {ltirCount ?? 0}
@@ -2847,7 +2835,7 @@ export function RosterCleanupEventMenu({ franchiseState = {}, eventData = {}, on
           ) : null}
           <span className={`${prefix}-chip`}>Space {formatMoney(raw.cap_space_m)}</span>
           <span className={`${prefix}-chip`}>
-            Slots {raw.contract_slots_used ?? "—"}/{raw.contract_slots_limit ?? "—"}
+            Contracts {raw.contract_slots_used ?? "—"} of {raw.contract_slots_limit ?? "—"}
           </span>
           <span className={`${prefix}-chip ${canGenerate ? "is-ready" : "is-blocked"}`}>
             {canGenerate ? "Ready" : "Blocked"}
@@ -2865,7 +2853,7 @@ export function RosterCleanupEventMenu({ franchiseState = {}, eventData = {}, on
                 title={String(item.message || item)}
                 details={[
                   item.route
-                    ? `Resolve in ${item.route === "free_agency" ? "Free Agency" : item.route}`
+                    ? `Resolve in ${item.route === "free_agency" ? "Free Agency" : humanizeLabel(item.route)}`
                     : "Blocking",
                 ].filter(Boolean)}
                 active
@@ -2905,7 +2893,8 @@ export function NextSeasonRevealEventMenu({ franchiseState = {}, eventData = {},
     "calendar_summary",
   ]) || {};
   const year = raw.season_year || franchiseState?.season_year;
-  const markers = safeArray(raw.calendar_markers).slice(0, 6);
+  // Skip markers without a name; an untitled card says nothing.
+  const markers = safeArray(raw.calendar_markers).filter((m) => m && (m.label || m.key)).slice(0, 6);
 
   return (
     <CinematicEventShell
@@ -2941,7 +2930,7 @@ export function NextSeasonRevealEventMenu({ franchiseState = {}, eventData = {},
             <Card
               key={m.key || i}
               prefix={prefix}
-              title={m.label || m.key || "Marker"}
+              title={m.label || String(m.key).replace(/_/g, " ")}
               details={[m.iso].filter(Boolean)}
             />
           ))}
@@ -3006,6 +2995,13 @@ function gradeLetter(value) {
   return m ? m[0].toUpperCase() : String(value).trim().slice(0, 2);
 }
 
+/** "OFFENSIVE D" -> "Offensive D": all-caps data reads as shouting next to sentence case. */
+function sentenceLabel(text) {
+  const t = String(text || "").trim();
+  if (!t || t !== t.toUpperCase()) return t || null;
+  return t.toLowerCase().replace(/\b([a-z])/g, (c) => c.toUpperCase()).replace(/\b(D|G|C|Lw|Rw)\b/g, (m) => m.toUpperCase());
+}
+
 function gradeTone(letter) {
   const L = String(letter || "").charAt(0).toUpperCase();
   if (L === "A") return "a";
@@ -3020,34 +3016,6 @@ function riskTone(risk) {
   if (r.includes("high") || r.includes("excellent") || r.includes("ideal") || r.includes("strong")) return "high";
   if (r.includes("low") || r.includes("poor") || r.includes("thin")) return "low";
   if (r.includes("med") || r.includes("mid") || r.includes("moderate") || r.includes("acceptable")) return "med";
-  return "neutral";
-}
-
-function confidenceWord(value) {
-  if (value == null || value === "") return null;
-  const raw = String(value).trim();
-  const tone = riskTone(raw);
-  if (tone === "high") return raw.toLowerCase().includes("excellent") ? "Excellent" : "High";
-  if (tone === "low") return "Low";
-  if (tone === "med") return raw.toLowerCase().includes("moderate") ? "Moderate" : "Medium";
-  return humanizeLabel(raw);
-}
-
-/** Map categorical confidence/risk labels to a presentation bar width only. */
-function confidencePct(value) {
-  const tone = riskTone(value);
-  if (tone === "high") return 86;
-  if (tone === "med") return 55;
-  if (tone === "low") return 28;
-  return 42;
-}
-
-function valueBannerTone(verdict) {
-  const v = String(verdict || "").toLowerCase();
-  if (v.includes("best value") || v.includes("steal")) return "steal";
-  if (v.includes("good value") || v.includes("value")) return "value";
-  if (v.includes("reach") || v.includes("aggressive") || v.includes("swing")) return "reach";
-  if (v.includes("expected") || v.includes("need")) return "expected";
   return "neutral";
 }
 
@@ -3127,31 +3095,6 @@ function buildScoutSignals(pick, fit, production) {
   return [...pros, ...cons].slice(0, 4);
 }
 
-function MeterRow({ prefix, label, value }) {
-  if (!value) return null;
-  const word = confidenceWord(value);
-  const tone = riskTone(value);
-  const pct = confidencePct(value);
-  return (
-    <div className={`${prefix}-meter-row`}>
-      <div className={`${prefix}-meter-head`}>
-        <span>{label}</span>
-        <strong>{word}</strong>
-      </div>
-      <div
-        className={`${prefix}-meter-track`}
-        role="meter"
-        aria-label={`${label}: ${word}`}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={pct}
-      >
-        <span className={`${prefix}-meter-fill tone-${tone}`} style={{ width: `${pct}%` }} />
-      </div>
-    </div>
-  );
-}
-
 const DRAFT_REVIEW_TABS = ["DRAFT REVIEW", "VALUE & FIT", "DEVELOPMENT PLAN", "NEXT: RIGHTS"];
 
 export function DraftReviewEventMenu({ franchiseState = {}, eventData = {}, onContinue, onBack }) {
@@ -3210,22 +3153,9 @@ export function DraftReviewEventMenu({ franchiseState = {}, eventData = {}, onCo
   const haulExplain = pickConciseLine([haul.summary_line, haul.haul_grade_reason], 20);
   const pos = pick?.position || getPlayerPosition(pick);
   const posGroup = positionGroup(pos);
-  const valueTone = valueBannerTone(pick?.selection_verdict || pick?.selection_grade_label);
   const ppgStat = stats.find(([label]) => label === "PPG");
   const otherStats = stats.filter(([label]) => label !== "PPG");
 
-  const haulMetrics = [
-    {
-      key: "picks",
-      label: "Picks",
-      value: haul.total_picks != null ? String(haul.total_picks) : picks.length ? String(picks.length) : null,
-    },
-    haul.reaches != null && Number(haul.reaches) > 0
-      ? { key: "reach", label: "Reaches", value: String(haul.reaches) }
-      : null,
-    bestValueName ? { key: "value", label: "Best value", value: bestValueName } : null,
-    closestName ? { key: "closest", label: "Closest NHL", value: closestName } : null,
-  ].filter((m) => m && m.value);
 
   const classChips = [
     haul.near_ready_count != null && Number(haul.near_ready_count) > 0
@@ -3268,12 +3198,6 @@ export function DraftReviewEventMenu({ franchiseState = {}, eventData = {}, onCo
     fit.nhl_players_ahead != null ||
     fit.ahl_players_ahead != null ||
     fit.prospects_ahead != null;
-  const depthMax = Math.max(
-    1,
-    Number(fit.nhl_players_ahead) || 0,
-    Number(fit.ahl_players_ahead) || 0,
-    Number(fit.prospects_ahead) || 0
-  );
 
   const hasOrgPlan = Boolean(
     fit.need_filled ||
@@ -3370,371 +3294,194 @@ export function DraftReviewEventMenu({ franchiseState = {}, eventData = {}, onCo
       railHint={picks.length ? "↑↓ to switch picks" : null}
       heroContent={
         pick ? (
-          <div className={`${prefix}-workspace`}>
-            <div className={`${prefix}-broadcast-strip`} aria-hidden="true">
-              <span className={`${prefix}-broadcast-live`}>On air</span>
-              <span className={`${prefix}-broadcast-show`}>Draft Class Review</span>
-              <span className={`${prefix}-broadcast-seg`}>
-                {safeArray(raw.user_picks).length || haul.total_picks || "—"} picks
-              </span>
-            </div>
-            <div className={`${prefix}-haul-banner`} ref={haulRef} aria-label="Draft class verdict">
-              <div
-                className={`${prefix}-haul-banner-grade tone-${gradeTone(gradeLetter(haulGrade))}`}
-                aria-label={haulGrade ? `Overall draft grade ${haulGrade}` : "Draft grade unavailable"}
-              >
+          <div className={`${prefix}-workspace dr`}>
+            <section className="dr-verdict" ref={haulRef} aria-label="Draft class verdict">
+              <div className={`dr-verdict__grade tone-${gradeTone(gradeLetter(haulGrade))}`}>
                 <strong>{haulGrade || "—"}</strong>
-                <span>Class</span>
+                <span>Class grade</span>
               </div>
-              <div className={`${prefix}-haul-banner-copy`}>
-                <p className={`${prefix}-kicker`} style={{ margin: 0 }}>
-                  Studio verdict · post-draft desk
-                </p>
-                {haulLabel ? <strong>{haulLabel}</strong> : null}
+              <div className="dr-verdict__copy">
+                <strong>{haulLabel || "Draft class review"}</strong>
                 {haulExplain ? <p>{haulExplain}</p> : null}
-                {classChips.length ? (
-                  <div className={`${prefix}-haul-chips`} aria-label="Class composition">
-                    {classChips.slice(0, 4).map((chip) => (
-                      <span key={chip} className={`${prefix}-haul-chip`}>
-                        {chip}
-                      </span>
-                    ))}
+                {classChips.length ? <p className="dr-verdict__mix">{classChips.slice(0, 5).join(" · ")}</p> : null}
+              </div>
+              {bestValueName || closestName ? (
+                <dl className="dr-verdict__facts">
+                  {bestValueName ? (
+                    <div><dt>Best value</dt><dd>{bestValueName}</dd></div>
+                  ) : null}
+                  {closestName ? (
+                    <div><dt>Closest to the NHL</dt><dd>{closestName}</dd></div>
+                  ) : null}
+                </dl>
+              ) : null}
+            </section>
+
+            <div className="dr-main">
+              <section className="dr-pick" ref={fitRef} aria-label="Selected pick">
+                <div className="dr-pick__id">
+                  <div className={`dr-pick__mark pos-${posGroup}`}>
+                    <strong>{pos || "—"}</strong>
+                    <span>{pick.round != null ? `Round ${pick.round}` : "Pick"}</span>
+                  </div>
+                  <div className="dr-pick__copy">
+                    <p className="dr-pick__slot">
+                      {[
+                        pick.overall_pick != null ? `Pick ${pick.overall_pick}` : null,
+                        pick.board_range ? (/^board/i.test(String(pick.board_range)) ? String(pick.board_range) : `Board ${pick.board_range}`) : null,
+                        pick.selection_delta_label,
+                      ].filter(Boolean).join(" · ")}
+                    </p>
+                    <h2>{pick.prospect_name || getPlayerName(pick)}</h2>
+                    <p>
+                      {[
+                        sentenceLabel(humanizeLabel(pick.archetype || pick.player_type)),
+                        pick.age != null ? `${pick.age}` : null,
+                        pick.shoots ? `shoots ${/^r/i.test(String(pick.shoots)) ? "right" : /^l/i.test(String(pick.shoots)) ? "left" : String(pick.shoots).toLowerCase()}` : null,
+                        [pick.height, pick.weight != null ? `${pick.weight} lb` : null].filter(Boolean).join(" "),
+                      ].filter(Boolean).join(" · ")}
+                    </p>
+                    <p className="dr-pick__club">{[pick.club, pick.league, pick.nationality].filter(Boolean).join(" · ")}</p>
+                  </div>
+                </div>
+                {pickGrade || pick.selection_grade_label || oneLineVerdict ? (
+                  <div className={`dr-pick__verdict tone-${gradeTone(pickGrade)}`}>
+                    {pickGrade ? <strong className="dr-pick__grade">{pickGrade}</strong> : null}
+                    <div>
+                      <span>{[pick.selection_grade_label, pick.selection_verdict].filter(Boolean).join(" · ") || "Pick verdict"}</span>
+                      {oneLineVerdict && ![pick.selection_grade_label, pick.selection_verdict].includes(oneLineVerdict) ? <p>{oneLineVerdict}</p> : null}
+                    </div>
                   </div>
                 ) : null}
-              </div>
-              {haulMetrics.length ? (
-                <div className={`${prefix}-haul-metrics`}>
-                  {haulMetrics.slice(0, 4).map((metric) => (
-                    <div key={metric.key} className={`${prefix}-haul-metric-card`} title={metric.value}>
-                      <span>{metric.label}</span>
-                      <strong>{metric.value}</strong>
-                    </div>
-                  ))}
+                <div className="dr-observed">
+                  <p className="dr-label">
+                    {production.mode === "scouting" ? "Scouting read" : "This season · observed"}
+                  </p>
+                  <div className="dr-observed__row">
+                    {ppgStat ? (
+                      <div className="dr-observed__hero">
+                        <strong>{formatProductionStat(ppgStat[0], ppgStat[1])}</strong>
+                        <span>points per game</span>
+                      </div>
+                    ) : production.headline ? (
+                      <p className="dr-observed__headline">{production.headline}</p>
+                    ) : null}
+                    {otherStats.slice(0, 4).map(([label, value]) => (
+                      <div key={label} className="dr-observed__stat">
+                        <strong>{formatProductionStat(label, value)}</strong>
+                        <span>{label === "GP" ? "games" : label === "G" ? "goals" : label === "A" ? "assists" : label === "PTS" ? "points" : label}</span>
+                      </div>
+                    ))}
+                  </div>
+                  {prodContext ? <p className="dr-note">{prodContext}</p> : null}
                 </div>
-              ) : null}
+              </section>
+
+              <section className="dr-proj" ref={planRef} aria-label="Projection">
+                <p className="dr-label">Projection · scouts' estimate</p>
+                {plan.nhl_projection || fit.fit_label || pick.selection_verdict ? (
+                  <p className="dr-proj__role">{plan.nhl_projection || fit.fit_label || pick.selection_verdict}</p>
+                ) : null}
+                {plan.eta_range ? <p className="dr-proj__eta">NHL in {plan.eta_range}</p> : null}
+                {pathStages.length ? (
+                  <ol className="dr-road" aria-label="Development path">
+                    {pathStages.map((step) => (
+                      <li key={step.key} className={`is-${step.status}`}>
+                        <span className="dr-road__when">
+                          {step.status === "next" ? "Now" : step.status === "projection" ? "Goal" : "Next"}
+                        </span>
+                        <strong>{step.label}</strong>
+                        {step.detail ? <span className="dr-road__what">{step.detail}</span> : null}
+                      </li>
+                    ))}
+                  </ol>
+                ) : nextHero ? (
+                  <p className="dr-proj__eta">Next: {nextHero}</p>
+                ) : null}
+                {[plan.recommended_role, plan.minutes_target, plan.special_teams_role].filter(Boolean).length ? (
+                  <p className="dr-note">
+                    {[plan.recommended_role, plan.minutes_target, plan.special_teams_role].filter(Boolean).join(" · ")}
+                  </p>
+                ) : null}
+                <ul className="dr-reads" aria-label="How sure the projection is">
+                  {[
+                    ["Projection", plan.nhl_projection_confidence, false],
+                    ["Scouting", pick.scouting_confidence_label, false],
+                    ["Timeline", plan.eta_confidence, false],
+                    ["Development risk", pick.risk_level, true],
+                  ]
+                    .filter(([, v]) => v)
+                    .map(([label, value, inverse]) => {
+                      const lvl = { high: 3, med: 2, low: 1 }[riskTone(value)] || 0;
+                      const tone = inverse ? (lvl >= 3 ? "down" : lvl === 2 ? "mid" : "up") : (lvl >= 3 ? "up" : lvl === 2 ? "mid" : "down");
+                      return (
+                        <li key={label} className={`is-${tone}`}>
+                          <span>{label}</span>
+                          <i aria-hidden="true">{[1, 2, 3].map((n) => <b key={n} className={n <= lvl ? "is-on" : ""} />)}</i>
+                          <em>{String(value)}</em>
+                        </li>
+                      );
+                    })}
+                </ul>
+              </section>
             </div>
 
-            <div className={`${prefix}-review-main`}>
-              <section className={`${prefix}-draft-card`} ref={fitRef} aria-label="Selected prospect">
-                <div className={`${prefix}-pos-mark pos-${posGroup}`} aria-hidden={!pos}>
-                  <strong>{pos || "—"}</strong>
-                  <span>{pick.round != null ? `R${pick.round}` : "Pick"}</span>
+            {(pros.length || cons.length || pick.risk_reason || hasOrgPlan) ? (
+              <section className="dr-case" ref={rightsRef} aria-label="Evidence and fit">
+                <div className="dr-evidence">
+                  {(pros.length ? pros : neutralNotes.slice(0, 2)).map((item) => (
+                    <p key={`pro-${item.text}`} className="is-up"><b aria-hidden="true">+</b>{item.text}</p>
+                  ))}
+                  {(cons.length ? cons : pick.risk_reason ? [{ text: pick.risk_reason }] : []).map((item) => (
+                    <p key={`con-${item.text}`} className="is-down"><b aria-hidden="true">{"−"}</b>{item.text}</p>
+                  ))}
                 </div>
-                <div className={`${prefix}-draft-card-body`}>
-                  <p className={`${prefix}-hero-kicker`}>
-                    {[
-                      pick.overall_pick != null ? `Overall #${pick.overall_pick}` : null,
-                      pick.round != null ? `Round ${pick.round}` : null,
-                      pick.nationality ? String(pick.nationality) : null,
-                    ]
-                      .filter(Boolean)
-                      .join(" · ") || "Draft pick"}
-                  </p>
-                  <h2 className={`${prefix}-hero-name`}>
-                    {pick.prospect_name || getPlayerName(pick)}
-                  </h2>
-                  <p className={`${prefix}-hero-sub`}>
-                    {[
-                      humanizeLabel(pick.archetype || pick.player_type),
-                      pick.league,
-                      pick.club,
-                      pick.age != null ? `Age ${pick.age}` : null,
-                    ]
-                      .filter(Boolean)
-                      .join(" · ")}
-                  </p>
-                  <p className={`${prefix}-hero-meta`}>
-                    {[
-                      pick.height,
-                      pick.weight != null ? `${pick.weight} lb` : null,
-                      pick.shoots ? `Shoots ${pick.shoots}` : null,
-                      pick.board_range ? `Board ${pick.board_range}` : null,
-                      pick.selection_delta_label,
-                    ]
-                      .filter(Boolean)
-                      .join(" · ")}
-                  </p>
-                  {pick.selection_verdict || pick.selection_grade_label ? (
-                    <div className={`${prefix}-value-banner tone-${valueTone}`}>
-                      {pick.selection_verdict || pick.selection_grade_label}
-                    </div>
-                  ) : null}
-                </div>
-                {pickGrade || pick.selection_grade_label ? (
-                  <div
-                    className={`${prefix}-grade-shield tone-${gradeTone(pickGrade)}`}
-                    aria-label={
-                      pickGrade
-                        ? `Selection grade ${pickGrade}${
-                            pick.selection_grade_label ? `, ${pick.selection_grade_label}` : ""
-                          }`
-                        : pick.selection_grade_label
-                    }
-                  >
-                    <strong>{pickGrade || "—"}</strong>
-                    {pick.selection_grade_label ? <span>{pick.selection_grade_label}</span> : null}
+                {hasOrgPlan ? (
+                  <div className="dr-fit">
+                    <p className="dr-label">Fit with your club</p>
+                    <p className="dr-fit__line">
+                      {[fit.need_filled ? `Fills ${String(fit.need_filled).toLowerCase()}` : null, [fit.fit_grade, fit.fit_label].filter(Boolean).join(" ")].filter(Boolean).join(" · ") || "Fit not graded"}
+                    </p>
+                    {hasDepth ? (
+                      <p className="dr-fit__depth">
+                        {[
+                          fit.nhl_players_ahead != null ? `${fit.nhl_players_ahead} NHL` : null,
+                          fit.ahl_players_ahead != null ? `${fit.ahl_players_ahead} AHL` : null,
+                          fit.prospects_ahead != null ? `${fit.prospects_ahead} prospects` : null,
+                        ].filter(Boolean).join(" · ")} ahead at {pos || "his position"}
+                      </p>
+                    ) : null}
+                    {[fit.depth_status || fit.path_congestion, fit.environment_grade ? `${fit.environment_grade} environment` : null].filter(Boolean).length ? (
+                      <p className="dr-note">{[fit.depth_status || fit.path_congestion, fit.environment_grade ? `${fit.environment_grade} environment` : null].filter(Boolean).join(" · ")}</p>
+                    ) : null}
+                    {rights.rights_status_label || rights.rights_deadline_label || rights.signing_recommendation ? (
+                      <p className="dr-fit__rights">
+                        {[rights.rights_status_label, rights.signing_recommendation, rights.rights_deadline_label].filter(Boolean).join(" · ")}
+                      </p>
+                    ) : null}
                   </div>
                 ) : null}
               </section>
+            ) : (
+              <div ref={rightsRef} />
+            )}
 
-              <div className={`${prefix}-stage-grid`}>
-                <section className={`${prefix}-projection-card`} aria-label="NHL projection">
-                  <p className={`${prefix}-section-label`}>Why he matters</p>
-                  {plan.nhl_projection || fit.fit_label || pick.selection_verdict ? (
-                    <p className={`${prefix}-projection-role`}>
-                      {plan.nhl_projection || fit.fit_label || pick.selection_verdict}
-                    </p>
-                  ) : null}
-                  {plan.eta_range ? (
-                    <p className={`${prefix}-projection-eta`}>Ready in {plan.eta_range}</p>
-                  ) : null}
-                  <div className={`${prefix}-meter-stack`}>
-                    <MeterRow
-                      prefix={prefix}
-                      label="Projection confidence"
-                      value={plan.nhl_projection_confidence}
-                    />
-                    <MeterRow
-                      prefix={prefix}
-                      label="Development risk"
-                      value={pick.risk_level}
-                    />
-                    <MeterRow
-                      prefix={prefix}
-                      label="Scouting confidence"
-                      value={pick.scouting_confidence_label}
-                    />
-                    <MeterRow
-                      prefix={prefix}
-                      label="Timeline confidence"
-                      value={plan.eta_confidence}
-                    />
+            {advancedLines.length ? (
+              <div className="dr-more">
+                <button type="button" aria-expanded={showMore} onClick={() => setShowMore((v) => !v)}>
+                  {showMore ? "Hide scouting detail" : "Scouting detail"}
+                </button>
+                {showMore ? (
+                  <div className="dr-more__panel">
+                    {[developReason, ...advancedLines]
+                      .filter(Boolean)
+                      .filter((line, i, arr) => arr.indexOf(line) === i)
+                      .slice(0, 8)
+                      .map((line) => <p key={line}>{line}</p>)}
                   </div>
-                </section>
-
-                <section className={`${prefix}-prod-card`} aria-label="Production">
-                  <p className={`${prefix}-section-label`}>
-                    {production.mode === "scouting" ? "Scouting read" : "Junior / league production"}
-                  </p>
-                  {ppgStat ? (
-                    <div className={`${prefix}-prod-hero`}>
-                      <strong>{formatProductionStat(ppgStat[0], ppgStat[1])}</strong>
-                      <span>Points per game</span>
-                    </div>
-                  ) : production.headline ? (
-                    <p className={`${prefix}-projection-role`}>{production.headline}</p>
-                  ) : null}
-                  {otherStats.length ? (
-                    <div className={`${prefix}-prod-stats`}>
-                      {otherStats.slice(0, 4).map(([label, value]) => (
-                        <p
-                          key={label}
-                          className={`${prefix}-prod-stat${label === "PPG" ? " is-ppg" : ""}`}
-                        >
-                          <span>{label}</span>
-                          <strong>{formatProductionStat(label, value)}</strong>
-                        </p>
-                      ))}
-                    </div>
-                  ) : null}
-                  {prodContext ? <p className={`${prefix}-prod-context`}>{prodContext}</p> : null}
-                </section>
-
-                {(nextHero || pathStages.length) ? (
-                  <section
-                    className={`${prefix}-roadmap-card`}
-                    ref={planRef}
-                    aria-label="Development roadmap"
-                  >
-                    <p className={`${prefix}-section-label`}>
-                      Development roadmap
-                      {plan.recommended_role ? ` · ${plan.recommended_role}` : ""}
-                      {[plan.minutes_target, plan.special_teams_role].filter(Boolean).length
-                        ? ` · ${[plan.minutes_target, plan.special_teams_role].filter(Boolean).join(" · ")}`
-                        : ""}
-                    </p>
-                    {pathStages.length ? (
-                      <div className={`${prefix}-roadmap`}>
-                        {pathStages.map((step, i) => (
-                          <div key={step.key} className={`${prefix}-road-step is-${step.status}`}>
-                            <span className={`${prefix}-road-step-label`}>
-                              {step.status === "next"
-                                ? "Now"
-                                : step.status === "projection"
-                                  ? "NHL goal"
-                                  : "Next"}
-                            </span>
-                            <span className={`${prefix}-road-step-title`}>{step.label}</span>
-                            {step.detail ? (
-                              <span className={`${prefix}-road-step-detail`}>{step.detail}</span>
-                            ) : null}
-                            {i === pathStages.length - 1 && plan.eta_range ? (
-                              <span className={`${prefix}-road-step-eta`}>ETA {plan.eta_range}</span>
-                            ) : null}
-                          </div>
-                        ))}
-                      </div>
-                    ) : nextHero ? (
-                      <p className={`${prefix}-projection-role`}>Next: {nextHero}</p>
-                    ) : null}
-                  </section>
                 ) : null}
-
-                {(pros.length ||
-                  cons.length ||
-                  neutralNotes.length ||
-                  hasOrgPlan ||
-                  pick.risk_reason) ? (
-                  <section
-                    className={`${prefix}-bottom-band`}
-                    ref={rightsRef}
-                    aria-label="Scouting and organization"
-                  >
-                    {(pros.length || neutralNotes.length > 0) ? (
-                      <div className={`${prefix}-scout-col is-pro`}>
-                        <h3>Biggest strengths</h3>
-                        {(pros.length ? pros : neutralNotes.slice(0, 2)).map((item) => (
-                          <p key={`pro-${item.text}`} className={`${prefix}-scout-item`}>
-                            {item.text}
-                          </p>
-                        ))}
-                      </div>
-                    ) : (
-                      <div />
-                    )}
-                    {(cons.length || pick.risk_reason || neutralNotes.length > 2) ? (
-                      <div className={`${prefix}-scout-col is-con`}>
-                        <h3>Biggest concerns</h3>
-                        {cons.length
-                          ? cons.map((item) => (
-                              <p key={`con-${item.text}`} className={`${prefix}-scout-item`}>
-                                {item.text}
-                              </p>
-                            ))
-                          : null}
-                        {!cons.length && pick.risk_reason ? (
-                          <p className={`${prefix}-scout-item`}>{pick.risk_reason}</p>
-                        ) : null}
-                        {!cons.length && !pick.risk_reason
-                          ? neutralNotes.slice(2, 4).map((item) => (
-                              <p key={`con-${item.text}`} className={`${prefix}-scout-item`}>
-                                {item.text}
-                              </p>
-                            ))
-                          : null}
-                      </div>
-                    ) : (
-                      <div />
-                    )}
-                    {hasOrgPlan ? (
-                      <div className={`${prefix}-org-col`}>
-                        <p className={`${prefix}-section-label`}>Organization fit</p>
-                        <div className={`${prefix}-org-top`}>
-                          {fit.need_filled ? (
-                            <p className={`${prefix}-org-kv`}>
-                              <span>Need filled</span>
-                              <strong>{fit.need_filled}</strong>
-                            </p>
-                          ) : null}
-                          {fit.fit_label || fit.fit_grade ? (
-                            <p className={`${prefix}-org-kv`}>
-                              <span>Fit</span>
-                              <strong>
-                                {[fit.fit_grade, fit.fit_label].filter(Boolean).join(" · ")}
-                              </strong>
-                            </p>
-                          ) : null}
-                          {fit.depth_status || fit.path_congestion ? (
-                            <p className={`${prefix}-org-kv`}>
-                              <span>Opportunity</span>
-                              <strong>{fit.depth_status || fit.path_congestion}</strong>
-                            </p>
-                          ) : null}
-                          {fit.environment_grade ? (
-                            <p className={`${prefix}-org-kv`}>
-                              <span>Environment</span>
-                              <strong>{fit.environment_grade}</strong>
-                            </p>
-                          ) : null}
-                          {rights.rights_status_label || rights.signing_recommendation ? (
-                            <p className={`${prefix}-org-kv`}>
-                              <span>Rights</span>
-                              <strong>
-                                {[rights.rights_status_label, rights.signing_recommendation]
-                                  .filter(Boolean)
-                                  .join(" · ")}
-                              </strong>
-                            </p>
-                          ) : null}
-                          {rights.rights_deadline_label ? (
-                            <p className={`${prefix}-org-kv`}>
-                              <span>Window</span>
-                              <strong>{rights.rights_deadline_label}</strong>
-                            </p>
-                          ) : null}
-                        </div>
-                        {hasDepth ? (
-                          <div className={`${prefix}-depth-bars`} aria-label="Players ahead at position">
-                            {[
-                              { key: "nhl", label: "NHL ahead", value: fit.nhl_players_ahead },
-                              { key: "ahl", label: "AHL ahead", value: fit.ahl_players_ahead },
-                              { key: "pro", label: "Prospects", value: fit.prospects_ahead },
-                            ]
-                              .filter((row) => row.value != null)
-                              .map((row) => (
-                                <div key={row.key} className={`${prefix}-depth-bar-row`}>
-                                  <span>{row.label}</span>
-                                  <div className={`${prefix}-depth-track`}>
-                                    <span
-                                      className={`${prefix}-depth-fill`}
-                                      style={{
-                                        width: `${Math.max(
-                                          8,
-                                          Math.round((Number(row.value) / depthMax) * 100)
-                                        )}%`,
-                                      }}
-                                    />
-                                  </div>
-                                  <em>{row.value}</em>
-                                </div>
-                              ))}
-                          </div>
-                        ) : null}
-                        {orgNote ? <p className={`${prefix}-org-note`}>{orgNote}</p> : null}
-                      </div>
-                    ) : (
-                      <div />
-                    )}
-                  </section>
-                ) : (
-                  <div ref={rightsRef} />
-                )}
               </div>
-
-              {advancedLines.length ? (
-                <div className={`${prefix}-more-details`}>
-                  <button
-                    type="button"
-                    className={`${prefix}-more-toggle`}
-                    aria-expanded={showMore}
-                    onClick={() => setShowMore((v) => !v)}
-                  >
-                    {showMore ? "Hide scouting detail" : "More scouting detail"}
-                  </button>
-                  {showMore ? (
-                    <div className={`${prefix}-more-panel`}>
-                      {[oneLineVerdict, developReason, ...advancedLines]
-                        .filter(Boolean)
-                        .filter((line, i, arr) => arr.indexOf(line) === i)
-                        .slice(0, 8)
-                        .map((line) => (
-                          <p key={line}>{line}</p>
-                        ))}
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-            </div>
+            ) : null}
           </div>
         ) : (
           <p className={`${prefix}-empty`}>{raw.headline || "No picks recorded for your club"}</p>
@@ -3859,7 +3606,7 @@ function buildRightsTimeline(focus, seasonYear) {
       steps.push({
         key: `path-${i}`,
         label: String(step),
-        value: i === 0 && seasonYear != null ? String(seasonYear) : "Next",
+        value: i === 0 && seasonYear != null ? String(Math.max(Number(seasonYear), draftYear || 0)) : "Next",
         tone: i === 0 ? "now" : "future",
       });
     });
@@ -4241,199 +3988,140 @@ export function ProspectRightsEventMenu({ franchiseState = {}, eventData = {}, o
       railHint={prospects.length ? "↑↓ switch" : null}
       heroContent={
         focus ? (
-          <div className={`${prefix}-workspace`}>
-            {warnings[0] ? (
-              <p className={`${prefix}-alert-banner`} role="status">
-                {warnings[0]}
-              </p>
-            ) : null}
-
-            <div className={`${prefix}-impact-strip`} aria-label="Organization impact">
-              <div className={`${prefix}-impact-card`}>
-                <span>Contracts</span>
-                <strong>
-                  {slotPreview
-                    ? `${slotPreview.contract_slots_used}/${slotPreview.contract_slots_limit}`
-                    : slots.used != null
-                      ? `${slots.used}/${slots.limit}`
-                      : payload?.contracts || "—"}
-                </strong>
-                {isSigning && slotPreview ? (
-                  <em>After {slotPreview.after_signing}/{slotPreview.contract_slots_limit}</em>
-                ) : null}
-              </div>
-              <div className={`${prefix}-impact-card${isSigning ? " is-warn" : ""}`}>
-                <span>Cap</span>
-                <strong>
-                  {isSigning
-                    ? preview?.signing_result?.cap_impact_display ||
-                      offer?.aav_display ||
-                      "+$950K"
-                    : "—"}
-                </strong>
-              </div>
-              <div className={`${prefix}-impact-card`}>
-                <span>Acceptance</span>
-                <strong>
-                  {isSigning && acceptance?.acceptance_pct != null
-                    ? `${acceptance.acceptance_pct}%`
-                    : isSigning
-                      ? acceptance?.outlook_label || "—"
-                      : "N/A"}
-                </strong>
-              </div>
-            </div>
-
-            <div className={`${prefix}-nego-grid`}>
-              <div className={`${prefix}-nego-col`}>
-                <article className={`${prefix}-player-card`}>
-                  <div className={`${prefix}-player-card-top`}>
-                    <PlayerHeadshot player={{ ...focus, id: focus.player_id }} size="md" />
-                    <div className={`${prefix}-pos-badge`}>
-                      <strong>{focus.position || getPlayerPosition(focus) || "—"}</strong>
-                      <span>{ovr != null ? ovr : "OVR"}</span>
-                    </div>
-                    <div>
-                      <p className={`${prefix}-kicker`}>
-                        {[
-                          focus.age != null ? `Age ${focus.age}` : null,
-                          focus.draft_overall_pick != null ? `Pick ${focus.draft_overall_pick}` : null,
-                          focus.eta != null ? `ETA ${focus.eta}y` : null,
-                        ]
-                          .filter(Boolean)
-                          .join(" · ")}
-                      </p>
-                      <h2>{focus.name || getPlayerName(focus)}</h2>
-                    </div>
-                  </div>
-                  <div className={`${prefix}-stat-grid`}>
-                    <div className={`${prefix}-stat-cell`}>
-                      <span>Age</span>
-                      <strong>{focus.age != null ? focus.age : "—"}</strong>
-                    </div>
-                    {ovr != null ? (
-                      <div className={`${prefix}-stat-cell`}>
-                        <span>OVR</span>
-                        <strong>{ovr}</strong>
-                      </div>
-                    ) : (
-                      <div className={`${prefix}-stat-cell`}>
-                        <span>OVR</span>
-                        <strong>—</strong>
-                      </div>
-                    )}
-                    {pot != null ? (
-                      <div className={`${prefix}-stat-cell`}>
-                        <span>POT</span>
-                        <strong>{pot}</strong>
-                      </div>
-                    ) : null}
-                    {focus.eta != null ? (
-                      <div className={`${prefix}-stat-cell`}>
-                        <span>ETA</span>
-                        <strong>{focus.eta}y</strong>
-                      </div>
-                    ) : null}
-                    {(focus.current_league_id || focus.returning_to) && (
-                      <div className={`${prefix}-stat-cell`}>
-                        <span>League</span>
-                        <strong>
-                          {String(focus.current_league_id || focus.returning_to)
-                            .replace(/^CHL_/, "")
-                            .slice(0, 10)}
-                        </strong>
-                      </div>
-                    )}
-                    <div className={`${prefix}-stat-cell`}>
-                      <span>Slide</span>
-                      <strong>
-                        {focus.legal_elc_terms?.slide_eligible ?? focus.elc_slide_eligible
-                          ? "Yes"
-                          : "No"}
-                      </strong>
-                    </div>
-                  </div>
-                  {[focus.shoots ? `Shoots ${focus.shoots}` : null, focus.height ? `${focus.height}` : null, focus.weight ? `${focus.weight} lb` : null, focus.nationality || null, focus.draft_year ? `Drafted ${focus.draft_year}${focus.draft_overall_pick ? ` · #${focus.draft_overall_pick}` : ""}` : null]
-                    .filter(Boolean).length ? (
-                    <p className={`${prefix}-context`}>
-                      {[focus.shoots ? `Shoots ${focus.shoots}` : null, focus.height ? `${focus.height}` : null, focus.weight ? `${focus.weight} lb` : null, focus.nationality || null, focus.draft_year ? `Drafted ${focus.draft_year}${focus.draft_overall_pick ? ` · #${focus.draft_overall_pick}` : ""}` : null]
-                        .filter(Boolean)
-                        .join(" · ")}
-                    </p>
-                  ) : null}
-                  {focus.season_stats ? (
-                    <div className={`${prefix}-contract-rows`}>
-                      <div className={`${prefix}-contract-row`}>
-                        <span>This season{focus.season_stats.league ? ` · ${String(focus.season_stats.league).replace(/^CHL_/, "")}` : ""}</span>
-                        <strong>
-                          {focus.season_stats.save_pct != null && focus.position === "G"
-                            ? `${focus.season_stats.gp} GP · ${focus.season_stats.wins ?? 0}W · ${Number(focus.season_stats.save_pct).toFixed(3)} SV% · ${focus.season_stats.gaa ?? "—"} GAA`
-                            : `${focus.season_stats.gp} GP · ${focus.season_stats.goals ?? 0}G ${focus.season_stats.assists ?? 0}A ${focus.season_stats.points ?? 0}P${focus.season_stats.ppg != null ? ` · ${Number(focus.season_stats.ppg).toFixed(2)} P/GP` : ""}`}
-                        </strong>
-                      </div>
-                      {focus.season_stats.stock_label ? (
-                        <div className={`${prefix}-contract-row`}>
-                          <span>Stock</span>
-                          <strong>{focus.season_stats.stock_label}</strong>
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : (
-                    <p className={`${prefix}-context`}>No games logged this season yet.</p>
-                  )}
-                </article>
-
-                <div className={`${prefix}-reasons`} style={{ display: "none" }}>
-                  <div className={`${prefix}-reason-col is-sign`}>
-                    <h4>Sign</h4>
-                    <ul>
-                      {(pros.length ? pros : ["Locks NHL rights"]).slice(0, 4).map((item) => (
-                        <li key={`pro-${item}`}>✓ {item}</li>
-                      ))}
-                    </ul>
-                  </div>
-                  <div className={`${prefix}-reason-col is-wait`}>
-                    <h4>Wait</h4>
-                    <ul>
-                      {(cons.length ? cons : ["Uses a contract slot"]).slice(0, 4).map((item) => (
-                        <li key={`con-${item}`}>! {item}</li>
-                      ))}
-                    </ul>
-                  </div>
+          <div className={`${prefix}-workspace pr`}>
+            {warnings[0] ? <p className="pr-alert" role="status">{warnings[0]}</p> : null}
+            <div className="nd nd2 nd2--rights">
+              <header className="nd2-hero">
+                <span aria-hidden="true" />
+                <div className="nd2-face">
+                  <PlayerHeadshot player={{ ...focus, id: focus.player_id }} size="md" showFlag={false} />
                 </div>
-              </div>
-
-              <div className={`${prefix}-nego-col`}>
-                <div className={`${prefix}-contract-doc`}>
-                  <div className={`${prefix}-contract-doc-head`}>
-                    <div>
-                      <h3>Entry Level Contract</h3>
-                      <p>{isSigning ? selectedPackage?.title : "Path decision — no ELC"}</p>
+                <div className="nd2-who">
+                  <h3>{focus.name || getPlayerName(focus)}</h3>
+                  <p>
+                    {[
+                      focus.position || getPlayerPosition(focus),
+                      ovr != null ? `${ovr} OVR` : null,
+                      pot != null ? `potential ${Math.round(Number(pot))}` : null,
+                      focus.age != null ? `age ${focus.age}` : null,
+                      focus.shoots ? `shoots ${/^r/i.test(String(focus.shoots)) ? "right" : /^l/i.test(String(focus.shoots)) ? "left" : String(focus.shoots).toLowerCase()}` : null,
+                    ].filter(Boolean).join(" · ")}
+                  </p>
+                  <p className="nd2-agent">
+                    {[
+                      focus.draft_year ? `Drafted ${focus.draft_year}${focus.draft_overall_pick ? `, pick ${focus.draft_overall_pick}` : ""}` : null,
+                      focus.current_league_id || focus.returning_to ? String(focus.current_league_id || focus.returning_to).replace(/^CHL_/, "") : null,
+                      focus.eta != null ? `NHL in about ${focus.eta} ${Number(focus.eta) === 1 ? "year" : "years"}` : null,
+                    ].filter(Boolean).join(" · ")}
+                  </p>
+                </div>
+                <div className="nd2-gap" aria-label="Rights window">
+                  <div>
+                    <span>Rights through</span>
+                    <strong>{focus.rights_through ?? "—"}</strong>
+                    <em>{humanizeLabel(focus.rights_type) || humanizeLabel(focus.rights_status) || "Exclusive rights"}</em>
+                  </div>
+                  {focus.rights_signing_deadline ? (
+                    <div className="is-you">
+                      <span>Sign by</span>
+                      <strong>{focus.rights_signing_deadline}</strong>
+                      <em>or lose him</em>
                     </div>
-                    {acceptance?.outlook_label ? (
-                      <span className={`${prefix}-offer-tag`}>{acceptance.outlook_label}</span>
-                    ) : null}
+                  ) : null}
+                </div>
+              </header>
+
+              {isSigning ? (
+                <section
+                  className={`nd2-gauge tone-${(acceptance?.acceptance_pct ?? 0) >= 75 ? "good" : (acceptance?.acceptance_pct ?? 0) >= 50 ? "mid" : "bad"}${(acceptance?.acceptance_pct ?? 0) >= 75 ? " will-accept" : ""}`}
+                  aria-label="Acceptance chance"
+                >
+                  <strong>{acceptance?.acceptance_pct != null ? `${acceptance.acceptance_pct}%` : "—"}</strong>
+                  <div className="nd2-gauge__body">
+                    <span>{acceptance?.outlook_label || "Chance he signs this offer"}</span>
+                    <div className="nd2-gauge__track">
+                      <i className="nd2-gauge__fill" style={{ width: `${Math.max(4, Number(acceptance?.acceptance_pct) || 4)}%` }} />
+                    </div>
+                    <small>
+                      {[
+                        agentWants.length ? `Wants ${agentWants.slice(0, 3).map((w, i) => (i === 0 ? String(w.label) : String(w.label).replace(/^[A-Z](?=[a-z])/, (c) => c.toLowerCase()))).join(", ")}` : null,
+                        acceptance?.main_concern ? `Concern: ${acceptance.main_concern}` : null,
+                      ].filter(Boolean).join(" · ") || "Chance he signs this offer"}
+                    </small>
                   </div>
-                  <div className={`${prefix}-contract-hero`}>
-                    {isSigning ? (
-                      <>
-                        <strong>{offer?.term_years || selectedPackage?.termYears || 3} Years</strong>
-                        <span>{offer?.aav_display || selectedPackage?.aavDisplay || "$950,000"}</span>
-                      </>
-                    ) : (
-                      <>
-                        <strong>Hold rights</strong>
-                        <span>No slot burn</span>
-                      </>
-                    )}
+                </section>
+              ) : (
+                <section className="nd2-gauge" aria-label="Path decision">
+                  <strong>{"→"}</strong>
+                  <div className="nd2-gauge__body">
+                    <span>{selectedPackage?.title || "Choose a path"}</span>
+                    <small>{selectedPackage?.blurb || "No contract signed: his rights stay with you and no slot is used."}</small>
                   </div>
+                </section>
+              )}
+
+              <div className="nd2-body">
+                <section className="nd2-offer" aria-label="Your decision">
+                  {["sign", "development", "rights"].map((section) => {
+                    const rows = sectionPackages(section);
+                    if (!rows.length) return null;
+                    return (
+                      <div key={section} className="pr-group">
+                        <span className="nd2-market__label">
+                          {section === "sign" ? "Sign an entry-level contract" : section === "development" ? "Or set his path without signing" : "Or hold the rights"}
+                        </span>
+                        <div className="pr-options" role="radiogroup">
+                          {rows.map((pkg) => {
+                            const on = selectedPackage && pkg.packageId === selectedPackage.packageId;
+                            return (
+                              <button
+                                key={pkg.packageId}
+                                type="button"
+                                role="radio"
+                                aria-checked={Boolean(on)}
+                                disabled={Boolean(pkg.disabled) || busy}
+                                className={`pr-option${on ? " is-active" : ""}${pkg.recommended ? " is-recommended" : ""}`}
+                                title={pkg.disabled ? pkg.action?.blocked_reason || pkg.blurb : pkg.blurb}
+                                onClick={() => {
+                                  if (pkg.disabled) return;
+                                  setSelectedPackageId(pkg.packageId);
+                                  setError("");
+                                  setFeedback("");
+                                }}
+                              >
+                                <i aria-hidden="true">{on ? "●" : "○"}</i>
+                                <span>
+                                  <strong>
+                                    {pkg.title}
+                                    {pkg.recommended ? <em>recommended</em> : null}
+                                  </strong>
+                                  <small>
+                                    {pkg.kind === "elc"
+                                      ? [
+                                          pkg.termYears != null ? `${pkg.termYears} years` : null,
+                                          pkg.aavDisplay,
+                                          pkg.signingBonusDisplay ? `bonus ${pkg.signingBonusDisplay}` : null,
+                                        ].filter(Boolean).join(" · ")
+                                      : pkg.disabled
+                                        ? pkg.action?.blocked_reason || pkg.blurb
+                                        : pkg.blurb}
+                                  </small>
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+
                   {isSigning ? (
-                    <div className={`${prefix}-contract-rows`}>
+                    <div className="pr-terms">
                       {assignmentOptions.length ? (
-                        <div className={`${prefix}-contract-row`}>
+                        <div className="nd2-field nd2-field--row">
                           <span>Assignment</span>
                           <select
-                            className={`${prefix}-assignment-select`}
+                            className="pr-select"
                             value={effectiveAssignmentPlan || ""}
                             onChange={(e) => setAssignmentPlanOverride(e.target.value)}
                             disabled={busy}
@@ -4447,231 +4135,132 @@ export function ProspectRightsEventMenu({ franchiseState = {}, eventData = {}, o
                           </select>
                         </div>
                       ) : null}
-                      <div className={`${prefix}-contract-row`}>
-                        <span>Signing bonus</span>
-                        <input
-                          type="range"
-                          min={0}
-                          max={Number(elcLegal.max_signing_bonus_total_m || 0.285) * (Number(offer?.term_years || 3) / 3)}
-                          step={0.005}
-                          value={Number(elcBonus.sb ?? offer?.signing_bonus_total_m ?? 0)}
-                          onChange={(e) => setElcBonus((b) => ({ ...b, sb: Number(e.target.value) }))}
-                          disabled={busy}
-                          aria-label="Signing bonus"
-                        />
-                        <strong>
-                          {offer?.signing_bonus_display ||
-                            selectedPackage?.signingBonusDisplay ||
-                            "—"}
-                        </strong>
+                      <div className="nd2-field">
+                        <div className="nd2-field__head">
+                          <span>Signing bonus</span>
+                          <strong>{offer?.signing_bonus_display || selectedPackage?.signingBonusDisplay || "$0"}</strong>
+                        </div>
+                        <div className="nd-range">
+                          <input
+                            type="range"
+                            min={0}
+                            max={Number(elcLegal.max_signing_bonus_total_m || 0.285) * (Number(offer?.term_years || 3) / 3)}
+                            step={0.005}
+                            value={Number(elcBonus.sb ?? offer?.signing_bonus_total_m ?? 0)}
+                            onChange={(e) => setElcBonus((b) => ({ ...b, sb: Number(e.target.value) }))}
+                            disabled={busy}
+                            aria-label="Signing bonus"
+                          />
+                        </div>
                       </div>
-                      <div className={`${prefix}-contract-row`}>
-                        <span>Schedule A</span>
-                        <input
-                          type="range"
-                          min={0}
-                          max={Number(elcLegal.max_schedule_a_m || 0.2125)}
-                          step={0.005}
-                          value={Number(elcBonus.sa ?? offer?.schedule_a_bonus_m ?? 0)}
-                          onChange={(e) => setElcBonus((b) => ({ ...b, sa: Number(e.target.value) }))}
-                          disabled={busy}
-                          aria-label="Schedule A bonuses"
-                        />
-                        <strong>{offer?.schedule_a_display || selectedPackage?.scheduleA || "—"}</strong>
-                      </div>
-                      <div className={`${prefix}-contract-row`}>
-                        <span>Cap charge (bonus hold)</span>
-                        <strong>
+                      <div className="nd2-field">
+                        <div className="nd2-field__head">
+                          <span>Performance bonuses (Schedule A)</span>
+                          <strong>{offer?.schedule_a_display || selectedPackage?.scheduleA || "$0"}</strong>
+                        </div>
+                        <div className="nd-range">
+                          <input
+                            type="range"
+                            min={0}
+                            max={Number(elcLegal.max_schedule_a_m || 0.2125)}
+                            step={0.005}
+                            value={Number(elcBonus.sa ?? offer?.schedule_a_bonus_m ?? 0)}
+                            onChange={(e) => setElcBonus((b) => ({ ...b, sa: Number(e.target.value) }))}
+                            disabled={busy}
+                            aria-label="Schedule A bonuses"
+                          />
+                        </div>
+                        <p className="nd2-note">
+                          Bonuses raise his chance of signing; they count against the cap only if earned.
                           {preview?.cap_preview?.bonus_exposure_m != null
-                            ? `+$${Math.round(Number(preview.cap_preview.bonus_exposure_m) * 1000)}K this season`
-                            : "—"}
-                        </strong>
-                      </div>
-                      <div className={`${prefix}-contract-row`}>
-                        <span>Schedule B</span>
-                        <strong>{offer?.schedule_b_display || selectedPackage?.scheduleB || "None"}</strong>
-                      </div>
-                      <div className={`${prefix}-contract-row`}>
-                        <span>Cap hit</span>
-                        <strong>{offer?.aav_display || "$950K"}</strong>
-                      </div>
-                      <div className={`${prefix}-contract-row`}>
-                        <span>Slide</span>
-                        <strong>
-                          {(offer?.slide_eligible ?? selectedPackage?.slide) ? "Eligible" : "No"}
-                        </strong>
-                      </div>
-                      <div className={`${prefix}-contract-row`}>
-                        <span>Slot</span>
-                        <strong>Yes (+1)</strong>
+                            ? ` Up to +$${Math.round(Number(preview.cap_preview.bonus_exposure_m) * 1000)}K this season.`
+                            : ""}
+                        </p>
                       </div>
                     </div>
                   ) : null}
+                </section>
 
-                  {isSigning && acceptance?.acceptance_pct != null ? (
-                    <div className={`${prefix}-accept-meter`} aria-label="Acceptance chance">
-                      <div className={`${prefix}-accept-meter-head`}>
-                        <span>Acceptance</span>
-                        <strong>{acceptance.acceptance_pct}%</strong>
-                      </div>
-                      <div className={`${prefix}-meter`}>
-                        <span style={{ width: `${Math.max(4, acceptance.acceptance_pct)}%` }} />
-                      </div>
-                      {agentWants.length ? (
-                        <ul className={`${prefix}-agent-wants`}>
-                          {agentWants.slice(0, 4).map((w) => (
-                            <li key={w.id || w.label}>✓ {w.label}</li>
-                          ))}
-                        </ul>
-                      ) : null}
-                      {acceptance.main_concern ? (
-                        <p className={`${prefix}-context`}>Concern: {acceptance.main_concern}</p>
-                      ) : null}
+                <section className="nd2-talk" aria-label="What this means">
+                  {isSigning && signingResult ? (
+                    <dl className="pr-result">
+                      <div><dt>Contract starts</dt><dd>{signingResult.contract_starts}</dd></div>
+                      <div><dt>Cap hit</dt><dd>{offer?.aav_display || signingResult.cap_impact_display}</dd></div>
+                      <div><dt>Assigned to</dt><dd>{humanizeLabel(signingResult.assignment)}</dd></div>
+                      <div><dt>Slide year</dt><dd>{(offer?.slide_eligible ?? selectedPackage?.slide) ? "Eligible" : "No"}</dd></div>
+                      {signingResult.rights ? <div><dt>Rights after</dt><dd>{signingResult.rights}</dd></div> : null}
+                    </dl>
+                  ) : null}
+                  {(pros.length || cons.length) ? (
+                    <div className="dr-evidence">
+                      {pros.slice(0, 3).map((item) => (
+                        <p key={`pro-${item}`} className="is-up"><b aria-hidden="true">+</b>{item}</p>
+                      ))}
+                      {cons.slice(0, 3).map((item) => (
+                        <p key={`con-${item}`} className="is-down"><b aria-hidden="true">{"−"}</b>{item}</p>
+                      ))}
                     </div>
                   ) : null}
-                </div>
-
-                {["sign", "development", "rights"].map((section) => {
-                  const rows = sectionPackages(section);
-                  if (!rows.length) return null;
-                  const label =
-                    section === "sign"
-                      ? "Sign contract"
-                      : section === "development"
-                        ? "Development"
-                        : "Rights";
-                  return (
-                    <React.Fragment key={section}>
-                      <p className={`${prefix}-offer-label`}>{label}</p>
-                      <div className={`${prefix}-offer-list`} style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
-                        {rows.map((pkg) => {
-                          const selected =
-                            selectedPackage && pkg.packageId === selectedPackage.packageId;
-                          return (
-                            <button
-                              key={pkg.packageId}
-                              type="button"
-                              disabled={Boolean(pkg.disabled) || busy}
-                              className={`${prefix}-offer-btn${selected ? " is-selected" : ""}${
-                                pkg.recommended ? " is-recommended" : ""
-                              }`}
-                              title={pkg.disabled ? pkg.action?.blocked_reason || pkg.blurb : pkg.blurb}
-                              onClick={() => {
-                                if (pkg.disabled) return;
-                                setSelectedPackageId(pkg.packageId);
-                                setError("");
-                                setFeedback("");
-                              }}
-                            >
-                              <span>
-                                <strong>{pkg.title}</strong>
-                                <p>
-                                  {[
-                                    pkg.termYears != null ? `${pkg.termYears}y` : null,
-                                    pkg.aavDisplay,
-                                    pkg.scheduleA && pkg.scheduleA !== "None" ? "Sch A" : null,
-                                    pkg.scheduleB && pkg.scheduleB !== "None" ? "Sch B" : null,
-                                    pkg.blurb && pkg.kind === "path" ? pkg.blurb : null,
-                                  ]
-                                    .filter(Boolean)
-                                    .slice(0, 3)
-                                    .join(" · ")}
-                                </p>
-                              </span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </React.Fragment>
-                  );
-                })}
-
-                {isSigning && signingResult ? (
-                  <div className={`${prefix}-apply-bar`}>
-                    <p className={`${prefix}-offer-label`}>Signing result</p>
-                    <div className={`${prefix}-preview`}>
-                      <span>
-                        Starts <strong>{signingResult.contract_starts}</strong>
-                      </span>
-                      <span>
-                        Cap <strong>{signingResult.cap_impact_display}</strong>
-                      </span>
-                      <span>
-                        Slots <strong>{signingResult.contract_slots_after}</strong>
-                      </span>
-                      <span>
-                        Assign <strong>{humanizeLabel(signingResult.assignment)}</strong>
-                      </span>
-                      <span>
-                        Rights <strong>{signingResult.rights}</strong>
-                      </span>
+                  {timeline.length ? (
+                    <div>
+                      <span className="nd2-market__label">His path</span>
+                      <ol className="dr-road pr-road" aria-label="Rights timeline">
+                        {timeline.map((step) => (
+                          <li
+                            key={step.key}
+                            className={step.tone === "deadline" ? "is-projection pr-deadline" : step.tone === "future" ? "" : "is-next"}
+                          >
+                            <span className="dr-road__when">{step.value}</span>
+                            <strong>{step.label}</strong>
+                          </li>
+                        ))}
+                      </ol>
                     </div>
+                  ) : null}
+                  {focus.season_stats ? (
+                    <p className="nd2-note">
+                      This season{focus.season_stats.league ? ` in the ${String(focus.season_stats.league).replace(/^CHL_/, "")}` : ""}:{" "}
+                      {focus.season_stats.save_pct != null && focus.position === "G"
+                        ? `${focus.season_stats.gp} GP, ${focus.season_stats.wins ?? 0} W, ${Number(focus.season_stats.save_pct).toFixed(3)} save %`
+                        : `${focus.season_stats.gp} GP, ${focus.season_stats.goals ?? 0}G ${focus.season_stats.assists ?? 0}A ${focus.season_stats.points ?? 0}P${focus.season_stats.ppg != null ? ` (${Number(focus.season_stats.ppg).toFixed(2)} per game)` : ""}`}
+                      {focus.season_stats.stock_label ? ` · stock ${String(focus.season_stats.stock_label).toLowerCase()}` : ""}
+                    </p>
+                  ) : null}
+                </section>
+              </div>
+
+              <footer className="nd2-foot">
+                <dl className="nd2-cap">
+                  <div>
+                    <dt>Contracts</dt>
+                    <dd>
+                      {slotPreview
+                        ? isSigning
+                          ? `${slotPreview.contract_slots_used} → ${slotPreview.after_signing} of ${slotPreview.contract_slots_limit}`
+                          : `${slotPreview.contract_slots_used} of ${slotPreview.contract_slots_limit}`
+                        : slots.used != null
+                          ? `${slots.used} of ${slots.limit}`
+                          : payload?.contracts || "—"}
+                    </dd>
                   </div>
-                ) : null}
-
-                <div className={`${prefix}-apply-bar`}>
+                  <div>
+                    <dt>Cap</dt>
+                    <dd>{isSigning ? preview?.signing_result?.cap_impact_display || offer?.aav_display || "—" : "No change"}</dd>
+                  </div>
+                </dl>
+                {error ? <p className="nd2-error" role="alert">{error}</p> : null}
+                {feedback ? <p className="nd2-note pr-ok">{feedback}</p> : null}
+                <div className="nd2-actions">
                   <button
                     type="button"
-                    className={`${prefix}-decision-apply`}
+                    className="nd-btn nd-btn--primary nd2-primary"
                     disabled={busy || !selectedPackage || selectedPackage.disabled}
                     onClick={applyDecision}
                   >
                     {applyLabel}
                   </button>
-                  {error ? <p className={`${prefix}-decision-feedback is-error`}>{error}</p> : null}
-                  {feedback ? <p className={`${prefix}-decision-feedback is-ok`}>{feedback}</p> : null}
                 </div>
-              </div>
-
-              <div className={`${prefix}-nego-col is-side`}>
-                <p className={`${prefix}-offer-label`}>Rights timeline</p>
-                {timeline.length ? (
-                  <div className={`${prefix}-timeline`} aria-label="Rights timeline">
-                    {timeline.map((step) => (
-                      <div
-                        key={step.key}
-                        className={`${prefix}-tl-step${
-                          step.tone === "future" ? " is-future" : ""
-                        }${step.tone === "deadline" ? " is-deadline" : ""}`}
-                      >
-                        <div className={`${prefix}-tl-dot`} />
-                        <span>{step.label}</span>
-                        <strong>{step.value}</strong>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className={`${prefix}-empty`}>No timeline</p>
-                )}
-                <div className={`${prefix}-contract-doc`} style={{ marginTop: "0.2rem" }}>
-                  <div className={`${prefix}-contract-doc-head`}>
-                    <div>
-                      <h3>Rights</h3>
-                      <p>{humanizeLabel(focus.rights_status) || "Exclusive"}</p>
-                    </div>
-                  </div>
-                  <div className={`${prefix}-contract-rows`}>
-                    <div className={`${prefix}-contract-row`}>
-                      <span>Type</span>
-                      <strong>{humanizeLabel(focus.rights_type) || "—"}</strong>
-                    </div>
-                    <div className={`${prefix}-contract-row`}>
-                      <span>Through</span>
-                      <strong>{focus.rights_through ?? "—"}</strong>
-                    </div>
-                    <div className={`${prefix}-contract-row`}>
-                      <span>Deadline</span>
-                      <strong>{focus.rights_signing_deadline || "—"}</strong>
-                    </div>
-                    <div className={`${prefix}-contract-row`}>
-                      <span>Term options</span>
-                      <strong>
-                        {(focus.legal_elc_terms?.legal_terms || []).join("/") || "—"}
-                      </strong>
-                    </div>
-                  </div>
-                </div>
-              </div>
+              </footer>
             </div>
           </div>
         ) : (
@@ -4728,12 +4317,6 @@ export function ProspectRightsEventMenu({ franchiseState = {}, eventData = {}, o
                           .join(" · ")}
                       </span>
                     </div>
-                  </div>
-                  <div
-                    className={`${prefix}-haul-grade-letter tone-${meta.rank >= 4 ? "c" : "n"}`}
-                    aria-hidden
-                  >
-                    {meta.rank >= 4 ? "!" : "U"}
                   </div>
                 </article>
               </button>

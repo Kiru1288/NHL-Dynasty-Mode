@@ -14193,7 +14193,6 @@ def _franchise_bulk_narrative_catchup(
     try:
         from app.sim_engine.franchise.storyline_engine import (  # noqa: WPS433
             _u_generate_daily_interactions,
-            _u_generate_minor_life_events,
             _u_sync_player_entities,
         )
 
@@ -14201,18 +14200,9 @@ def _franchise_bulk_narrative_catchup(
         utid = str(getattr(session, "user_team_id", "") or "")
         if rng is not None and utid:
             _u_sync_player_entities(session, team_id=utid)
-            setattr(session, "_bulk_narrative_life_burst", True)
-            try:
-                # No forced beat on short steps — the daily pass already rolls life events.
-                life_target = max(0, min(3, int(days_advanced) // 4)) if incremental else max(2, min(8, int(days_advanced) // 4))
-                created = 0
-                while created < life_target:
-                    batch = _u_generate_minor_life_events(session, rng)
-                    if batch <= 0:
-                        break
-                    created += int(batch)
-            finally:
-                setattr(session, "_bulk_narrative_life_burst", False)
+            # Life events are no longer forced here (2–8 per sim regardless of who was
+            # eligible): the director compounds the daily odds over the days it covers,
+            # so a bulk sim gets the same expected count as simming day by day.
             _u_generate_daily_interactions(session, rng)
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
@@ -14222,13 +14212,12 @@ def _franchise_bulk_narrative_catchup(
         boxes = [box for box in list(getattr(session, "game_results", None) or []) if isinstance(box, dict)]
         box_cursor = int(getattr(session, "_bulk_narrative_box_cursor", 0) or 0)
         new_boxes = boxes[box_cursor:]
-        cap = max(1, min(6, int(days_advanced))) if incremental else max(4, min(16, int(days_advanced) // 2))
-        if new_boxes:
-            step = max(1, len(new_boxes) // max(1, cap))
-            sample = new_boxes[: cap * step : step][:cap]
-            for box in sample:
-                ingest_game_box_storylines(session, box)
-            session._bulk_narrative_box_cursor = box_cursor + len(sample)
+        # Every game gets the same box-score pass it would get day by day (hat tricks,
+        # OT winners, shutouts); sampling 4–16 boxes silently dropped most of them.
+        # The league volume caps still limit what publishes.
+        for box in new_boxes:
+            ingest_game_box_storylines(session, box)
+        session._bulk_narrative_box_cursor = box_cursor + len(new_boxes)
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
@@ -14581,6 +14570,9 @@ def _actionable_interrupt_ids(session: FranchiseSession):
         ):
             # A player on your club asking out stops week/month sims so the crisis is seen.
             pops.append("d:" + str(p.get("id") or ""))
+        elif str(p.get("presentation_type") or "") == "trade_opportunity":
+            # Another club's player whose demand has cut his price: stop so it can be acted on.
+            pops.append("o:" + str(p.get("id") or ""))
     meetings = []
     day = int(getattr(session, "calendar_cursor", 0) or 0)
     for r in list(getattr(session, "universe_interaction_queue", None) or []):

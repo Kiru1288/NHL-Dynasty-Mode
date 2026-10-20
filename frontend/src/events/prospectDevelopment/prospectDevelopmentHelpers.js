@@ -154,7 +154,7 @@ function attrLabel(key) {
       break;
     }
   }
-  return k.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  return k.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()).replace(/\bIq\b/g, "IQ");
 }
 
 function formatOvrDelta(delta) {

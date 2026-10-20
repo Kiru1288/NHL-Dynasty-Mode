@@ -231,6 +231,16 @@ export default function CapReportBoard({
             : "",
     },
   ];
+  // Payroll and projected space already lead the club card; the commitments panel lists
+  // only other obligations that actually exist.
+  const extraObligations = [
+    { label: "Dead Cap", amount: deadCap },
+    { label: "Retained", amount: retainedSalary },
+    { label: "Bonus Carry", amount: bonusOverages },
+  ]
+    .filter((row) => Number(row.amount) > 0)
+    .map((row) => metrics.find((m) => m.label === row.label))
+    .filter(Boolean);
 
   return (
     <section className="cap-report-page">
@@ -400,21 +410,24 @@ export default function CapReportBoard({
               </div>
             </div>
 
-            <div className="cap-report-club-footer">
-              <div>
-                <span>Projected</span>
-                <strong>
-                  {money(projectedSpace)}
-                </strong>
+            {/* Only show figures that add something: projected space when it differs from
+                today's space, dead money when there is any. */}
+            {(projectedSpace != null && Math.abs(Number(projectedSpace) - Number(capSpace)) >= 0.05) || Number(deadCap) > 0 ? (
+              <div className="cap-report-club-footer">
+                {projectedSpace != null && Math.abs(Number(projectedSpace) - Number(capSpace)) >= 0.05 ? (
+                  <div>
+                    <span>Projected at deadline</span>
+                    <strong>{money(projectedSpace)}</strong>
+                  </div>
+                ) : null}
+                {Number(deadCap) > 0 ? (
+                  <div>
+                    <span>Dead money</span>
+                    <strong>{money(deadCap)}</strong>
+                  </div>
+                ) : null}
               </div>
-
-              <div>
-                <span>Dead Money</span>
-                <strong>
-                  {money(deadCap)}
-                </strong>
-              </div>
-            </div>
+            ) : null}
           </aside>
         </section>
 
@@ -430,17 +443,21 @@ export default function CapReportBoard({
             </p>
           </header>
 
-          <div className="cap-report-metrics-grid">
-            {metrics.map((metric) => (
-              <ReportMetric
-                key={metric.label}
-                label={metric.label}
-                value={metric.value}
-                detail={metric.detail}
-                tone={metric.tone}
-              />
-            ))}
-          </div>
+          {extraObligations.length ? (
+            <div className="cap-report-metrics-grid">
+              {extraObligations.map((metric) => (
+                <ReportMetric
+                  key={metric.label}
+                  label={metric.label}
+                  value={metric.value}
+                  detail={metric.detail}
+                  tone={metric.tone}
+                />
+              ))}
+            </div>
+          ) : (
+            <p className="cap-report-metrics-empty">No dead cap, retained salary or bonus carryover.</p>
+          )}
         </section>
       </main>
 

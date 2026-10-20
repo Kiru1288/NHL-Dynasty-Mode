@@ -180,20 +180,23 @@ _CHAIN_RAW = (
 _CHAIN_P_TWO = (_CHAIN_RAW[0] + _CHAIN_RAW[1]) / sum(_CHAIN_RAW)
 
 # Edit Lines ice share is the scoring weight. Role tilts who finishes those minutes.
+# Tilts are deliberately small and carry a cost: an attacking line is credited with a
+# bit more scoring and is also on the ice for a bit more against. Earlier values
+# (+22% for, -20% against) let one Offensive + Attack line own a team's offence.
 _FWD_GF_TILT = {
-    ("offensive", "attack"): 1.22,
-    ("offensive", "checking"): 0.92,
-    ("defensive", "attack"): 1.05,
-    ("defensive", "checking"): 0.70,
+    ("offensive", "attack"): 1.10,
+    ("offensive", "checking"): 0.98,
+    ("defensive", "attack"): 1.02,
+    ("defensive", "checking"): 0.88,
 }
 _FWD_GA_TILT = {
-    ("offensive", "attack"): 0.80,
-    ("offensive", "checking"): 1.05,
+    ("offensive", "attack"): 1.06,
+    ("offensive", "checking"): 1.00,
     ("defensive", "attack"): 1.00,
-    ("defensive", "checking"): 1.28,
+    ("defensive", "checking"): 1.10,
 }
-_DEF_GF_TILT = {"offensive": 1.25, "neutral": 1.00, "shutdown": 0.85, "sheltered": 0.92}
-_DEF_GA_TILT = {"offensive": 0.90, "neutral": 1.00, "shutdown": 1.30, "sheltered": 0.70}
+_DEF_GF_TILT = {"offensive": 1.12, "neutral": 1.00, "shutdown": 0.93, "sheltered": 0.96}
+_DEF_GA_TILT = {"offensive": 1.06, "neutral": 1.00, "shutdown": 1.12, "sheltered": 0.88}
 _DEFAULT_FWD_SHARE = (0.34, 0.29, 0.22, 0.15)
 _DEFAULT_DEF_SHARE = (0.46, 0.34, 0.20)
 
@@ -610,7 +613,9 @@ def diversify_player_personality_and_psych(player: Any, rng: random.Random) -> N
         def _wobble(spread: float) -> float:
             return local.gauss(0.0, spread)
 
-        psych.morale = clamp01(0.38 + 0.28 * new_traits.confidence + _wobble(0.14))
+        # Players arrive at camp content (about 65-75). The old 0.38 base with a 0.14 wobble
+        # left a third of every roster "frustrated" before a single game had been played.
+        psych.morale = clamp01(0.62 + 0.12 * new_traits.confidence + _wobble(0.05))
         psych.morale_sensitivity = clamp01(0.22 + 0.62 * new_traits.volatility + _wobble(0.08))
         psych.confidence_level = clamp01(new_traits.confidence + _wobble(0.08))
         psych.confidence_volatility = clamp01(new_traits.volatility + _wobble(0.06))
@@ -13088,6 +13093,8 @@ class SimEngine:
                     setattr(p, "_gm_unit_chem", 55.0)
         if use_saved:
             self._gm_stamp_saved_deployment(team, lines, pairs)
+        else:
+            self._gm_stamp_cpu_deployment(lines, pairs)
 
         return {
             "lines": lines,
@@ -13139,6 +13146,64 @@ class SimEngine:
                 out[pid] = int(min(int(sec), 28 * 60 + 30))
         return out
 
+    def _gm_stamp_cpu_deployment(self, lines: List[List[Any]], pairs: List[List[Any]]) -> None:
+        """CPU coaches set line roles too, from what each unit is good at.
+
+        Ice share stays at the default split; only the role tilts are chosen. The most
+        offence-leaning top-six line attacks, the most defence-leaning depth line checks,
+        and the pair that defends best gets the shutdown minutes.
+        """
+        def _lean(unit: List[Any]) -> float:
+            if not unit:
+                return 0.0
+            off = sum(self._gm_rating_avg(p, OFFENSE_KEYS) for p in unit) / len(unit)
+            dfn = sum(self._gm_rating_avg(p, DEFENSE_KEYS) for p in unit) / len(unit)
+            return float(off - dfn)
+
+        try:
+            leans = [_lean(list(ln or [])) for ln in lines[:4]]
+            roles: List[Tuple[str, str]] = []
+            for i, lean in enumerate(leans):
+                if i < 2:
+                    roles.append(("offensive", "attack") if lean >= 0 else ("defensive", "attack"))
+                else:
+                    roles.append(("offensive", "checking") if lean >= 4 else ("defensive", "checking"))
+            if len(leans) >= 2:
+                top = max(range(min(2, len(leans))), key=lambda i: leans[i])
+                roles[top] = ("offensive", "attack")
+            if len(leans) >= 3:
+                low = min(range(1, len(leans)), key=lambda i: leans[i])
+                if low != (top if len(leans) >= 2 else -1):
+                    roles[low] = ("defensive", "checking")
+            for i, ln in enumerate(lines[:4]):
+                gf = _FWD_GF_TILT.get(roles[i], 1.0)
+                ga = _FWD_GA_TILT.get(roles[i], 1.0)
+                for p in ln or []:
+                    setattr(p, "_gm_toi_share", _DEFAULT_FWD_SHARE[i])
+                    setattr(p, "_gm_share_from_cpu", True)
+                    setattr(p, "_gm_gf_tilt", gf)
+                    setattr(p, "_gm_ga_tilt", ga)
+
+            pair_leans = [_lean(list(pr or [])) for pr in pairs[:3]]
+            pair_roles = ["neutral"] * len(pair_leans)
+            if pair_leans:
+                shut = min(range(min(2, len(pair_leans))), key=lambda i: pair_leans[i])
+                pair_roles[shut] = "shutdown"
+                for i in range(min(2, len(pair_leans))):
+                    if i != shut and pair_leans[i] >= 3:
+                        pair_roles[i] = "offensive"
+                if len(pair_leans) >= 3:
+                    pair_roles[2] = "sheltered"
+            for i, pr in enumerate(pairs[:3]):
+                role = pair_roles[i]
+                for p in pr or []:
+                    setattr(p, "_gm_toi_share", _DEFAULT_DEF_SHARE[i])
+                    setattr(p, "_gm_share_from_cpu", True)
+                    setattr(p, "_gm_gf_tilt", _DEF_GF_TILT[role])
+                    setattr(p, "_gm_ga_tilt", _DEF_GA_TILT[role])
+        except Exception:
+            return
+
     def _gm_stamp_saved_deployment(self, team: Any, lines: List[List[Any]], pairs: List[List[Any]]) -> None:
         """Copy Edit Lines ice share and role onto the players who will take those minutes."""
         payload = self._gm_saved_lines_payload(team) or {}
@@ -13165,6 +13230,7 @@ class SimEngine:
             ga = _FWD_GA_TILT.get((zone, usage), 1.0)
             for p in ln:
                 setattr(p, "_gm_toi_share", share)
+                setattr(p, "_gm_share_from_cpu", False)
                 setattr(p, "_gm_gf_tilt", gf)
                 setattr(p, "_gm_ga_tilt", ga)
         for i, pr in enumerate(pairs):
@@ -13177,6 +13243,7 @@ class SimEngine:
                 role = "neutral"
             for p in pr:
                 setattr(p, "_gm_toi_share", share)
+                setattr(p, "_gm_share_from_cpu", False)
                 setattr(p, "_gm_gf_tilt", _DEF_GF_TILT[role])
                 setattr(p, "_gm_ga_tilt", _DEF_GA_TILT[role])
 
@@ -13211,7 +13278,8 @@ class SimEngine:
                 "balanced": (1.48, 1.14, 0.80),
                 "top_heavy": (1.60, 1.14, 0.66),
             }.get(style, (1.48, 1.14, 0.80))
-            saved = getattr(p, "_gm_toi_share", None)
+            # CPU role stamps carry the default split only; minutes follow the deployment style.
+            saved = None if getattr(p, "_gm_share_from_cpu", False) else getattr(p, "_gm_toi_share", None)
             base = float(saved) if saved is not None else pair_weights[pair_idx]
             ovr_n = self._gm_ovr_norm(p)
             talent = 0.98 + 0.04 * ovr_n if stamped_pair else 0.88 + 0.18 * ovr_n
@@ -13236,7 +13304,7 @@ class SimEngine:
             "balanced": (1.62, 1.24, 0.92, 0.66),
             "top_heavy": (1.82, 1.28, 0.76, 0.48),
         }.get(style, (1.62, 1.24, 0.92, 0.66))
-        saved = getattr(p, "_gm_toi_share", None)
+        saved = None if getattr(p, "_gm_share_from_cpu", False) else getattr(p, "_gm_toi_share", None)
         base = float(saved) if saved is not None else line_weights[line_idx]
         ovr_n = self._gm_ovr_norm(p)
         talent = 0.98 + 0.04 * ovr_n if stamped_line else 0.90 + 0.20 * ovr_n

@@ -156,16 +156,17 @@ function NoteList({ items, empty }) {
   );
 }
 
-export function DossierSkillProfile({ model }) {
-  const axes = radarAxes(model.skills);
+export function DossierSkillProfile({ model, showShape = true }) {
+  const axes = showShape ? radarAxes(model.skills) : [];
   return (
     <div className="dd-skills">
       <section className="dd-card">
         <DossierHeading
           title={model.goalie ? "Goalie profile" : "Skill profile"}
-          aside="Tier = league scale · % = vs. this draft class"
+          aside={model.file.pct < 72 ? "Ranges until your file reaches 72%" : null}
         />
         <PercentileBars rows={skillBarRows(model.skills)} headless />
+        <p className="dd-legend-note">Bar shows the rating. The tick is the class average. "Top 30%" is where he ranks in this draft class.</p>
       </section>
       {axes.length >= 3 ? (
         <section className="dd-card">
@@ -201,6 +202,453 @@ function Fact({ label, value }) {
   );
 }
 
+/** Most likely career outcome from the backend distribution; null when it sent none. */
+function likelyOutcome(model) {
+  const segs = model.role.outcomes || [];
+  if (!segs.length) return null;
+  return segs.reduce((best, s) => (s.pct > best.pct ? s : best), segs[0]);
+}
+
+/** Draft hero: who he is, then only Now / Ceiling / Your file. */
+export function DossierHero({ model, portrait, tag = "P1 file" }) {
+  const id = model.identity;
+  const frame = [id.height, id.weight].filter(Boolean).join(" ");
+  const nowPublic = !model.ovr.revealed && model.file.pct < 72;
+  return (
+    <section className="dd-hero">
+      {tag && tag !== "P1 file" ? <span className="dd-hero__tag">{tag}</span> : null}
+      <div className="dd-hero__shot">{portrait}</div>
+      <div className="dd-hero__id">
+        <h2>{id.name}</h2>
+        <p>{[id.pos, id.age != null ? String(id.age) : null, id.shoots, frame].filter(Boolean).join(" · ")}</p>
+        <p className="is-muted">{[id.club, id.league].filter(Boolean).join(" · ") || "—"}</p>
+      </div>
+      <div className="dd-hero__eval">
+        <div className="dd-hero__nums">
+          <div>
+            <span>Now</span>
+            <strong>{model.display.ovr}</strong>
+            {nowPublic ? <small>Public read</small> : null}
+          </div>
+          <div className="is-ceiling">
+            <span>Ceiling</span>
+            <strong>{model.peak.hidden ? "?" : model.display.peak}</strong>
+          </div>
+        </div>
+        <div className="dd-hero__file" title="How much of this player your scouts have seen">
+          <span>Scouting file {model.display.file}</span>
+          <i><b style={{ width: `${model.file.pct}%` }} /></i>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/** Three plain statements: slot, likely outcome, club need. Each is omitted when the data is missing. */
+export function DossierVerdictStrip({ model, eta, slotNote }) {
+  const likely = likelyOutcome(model);
+  const board = model.rank.consensus ?? model.rank.board;
+  const slot = [board != null ? `${formatRank(board)} public` : null, model.rank.board != null && model.rank.board !== board ? `${formatRank(model.rank.board)} yours` : null]
+    .filter(Boolean).join(" · ");
+  const outcome = likely
+    ? `${likely.label} (${Math.round(likely.pct)}%)`
+    : (model.role.projected ? `${model.role.projected} if it hits` : null);
+  const known = (v) => (v && !/unknown/i.test(String(v)) ? String(v) : null);
+  const timeline = known(eta) || known(model.role.eta);
+  const fit = model.orgFit;
+  const cells = [
+    slot ? { k: "Board", v: slot, sub: slotNote ? `${slotNote} at this pick` : null } : null,
+    outcome ? { k: "Likely outcome", v: outcome, sub: timeline } : null,
+    fit ? { k: "Club need", v: fit.label || "Noted", sub: fit.reasons[0] || null } : null,
+  ].filter(Boolean);
+  if (!cells.length) return null;
+  return (
+    <div className="dd-strip">
+      {cells.map((c) => (
+        <div key={c.k} className="dd-strip__cell">
+          <span>{c.k}</span>
+          <strong>{c.v}</strong>
+          {c.sub ? <small>{c.sub}</small> : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const CS_LO = 20;
+const CS_HI = 99;
+const csPos = (v) => Math.max(0, Math.min(100, ((Number(v) - CS_LO) / (CS_HI - CS_LO)) * 100));
+
+const TIER_ORDER = ["awful", "bad", "weak", "average", "good", "very-good", "great", "elite", "world-class"];
+function tierTone(tier) {
+  const i = TIER_ORDER.indexOf(tier?.key);
+  if (i < 0) return "mid";
+  if (i >= 6) return "up";
+  if (i <= 2) return "down";
+  return "mid";
+}
+
+function pctTone(p) {
+  if (p == null) return "mid";
+  if (p >= 67) return "up";
+  if (p < 40) return "down";
+  return "mid";
+}
+
+function sentenceCase(label) {
+  const s = String(label || "");
+  return s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : "";
+}
+
+/** Now → ceiling: one rail, a fill for current ability and a bracket for the scouted ceiling band. */
+function PotentialRail({ model }) {
+  const ovr = model.ovr;
+  const peak = model.peak;
+  const nowLo = ovr.exact ? ovr.value : ovr.low;
+  const nowHi = ovr.exact ? ovr.value : ovr.high;
+  return (
+    <div className="ws-pot">
+      <div className="ws-pot__nums">
+        <span className="ws-pot__now"><small>Now</small>{model.display.ovr}</span>
+        <span className="ws-pot__arrow" aria-hidden="true" />
+        <span className="ws-pot__ceil"><small>Ceiling</small>{peak.hidden ? "?" : model.display.peak}</span>
+      </div>
+      <div className="ws-rail" role="img" aria-label={`Now ${model.display.ovr}, ceiling ${peak.hidden ? "unknown" : model.display.peak}`}>
+        {nowLo != null ? <i className="ws-rail__now" style={{ width: `${csPos(nowHi ?? nowLo)}%`, opacity: nowHi > nowLo ? 0.6 : 1 }} /> : null}
+        {!peak.hidden && peak.low != null && peak.high != null ? (
+          <i className="ws-rail__ceil" style={{ left: `${csPos(peak.low)}%`, width: `${Math.max(1.5, csPos(peak.high) - csPos(peak.low))}%` }} />
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+const CONF_FILL = {
+  Confirmed: 3, Narrow: 3, Reliable: 3, Read: 3,
+  Solid: 2, Moderate: 2, Usable: 2,
+  Early: 1, Wide: 1, Thin: 1, Unread: 1,
+};
+const CONF_ROWS = [
+  ["current", "Current"],
+  ["development", "Development"],
+  ["translation", "Stats"],
+  ["character", "Character"],
+];
+
+/** Four separate certainty reads. None of them is a chance of NHL success. */
+function ConfidenceMeter({ confidence, filePct }) {
+  if (!confidence) {
+    return <p className="ws-conf__fallback">Your file {filePct}%</p>;
+  }
+  return (
+    <ul className="ws-conf" aria-label="Scouting confidence">
+      {CONF_ROWS.map(([key, label]) => {
+        const read = confidence[key] || {};
+        const fill = CONF_FILL[read.level] ?? 0;
+        return (
+          <li key={key} title={read.why || undefined}>
+            <span>{label}</span>
+            <i aria-hidden="true">{[0, 1, 2].map((n) => <b key={n} className={n < fill ? "is-on" : ""} />)}</i>
+            <em>{read.level || "—"}</em>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function MatrixCell({ skill }) {
+  const exact = skill.exact && skill.value != null;
+  const lo = exact ? skill.value : skill.low;
+  const hi = exact ? skill.value : skill.high;
+  const tone = skill.locked ? "lock" : tierTone(skill.tier);
+  const pct = skill.percentile == null ? null
+    : skill.percentile >= 50 ? `Top ${Math.max(1, 100 - Math.round(skill.percentile))}%` : `Btm ${Math.max(1, Math.round(skill.percentile))}%`;
+  return (
+    <div className={`ws-cell is-${tone}`} title={skill.label}>
+      <span className="ws-cell__lab">{skill.label}</span>
+      <strong className="ws-cell__val">{skill.locked ? "?" : formatRating(skill)}</strong>
+      <i className="ws-cell__bar">
+        {skill.locked || lo == null ? null : (
+          <b style={{ left: exact ? 0 : `${csPos(lo)}%`, width: exact ? `${csPos(lo)}%` : `${Math.max(3, csPos(hi) - csPos(lo))}%` }} />
+        )}
+        {skill.classAvg != null ? <em style={{ left: `${csPos(skill.classAvg)}%` }} /> : null}
+      </i>
+      <small>
+        {skill.locked ? "Scout to reveal" : sentenceCase(skill.tier?.label)}
+        {pct ? <span className={`is-${pctTone(skill.percentile)}`}> {pct}</span> : null}
+      </small>
+    </div>
+  );
+}
+
+function FindingBlock({ finding, others, tone, title }) {
+  if (!finding) return null;
+  return (
+    <div className={`ws-find is-${tone}`}>
+      <small className="ws-find__kick">{title} {"·"} {finding.kind === "projection" ? "projection risk" : "current"}</small>
+      <strong>{finding.title}</strong>
+      <p>{finding.evidence}</p>
+      <p className="ws-find__bench">{finding.benchmark}{finding.why ? ` — ${finding.why}` : ""}</p>
+      {finding.confidence ? <small className="ws-find__conf">Confidence: {finding.confidence}</small> : null}
+      {others?.length ? (
+        <ul>
+          {others.map((o) => <li key={o.key}>{o.title} <span>{o.evidence}</span></li>)}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
+const OUTCOME_TONES = ["down", "slate", "mid", "blue", "up", "up"];
+
+function OutcomeRail({ outcomes, mostLikely, ceilingOutcome, method }) {
+  const list = (outcomes || []).filter((o) => o.pct >= 0);
+  if (!list.some((o) => o.pct > 0)) return null;
+  const total = list.reduce((a, o) => a + o.pct, 0) || 1;
+  const topKey = mostLikely?.key || list.reduce((a, b) => (b.pct > a.pct ? b : a), list[0]).key;
+  const toneAt = (i) => OUTCOME_TONES[Math.min(OUTCOME_TONES.length - 1, Math.round((i / Math.max(1, list.length - 1)) * (OUTCOME_TONES.length - 2)))];
+  return (
+    <div className="ws-out">
+      <div className="ws-out__head">
+        <span>Career outcomes</span>
+        <span>{ceilingOutcome ? `Ceiling: ${ceilingOutcome.label}` : null}{method === "heuristic" ? " · heuristic model" : ""}</span>
+      </div>
+      <div className="ws-out__bar" role="img" aria-label={list.map((o) => `${o.label} ${Math.round(o.pct)}%`).join(", ")}>
+        {list.map((o, i) => (
+          o.pct > 0 ? <i key={o.key} className={`is-${toneAt(i)}${o.key === topKey ? " is-top" : ""}`} style={{ width: `${(o.pct / total) * 100}%` }} /> : null
+        ))}
+      </div>
+      <ul className="ws-out__legend">
+        {list.map((o, i) => (
+          <li key={o.key} className={o.key === topKey ? "is-top" : ""}>
+            <i className={`is-${toneAt(i)}`} />
+            {o.label} <b>{Math.round(o.pct)}%</b>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function fitTone(label) {
+  const s = String(label || "").toLowerCase();
+  if (/elite|good|strong|great|ideal/.test(s)) return "up";
+  if (/poor|weak|crowd|bad|conflict/.test(s)) return "down";
+  return "mid";
+}
+
+const ESTIMATE_LABELS = {
+  war: "WAR", offensive_war: "Off WAR", defensive_war: "Def WAR", xgf_pct: "xGF%", cf_pct: "CF%", shot_rate: "Shots/G", gsax: "GSAx",
+};
+
+/**
+ * Draft scouting workspace. Left: who he is, his upside, how sure the read is, and
+ * the draft verdict. Right: the evaluation, an attribute matrix, the defining
+ * advantage against the defining concern, and the outcome split. Evidence sits
+ * behind one disclosure. Every value comes from the dossier model or the caller.
+ */
+export function DossierCommandSheet({
+  model,
+  portrait,
+  tag,
+  slotNote,
+  eta,
+  playStyle,
+  production,
+  currentPick,
+  footnote,
+}) {
+  const id = model.identity;
+  const frame = [id.height, id.weight].filter(Boolean).join(" ");
+  const board = model.rank.consensus ?? model.rank.board;
+  const fit = model.orgFit;
+  const known = (v) => (v && !/unknown/i.test(String(v)) ? String(v) : null);
+  const when = known(eta) || known(model.role.eta);
+  const intel = model.intel;
+  const tr = intel?.translation;
+  const findings = model.findings || { strengths: [], concerns: [] };
+  const ranks = model.value;
+  const rankLine = ranks
+    ? [ranks.ceiling != null ? `Ceiling #${ranks.ceiling}` : null, ranks.ability != null ? `now #${ranks.ability}` : null].filter(Boolean).join(", ")
+    : null;
+  const vsPick = currentPick != null ? `You pick #${currentPick}` : null;
+  const traits = model.character.visible ? model.character.traits : [];
+  const unmodelled = model.character.unmodelled || [];
+  const estimates = tr?.estimates ? Object.entries(tr.estimates).filter(([k]) => ESTIMATE_LABELS[k]) : [];
+  return (
+    <div className="cs-host">
+      <div className="ws">
+        <section className="ws-left">
+          <div className="ws-id">
+            {tag ? <span className="ws-id__tag">{tag}</span> : null}
+            <div className="ws-id__row">
+              <div className="ws-id__flag">{portrait}</div>
+              <div className="ws-id__copy">
+                <h2>{id.name}</h2>
+                <p>{[id.pos, id.age != null ? String(id.age) : null, id.shoots, frame].filter(Boolean).join(" · ")}</p>
+                <p className="is-soft">{[id.club, id.league].filter(Boolean).join(" · ") || "—"}</p>
+              </div>
+            </div>
+            {playStyle || production ? (
+              <div className="ws-id__style">
+                {playStyle ? <span className="ws-stamp">{playStyle}</span> : null}
+                {production ? <span className="ws-id__prod"><b>{production.line}</b>{production.context ? ` · ${production.context}` : ""}</span> : null}
+              </div>
+            ) : null}
+            <PotentialRail model={model} />
+            <ConfidenceMeter confidence={intel?.confidence} filePct={model.file.pct} />
+          </div>
+
+          <div className="ws-verdict">
+            {board != null ? (
+              <div className="ws-board">
+                <small>Board</small>
+                <strong>#{board}</strong>
+                {slotNote ? <span>{slotNote}</span> : null}
+              </div>
+            ) : null}
+            <dl className="ws-verdict__facts">
+              {rankLine ? (
+                <div>
+                  <dt>In this class</dt>
+                  <dd>{rankLine}<small>{[`of ${ranks.size}`, vsPick].filter(Boolean).join(" · ")}</small></dd>
+                </div>
+              ) : null}
+              {fit ? (
+                <div>
+                  <dt>Club need</dt>
+                  <dd className={`is-${fitTone(fit.label)}`}>{fit.label || "Noted"}{fit.reasons[0] ? <small>{fit.reasons[0]}</small> : null}</dd>
+                </div>
+              ) : null}
+              {model.role.mostLikely ? (
+                <div>
+                  <dt>Most likely</dt>
+                  <dd>{model.role.mostLikely.label}{when ? <small>ETA {when}</small> : null}</dd>
+                </div>
+              ) : null}
+            </dl>
+          </div>
+        </section>
+
+        <section className="ws-right">
+          {model.summary ? <p className="ws-sum">{model.summary}</p> : null}
+          <div className={`ws-matrix${model.goalie ? " is-goalie" : ""}`}>
+            {model.skills.map((skill) => <MatrixCell key={skill.key} skill={skill} />)}
+            <span className="ws-matrix__key"><em /> class average</span>
+          </div>
+          <div className="ws-av">
+            <FindingBlock finding={findings.strengths[0]} others={findings.strengths.slice(1)} tone="up" title="Advantage" />
+            <FindingBlock finding={findings.concerns[0]} others={findings.concerns.slice(1)} tone="down" title="Concern" />
+            {!findings.strengths.length && !findings.concerns.length ? (
+              <p className="ws-muted">Not enough evidence yet to name an advantage or a concern.</p>
+            ) : null}
+          </div>
+          <OutcomeRail
+            outcomes={model.role.outcomes}
+            mostLikely={model.role.mostLikely}
+            ceilingOutcome={model.role.ceilingOutcome}
+            method={model.role.outcomeMethod}
+          />
+        </section>
+      </div>
+
+      <details className="ws-evidence">
+        <summary>Evidence: stats, comparables, confidence, character</summary>
+        <div className="ws-evidence__grid">
+          {tr ? (
+            <div>
+              <h4>Stats in context</h4>
+              <p>
+                {tr.observed?.gp ? `${tr.observed.gp} GP` : "No games on record"}
+                {tr.nhle != null ? ` · ${tr.nhle} NHLe pts/82` : ""}
+                {tr.context_band ? ` · ${tr.context_band} for position` : ""}
+              </p>
+              {tr.nhle_factor != null ? <p className="ws-muted">League translation factor {tr.nhle_factor}. {tr.context_basis}.</p> : null}
+              {estimates.length ? (
+                <>
+                  <p className="ws-est">
+                    {estimates.map(([k, v]) => <span key={k}>{ESTIMATE_LABELS[k]} <b>{Number(v).toFixed(1)}</b></span>)}
+                  </p>
+                  <p className="ws-muted">{tr.estimates_label}: {tr.estimates_note}</p>
+                </>
+              ) : null}
+            </div>
+          ) : null}
+          <div>
+            <h4>Class comparables</h4>
+            {model.comparables?.length ? (
+              <ul className="ws-comps">
+                {model.comparables.map((c) => (
+                  <li key={c.id || c.name}>
+                    <b>{c.name}</b>{c.rank ? ` #${c.rank}` : ""} <span className="ws-sim">{c.similarity}</span>
+                    <small>Closest on {c.closest.toLowerCase()}{c.apart ? `; ${c.apart.toLowerCase()}` : ""}</small>
+                  </li>
+                ))}
+              </ul>
+            ) : <p className="ws-muted">Not enough scouted overlap in this class to compare.</p>}
+            <p className="ws-muted">Profile match within this draft class (0 to 100). Not a career forecast.</p>
+          </div>
+          {intel?.confidence ? (
+            <div>
+              <h4>How sure we are</h4>
+              <ul className="ws-why">
+                {CONF_ROWS.map(([key, label]) => (
+                  <li key={key}><b>{label}: {intel.confidence[key]?.level}</b> {intel.confidence[key]?.why}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+          <div>
+            <h4>Character</h4>
+            {traits.length ? (
+              <ul className="ws-traits">
+                {traits.map((t) => {
+                  const tone = tierTone(t.tier) === "down" ? "down" : (["good", "very-good", "great", "elite", "world-class"].includes(t.tier?.key) ? "up" : "mid");
+                  return <li key={t.key} className={`is-${tone}`}><span>{t.label}</span><b>{sentenceCase(t.tier.label)}</b></li>;
+                })}
+              </ul>
+            ) : <p className="ws-muted">{model.file.pct < 36 && !unmodelled.length ? "Opens once your file reaches 36%." : "No character traits on file."}</p>}
+            {unmodelled.length ? <p className="ws-muted">Not modelled: {unmodelled.join(", ")}.</p> : null}
+          </div>
+          {footnote ? <p className="ws-muted ws-evidence__foot">{footnote}</p> : null}
+        </div>
+      </details>
+    </div>
+  );
+}
+
+/** Projection, not evidence: role and ETA are read off the scouted ceiling band. */
+export function DossierProjection({ model }) {
+  const role = model.role;
+  return (
+    <section className="dd-card">
+      <DossierHeading title="Projection" aside={`Scouting estimate · ${prettyTier(model.file.certaintyLabel)}`} />
+      <ul className="dd-facts">
+        <Fact label="Readiness" value={role.readiness} />
+        <Fact label="Projected role" value={role.projected} />
+        <Fact label="ETA" value={role.eta} />
+        <Fact label="NHL odds" value={model.display.nhlOdds} />
+      </ul>
+    </section>
+  );
+}
+
+export function DossierOrgFit({ model }) {
+  const fit = model.orgFit;
+  if (!fit) return null;
+  return (
+    <section className="dd-card">
+      <DossierHeading title="Club fit" aside={fit.label} />
+      {fit.reasons.length ? (
+        <ul className="dd-notes">
+          {fit.reasons.map((line) => <li key={line}>{line}</li>)}
+        </ul>
+      ) : <p className="dd-empty">No positional need flagged.</p>}
+    </section>
+  );
+}
+
 export function DossierContext({ model }) {
   const role = model.role;
   return (
@@ -224,15 +672,8 @@ export function DossierContext({ model }) {
           </ul>
         </section>
       ) : null}
-      <section className="dd-card">
-        <DossierHeading title="Readiness" />
-        <ul className="dd-facts">
-          <Fact label="Readiness" value={role.readiness} />
-          <Fact label="Projected role" value={role.projected} />
-          <Fact label="ETA" value={role.eta} />
-          <Fact label="NHL odds" value={model.display.nhlOdds} />
-        </ul>
-      </section>
+      <DossierProjection model={model} />
+      <DossierOrgFit model={model} />
     </aside>
   );
 }
@@ -307,6 +748,22 @@ export function DossierIntel({ model }) {
           </div>
         ) : <p className="dd-empty">No season line on file.</p>}
       </section>
+      {model.playoffs ? (
+        <section className="dd-card">
+          <DossierHeading
+            title="Playoffs"
+            aside={model.playoffs.sampleThin ? `Thin sample (${model.playoffs.gp} GP)` : "Kept apart from the season line"}
+          />
+          <div className="dd-stats">
+            {model.playoffs.cells.map((cell) => (
+              <div key={cell.label}>
+                <span>{cell.label}</span>
+                <strong>{cell.value}</strong>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
       <Trajectory points={model.trajectory} />
       {model.wjc ? (
         <section className="dd-card">
@@ -475,6 +932,165 @@ const DD_CSS = `
 .dd-assign{display:flex;flex-wrap:wrap;gap:var(--sp-1);}
 .dd-assign button{appearance:none;background:transparent;border:1px solid rgba(158,180,198,.35);color:var(--c-text);border-radius:99px;padding:4px 10px;font-size:var(--fs-meta);cursor:pointer;}
 .dd-assign button.is-active{border-color:var(--c-you);color:var(--c-you);}
+.dd-hero{position:relative;display:grid;grid-template-columns:52px minmax(0,1fr) auto;gap:18px;align-items:center;margin:0 0 4px;padding:20px 4px 18px;border-bottom:1px solid rgba(248,213,138,.28);}
+.dd-hero__tag{position:absolute;top:2px;left:4px;font-size:12px;color:var(--dd-gold-hi,#f8d58a);}
+.dd-hero__shot{width:52px;height:52px;border-radius:6px;overflow:hidden;display:grid;place-items:center;background:rgba(255,255,255,.05);}
+.dd-hero__shot img{max-width:100%;max-height:100%;}
+.dd-hero__id{min-width:0;}
+.dd-hero__id h2{margin:0;font-family:var(--dd-font-ui);font-size:clamp(22px,2.4vw,30px);font-weight:800;line-height:1.1;color:#fff;text-transform:none;letter-spacing:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.dd-hero__id p{margin:4px 0 0;font-size:14px;color:var(--dd-cream,#ffe7c4);overflow-wrap:anywhere;}
+.dd-hero__id p.is-muted{font-size:13px;color:var(--c-muted);margin-top:2px;}
+.dd-hero__eval{display:flex;flex-direction:column;align-items:flex-end;gap:8px;}
+.dd-hero__nums{display:flex;gap:28px;text-align:right;}
+.dd-hero__nums span{display:block;font-size:12px;color:var(--c-muted);}
+.dd-hero__nums strong{display:block;font-family:var(--dd-font-ui);font-size:40px;font-weight:800;line-height:1;color:#fff;font-variant-numeric:tabular-nums;white-space:nowrap;}
+.dd-hero__nums .is-ceiling strong{color:var(--dd-gold-hi,#f8d58a);}
+.dd-hero__nums small{display:block;font-size:11px;color:var(--c-muted);margin-top:2px;}
+.dd-hero__file{width:180px;font-size:12px;color:var(--c-muted);text-align:right;}
+.dd-hero__file i{display:block;height:3px;margin-top:4px;background:rgba(158,180,198,.2);border-radius:2px;overflow:hidden;}
+.dd-hero__file b{display:block;height:100%;background:var(--c-you);}
+.dd-strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));margin:0 0 20px;}
+.dd-strip__cell{padding:14px 16px 14px 4px;min-width:0;}
+.dd-strip__cell + .dd-strip__cell{padding-left:16px;border-left:1px solid rgba(158,180,198,.16);}
+.dd-strip__cell span{display:block;font-size:12px;color:var(--c-muted);}
+.dd-strip__cell strong{display:block;margin-top:2px;font-size:16px;font-weight:700;color:#fff;}
+.dd-strip__cell small{display:block;margin-top:2px;font-size:13px;color:var(--dd-cream,#ffe7c4);opacity:1;overflow-wrap:anywhere;}
+.dd-legend-note{margin:8px 0 0;font-size:12px;color:var(--c-muted);}
+@media (max-width:720px){
+  .dd-hero{grid-template-columns:44px minmax(0,1fr);}
+  .dd-hero__eval{grid-column:1 / -1;align-items:stretch;}
+  .dd-hero__nums{justify-content:flex-start;text-align:left;}
+  .dd-hero__file{width:auto;text-align:left;}
+  .dd-strip__cell + .dd-strip__cell{border-left:0;padding-left:4px;border-top:1px solid rgba(158,180,198,.16);}
+}
+.cs-host{container-type:inline-size;--ws-cyan:#3ee6ff;--ws-orange:#ff8a1f;--ws-lime:#9be564;--ws-blue:#5aa2ff;--ws-cream:var(--dd-cream,#ffe7c4);--ws-coral:#ff6b5c;--ws-slate:#5a6b93;--ws-ink:#071233;--ws-deep:#050c2c;--ws-soft:#a9bfdc;
+  color:#eef4ff;font-family:var(--dd-font-ui);font-size:14px;line-height:1.35;}
+.ws{display:grid;grid-template-columns:minmax(260px,0.82fr) minmax(0,1.18fr);gap:0;align-items:stretch;}
+.ws small{display:block;font-size:11px;font-weight:700;color:var(--ws-soft);}
+.ws-muted{margin:0;font-size:12px;color:var(--ws-soft);}
+.ws-left{display:flex;flex-direction:column;background:var(--ws-cream);color:var(--ws-ink);clip-path:polygon(0 0,100% 0,calc(100% - 18px) 100%,0 100%);}
+.ws-id{padding:16px 30px 14px 18px;display:flex;flex-direction:column;gap:10px;}
+.ws-id__tag{font-size:11px;font-weight:900;color:#a8300f;letter-spacing:.04em;}
+.ws-id__row{display:flex;gap:12px;align-items:center;min-width:0;}
+.ws-id__flag{flex:none;width:44px;height:44px;display:grid;place-items:center;background:var(--ws-ink);clip-path:polygon(0 0,100% 0,100% 76%,76% 100%,0 100%);}
+.ws-id__copy{min-width:0;}
+.ws-id h2{margin:0;font-family:var(--dd-font-ui);font-size:clamp(24px,3.2cqi,32px);font-weight:900;line-height:1;color:var(--ws-ink);letter-spacing:-.01em;text-transform:none;overflow-wrap:anywhere;}
+.ws-id p{margin:4px 0 0;font-size:13px;font-weight:700;color:#24315a;}
+.ws-id p.is-soft{font-weight:600;color:#4b5a82;margin-top:1px;}
+.ws-id__style{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;font-size:13px;color:#24315a;}
+.ws-id__prod b{color:var(--ws-ink);font-weight:900;}
+.ws-stamp{display:inline-block;padding:2px 8px;font-size:11px;font-weight:900;letter-spacing:.06em;text-transform:uppercase;color:#fff;background:var(--ws-ink);transform:rotate(-2deg);}
+.ws-pot__nums{display:flex;align-items:flex-end;gap:10px;}
+.ws-pot small{color:#4b5a82;}
+.ws-pot__now,.ws-pot__ceil{font-size:40px;font-weight:900;line-height:.95;font-variant-numeric:tabular-nums;color:var(--ws-ink);}
+.ws-pot__ceil{color:#2f7d16;}
+.ws-pot__arrow{flex:1;height:3px;margin-bottom:12px;background:var(--ws-ink);position:relative;}
+.ws-pot__arrow::after{content:"";position:absolute;right:-2px;top:-5px;border-left:10px solid var(--ws-ink);border-top:6px solid transparent;border-bottom:6px solid transparent;}
+.ws-rail{position:relative;height:12px;margin-top:6px;background:repeating-linear-gradient(90deg,rgba(7,18,51,.14) 0 calc(10% - 2px),transparent calc(10% - 2px) 10%);}
+.ws-rail__now{position:absolute;top:0;bottom:0;left:0;background:var(--ws-ink);}
+.ws-rail__ceil{position:absolute;top:-4px;bottom:-4px;border:3px solid #2f7d16;}
+.ws-conf{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:1fr 1fr;gap:4px 14px;}
+.ws-conf li{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 8px;align-items:center;font-size:11px;font-weight:800;color:#4b5a82;}
+.ws-conf li i{display:flex;gap:2px;grid-row:2;}
+.ws-conf li i b{width:16px;height:5px;background:rgba(7,18,51,.15);}
+.ws-conf li i b.is-on{background:var(--ws-ink);}
+.ws-conf li em{font-style:normal;color:var(--ws-ink);grid-row:2;}
+.ws-conf__fallback{margin:0;font-size:12px;font-weight:800;color:#4b5a82;}
+.ws-verdict{margin-top:auto;display:grid;grid-template-columns:auto minmax(0,1fr);background:var(--ws-orange);color:#2a1200;}
+.ws-board{padding:12px 16px;background:#e2621a;clip-path:polygon(0 0,100% 0,calc(100% - 12px) 100%,0 100%);padding-right:24px;}
+.ws-board small{color:#2a1200;}
+.ws-board strong{display:block;font-family:var(--dd-font-display);font-size:38px;font-weight:400;line-height:1;color:#fff;-webkit-text-stroke:1px #2a1200;paint-order:stroke fill;}
+.ws-board span{display:block;font-size:12px;font-weight:900;}
+.ws-verdict__facts{margin:0;padding:10px 30px 10px 12px;display:grid;gap:6px;}
+.ws .ws-verdict__facts dt{font-size:11px;font-weight:900;color:#4a1f02!important;opacity:1;text-transform:none;letter-spacing:0;}
+.ws-verdict__facts dd{margin:0;font-size:15px;font-weight:900;color:#1a0b00;}
+.ws-verdict__facts dd small{color:#5a2a05;font-weight:700;}
+.ws-verdict__facts dd.is-up{color:#14460a;}
+.ws-verdict__facts dd.is-down{color:#7a1206;}
+.ws-right{padding:14px 4px 6px 22px;display:flex;flex-direction:column;gap:14px;min-width:0;}
+.ws-sum{margin:0;font-size:16px;font-weight:800;line-height:1.35;color:#fff;}
+.ws-matrix{position:relative;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;background:rgba(169,191,220,.16);padding-bottom:18px;}
+.ws-matrix.is-goalie{grid-template-columns:repeat(3,minmax(0,1fr));}
+.ws-matrix__key{position:absolute;right:0;bottom:0;font-size:11px;color:var(--ws-soft);display:inline-flex;align-items:center;gap:5px;}
+.ws-matrix__key em{display:inline-block;width:2px;height:10px;background:#fff;}
+.ws-cell{background:var(--ws-deep);padding:8px 10px;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:baseline;gap:2px 6px;border-top:3px solid var(--ws-cream);}
+.ws-cell.is-up{border-top-color:var(--ws-lime);}
+.ws-cell.is-down{border-top-color:var(--ws-coral);}
+.ws-cell.is-lock{border-top-color:var(--ws-slate);}
+.ws-cell__lab{font-size:12px;font-weight:800;color:#d6e2f4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.ws-cell__val{font-size:22px;font-weight:900;font-variant-numeric:tabular-nums;color:#fff;white-space:nowrap;}
+.ws-cell.is-up .ws-cell__val{color:var(--ws-lime);}
+.ws-cell.is-down .ws-cell__val{color:var(--ws-coral);}
+.ws-cell__bar{grid-column:1 / -1;position:relative;height:6px;background:rgba(169,191,220,.16);}
+.ws-cell__bar b{position:absolute;top:0;bottom:0;background:var(--ws-cream);}
+.ws-cell.is-up .ws-cell__bar b{background:var(--ws-lime);}
+.ws-cell.is-down .ws-cell__bar b{background:var(--ws-coral);}
+.ws-cell__bar em{position:absolute;top:-3px;bottom:-3px;width:2px;margin-left:-1px;background:#fff;}
+.ws-cell small{grid-column:1 / -1;font-size:11px;font-weight:800;color:#d6e2f4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.ws-cell small span.is-up{color:var(--ws-lime);}
+.ws-cell small span.is-down{color:var(--ws-coral);}
+.ws-cell small span.is-mid{color:var(--ws-blue);}
+.ws-av{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+.ws-find{padding:10px 12px;color:var(--ws-ink);}
+.ws-find.is-up{background:var(--ws-lime);}
+.ws-find.is-down{background:var(--ws-coral);color:#2a0702;}
+.ws-find small{color:inherit;opacity:.8;}
+.ws-find__kick{text-transform:uppercase;letter-spacing:.05em;font-weight:900;}
+.ws-find strong{display:block;font-size:18px;font-weight:900;line-height:1.1;margin:2px 0;}
+.ws-find p{margin:0;font-size:13px;font-weight:800;}
+.ws-find p.ws-find__bench{font-weight:600;}
+.ws-find__conf{margin-top:4px;}
+.ws-find ul{list-style:none;margin:6px 0 0;padding:6px 0 0;border-top:1px solid rgba(7,18,51,.25);font-size:12px;font-weight:800;}
+.ws-find ul span{font-weight:600;}
+.ws-out__head{display:flex;justify-content:space-between;gap:8px;font-size:12px;font-weight:800;color:var(--ws-soft);margin-bottom:5px;}
+.ws-out__head span:first-child{color:#fff;font-size:13px;}
+.ws-out__bar{display:flex;height:16px;gap:2px;}
+.ws-out__bar i{display:block;min-width:3px;}
+.ws-out__bar i.is-top{outline:2px solid #fff;outline-offset:1px;}
+.ws-out__legend{list-style:none;margin:6px 0 0;padding:0;display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12px;color:var(--ws-soft);}
+.ws-out__legend li{display:inline-flex;align-items:center;gap:5px;}
+.ws-out__legend li b{color:#eef4ff;}
+.ws-out__legend li.is-top{color:#fff;font-weight:900;}
+.ws-out__legend li i{width:9px;height:9px;display:inline-block;}
+.ws-out .is-down{background:var(--ws-coral);}
+.ws-out .is-slate{background:var(--ws-slate);}
+.ws-out .is-mid{background:var(--ws-cream);}
+.ws-out .is-blue{background:var(--ws-blue);}
+.ws-out .is-up{background:var(--ws-lime);}
+.ws-evidence{margin-top:12px;border-top:2px solid var(--ws-cyan);}
+.ws-evidence > summary{cursor:pointer;list-style:none;padding:8px 0;font-size:13px;font-weight:900;color:var(--ws-cyan);}
+.ws-evidence > summary::-webkit-details-marker{display:none;}
+.ws-evidence__grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 24px;padding-bottom:6px;}
+.ws-evidence h4{margin:0 0 4px;font-size:13px;font-weight:900;color:#fff;text-transform:none;letter-spacing:0;}
+.ws-evidence p{margin:0 0 4px;font-size:13px;}
+.ws-evidence__foot{grid-column:1 / -1;}
+.ws-est{display:flex;flex-wrap:wrap;gap:4px 14px;}
+.ws-est b{color:var(--ws-blue);}
+.ws-comps,.ws-why,.ws-traits{list-style:none;margin:0 0 4px;padding:0;display:grid;gap:4px;font-size:13px;}
+.ws-comps small{font-weight:600;}
+.ws-sim{display:inline-block;margin-left:6px;padding:0 5px;font-size:11px;font-weight:900;color:var(--ws-ink);background:var(--ws-cyan);}
+.ws-why b{color:#fff;}
+.ws-traits li{display:flex;justify-content:space-between;gap:8px;}
+.ws-traits li.is-up b{color:var(--ws-lime);}
+.ws-traits li.is-down b{color:var(--ws-coral);}
+.ws-traits li.is-mid b{color:var(--ws-cream);}
+.cs-more{margin-top:8px;}
+.cs-more > summary{cursor:pointer;font-size:13px;font-weight:800;color:#3ee6ff;list-style:none;padding:6px 0;}
+.cs-more > summary::-webkit-details-marker{display:none;}
+.cs-more[open] > summary{margin-bottom:8px;}
+@container (max-width:620px){
+  .ws{grid-template-columns:minmax(0,1fr);}
+  .ws-left{clip-path:none;}
+  .ws-id{padding-right:18px;}
+  .ws-verdict__facts{padding-right:14px;}
+  .ws-right{padding:14px 0 6px;}
+  .ws-evidence__grid{grid-template-columns:minmax(0,1fr);}
+}
+@container (max-width:460px){
+  .ws-matrix{grid-template-columns:repeat(2,minmax(0,1fr));}
+  .ws-av{grid-template-columns:1fr;}
+  .ws-pot__now,.ws-pot__ceil{font-size:32px;}
+}
 @media (max-width:1100px){
   .dd-verdict,.dd-columns,.dd-split-notes,.dd-tiles,.dd-actions__row{grid-template-columns:1fr 1fr;}
   .dd-verdict{grid-template-columns:1fr;}

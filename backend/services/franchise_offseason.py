@@ -4,6 +4,8 @@ Franchise offseason phase controller — year-over-year continuation after Stanl
 
 from __future__ import annotations
 
+import zlib
+
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -2389,7 +2391,7 @@ def _dev_attr_label(key: str) -> str:
         if k.startswith(prefix):
             k = k[len(prefix) :]
             break
-    return k.replace("_", " ").strip().title()
+    return k.replace("_", " ").strip().title().replace(" Iq", " IQ")
 
 
 def _dev_ledger_attr_deltas(ledger: Dict[str, Any]) -> Dict[str, float]:
@@ -2788,9 +2790,12 @@ def _dev_build_reasons(
     league_ctx: Dict[str, Any],
 ) -> Tuple[str, List[str]]:
     reasons: List[str] = []
+    # Equal gains are common; break ties per player so the same two attributes
+    # are not named for every row in dict order.
+    _pid = str(getattr(player, "id", "") or getattr(player, "name", ""))
     pos_deltas = sorted(
         ((k, v) for k, v in attr_deltas.items() if v > 0 and _dev_is_skill_attr(k)),
-        key=lambda x: -x[1],
+        key=lambda x: (-round(x[1], 2), zlib.crc32(f"{_pid}:{x[0]}".encode())),
     )
     neg_deltas = sorted(
         ((k, v) for k, v in attr_deltas.items() if v < 0 and _dev_is_skill_attr(k)),
@@ -6882,6 +6887,31 @@ def _position_code(player: Any) -> str:
     return position_code(player)
 
 
+# Live-draft-only keys (full prospect pool, boards, duplicate pick lists). After the
+# draft they made every state response ~40 MB and stalled the later offseason screens.
+_DRAFT_LIVE_ONLY_KEYS = (
+    "available_prospects",
+    "draft_class_rankings",
+    "public_draft_board",
+    "team_board",
+    "completed_picks",
+    "draft_recap",
+)
+
+
+def _draft_payload_for_state(payload: Any, stage: Any) -> Any:
+    if not isinstance(payload, dict) or str(stage or "") in ("", "draft", "draft_lottery", "draft_combine"):
+        return payload
+    if str(stage) not in OFFSEASON_STAGES:
+        return payload
+    slim = {k: v for k, v in payload.items() if k not in _DRAFT_LIVE_ONLY_KEYS}
+    recap = slim.get("recap")
+    if isinstance(recap, dict) and "all_picks" in recap:
+        # Same list as draft_results; nothing on the client reads it.
+        slim["recap"] = {k: v for k, v in recap.items() if k != "all_picks"}
+    return slim
+
+
 def _revalidate_roster_cleanup(session: FranchiseSession, payload: Dict[str, Any]) -> Dict[str, Any]:
     """Refresh the Roster Check gate from live rosters without replaying any moves."""
     from services.contract_economy import get_team_cap_snapshot_full
@@ -7914,20 +7944,31 @@ def generate_next_season(session: FranchiseSession) -> Dict[str, Any]:
             break
 
     anchors = season_anchor_event_markers(next_sy)
-    opening = next((a for a in anchors if "opening" in str(a.get("key", "")).lower()), None)
-    preseason = next((a for a in anchors if "preseason_start" in str(a.get("key", "")).lower()), None)
+    # Season anchors carry id/date/title (see nhl_season_calendar.season_anchor_event_markers).
+    def _anchor_key(a):
+        return str(a.get("key") or a.get("id") or "").lower()
+
+    def _anchor_iso(a):
+        return a.get("iso") or a.get("calendar_iso") or a.get("date")
+
+    opening = next((a for a in anchors if "opening" in _anchor_key(a)), None)
+    preseason = next((a for a in anchors if "preseason_start" in _anchor_key(a)), None)
 
     payload = {
         "season_year": next_sy,
         "season_label": f"{next_sy}–{next_sy + 1}",
-        "opening_night": opening.get("iso") if opening else None,
-        "preseason_start": preseason.get("iso") if preseason else (nhl_cal[0].get("iso") if nhl_cal else None),
+        "opening_night": _anchor_iso(opening) if opening else None,
+        "preseason_start": _anchor_iso(preseason) if preseason else (nhl_cal[0].get("iso") if nhl_cal else None),
         "first_opponent": first_opp,
         "schedule_games": len(schedule),
         "calendar_markers": [
-            {"key": a.get("key"), "iso": a.get("iso"), "label": a.get("label") or a.get("name")}
+            {
+                "key": a.get("key") or a.get("id"),
+                "iso": _anchor_iso(a),
+                "label": a.get("label") or a.get("name") or a.get("title"),
+            }
             for a in (anchors or [])[:12]
-            if isinstance(a, dict)
+            if isinstance(a, dict) and (a.get("label") or a.get("name") or a.get("title"))
         ],
         "salary_cap_m": (getattr(session, "salary_cap_payload", None) or {}).get("new_season_cap"),
         "generation_status": "ready",
@@ -8307,7 +8348,7 @@ def build_offseason_state_extras(session: FranchiseSession, *, lean: bool = Fals
         "retired_players_archive": list(getattr(session, "retired_players_archive", None) or []),
         "draft_lottery": session.draft_lottery_payload,
         "draft_combine": session.draft_combine_payload,
-        "draft": session.draft_payload,
+        "draft": _draft_payload_for_state(session.draft_payload, stage),
         "draft_review": getattr(session, "draft_review_payload", None),
         "prospect_rights": getattr(session, "prospect_rights_payload", None),
         "free_agency_open": bool(getattr(session, "free_agency_open", False)),
@@ -8317,7 +8358,13 @@ def build_offseason_state_extras(session: FranchiseSession, *, lean: bool = Fals
         "development_report": session.development_report_payload,
         "hub_warnings": list(getattr(session, "hub_warnings", None) or []),
         "next_season": session.next_season_payload,
-        "season_history": list(getattr(session, "season_history", None) or []),
+        # Each archived season holds that year's full draft results (~4 MB) and grows
+        # every year; the client only reads the year, label and champion. Ship a summary.
+        "season_history": [
+            {k: v for k, v in row.items() if k not in ("draft_results", "retirements")}
+            if isinstance(row, dict) else row
+            for row in list(getattr(session, "season_history", None) or [])
+        ],
         "flags": {
             "playoffs_done": bool(getattr(session, "playoffs_done", session.playoffs_simulated)),
             "can_advance_day": can_advance,

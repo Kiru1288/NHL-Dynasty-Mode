@@ -7,10 +7,11 @@ interactions into visible Newsroom / Insiders / Social beats.
 
 from __future__ import annotations
 
+import math
 import random
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.sim_engine.franchise.storyline_engine import PLAYER_AGENTS, _AGENT_BY_ID, _can_fire, _league_points_rank, _mark_fired, _player_age, _player_from_roster, _player_ovr99, _pos_bucket, _stat_int, _team_display, _team_games_played, _team_record, _u_add_social_post, _u_all_players, _u_clip, _u_current_meta, _u_name, _u_personality, _u_position, _u_psych_value, _enqueue_storyline_followup, _u_record_storyline, _u_sync_player_entities, apply_universe_matchup_context, build_universe_matchup_context, _u_push_morale_to_player
+from app.sim_engine.franchise.storyline_engine import PLAYER_AGENTS, _AGENT_BY_ID, _can_fire, _league_points_rank, _mark_fired, _player_age, _player_from_roster, _player_ovr99, _pos_bucket, _stat_int, _team_display, _team_games_played, _team_record, _u_add_social_post, _u_all_players, _u_clip, _u_current_meta, _u_name, _u_personality, _u_position, _u_psych_value, _enqueue_storyline_followup, _u_record_storyline, _u_sync_player_entities, apply_universe_matchup_context, build_universe_matchup_context, _u_push_morale_to_player, _u_push_confidence_to_player, _u_mark_psych_seen, _u_contract_satisfaction, _expected_points_per_game, _points_z, POINTS_Z_BREAKOUT, POINTS_Z_MINOR
 
 BEAT_WRITERS: List[Dict[str, Any]] = [
     {"id": "morin", "name": "Rachel Morin", "outlet": "Team Ledger", "role": "beat_reporter", "specialty": "local", "markets": "user"},
@@ -65,14 +66,32 @@ def refresh_entity_from_player(session: Any, team_id: str, player: Any, entity: 
     entity["age"] = _player_age(player)
     entity["overall"] = round(_player_ovr99(player), 1)
     state = dict(entity.get("state") or {})
-    state["morale"] = _u_psych_value(player, ("morale",), float(state.get("morale", 55)))
-    state["confidence"] = _u_psych_value(player, ("confidence_level", "confidence"), float(state.get("confidence", 55)))
-    state["coach_trust"] = _u_psych_value(player, ("coach_trust",), float(state.get("coach_trust", 55)))
-    state["role_satisfaction"] = _u_psych_value(
-        player, ("role_satisfaction", "ice_time_satisfaction"), float(state.get("role_satisfaction", 55))
-    )
-    state["media_stress"] = _u_psych_value(player, ("media_stress",), float(state.get("media_stress", 28)))
+    # Fold in psych movement since we last agreed with it, rather than overwriting:
+    # profile-only deltas (life events, meetings, coverage form) were erased here
+    # the same day they were applied.
+    for field, keys, fallback in (
+        ("morale", ("morale",), 55.0),
+        ("confidence", ("confidence_level", "confidence"), 55.0),
+        ("coach_trust", ("coach_trust",), 55.0),
+        ("role_satisfaction", ("role_satisfaction", "ice_time_satisfaction"), 55.0),
+        ("media_stress", ("media_stress",), 28.0),
+    ):
+        now = _u_psych_value(player, keys, math.nan)
+        if math.isnan(now):
+            continue
+        seen = (getattr(player, "_u_psych_seen", None) or {}).get(field)
+        if seen is None or field not in state:
+            state[field] = _u_clip(now)
+        else:
+            state[field] = _u_clip(float(state.get(field, fallback)) + (now - float(seen)))
+        _u_mark_psych_seen(player, field, now)
     entity["state"] = state
+    # The game sim reads psych: hand it the profile's morale and confidence.
+    if abs(float(state.get("morale", 55)) - _u_psych_value(player, ("morale",), float(state.get("morale", 55)))) >= 0.05:
+        _u_push_morale_to_player(session, str(getattr(player, "id", "") or ""), float(state["morale"]))
+    conf_now = _u_psych_value(player, ("confidence_level", "confidence"), float(state.get("confidence", 55)))
+    if abs(float(state.get("confidence", 55)) - conf_now) >= 0.05:
+        _u_push_confidence_to_player(session, str(getattr(player, "id", "") or ""), float(state["confidence"]))
     return entity
 
 
@@ -140,21 +159,25 @@ def emit_concern_threshold_storylines(session: Any, rng: random.Random) -> int:
             role_sat = float(getattr(psych, "role_satisfaction", 0.5) or 0.5)
             ice_sat = float(getattr(psych, "ice_time_satisfaction", 0.5) or 0.5)
             belonging = float(getattr(psych, "locker_room_fit", 0.5) or 0.5)
-            contract_p = float(getattr(psych, "contract_pressure", 0.5) or 0.5)
             role_sat = role_sat * 100.0 if role_sat <= 1.5 else role_sat
             ice_sat = ice_sat * 100.0 if ice_sat <= 1.5 else ice_sat
             belonging = belonging * 100.0 if belonging <= 1.5 else belonging
-            contract_p = contract_p * 100.0 if contract_p <= 1.5 else contract_p
             role = concerns.setdefault("role", {"label": "Role and ice time", "importance": 50, "satisfaction": 58, "trend": 0})
-            role["satisfaction"] = round((role_sat + ice_sat) / 2.0, 1)
+            # The meeting desk's role number is deployment-based (real TOI vs earned
+            # slot); use it so a role story and a role meeting never disagree.
+            state_role = (entity.get("state") or {}).get("role_satisfaction")
+            role["satisfaction"] = round(float(state_role), 1) if state_role is not None else round((role_sat + ice_sat) / 2.0, 1)
             belong = concerns.setdefault(
                 "team_belonging", {"label": "Belonging in the room", "importance": 50, "satisfaction": 60, "trend": 0}
             )
             belong["satisfaction"] = round(belonging, 1)
-            contract = concerns.setdefault(
-                "contract", {"label": "Contract security", "importance": 50, "satisfaction": 55, "trend": 0}
-            )
-            contract["satisfaction"] = round(max(8.0, 100.0 - contract_p), 1)
+        # Same contract model as the life tick (it used to be 100 − contract_pressure here).
+        contract = concerns.setdefault(
+            "contract", {"label": "Contract security", "importance": 50, "satisfaction": 55, "trend": 0}
+        )
+        contract_model = _u_contract_satisfaction(session, player, entity, season)
+        contract["satisfaction"] = contract_model["satisfaction"]
+        contract["model"] = contract_model
         w, l, o, _ = _team_record(session, str(team_id))
         gp = w + l + o
         pts_pct = (w * 2 + o) / max(2, gp * 2)
@@ -494,10 +517,15 @@ def emit_rolling_form_storylines(session: Any) -> int:
         ovr = _player_ovr99(player)
         name = _u_name(player)
         team_id = team_of.get(pid, "")
-        expected = max(0.15, (ovr - 62.0) / 42.0)
-        if _pos_bucket(_u_position(player)) == "D":
-            expected *= 0.55
-        if ppg >= expected * 1.55 and pts >= 5:
+        pos = _u_position(player)
+        if _pos_bucket(pos) == "G":
+            continue
+        # Same expected pace as the season-long data stories, so "rolling cold" and
+        # "star underperforming" never judge one player against two baselines.
+        age = _player_age(player)
+        expected = _expected_points_per_game(ovr, pos, age, age <= 23)
+        form_z = _points_z(pts, expected * gp)
+        if ppg >= expected * 1.55 and pts >= 5 and form_z >= POINTS_Z_BREAKOUT:
             stable = f"formhot|{pid}|{season}|{day // 6}"
             if _can_fire(session, stable, day, "minor")[0]:
                 _emit_public(
@@ -521,7 +549,7 @@ def emit_rolling_form_storylines(session: Any) -> int:
                     state["confidence"] = _u_clip(float(state.get("confidence", 55)) + 2.8)
                     _u_push_morale_to_player(session, pid, float(state["morale"]))
                 emitted += 1
-        elif ppg <= expected * 0.42 and ovr >= 78 and gp >= 6:
+        elif ppg <= expected * 0.42 and ovr >= 78 and gp >= 6 and form_z <= POINTS_Z_MINOR:
             stable = f"formcold|{pid}|{season}|{day // 6}"
             if _can_fire(session, stable, day, "minor")[0]:
                 _emit_public(
@@ -641,6 +669,10 @@ def emit_league_social(session: Any, rng: random.Random) -> int:
     return created
 
 
+CAPTAINCY_PULSE_DAILY_CHANCE = 0.025
+CAPTAINCY_PULSE_WINDOW_DAYS = 30
+
+
 def emit_org_desk_storylines(session: Any, rng: random.Random) -> int:
     """Coaches, GMs, captains, AHL shuttle, DOPS-flavored league notes."""
     day, _iso, season = _u_current_meta(session)
@@ -704,10 +736,12 @@ def emit_org_desk_storylines(session: Any, rng: random.Random) -> int:
                 captains.append(p)
             elif str(getattr(tm, "captain_id", "") or "") == str(getattr(p, "id", "") or ""):
                 captains.append(p)
-        if captains and rng.random() < 0.08:
+        # Target ≈ 3 captaincy pulses per team per season: 2.5%/day inside a 30-day
+        # window fires ~53% of windows (was 8%/day in 12-day windows ≈ 10 a season).
+        if captains and rng.random() < CAPTAINCY_PULSE_DAILY_CHANCE:
             cap = captains[0]
             cname = _u_name(cap)
-            stable = f"captain|{getattr(cap, 'id', '')}|{season}|{day // 12}"
+            stable = f"captain|{getattr(cap, 'id', '')}|{season}|{day // CAPTAINCY_PULSE_WINDOW_DAYS}"
             if _can_fire(session, stable, day, "minor")[0]:
                 _emit_public(
                     session,
@@ -795,14 +829,28 @@ def apply_matchup_to_scales(
 
 
 def ensure_player_agents(session: Any, rng: random.Random) -> int:
+    """Mirror each player's real agent (player_agent_engine) into the storyline ledger."""
+    from app.sim_engine.franchise.player_agent_engine import ensure_player_agent  # noqa: WPS433
+
     rel = dict(getattr(session, "agent_relationships", None) or {})
     assigned = 0
     for _tid, player in _u_all_players(session):
         pid = str(getattr(player, "id", "") or "")
-        if not pid or pid in rel:
+        if not pid:
             continue
-        agent = rng.choice(PLAYER_AGENTS)
-        rel[pid] = {"agent_id": agent["id"], "trust": 0.55, "gm_trust": 0.5}
+        try:
+            aid = str((ensure_player_agent(player, session) or {}).get("id") or "")
+        except Exception:
+            aid = ""
+        if aid not in _AGENT_BY_ID:
+            if pid in rel:
+                continue
+            aid = rng.choice(PLAYER_AGENTS)["id"]
+        row = dict(rel.get(pid) or {"trust": 0.55, "gm_trust": 0.5})
+        if row.get("agent_id") == aid:
+            continue
+        row["agent_id"] = aid  # also repairs saves where the two ledgers disagreed
+        rel[pid] = row
         assigned += 1
     session.agent_relationships = rel
     return assigned

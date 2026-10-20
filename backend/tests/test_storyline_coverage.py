@@ -343,3 +343,53 @@ def test_stats_ledger_box_moves_morale():
     assert session.team_by_id["T1"].roster[0].psych.morale > 0.55
 
 
+
+
+# ----------------------------------------------------------------------------- psych refresh keeps profile deltas
+def _refresh_fixture():
+    from types import SimpleNamespace
+
+    psych = SimpleNamespace(morale=0.60, confidence_level=0.50, coach_trust=0.55, role_satisfaction=0.50, media_stress=0.30)
+    player = SimpleNamespace(id="p1", name="Test Skater", psych=psych, traits=_Traits(), age=26, position="C", overall=80)
+    team = SimpleNamespace(roster=[player], ahl_roster=[], name="T1")
+    session = SimpleNamespace(user_team_id="T1", team_by_id={"T1": team}, universe_players={})
+    return session, player, {"state": {}}
+
+
+def test_refresh_bootstraps_profile_from_psych():
+    from app.sim_engine.franchise.storyline_coverage import refresh_entity_from_player
+
+    session, player, entity = _refresh_fixture()
+    refresh_entity_from_player(session, "T1", player, entity)
+    assert round(entity["state"]["morale"], 1) == 60.0
+    assert round(entity["state"]["confidence"], 1) == 50.0
+
+
+def test_refresh_keeps_profile_only_delta_and_pushes_it_to_psych():
+    from app.sim_engine.franchise.storyline_coverage import refresh_entity_from_player
+
+    session, player, entity = _refresh_fixture()
+    refresh_entity_from_player(session, "T1", player, entity)
+    entity["state"]["confidence"] -= 10.0  # a life event writes the profile only
+    entity["state"]["media_stress"] += 6.0
+    refresh_entity_from_player(session, "T1", player, entity)
+    assert round(entity["state"]["confidence"], 1) == 40.0  # used to be reset to 50
+    assert round(entity["state"]["media_stress"], 1) == 36.0
+    assert round(player.psych.confidence_level, 3) == 0.40  # the sim now sees it
+
+
+def test_refresh_folds_in_external_psych_change_without_double_counting():
+    from app.sim_engine.franchise.storyline_coverage import refresh_entity_from_player
+    from app.sim_engine.franchise.storyline_engine import _u_push_morale_to_player
+
+    session, player, entity = _refresh_fixture()
+    refresh_entity_from_player(session, "T1", player, entity)
+    entity["state"]["morale"] -= 4.0  # profile delta: 56
+    player.psych.morale += 0.05  # another system: +5 on psych
+    refresh_entity_from_player(session, "T1", player, entity)
+    assert round(entity["state"]["morale"], 1) == 61.0
+    _u_push_morale_to_player(session, "p1", 70.0)
+    entity["state"]["morale"] = 70.0
+    refresh_entity_from_player(session, "T1", player, entity)
+    refresh_entity_from_player(session, "T1", player, entity)
+    assert round(entity["state"]["morale"], 1) == 70.0  # our own push is not counted again

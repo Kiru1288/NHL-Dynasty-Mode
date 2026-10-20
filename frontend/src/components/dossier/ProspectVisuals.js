@@ -352,7 +352,8 @@ export function RatingCertaintyGauge({ title, valueText, range, certainty, tone 
 }
 
 function ratingScale(v) {
-  return ((clamp(n(v) ?? 40, 40, 99) - 40) / 59) * 100;
+  // Floor at 20 so weak ratings (a 38 character read) still draw a visible bar.
+  return ((clamp(n(v) ?? 20, 20, 99) - 20) / 79) * 100;
 }
 
 const RADAR_SHORT = {

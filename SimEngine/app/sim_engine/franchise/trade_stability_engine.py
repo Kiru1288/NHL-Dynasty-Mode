@@ -224,6 +224,7 @@ def ensure_trade_stability_state(session: Any) -> Dict[str, Any]:
 @dataclass
 class PlayerConcernSnapshot:
     role_satisfaction: float = 50.0
+    deploy_gp: int = 0
     gm_trust: float = 50.0
     coach_trust: float = 50.0
     winning_satisfaction: float = 50.0
@@ -1213,6 +1214,7 @@ def gather_player_concerns(session: Any, player: Any, team: Any) -> PlayerConcer
 
     snap = PlayerConcernSnapshot(
         role_satisfaction=role,
+        deploy_gp=int(getattr(deploy, "gp", 0) or 0),
         gm_trust=gm_trust,
         coach_trust=coach_trust,
         winning_satisfaction=winning_sat,
@@ -1335,9 +1337,16 @@ def _temperament_pressure(snap: PlayerConcernSnapshot) -> float:
         return 0.0
     base = (68.0 - c) * 0.45
     losing_amp = max(0.0, 55.0 - snap.winning_satisfaction) / 40.0
-    role_amp = _dissatisfaction(snap.role_satisfaction) / 60.0
+    # Before ~8 games the role number is a guess, not his real usage; don't let it light the fuse.
+    role_amp = _dissatisfaction(snap.role_satisfaction) / 60.0 if int(snap.deploy_gp or 0) >= 8 else 0.0
     mental_amp = 0.25 if snap.mental < 62 else 0.0
-    return base * (1.0 + losing_amp + role_amp + mental_amp)
+    trigger = losing_amp + role_amp
+    if trigger < 0.15:
+        # A calm, winning room with him in the role he wants: low character is a trait,
+        # not a grievance. It stays under the 7.5 "significant" line instead of flagging
+        # a third of a contender's roster for "friction in the room" in week one.
+        return base * 0.25
+    return base * (0.5 + trigger + mental_amp)
 
 
 def _contract_pressure(snap: PlayerConcernSnapshot) -> float:
@@ -1867,6 +1876,6 @@ def primary_complaint_from_pressures(pressures: Dict[str, float]) -> str:
         "broken_promise": "broken organizational promises",
         "performance": "role relative to production",
         "organizational": "organizational direction",
-        "temperament": "friction in the room",
+        "temperament": "a short fuse about his role or results",
     }
     return labels.get(top[0], top[0].replace("_", " "))

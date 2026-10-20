@@ -195,7 +195,11 @@ export function getTeamLogoSrc(team) {
   }
 
   const abbr = String(getTeamAbbreviation(team) || "").toUpperCase();
-  const preferredName = TEAM_LOGO_NAME_OVERRIDES[abbr] || logoStemFromCanonicalName(team.name || team.team_name);
+  // A derived abbreviation is just the first three letters of the name ("Columbus" -> COL),
+  // so the full name must win over it or Columbus resolves to Colorado.
+  const preferredName =
+    logoStemFromCanonicalName(team.full_name || team.fullName || team.name || team.team_name) ||
+    TEAM_LOGO_NAME_OVERRIDES[abbr];
 
   const candidates = [
     preferredName,

@@ -38,7 +38,7 @@ const CHARACTER_TRAITS = [
   { key: "coach", label: "Coachability", match: /coach/i },
   { key: "lead", label: "Leadership", match: /leader/i },
   { key: "work", label: "Work Ethic", match: /work|ethic|motor/i },
-  { key: "social", label: "Social Adjustment", match: /social|adjust/i },
+  { key: "social", label: "Locker Room", match: /social|adjust|locker/i },
 ];
 
 const TIER_RANK = {
@@ -218,8 +218,16 @@ function buildOvr(player, profile, filePct) {
     const value = clamp(Math.round((low + high) / 2), low, high);
     return { value, low, high, exact: false, revealed: false };
   }
-  if (exactSrc != null && exactSrc > 0) {
-    const value = clamp(exactSrc, 0, RATING_CAP);
+  // Unrevealed and no band: only a scouted estimate may stand in, never the true rating.
+  const scoutedSrc = round(
+    profile?.scoutedOverall
+    ?? profile?.currentOvrEstimate
+    ?? profile?.scouted_overall
+    ?? player?.ovrHint
+    ?? player?.current_ovr_estimate,
+  );
+  if (scoutedSrc != null && scoutedSrc > 0) {
+    const value = clamp(scoutedSrc, 0, RATING_CAP);
     return { value, low: value, high: value, exact: true, revealed: false };
   }
   return { value: null, low: null, high: null, exact: false, revealed: false };
@@ -417,16 +425,21 @@ function wordTier(raw) {
 function buildCharacter(profile, filePct) {
   const traitsIn = Array.isArray(profile?.character_read?.traits) ? profile.character_read.traits : [];
   const traits = [];
+  const unmodelled = [];
   CHARACTER_TRAITS.forEach((spec) => {
     const row = traitsIn.find((t) => spec.match.test(String(t?.label || t?.key || "")));
     if (!row) return;
+    if (row.modelled === false) {
+      unmodelled.push(spec.label);
+      return;
+    }
     const tier = wordTier(row.tier ?? row.score ?? row.value);
     if (!tier || tier.key === "unknown") return;
     traits.push({ key: spec.key, label: spec.label, tier });
   });
   const flagged = traits.some((t) => (tierRank(t.tier) ?? 9) <= TIER_RANK.weak);
   const visible = traits.length > 0 && (filePct >= 36 || flagged);
-  return { traits, visible, flagged };
+  return { traits, visible, flagged, unmodelled };
 }
 
 function phrasePercentile(p) {
@@ -531,7 +544,7 @@ function outcomesOf(profile) {
         label: String(seg.label || seg.key || "Outcome"),
         pct: num(seg.pct ?? seg.weight ?? seg.w ?? seg.value ?? seg.probability),
       }))
-      .filter((s) => s.pct != null && s.pct > 0);
+      .filter((s) => s.pct != null && s.pct >= 0);
   }
   if (dist && typeof dist === "object") {
     return Object.entries(dist)
@@ -703,6 +716,41 @@ function buildAnalytics(player, profile, goalie) {
   return { cells, sampleThin, gp: gp != null ? Math.round(gp) : null };
 }
 
+/** Playoff line, kept apart from the regular season. Null when he did not play playoffs. */
+function buildPlayoffs(profile, goalie) {
+  const po = profile?.playoffStats || profile?.playoff_stats || null;
+  const gp = num(po?.games ?? po?.gp);
+  if (!po || gp == null || gp <= 0) return null;
+  const cells = [{ label: "GP", value: String(Math.round(gp)) }];
+  if (goalie) {
+    const sv = numCell("SV%", po.save_pct ?? po.savePct, 3);
+    const gaa = numCell("GAA", po.gaa, 2);
+    if (sv) cells.push(sv);
+    if (gaa) cells.push(gaa);
+  } else {
+    const g = round(po.goals) ?? 0;
+    const a = round(po.assists) ?? 0;
+    const p = round(po.points) ?? g + a;
+    cells.push({ label: "G-A-P", value: `${g}-${a}-${p}` });
+    if (gp > 0) cells.push({ label: "P/GP", value: (p / gp).toFixed(2) });
+  }
+  return { cells, gp: Math.round(gp), sampleThin: gp < 10 };
+}
+
+/** Club need read from the backend team-fit block. Reasons that hint at true ability stay hidden until the file is in. */
+function buildOrgFit(profile, filePct) {
+  const fit = profile?.teamFit || profile?.team_fit || null;
+  if (!fit || typeof fit !== "object") return null;
+  const reasons = (Array.isArray(fit.reasons) ? fit.reasons : [])
+    .map((r) => String(r || "").trim())
+    .filter(Boolean)
+    .filter((r) => filePct >= REVEAL_AT || !/abilit|ready/i.test(r))
+    .slice(0, 2);
+  const label = fit.label ? String(fit.label) : null;
+  if (!label && !reasons.length) return null;
+  return { label, reasons };
+}
+
 function buildReports(player, profile) {
   const desk = buildScoutingDeskEntries(player, profile, {
     gp: num(player?.gp ?? profile?.stats?.games) || 0,
@@ -763,6 +811,248 @@ function buildIdentity(player, profile, goalie) {
   };
 }
 
+/* What each chapter covers in the game's taxonomy; used to say why a finding matters. */
+const CHAPTER_ROLE = {
+  offence: "creates and finishes scoring chances",
+  defence: "limits chances against",
+  transition: "moves the puck up ice",
+  mental: "reads the play and makes decisions",
+  physical: "wins battles and holds up physically",
+  character: "habits that shape development",
+  glove: "glove-side saves",
+  blocker: "blocker-side saves",
+  stick: "puck handling and rebound control",
+};
+
+const SEVERITY_RANK = { Major: 3, Notable: 2, Minor: 1 };
+
+function severityFromPct(p, high) {
+  const edge = high ? p : 100 - p;
+  if (edge >= 90) return "Major";
+  if (edge >= 75) return "Notable";
+  return "Minor";
+}
+
+/**
+ * Evidence-backed findings. Each one names its evidence, the benchmark it is judged
+ * against, why it matters, how sure the read is, and whether it is current or a
+ * projection. Nothing here is invented: chapters, class percentiles, the backend
+ * translation block, modelled character traits, and the scouted ceiling band only.
+ */
+function buildFindings({ skills, character, intel, peak, identity, display }) {
+  const strengths = [];
+  const concerns = [];
+  skills.forEach((s) => {
+    if (s.locked || s.percentile == null) return;
+    const base = {
+      key: s.key,
+      title: s.label,
+      evidence: `${formatRating(s)} · ${String(s.tier?.label || "").toLowerCase()}`,
+      benchmark: `${phrasePercentile(s.percentile)}${s.classAvg != null ? `, avg ${Math.round(s.classAvg)}` : ""}`,
+      rank: phrasePercentile(s.percentile),
+      why: CHAPTER_ROLE[s.key] || null,
+      confidence: s.exact ? "Confirmed" : "Scouted range",
+      kind: "current",
+    };
+    if (s.percentile >= 67) strengths.push({ ...base, severity: severityFromPct(s.percentile, true), weight: s.percentile });
+    else if (s.percentile < 40 || (tierRank(s.tier) ?? 9) <= TIER_RANK.weak) {
+      concerns.push({ ...base, severity: severityFromPct(s.percentile, false), weight: 100 - s.percentile });
+    }
+  });
+
+  const tr = intel?.translation;
+  const trConf = intel?.confidence?.translation?.level || null;
+  if (tr?.context_band && tr.observed?.gp) {
+    const line = tr.nhle != null
+      ? `${tr.nhle} NHLe pts/82 · ${tr.observed.gp} GP`
+      : `${tr.observed.save_pct != null ? String(tr.observed.save_pct).replace(/^0/, "") : "—"} SV% · ${tr.observed.gp} GP`;
+    const f = {
+      key: "translation",
+      title: tr.nhle != null ? "League-adjusted scoring" : "Save percentage",
+      evidence: line,
+      benchmark: `${tr.context_band} for a ${posPhrase(identity.pos)}`,
+      why: tr.nhle != null ? "scoring pace translated to an NHL season" : "save rate over a usable sample",
+      confidence: trConf,
+      kind: "current",
+    };
+    if (/elite|strong/i.test(tr.context_band)) strengths.push({ ...f, severity: /elite/i.test(tr.context_band) ? "Major" : "Notable", weight: 80 });
+    if (/below/i.test(tr.context_band)) concerns.push({ ...f, severity: "Notable", weight: 70 });
+  } else if (trConf === "Thin" && tr?.observed?.gp) {
+    concerns.push({
+      key: "sample",
+      title: "Small sample",
+      evidence: `${tr.observed.gp} GP this season`,
+      benchmark: "20 GP before rates settle",
+      why: "production may not hold",
+      confidence: trConf,
+      kind: "current",
+      severity: "Minor",
+      weight: 30,
+    });
+  }
+
+  character.traits
+    .filter((t) => (tierRank(t.tier) ?? 9) <= TIER_RANK.weak)
+    .forEach((t) => {
+      concerns.push({
+        key: `char-${t.key}`,
+        title: t.label,
+        evidence: `Scouted ${t.tier.label.toLowerCase()}`,
+        benchmark: "Character trait on file",
+        why: null,
+        confidence: intel?.confidence?.character?.level || null,
+        kind: "projection",
+        severity: (tierRank(t.tier) ?? 9) <= TIER_RANK.bad ? "Notable" : "Minor",
+        // An awful or bad modelled trait outranks a middling chapter.
+        weight: 90 - 10 * (tierRank(t.tier) ?? 0),
+      });
+    });
+
+  if (intel?.confidence?.development?.level === "Wide" && !peak.hidden) {
+    concerns.push({
+      key: "band",
+      title: "Wide development band",
+      evidence: `Ceiling ${display.peak}`,
+      benchmark: intel.confidence.development.why,
+      why: "outcome leans heavily on development",
+      confidence: "Projection",
+      kind: "projection",
+      severity: "Minor",
+      weight: 40,
+    });
+  }
+
+  const order = (a, b) => (SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity]) || (b.weight - a.weight);
+  return {
+    strengths: strengths.sort(order).slice(0, 3),
+    concerns: concerns.sort(order).slice(0, 3),
+  };
+}
+
+function peerName(p) {
+  const n = `${p?.firstName || p?.first_name || ""} ${p?.lastName || p?.last_name || ""}`.trim();
+  return n || p?.prospect_name || p?.name || null;
+}
+
+function posGroup(pos) {
+  const p = String(pos || "").toUpperCase();
+  if (isGoaliePos(p)) return "G";
+  if (p === "D" || p === "LD" || p === "RD" || p.includes("DEF")) return "D";
+  return "F";
+}
+
+/**
+ * Class comparables: same position group, compared on visible chapter midpoints and
+ * points per game, each standardised by the class spread. Similarity is 100 minus 25
+ * per standard deviation of average distance. A profile match, not a career forecast.
+ */
+function buildComparables(src, prof, skills, allProspects, goalie) {
+  const keys = (goalie ? GOALIE_CHAPTERS : SKATER_CHAPTERS).map(([k]) => k);
+  const group = posGroup(src.position || prof.position);
+  const selfId = String(src.id ?? src.key ?? src.player_id ?? "");
+  const vec = (p, chapters) => {
+    const out = {};
+    keys.forEach((k) => {
+      const v = sortMidOf(readRaw(chapters, k), REVEAL_AT);
+      if (v != null) out[k] = v;
+    });
+    const ppg = num(p?.ppg ?? p?.points_per_game ?? p?.dossier?.stats?.ppg);
+    if (!goalie && ppg != null && num(p?.gp ?? p?.games_played ?? p?.dossier?.stats?.games) >= 15) out.ppg = ppg * 40;
+    return out;
+  };
+  const mine = {};
+  skills.forEach((s) => {
+    if (s.locked) return;
+    mine[s.key] = s.exact ? s.value : (s.low + s.high) / 2;
+  });
+  const myPpg = num(src.ppg ?? prof?.stats?.ppg);
+  if (!goalie && myPpg != null && num(src.gp ?? prof?.stats?.games) >= 15) mine.ppg = myPpg * 40;
+  const minShared = goalie ? 2 : 4;
+  if (Object.keys(mine).length < minShared) return [];
+
+  const peers = (allProspects || [])
+    .filter((p) => posGroup(p?.position || p?.pos) === group)
+    .filter((p) => String(p?.id ?? p?.key ?? p?.player_id ?? "") !== selfId)
+    .map((p) => ({ p, v: vec(p, chaptersOf(p, p?.profile || p?.dossier) || {}) }));
+  const spread = {};
+  Object.keys(mine).forEach((k) => {
+    const vals = peers.map((x) => x.v[k]).filter((v) => v != null);
+    if (vals.length < 3) return;
+    const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
+    const sd = Math.sqrt(vals.reduce((a, b) => a + (b - mean) ** 2, 0) / vals.length);
+    spread[k] = sd > 0.5 ? sd : 0.5;
+  });
+  const label = (k) => (k === "ppg" ? "Scoring rate" : (keys.includes(k) ? (goalie ? GOALIE_CHAPTERS : SKATER_CHAPTERS).find(([kk]) => kk === k)[1] : k));
+  return peers
+    .map(({ p, v }) => {
+      const shared = Object.keys(mine).filter((k) => v[k] != null && spread[k]);
+      if (shared.length < minShared) return null;
+      const diffs = shared.map((k) => ({ k, z: (v[k] - mine[k]) / spread[k] }));
+      const rms = Math.sqrt(diffs.reduce((a, d) => a + d.z * d.z, 0) / diffs.length);
+      const closest = diffs.reduce((a, b) => (Math.abs(b.z) < Math.abs(a.z) ? b : a));
+      const apart = diffs.reduce((a, b) => (Math.abs(b.z) > Math.abs(a.z) ? b : a));
+      return {
+        id: String(p?.id ?? p?.key ?? ""),
+        name: peerName(p),
+        rank: round(p?.rank ?? p?.boardRank ?? p?.publicRank ?? p?.consensus_rank),
+        similarity: clamp(Math.round(100 - rms * 25), 0, 100),
+        shared: shared.length,
+        closest: label(closest.k),
+        apart: Math.abs(apart.z) >= 0.75 ? `${label(apart.k)} ${apart.z > 0 ? "higher" : "lower"}` : null,
+      };
+    })
+    .filter((c) => c && c.name)
+    .sort((a, b) => b.similarity - a.similarity)
+    .slice(0, 3);
+}
+
+/**
+ * Where this prospect's public reads rank in the class: current ability and ceiling
+ * midpoints, using each peer's own fogged read (never true ratings).
+ */
+function buildClassRanks(ovr, peak, allProspects) {
+  const mid = (b) => (b?.value != null ? b.value : b?.low != null && b?.high != null ? (b.low + b.high) / 2 : null);
+  const myNow = mid(ovr);
+  const myCeil = peak.hidden ? null : mid(peak);
+  const peers = (allProspects || []).filter(Boolean);
+  if (!peers.length || (myNow == null && myCeil == null)) return null;
+  let nowAbove = 0;
+  let ceilAbove = 0;
+  let nowN = 0;
+  let ceilN = 0;
+  peers.forEach((p) => {
+    const pp = p?.profile || p?.dossier || {};
+    const pct = filePctOf(p, pp);
+    const o = buildOvr(p, pp, pct);
+    const k = buildPeak(p, pp, o);
+    const n = mid(o);
+    const c = k.hidden ? null : mid(k);
+    if (n != null) { nowN += 1; if (myNow != null && n > myNow) nowAbove += 1; }
+    if (c != null) { ceilN += 1; if (myCeil != null && c > myCeil) ceilAbove += 1; }
+  });
+  return {
+    ability: myNow != null && nowN ? nowAbove + 1 : null,
+    ceiling: myCeil != null && ceilN ? ceilAbove + 1 : null,
+    size: Math.max(nowN, ceilN),
+  };
+}
+
+function buildSummary({ identity, findings, intel, file, peak }) {
+  const style = identity.archetype || null;
+  const parts = [];
+  const lead = style ? `${style}` : `${posPhrase(identity.pos).replace(/^\w/, (c) => c.toUpperCase())}`;
+  const s = findings.strengths[0];
+  const c = findings.concerns[0];
+  if (s) parts.push(`${lead} whose ${s.title.toLowerCase()} stands out (${s.rank || s.benchmark}).`);
+  else parts.push(`${lead} with no standout area on this read.`);
+  if (c) parts.push(`${c.title} is the main concern (${(c.rank || c.evidence).toLowerCase()}).`);
+  const dev = intel?.confidence?.development?.level;
+  if (file.pct < 36) parts.push("Early read; scout further before trusting it.");
+  else if (dev === "Wide" && !peak.hidden) parts.push("Upside is real but uncertain.");
+  else if (dev === "Narrow") parts.push("Projection is fairly settled.");
+  return parts.join(" ");
+}
+
 /**
  * @param {object} player board row or entry-draft prospect
  * @param {object} profile scouting profile (or prospect.dossier)
@@ -818,11 +1108,30 @@ export function buildProspectDossierModel(player, profile, options = {}) {
     concerns: notes.concerns,
     character,
     analytics: buildAnalytics(src, prof, goalie),
+    playoffs: buildPlayoffs(prof, goalie),
+    orgFit: buildOrgFit(prof, pct),
     reports: buildReports(src, prof),
     trajectory: weeklyTrajectoryPoints(prof, src),
     wjc: resolveWjcDossierBlock(prof, goalie),
     goalie,
   };
+  const intel = prof?.intel && typeof prof.intel === "object" ? prof.intel : null;
+  const dist = prof?.outcome_distribution || null;
+  model.intel = intel;
+  model.role.mostLikely = dist?.most_likely || null;
+  model.role.ceilingOutcome = dist?.ceiling_outcome || null;
+  model.role.outcomeMethod = dist?.method || null;
+  model.findings = buildFindings({
+    skills,
+    character,
+    intel,
+    peak,
+    identity,
+    display: { peak: formatRating(peak) },
+  });
+  model.comparables = buildComparables(src, prof, skills, options.allProspects || [], goalie);
+  model.value = buildClassRanks(ovr, peak, options.allProspects || []);
+  model.summary = buildSummary({ identity, findings: model.findings, intel, file, peak });
   const sentence = buildSentence({
     file,
     role,
@@ -969,6 +1278,35 @@ export function __selfTest() {
   if (!goalie.goalie || goalie.skills.length !== 3) errors.push("goalie: chapters");
   if (goalie.skills.some((s) => s.key === "blocker" && s.value != null)) errors.push("goalie: blocker leak");
   if (!goalie.identity.seasonLine || !goalie.identity.seasonLine.includes("24 GP")) errors.push("goalie: season");
+
+  const fogged = buildProspectDossierModel(
+    { id: "fog", position: "C", age: 18, true_ovr: 81, overall: 81 },
+    { userScoutPct: 20, teamFit: { label: "Need noted", reasons: ["Near-ready ability matches a competitive window.", "Center depth is thin (2 centers)."] } },
+    { userScoutPct: 20 },
+  );
+  if (fogged.ovr.value != null) errors.push(`fog: true ovr leaked ${fogged.ovr.value}`);
+  if (fogged.orgFit?.reasons?.some((r) => /abilit/i.test(r))) errors.push("fog: fit reason leaked ability");
+  if (fogged.playoffs != null) errors.push("fog: phantom playoffs");
+
+  const intelProfile = {
+    ...daltonProfile,
+    userScoutPct: 80,
+    character_read: { traits: [{ label: "Coachability", tier: "Awful", modelled: true }, { label: "Locker Room Presence", tier: "Unknown", modelled: false }] },
+    intel: {
+      confidence: { development: { level: "Wide", why: "Ceiling band is 9 points wide." }, translation: { level: "Reliable" }, character: { level: "Read" } },
+      translation: { observed: { gp: 50, points: 80 }, nhle: 48, context_band: "Elite" },
+      slot_equivalent: 4,
+    },
+  };
+  const filedPeers = peers.map((p, i) => ({ ...p, dossier: { ...daltonProfile, now_range: { low: 70 + i, high: 72 + i }, peak_range: { low: 84 + i, high: 90 + i } } }));
+  const rich = buildProspectDossierModel({ ...dalton, dedicatedScoutingPct: 80 }, intelProfile, { allProspects: filedPeers, userScoutPct: 80 });
+  if (!rich.findings.strengths.some((f) => f.key === "translation")) errors.push("intel: translation strength missing");
+  if (!rich.findings.concerns.some((f) => f.key === "char-coach")) errors.push("intel: modelled trait concern missing");
+  if (!rich.character.unmodelled.includes("Locker Room")) errors.push("intel: unmodelled trait not reported");
+  if (rich.findings.strengths.concat(rich.findings.concerns).some((f) => !f.evidence || !f.benchmark || !f.kind)) errors.push("intel: finding missing evidence");
+  if (!rich.summary || /\(\s*[^)]*\(/.test(rich.summary)) errors.push(`intel: summary ${rich.summary}`);
+  if (!rich.value || rich.value.size !== filedPeers.length || rich.value.ceiling == null) errors.push(`intel: class ranks ${JSON.stringify(rich.value)}`);
+  if (!Array.isArray(rich.comparables)) errors.push("intel: comparables");
 
   return { ok: errors.length === 0, errors };
 }

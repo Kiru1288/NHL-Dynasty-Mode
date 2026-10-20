@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import logging
+import math
 import os
 import random
 import re
@@ -91,6 +92,33 @@ def _expected_points_per_game(ovr: float, pos: str, age: int, is_rookie: bool) -
 
 def _expected_save_pct(ovr: float) -> float:
     return round(0.870 + (ovr - 70.0) * 0.0018, 3)
+
+
+# Evidence gates. A pace or save-% cutoff alone fired on noise (a star with 2 points in
+# 6 games, a goalie after 3 starts). These scale the bar with the sample: the same
+# shortfall must be larger to count early and can be smaller once there are many games.
+POINTS_Z_MINOR = -1.5
+POINTS_Z_MAJOR = -2.0
+POINTS_Z_BREAKOUT = 1.5
+SAVE_Z_MELTDOWN = -1.5
+SAVE_Z_HEATER = 1.5
+GOALIE_MIN_SA_MELTDOWN = 150
+GOALIE_MIN_SA_HEATER = 90
+
+
+def _points_z(points: float, expected_points: float) -> float:
+    """Points vs expectation in Poisson standard deviations (sqrt of the expected count)."""
+    exp = max(1.0, float(expected_points))
+    return (float(points) - float(expected_points)) / math.sqrt(exp)
+
+
+def _save_pct_z(save_pct: float, expected: float, shots_against: int) -> float:
+    """Save % vs expectation in binomial standard errors for this many shots."""
+    sa = int(shots_against or 0)
+    if sa <= 0:
+        return 0.0
+    p = min(0.99, max(0.5, float(expected)))
+    return (float(save_pct) - p) / math.sqrt(p * (1.0 - p) / sa)
 
 
 _EVIDENCE_LABELS = (
@@ -1179,11 +1207,13 @@ def run_data_storyline_pass(
                 name_by_id[pid] = str(getattr(p, "name", "") or "Player")
                 cap_hit_by_id[pid] = _cap_hit_m(p)
 
+    # Effects and decisions wait until the daily cap has picked what publishes:
+    # a story trimmed from the feed must not still move morale or fan numbers.
+    fx_targets: Dict[int, Tuple[str, str]] = {}
+
     def emit(raw: Dict[str, Any], fx_team: str, fx_player: str = "") -> None:
         generated.append(raw)
-        _apply_storyline_effects(session, fx_team, fx_player, dict(raw.get("effects") or {}))
-        if raw.get("requires_action") and raw.get("action_options"):
-            _enqueue_decision(session, raw)
+        fx_targets[id(raw)] = (fx_team, fx_player)
 
     def try_emit(**kwargs: Any) -> None:
         nonlocal skipped_cd
@@ -1251,7 +1281,7 @@ def run_data_storyline_pass(
         if ovr >= 84 and gp >= SKATER_GP_MINOR:
             major = gp >= SKATER_GP_MAJOR
             threshold = -2.2 if major else -1.4
-            if ppg < exp_ppg * (0.45 if major else 0.62):
+            if ppg < exp_ppg * (0.45 if major else 0.62) and _points_z(pts, exp_pts) <= (POINTS_Z_MAJOR if major else POINTS_Z_MINOR):
                 sev = "major" if major and delta <= threshold * 2 else "minor"
                 pri = "HIGH" if major else "MEDIUM"
                 stype = "star_underperforming"
@@ -1284,7 +1314,7 @@ def run_data_storyline_pass(
                 skipped_sample += 1
 
         # Rookie / young breakout
-        if is_rookie and ovr <= 83 and gp >= SKATER_GP_MINOR and ppg >= max(0.55, exp_ppg * 1.45):
+        if is_rookie and ovr <= 83 and gp >= SKATER_GP_MINOR and ppg >= max(0.55, exp_ppg * 1.45) and _points_z(pts, exp_pts) >= POINTS_Z_BREAKOUT:
             try_emit(
                 stable_key=f"rookie_breakout|{pid}|{season}",
                 stype="rookie_breakout",
@@ -1410,7 +1440,8 @@ def run_data_storyline_pass(
         tw, tl, to, trec = _team_record(session, tid)
         gctx["record"] = trec
 
-        if sv_pct < exp_sv - 0.018 and major:
+        save_z = _save_pct_z(sv_pct, exp_sv, sa)
+        if sv_pct < exp_sv - 0.018 and major and sa >= GOALIE_MIN_SA_MELTDOWN and save_z <= SAVE_Z_MELTDOWN:
             if valid_goalie_meltdown_sv(sv_pct):
                 hl = pick_line(r, "goalie_meltdown", gctx)
                 body = pick_line(r, "goalie_meltdown", gctx, body=True)
@@ -1438,7 +1469,7 @@ def run_data_storyline_pass(
                         action_options=_goalie_meltdown_actions() if tid == uid else None,
                         heat=72,
                     )
-        elif sv_pct >= exp_sv + 0.012 and gp >= GOALIE_GP_MINOR:
+        elif sv_pct >= exp_sv + 0.012 and gp >= GOALIE_GP_MINOR and sa >= GOALIE_MIN_SA_HEATER and save_z >= SAVE_Z_HEATER:
             if valid_goalie_heater_sv(sv_pct):
                 hl = pick_line(r, "goalie_heater", gctx)
                 body = pick_line(r, "goalie_heater", gctx, body=True)
@@ -1753,6 +1784,15 @@ def run_data_storyline_pass(
 
     # Cap storylines per day (league desks + rolling form live elsewhere)
     trimmed = select_daily_data_stories(generated, uid, league_cap=7)
+    for raw in trimmed:
+        # User-club stories with a cause go through _emit_cause_storyline, which
+        # applies effects and queues the decision itself; doing it here too doubled them.
+        if _data_story_uses_cause_path(raw, uid):
+            continue
+        fx_team, fx_player = fx_targets.get(id(raw), ("", ""))
+        _apply_storyline_effects(session, fx_team, fx_player, dict(raw.get("effects") or {}))
+        if raw.get("requires_action") and raw.get("action_options"):
+            _enqueue_decision(session, raw)
 
     out = {
         "generated": len(trimmed),
@@ -1821,6 +1861,12 @@ def _enqueue_decision(session: Any, storyline: Dict[str, Any]) -> None:
     session.pending_decisions = pending
 
 
+def _data_story_uses_cause_path(raw: Dict[str, Any], user_team_id: str) -> bool:
+    """User-club data stories with a cause publish via _emit_cause_storyline (effects + decision there)."""
+    tid = str(raw.get("team_id") or raw.get("team") or "")
+    return bool(user_team_id) and tid == str(user_team_id) and bool(str(raw.get("cause_type") or ""))
+
+
 def franchise_record_data_storylines(
     session: Any,
     calendar_idx: int,
@@ -1836,7 +1882,7 @@ def franchise_record_data_storylines(
         if not isinstance(raw, dict) or not raw.get("headline"):
             continue
         tid = str(raw.get("team_id") or raw.get("team") or "")
-        if tid == utid and str(raw.get("cause_type") or ""):
+        if _data_story_uses_cause_path(raw, utid):
             _emit_cause_storyline(session, raw)
         else:
             _record_storyline(session, raw)
@@ -4083,6 +4129,24 @@ def _apply_market_media_tone(session: Any, sl: Dict[str, Any]) -> Dict[str, Any]
 def _agent_for_player(session: Any, player_id: str, rng: Optional[random.Random] = None) -> Dict[str, Any]:
     rel = dict(getattr(session, "agent_relationships", None) or {})
     pid = str(player_id or "")
+    # One agent per player: the contract/negotiation engine's assignment
+    # (player.agent_profile) is authoritative. This ledger used to pick its own
+    # random agent, so leaks and negotiations could name two different agents.
+    player = _player_from_roster(session, pid) if pid else None
+    if player is not None:
+        try:
+            from app.sim_engine.franchise.player_agent_engine import ensure_player_agent  # noqa: WPS433
+
+            aid = str((ensure_player_agent(player, session) or {}).get("id") or "")
+        except Exception:
+            aid = ""
+        if aid in _AGENT_BY_ID:
+            row = dict(rel.get(pid) or {"trust": 0.55, "gm_trust": 0.5})
+            if row.get("agent_id") != aid:
+                row["agent_id"] = aid
+                rel[pid] = row
+                session.agent_relationships = rel
+            return _AGENT_BY_ID[aid]
     if pid and pid in rel:
         aid = str(rel[pid].get("agent_id") or "")
         if aid in _AGENT_BY_ID:
@@ -5919,6 +5983,7 @@ def _u_reconcile_psych_morale(entity: Dict[str, Any], player: Any) -> None:
         setattr(player, "_u_pushed_morale", float(state["morale"]))
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
+    _u_mark_psych_seen(player, "morale", float(state["morale"]))
 
 
 def fan_mood_weekly_deltas(fan: float) -> Tuple[float, float]:
@@ -5964,12 +6029,29 @@ def nudge_roster_state(session: Any, team_id: str, *, morale: float = 0.0, belon
     return moved
 
 
+def _u_mark_psych_seen(player: Any, field: str, value_100: float) -> None:
+    """Remember the psych value the profile already agrees with (0–100).
+
+    refresh_entity_from_player folds in only psych movement since this mark, so a
+    profile delta that was never pushed to psych is not erased by the next refresh,
+    and a value we pushed ourselves is not counted twice."""
+    try:
+        seen = getattr(player, "_u_psych_seen", None)
+        if not isinstance(seen, dict):
+            seen = {}
+            setattr(player, "_u_psych_seen", seen)
+        seen[str(field)] = float(value_100)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+
+
 def _u_push_morale_to_player(session: Any, player_id: str, morale_100: float) -> None:
     """Keep Player.psych.morale in lockstep with the universe 0–100 morale used by storylines."""
     player = _player_from_roster(session, str(player_id))
     if player is None:
         return
     value = _u_clip(morale_100)
+    _u_mark_psych_seen(player, "morale", value)
     try:
         setattr(player, "_u_pushed_morale", float(value))
     except Exception:
@@ -5998,6 +6080,7 @@ def _u_push_confidence_to_player(session: Any, player_id: str, confidence_100: f
     psych = getattr(player, "psych", None)
     if psych is None:
         return
+    _u_mark_psych_seen(player, "confidence", value * 100.0)
     for attr in ("confidence", "confidence_level"):
         if hasattr(psych, attr):
             try:
@@ -6178,6 +6261,41 @@ def _u_contract_years(player: Any, season: int) -> int:
     except (TypeError, ValueError):
         expiry = 0
     return max(0, expiry - season) if expiry else 2
+
+
+def _u_contract_satisfaction(session: Any, player: Any, entity: Dict[str, Any], season: int) -> Dict[str, float]:
+    """One contract-satisfaction model (0–100) for every storyline reader.
+
+    It used to be two unrelated writers on the same field: the life tick
+    (38 + years_left × 18, so term alone decided it) and the coverage pass
+    (100 − psych.contract_pressure). Components:
+      security — years of term left (0 → 30, 4+ → 82)
+      pay      — cap hit vs league market value: underpaid lowers it (20 … 80)
+      pressure — psych.contract_pressure, the event-driven stress on the deal
+    money_focus moves weight from security to pay; high ambition shaves a little."""
+    personality = entity.get("personality") or {}
+    years = _u_contract_years(player, season) if player is not None else 2
+    security = _u_clip(30.0 + min(4, max(0, years)) * 13.0)
+    pay = 55.0
+    gap = 0.0
+    cap_hit = _cap_hit_m(player) if player is not None else 0.0
+    if player is not None and cap_hit > 0:
+        try:
+            from services.contract_economy import compute_market_value  # noqa: WPS433
+
+            market = float(compute_market_value(player, getattr(getattr(session, "sim", None), "league", None)) or 0.0)
+        except Exception:
+            market = 0.0
+        if market > 0:
+            gap = max(-0.5, min(0.5, (cap_hit - market) / market))
+            pay = 50.0 + gap * 60.0
+    pressure = _u_psych_value(player, ("contract_pressure",), 50.0) if player is not None else 50.0
+    money = float(personality.get("money_focus", 45)) / 100.0
+    w_pay = 0.25 + 0.35 * money
+    w_sec = 0.60 - 0.35 * money
+    sat = w_sec * security + w_pay * pay + 0.15 * (100.0 - pressure)
+    sat -= max(0.0, float(personality.get("ambition", 50)) - 70.0) * 0.18
+    return {"satisfaction": round(_u_clip(sat), 1), "security": round(security, 1), "pay": round(pay, 1), "market_gap": round(gap, 3), "years_left": float(years)}
 
 
 def _u_social_handle(name: str, player_id: str) -> str:
@@ -7599,6 +7717,28 @@ def _promise_navigate(promise_type: str, player_id: str) -> Dict[str, Any]:
     return {"screen": screen, "unit": unit, "player_id": pid, "label": label}
 
 
+# A "make us more competitive" promise is delivered by a real lift in the lineup's top
+# end, not by any single 80+ arrival (a lateral 80-for-82 swap used to count).
+WINNING_PROMISE_CORE_OVR_GAIN = 0.6
+
+
+def _team_core_ovr(team: Any) -> Optional[float]:
+    """Mean OVR of the dressed core: best 12 F, 6 D and 1 G on the NHL roster."""
+    if team is None:
+        return None
+    fwd: List[float] = []
+    dmen: List[float] = []
+    gk: List[float] = []
+    for p in list(getattr(team, "roster", None) or []):
+        if getattr(p, "retired", False):
+            continue
+        bucket = _pos_bucket(_u_position(p))
+        ovr = float(_player_ovr99(p) or 0)
+        (gk if bucket == "G" else dmen if bucket == "D" else fwd).append(ovr)
+    core = sorted(fwd, reverse=True)[:12] + sorted(dmen, reverse=True)[:6] + sorted(gk, reverse=True)[:1]
+    return round(sum(core) / len(core), 2) if core else None
+
+
 def _u_promise_snapshot(session: Any, player_id: str) -> Dict[str, Any]:
     """Where the player stands right now: lineup slot, special teams, games, roster level."""
     snap: Dict[str, Any] = {
@@ -7661,6 +7801,7 @@ def _u_promise_snapshot(session: Any, player_id: str) -> Dict[str, Any]:
                 org_ids.append(oid)
     snap["org_ids"] = sorted(set(org_ids))
     snap["roster_ids"] = sorted(str(getattr(p, "id", "") or "") for p in list(getattr(team, "roster", None) or []))
+    snap["core_ovr"] = _team_core_ovr(team)
     lines = getattr(session, "lines", None)
     if isinstance(lines, dict):
         block = lines.get("even_strength") if isinstance(lines.get("even_strength"), dict) else lines
@@ -7852,7 +7993,10 @@ def _u_promise_progress_tick(session: Any, promise: Dict[str, Any]) -> bool:
         mentee = str(promise.get("mentee_id") or "")
         dressed = now.get("on_nhl") and not now.get("scratched")
         delivered = bool(dressed and mentee and _shares_line(session, pid, mentee))
+    elif ptype == "winning_commitment" and base.get("core_ovr") is not None and now.get("core_ovr") is not None:
+        delivered = float(now["core_ovr"]) >= float(base["core_ovr"]) + WINNING_PROMISE_CORE_OVR_GAIN
     elif ptype == "winning_commitment":
+        # Promises made before core_ovr was snapshotted keep the old rule.
         added = set(now.get("roster_ids") or []) - set(base.get("org_ids") or base.get("roster_ids") or [])
         for aid in added:
             pl = _player_from_roster(session, aid)
@@ -7966,6 +8110,14 @@ def apply_universe_postgame(session: Any, team_id: str, game_result: Dict[str, A
         except Exception:
             player_stats = {}
     notable: List[Dict[str, Any]] = []
+    # How the team is doing sets the room's mood. A winning club's resting morale sits
+    # higher, so one quiet night on the scoresheet cannot make a contender's room sour.
+    try:
+        _tw, _tl, _to, _ = _team_record(session, str(team_id))
+        _tgp = int(_tw) + int(_tl) + int(_to)
+        team_form = ((int(_tw) + 0.5 * int(_to)) / _tgp - 0.5) if _tgp >= 5 else 0.0
+    except Exception:
+        team_form = 0.0
     for player in _u_team_players(session, str(team_id)):
         player_id = str(getattr(player, "id", "") or "")
         entity = entities.get(player_id) or {}
@@ -8007,8 +8159,9 @@ def apply_universe_postgame(session: Any, team_id: str, game_result: Dict[str, A
             elif pts == 1:
                 morale_delta += 1.2
                 confidence_delta += 0.8
-            elif toi >= 900 and pts == 0:
-                morale_delta -= 0.9 if won else 1.6
+            elif toi >= 900 and pts == 0 and not won:
+                # Going pointless in a win is not a grievance; it stings after a loss.
+                morale_delta -= 1.0
             if goals >= 2:
                 morale_delta += 1.4
             if sog >= 6 and pts == 0:
@@ -8029,14 +8182,19 @@ def apply_universe_postgame(session: Any, team_id: str, game_result: Dict[str, A
             state["confidence"] = _u_clip(cur_c + confidence_delta * 0.7 + (anchor_c - cur_c) * 0.04)
         else:
             baseline = (
-                56.0
+                60.0
+                + team_form * 30.0
                 + (float(state.get("role_satisfaction", 58)) - 55.0) * 0.25
                 + (float(state.get("gm_trust", 60)) - 58.0) * 0.15
                 + (float(personality.get("resilience", 55)) - 55.0) * 0.12
             )
-            baseline = max(38.0, min(74.0, baseline))
+            baseline = max(40.0, min(82.0, baseline))
             cur_m = float(state.get("morale", 55))
-            state["morale"] = _u_clip(cur_m + morale_delta + (baseline - cur_m) * 0.07)
+            if morale_delta > 0 and cur_m > baseline:
+                # Above his resting level, good nights add less.
+                morale_delta *= max(0.0, 1.0 - (cur_m - baseline) / 10.0)
+            pull = 0.12 if cur_m > baseline else 0.07
+            state["morale"] = _u_clip(cur_m + morale_delta + (baseline - cur_m) * pull)
             cur_c = float(state.get("confidence", 55))
             state["confidence"] = _u_clip(cur_c + confidence_delta + (55.0 - cur_c) * 0.06)
         entity["state"] = state
@@ -8606,16 +8764,21 @@ def _u_compute_human_pressure(
     volatility_amp = 1.0 + max(0.0, float(personality.get("volatility", 40)) - 65) * 0.008
     resilience_damp = 1.0 - max(0.0, float(personality.get("resilience", 55)) - 70) * 0.006
 
+    # Small grumbles are part of any season. Each source only counts past a tolerance,
+    # so nine mild 3-point gripes no longer add up to "Frustrated" with no reason given.
+    def _past(v: float, tol: float = 3.0) -> float:
+        return max(0.0, float(v) - tol)
+
     raw = (
-        role_pressure * 1.15
-        + losing_pressure
-        + trust_pressure
-        + life_pressure
-        + city_pressure
-        + social_pressure
-        + media_stress * 0.08
+        _past(role_pressure * 1.15)
+        + _past(losing_pressure)
+        + _past(trust_pressure)
+        + _past(life_pressure)
+        + _past(city_pressure)
+        + _past(social_pressure)
+        + max(0.0, media_stress - 50.0) * 0.12
         + memory_pressure
-        + agent_pressure
+        + _past(agent_pressure)
     ) * volatility_amp * resilience_damp
 
     score = _u_clip(raw, 0.0, 100.0)
@@ -8632,6 +8795,9 @@ def _u_compute_human_pressure(
         if val >= 8:
             drivers.append({"label": label, "pressure": round(val, 1)})
     drivers.sort(key=lambda row: -float(row["pressure"]))
+    if not drivers and tier > 1:
+        # Never "Frustrated" without a reason we can name.
+        tier = 1
     return {"score": round(score, 1), "tier": tier, "tier_label": _u_pressure_tier_label(tier), "drivers": drivers[:4]}
 
 
@@ -9256,13 +9422,14 @@ def _u_active_readiness(session: Any, player_id: str) -> Dict[str, Any]:
     }
 
 
-def _u_tick_readiness_modifiers(session: Any) -> int:
+def _u_tick_readiness_modifiers(session: Any, days: int = 1) -> int:
     store = dict(getattr(session, "universe_readiness_modifiers", None) or {})
     expired = 0
+    step = max(1, int(days))
     for player_id, rows in list(store.items()):
         kept: List[Dict[str, Any]] = []
         for row in rows or []:
-            row["days_remaining"] = int(row.get("days_remaining", 0) or 0) - 1
+            row["days_remaining"] = int(row.get("days_remaining", 0) or 0) - step
             if row["days_remaining"] > 0:
                 kept.append(row)
             else:
@@ -9599,8 +9766,11 @@ def _u_life_event_allowed(entity: Dict[str, Any], spec: Dict[str, Any]) -> bool:
     return True
 
 
-def _u_generate_minor_life_events(session: Any, rng: random.Random) -> int:
-    """Generate diverse small positive/negative off-ice events with subtle real sim effects."""
+def _u_generate_minor_life_events(session: Any, rng: random.Random, days: int = 1) -> int:
+    """Generate diverse small positive/negative off-ice events with subtle real sim effects.
+
+    ``days`` is how many calendar days this roll stands for: bulk sims run the director
+    once per several days, so the daily chance is compounded over the span."""
     user_team_id = str(getattr(session, "user_team_id", "") or "")
     entities = getattr(session, "universe_players", None) or {}
     bulk_burst = bool(getattr(session, "_bulk_narrative_life_burst", False))
@@ -9632,6 +9802,9 @@ def _u_generate_minor_life_events(session: Any, rng: random.Random) -> int:
                 chance = 0.22
             else:
                 chance = (0.07 if team_id == user_team_id else 0.03) * (0.75 + vol / 100.0)
+                span = max(1, min(int(days), day - last if last > -999 else int(days)))
+                if span > 1:
+                    chance = 1.0 - (1.0 - chance) ** span
             if rng.random() > chance:
                 continue
             positive = rng.random() < 0.52
@@ -10313,15 +10486,45 @@ def _u_generate_daily_interactions_impl(session: Any, rng: random.Random) -> int
     return created
 
 
+def _u_user_org_player_ids(session: Any) -> Optional[Set[str]]:
+    """Player ids in the user's organization (NHL + AHL), or None when there is no user club."""
+    utid = str(getattr(session, "user_team_id", "") or "")
+    team = (getattr(session, "team_by_id", None) or {}).get(utid) if utid else None
+    if team is None:
+        return None
+    ids: Set[str] = set()
+    for bucket in ("roster", "ahl_roster", "injured_reserve", "scratches", "echl_roster"):
+        for p in getattr(team, bucket, None) or []:
+            if getattr(p, "retired", False):
+                continue
+            pid = str(getattr(p, "id", "") or "")
+            if pid:
+                ids.add(pid)
+    return ids
+
+
 def _u_tick_promises(session: Any) -> Dict[str, int]:
     """Resolve promises with long-term potential rewards and readiness fallout."""
     promises = list(getattr(session, "universe_promises", None) or [])
-    counts = {"kept": 0, "broken": 0, "waived": 0}
+    counts = {"kept": 0, "broken": 0, "waived": 0, "void": 0}
     day, iso, _ = _u_current_meta(session)
+    org_ids = _u_user_org_player_ids(session)
     for promise in promises:
         status = str(promise.get("status") or "")
         player_id = str(promise.get("player_id") or "")
         entity = (getattr(session, "universe_players", None) or {}).get(player_id) or {}
+        if status == "active" and org_ids is not None and player_id and player_id not in org_ids:
+            # He was traded, released or retired. Game counts only tick for players on
+            # the club, so the promise used to sit "active" forever and kept blocking
+            # storyline decisions for him. The move itself carries the fallout
+            # (apply_trade_universe_relocation), so voiding adds no extra penalty.
+            promise["status"] = "void"
+            promise["resolved_day"] = day
+            promise["games_remaining"] = 0
+            if entity:
+                _u_add_memory(entity, kind="promise_void", summary=f"Management promise ended when he left the club: {promise.get('description')}", day=day, iso=iso)
+            counts["void"] += 1
+            continue
         if status == "waived" and not promise.get("_waived_applied"):
             if entity:
                 _u_apply_profile_delta(entity, "state.gm_trust", -1)
@@ -10362,6 +10565,10 @@ def _u_tick_promises(session: Any) -> Dict[str, int]:
     return counts
 
 
+# Trade rumour heat (0–100) at which a first rejected proposal counts as public.
+TRADE_FALLOUT_PUBLIC_HEAT = 25
+
+
 def _trade_fallout_magnitude(session: Any, player: Any, attempt_count: int) -> Tuple[int, int, int, str, int]:
     """Scale trade fallout by future Mental OVR, personality and repeated exposure."""
     player_id = str(getattr(player, "id", "") or "")
@@ -10385,6 +10592,13 @@ def _trade_fallout_magnitude(session: Any, player: Any, attempt_count: int) -> T
     ovr_mod = max(1, min(18, ovr_mod))
     duration_days = int(round(7 + attempt_count * 7 + fragility * 52 + max(0, 50 - char) * 0.35))
     duration_days = max(7, min(120, duration_days))
+    if attempt_count <= 1 and heat < TRADE_FALLOUT_PUBLIC_HEAT:
+        # One rejected proposal that never became a public rumour is routine market
+        # work; the player only senses it. Repeat exposure or public heat is the real hit.
+        gm_trust_drop = max(1, gm_trust_drop // 2)
+        morale_drop = max(1, morale_drop // 2)
+        ovr_mod = min(ovr_mod, 1)
+        duration_days = min(duration_days, 14)
     severity = "minor" if ovr_mod <= 2 else "mid" if ovr_mod <= 6 else "major"
     if entity:
         _u_apply_profile_delta(entity, "state.gm_trust", -float(gm_trust_drop))
@@ -10701,6 +10915,27 @@ def _u_set_player_availability(session: Any, player_id: str, *, status: str, rea
     row = {"player_id": str(player_id), "status": str(status), "reason": str(reason), "days_remaining": max(0, int(days)), "games_remaining": max(0, int(games)), "active": True}
     store[str(player_id)] = row
     session.universe_player_availability = store
+    # This store is read by nothing outside storylines, so a "suspension" here used to be
+    # headline only: the player kept dressing. Mirror it onto the real conduct flags the
+    # lineup, roster status and game ticker use, so he sits, shows Suspended, and serves it.
+    if str(status) in ("suspended", "banned", "investigative_leave"):
+        player = _player_from_roster(session, str(player_id))
+        if player is not None:
+            served = max(0, int(games)) or (max(1, int(round(int(days) / 2.2))) if int(days) > 0 else 0)
+            if str(status) == "banned":
+                served = max(served, 82)
+            if served > 0:
+                try:
+                    cur = int(getattr(player, "_world_conduct_games_remaining", 0) or 0)
+                    setattr(player, "_world_conduct_games_remaining", max(cur, served))
+                    setattr(
+                        player,
+                        "_world_conduct_status",
+                        "league_suspended" if str(status) != "investigative_leave" else "administrative_leave",
+                    )
+                    row["games_remaining"] = max(int(row.get("games_remaining") or 0), served)
+                except Exception:
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
     return row
 
 
@@ -10711,14 +10946,20 @@ def universe_player_is_available(session: Any, player_id: str) -> bool:
     return str(row.get("status") or "available") not in ("suspended", "banned", "investigative_leave", "deceased")
 
 
-def _u_tick_player_availability_days(session: Any) -> int:
+def _u_tick_player_availability_days(session: Any, days: int = 1) -> int:
     store = dict(getattr(session, "universe_player_availability", None) or {})
     cleared = 0
+    step = max(1, int(days))
     for row in store.values():
         if not row.get("active"):
             continue
+        if int(row.get("games_remaining", 0) or 0) > 0:
+            # Games are served on the real player flag (ticked by the game loop).
+            pl = _player_from_roster(session, str(row.get("player_id") or ""))
+            if pl is not None:
+                row["games_remaining"] = int(getattr(pl, "_world_conduct_games_remaining", 0) or 0)
         if int(row.get("days_remaining", 0) or 0) > 0:
-            row["days_remaining"] = int(row.get("days_remaining") or 0) - 1
+            row["days_remaining"] = max(0, int(row.get("days_remaining") or 0) - step)
         if int(row.get("days_remaining", 0) or 0) <= 0 and int(row.get("games_remaining", 0) or 0) <= 0 and str(row.get("status")) != "deceased":
             row["active"] = False
             row["status"] = "available"
@@ -10792,7 +11033,18 @@ def _u_major_event_state_for_season(session: Any, rng: random.Random) -> Dict[st
     return state
 
 
-def _u_run_major_league_event_pass(session: Any, rng: random.Random) -> int:
+def _u_conduct_risk(entity: Dict[str, Any], player: Any) -> float:
+    """Relative chance a player is the subject of a conduct incident (≥ 0.02, so nobody is immune)."""
+    p = entity.get("personality") or {}
+    state = entity.get("state") or {}
+    char = float(p.get("character", _player_character_0_100(player) if player is not None else 55))
+    vol = float(p.get("volatility", 50))
+    media = float(state.get("media_stress", 28))
+    base = (max(0.0, 100.0 - char) / 100.0) ** 2
+    return max(0.02, base * (0.5 + vol / 100.0) * (1.0 + media / 200.0))
+
+
+def _u_run_major_league_event_pass(session: Any, rng: random.Random, days: int = 1) -> int:
     """League-wide scheduler: 3-5 major incidents per season, never 3-5 per team."""
     state = _u_major_event_state_for_season(session, rng)
     target = int(state.get("target", 4) or 4)
@@ -10806,6 +11058,10 @@ def _u_run_major_league_event_pass(session: Any, rng: random.Random) -> int:
     remaining_days = max(1, calendar_len - day)
     remaining_events = max(1, target - generated)
     chance_today = min(0.12, max(0.0035, remaining_events / remaining_days * 1.25))
+    # Bulk sims run this pass once per several days: roll for the whole span.
+    span = max(1, int(days))
+    if span > 1:
+        chance_today = 1.0 - (1.0 - chance_today) ** span
     if rng.random() > chance_today:
         return 0
     teams = [(str(tid), tm) for tid, tm in (getattr(session, "team_by_id", None) or {}).items()]
@@ -10851,18 +11107,26 @@ def _u_run_major_league_event_pass(session: Any, rng: random.Random) -> int:
                     nhl_players.append((team_id, player))
         if not nhl_players:
             return 0
-        team_id, player = rng.choice(nhl_players)
+        # Conduct incidents follow conduct risk instead of landing on a uniformly random
+        # player: low character, volatility, media stress and money pressure raise it.
+        ents = getattr(session, "universe_players", None) or {}
+        risks = [_u_conduct_risk(ents.get(str(getattr(pl, "id", "") or "")) or {}, pl) for _, pl in nhl_players]
+        team_id, player = rng.choices(nhl_players, weights=risks, k=1)[0]
         player_id = str(getattr(player, "id", "") or "")
-        entity = (getattr(session, "universe_players", None) or {}).get(player_id) or {}
+        entity = ents.get(player_id) or {}
         name = str(entity.get("player_name") or _u_name(player))
-        # PLAYER_DEATH has weight 0.01 against a ~4.5 total pool: exceptionally rare.
+        p_traits = entity.get("personality") or {}
+        money = float(p_traits.get("money_focus", 45))
+        vol = float(p_traits.get("volatility", 50))
+        # Type weights lean on the trait that plausibly drives each incident. A random
+        # player death is no longer rolled as routine league news (weight was 0.01).
         pool = [
             ("PLAYER_ARRESTED", 1.35),
             ("LEAGUE_SUSPENSION", 1.25),
             ("PLAYER_BANNED", 0.35),
-            ("MAJOR_PUBLIC_ALTERCATION", 1.15),
-            ("GAMBLING_VIOLATION", 0.45),
-            ("PLAYER_DEATH", 0.01),
+            ("MAJOR_PUBLIC_ALTERCATION", 1.15 * (0.6 + vol / 100.0)),
+            ("GAMBLING_VIOLATION", 0.45 * (0.5 + money / 100.0)),
+            ("PLAYER_DEATH", 0.0),
         ]
         total = sum(weight for _, weight in pool)
         pick = rng.random() * total
@@ -10947,18 +11211,25 @@ def _u_run_major_league_event_pass(session: Any, rng: random.Random) -> int:
     return 1
 
 
-def _u_tick_player_life(session: Any, team_id: str, entity: Dict[str, Any], rng: random.Random) -> None:
-    """State simulation only. Actual discrete life events are generated separately by V3."""
+def _u_tick_player_life(session: Any, team_id: str, entity: Dict[str, Any], rng: random.Random, days: int = 1) -> None:
+    """State simulation only. Actual discrete life events are generated separately by V3.
+
+    ``days`` compounds the per-day pulls when one tick covers several days (bulk sims)."""
     day, iso, season = _u_current_meta(session)
     if int(entity.get("last_tick_day", -1) or -1) == day:
         return
+    span = max(1, int(days))
+
+    def pull(rate: float) -> float:
+        return 1.0 - (1.0 - rate) ** span
+
     state = entity.get("state") or {}
     life = entity.get("life") or {}
     personality = entity.get("personality") or {}
-    state["character_modifier"] = round(float(state.get("character_modifier", 0) or 0) * 0.992, 3)
+    state["character_modifier"] = round(float(state.get("character_modifier", 0) or 0) * (0.992 ** span), 3)
     previous_role = float(state.get("role_satisfaction", 58))
     role_target = _u_infer_role_satisfaction(session, team_id, entity)
-    state["role_satisfaction"] = _u_clip(previous_role + (role_target - previous_role) * 0.18)
+    state["role_satisfaction"] = _u_clip(previous_role + (role_target - previous_role) * pull(0.18))
     home_stability = float(life.get("home_stability", 65))
     relocation = float(life.get("relocation_strain", 15))
     sleep = float(life.get("sleep_quality", 68))
@@ -10967,6 +11238,8 @@ def _u_tick_player_life(session: Any, team_id: str, entity: Dict[str, Any], rng:
     stress_keep = 0.94 if held else 0.86
     stress_pull = 0.06 if held else 0.14
     jitter = rng.uniform(-0.4, 0.4) if held else rng.uniform(-1.8, 1.8)
+    stress_pull = pull(stress_pull)
+    stress_keep = 1.0 - stress_pull
     state["personal_stress"] = _u_clip(float(state.get("personal_stress", 30)) * stress_keep + personal_target * stress_pull + jitter)
     if held:
         anchor_energy = float((entity.get("meeting_hold") or {}).get("energy") or state.get("energy", 70))
@@ -10978,8 +11251,8 @@ def _u_tick_player_life(session: Any, team_id: str, entity: Dict[str, Any], rng:
         state["focus"] = _u_clip(float(state.get("focus", 60)) * 0.82 + focus_formula * 0.18)
     else:
         state["focus"] = _u_clip(focus_formula)
-    life["relocation_strain"] = _u_clip(relocation - 0.18)
-    life["community_connection"] = _u_clip(float(life.get("community_connection", 35)) + rng.uniform(0, 0.25))
+    life["relocation_strain"] = _u_clip(relocation - 0.18 * span)
+    life["community_connection"] = _u_clip(float(life.get("community_connection", 35)) + rng.uniform(0, 0.25) * span)
     life["current_note"] = "Travel and home responsibilities are competing with hockey focus." if float(state.get("personal_stress", 0)) >= 68 else "Home life is stable."
     concerns = entity.get("concerns") or {}
     role_concern = concerns.get("role") or {}
@@ -10991,11 +11264,11 @@ def _u_tick_player_life(session: Any, team_id: str, entity: Dict[str, Any], rng:
     home_after = _u_clip(home_stability - relocation * 0.35)
     home_concern.update({"satisfaction": home_after, "trend": round(home_after - home_before, 2)})
     concerns["home_life"] = home_concern
-    years = _u_contract_years(_player_from_roster(session, str(entity.get("player_id") or "")) or object(), season)
+    contract_model = _u_contract_satisfaction(session, _player_from_roster(session, str(entity.get("player_id") or "")), entity, season)
     contract_concern = concerns.get("contract") or {}
     old_contract = float(contract_concern.get("satisfaction", 55))
-    contract_after = _u_clip(38 + years * 18 - max(0, float(personality.get("ambition", 50)) - 70) * 0.18)
-    contract_concern.update({"satisfaction": contract_after, "trend": round(contract_after - old_contract, 2)})
+    contract_after = float(contract_model["satisfaction"])
+    contract_concern.update({"satisfaction": contract_after, "trend": round(contract_after - old_contract, 2), "model": contract_model})
     concerns["contract"] = contract_concern
     w, l, o, _ = _team_record(session, team_id)
     gp = w + l + o
@@ -11039,15 +11312,20 @@ def narrative_universe_v2_daily_pass(session: Any, calendar_idx: int, day_meta: 
     entities = _u_sync_player_entities(session)
     season = int(getattr(session, "season_calendar_year", 2025) or 2025)
     local_rng = rng or random.Random(_u_seed("universe_daily_v3", season, calendar_idx, getattr(session, "user_team_id", "")))
-    readiness_expired = _u_tick_readiness_modifiers(session)
-    availability_cleared = _u_tick_player_availability_days(session)
+    # Bulk sims run this director once per UNIVERSE_BULK_PASS_EVERY_DAYS: day-counted
+    # timers must advance by the days actually elapsed, not by one per pass (a 5-day
+    # readiness hit used to last ~35 days in a sim-to-date).
+    last_tick = int(getattr(session, "_universe_last_daily_tick", -1) or -1)
+    elapsed_days = max(1, min(60, int(calendar_idx) - last_tick)) if last_tick >= 0 else 1
+    readiness_expired = _u_tick_readiness_modifiers(session, elapsed_days)
+    availability_cleared = _u_tick_player_availability_days(session, elapsed_days)
     for team_id, player in _u_all_players(session):
         entity = entities.get(str(getattr(player, "id", "") or ""))
         if entity:
-            _u_tick_player_life(session, team_id, entity, local_rng)
+            _u_tick_player_life(session, team_id, entity, local_rng, elapsed_days)
     for team_id in (getattr(session, "team_by_id", None) or {}).keys():
         _u_rebuild_locker_room(session, str(team_id))
-    minor_life = _u_generate_minor_life_events(session, local_rng)
+    minor_life = _u_generate_minor_life_events(session, local_rng, elapsed_days)
     try:
         _u_cpu_morale_management(session, local_rng)
     except Exception:
@@ -11061,9 +11339,13 @@ def narrative_universe_v2_daily_pass(session: Any, calendar_idx: int, day_meta: 
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
     interactions = _u_generate_daily_interactions(session, local_rng)
+    try:
+        _u_teammate_chatter(session, local_rng, elapsed_days)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     trade_demands_created = _u_maybe_create_trade_demand_from_state(session, local_rng)
     trade_demand_tick = _u_tick_trade_demands(session, local_rng)
-    major_events = _u_run_major_league_event_pass(session, local_rng)
+    major_events = _u_run_major_league_event_pass(session, local_rng, elapsed_days)
     social_created = _u_generate_ambient_social(session, local_rng)
     promise_counts = _u_tick_promises(session)
     coverage_stats: Dict[str, Any] = {}
@@ -13440,6 +13722,244 @@ def build_player_meetings_payload(session: Any) -> Dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# Living room: how each player feels (and why), and teammates who talk to each other.
+# Everything here reads real state (morale, confidence, record, pressure, family,
+# availability); nothing is invented for flavour without a cause behind it.
+# ---------------------------------------------------------------------------
+
+LIFE_FEED_MAX = 24
+CHATTER_PAIRS_PER_DAY = 2
+
+
+def _u_player_team_id(session: Any, player_id: str) -> str:
+    for tid, team in (getattr(session, "team_by_id", None) or {}).items():
+        for p in getattr(team, "roster", None) or []:
+            if str(getattr(p, "id", "") or "") == str(player_id):
+                return str(tid)
+    return ""
+
+
+def _u_team_form(session: Any, team_id: str) -> Tuple[float, str]:
+    """(win share minus .500, record text); 0.0 until five games are in."""
+    try:
+        w, l, o, rec = _team_record(session, str(team_id))
+        gp = int(w) + int(l) + int(o)
+        if gp < 5:
+            return 0.0, str(rec)
+        return (int(w) + 0.5 * int(o)) / gp - 0.5, str(rec)
+    except Exception:
+        return 0.0, ""
+
+
+def _u_short_name(player: Any) -> str:
+    name = str(getattr(player, "name", "") or "")
+    return name.split()[-1] if name else "He"
+
+
+def _u_bond_key(a: str, b: str) -> str:
+    return "|".join(sorted((str(a), str(b))))
+
+
+def _u_bond(session: Any, a: str, b: str) -> float:
+    return float((getattr(session, "universe_bonds", None) or {}).get(_u_bond_key(a, b), 50.0))
+
+
+def _u_shift_bond(session: Any, a: str, b: str, delta: float) -> float:
+    book = dict(getattr(session, "universe_bonds", None) or {})
+    key = _u_bond_key(a, b)
+    book[key] = _u_clip(float(book.get(key, 50.0)) + float(delta))
+    session.universe_bonds = book
+    return float(book[key])
+
+
+def _u_life_post(entity: Dict[str, Any], *, day: int, iso: str, text: str, tone: str, with_id: str = "", with_name: str = "") -> None:
+    feed = list(entity.get("life_feed") or [])
+    feed.append({"day": int(day), "iso": str(iso), "text": str(text), "tone": str(tone), "with_id": str(with_id), "with_name": str(with_name)})
+    entity["life_feed"] = feed[-LIFE_FEED_MAX:]
+
+
+_PRESSURE_REASON = {
+    "Role": "Unhappy with his role",
+    "Winning": "Wants to win now",
+    "Management trust": "Doubts the front office",
+    "Home life": "Strain at home",
+    "City fit": "Not settled in the city",
+    "Belonging": "Doesn't feel part of the room",
+}
+
+
+def player_emotion(session: Any, player_id: str, entity: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Current feeling with the reasons behind it."""
+    entity = entity or (getattr(session, "universe_players", None) or {}).get(str(player_id)) or {}
+    state = entity.get("state") or {}
+    life = entity.get("life") or {}
+    player = _player_from_roster(session, str(player_id))
+    morale = float(state.get("morale", 60) or 60)
+    confidence = float(state.get("confidence", 55) or 55)
+    why: List[str] = []
+    team_id = _u_player_team_id(session, str(player_id))
+    form, rec = _u_team_form(session, team_id) if team_id else (0.0, "")
+    if rec and form >= 0.1:
+        why.append(f"The team is winning ({rec})")
+    elif rec and form <= -0.1:
+        why.append(f"The losing is wearing on him ({rec})")
+    try:
+        pressure = _u_compute_human_pressure(entity)
+    except Exception:
+        pressure = {"drivers": [], "tier": 0}
+    for d in (pressure.get("drivers") or [])[:2]:
+        label = str(d.get("label") or "")
+        why.append(_PRESSURE_REASON.get(label, label))
+    suspended = int(getattr(player, "_world_conduct_games_remaining", 0) or 0) if player is not None else 0
+    injured = int(getattr(player, "_world_injury_games_remaining", 0) or 0) if player is not None else 0
+    recent = [m for m in (entity.get("memories") or [])[-4:] if abs(float(m.get("emotional_delta") or 0)) >= 2]
+    if recent:
+        summary = str(recent[-1].get("summary") or "")
+        summary = summary.split(" Effect:")[0].split(" (")[0].strip().rstrip(".")
+        if summary:
+            lift = float(recent[-1].get("emotional_delta") or 0) > 0
+            why.append(("Lately: " if lift else "Weighing on him: ") + summary)
+    partner = life.get("partner") if isinstance(life.get("partner"), dict) else None
+    if partner and float(partner.get("relationship_strength") or 60) >= 75:
+        why.append("Things are good at home")
+    if suspended > 0:
+        feeling, tone = "Restless", "warn"
+        why.insert(0, f"Serving a suspension ({suspended} game{'s' if suspended != 1 else ''} left)")
+    elif injured > 0:
+        feeling, tone = "Restless", "warn"
+        why.insert(0, f"Out injured ({injured} game{'s' if injured != 1 else ''})")
+    elif morale >= 75 and confidence >= 60:
+        feeling, tone = "Fired up", "good"
+    elif morale >= 62:
+        feeling, tone = "Happy", "good"
+    elif morale >= 50:
+        feeling, tone = "Content", "neutral"
+    elif morale >= 40:
+        feeling, tone = "Restless", "warn"
+    elif pressure.get("drivers"):
+        feeling, tone = "Frustrated", "bad"
+    else:
+        feeling, tone = "Down", "bad"
+    if confidence <= 35:
+        why.append("His confidence is shaken")
+    seen: set = set()
+    reasons = []
+    for r in why:
+        if r and r not in seen:
+            seen.add(r)
+            reasons.append(r)
+    return {"feeling": feeling, "tone": tone, "morale": round(morale), "confidence": round(confidence), "why": reasons[:4]}
+
+
+def _u_chatter_topic(a: Any, b: Any, ea: Dict[str, Any], eb: Dict[str, Any], form: float, rng: random.Random) -> Tuple[str, str, float, float, float]:
+    """(text, tone, bond delta, morale delta a, morale delta b) for one conversation.
+
+    Every topic that fits the pair's real situation is a candidate; one is picked, so a
+    winning room still has family talk, mentoring and road dinners, not one line on repeat.
+    """
+    na, nb = _u_short_name(a), _u_short_name(b)
+    sa, sb = ea.get("state") or {}, eb.get("state") or {}
+    pa, pb = ea.get("personality") or {}, eb.get("personality") or {}
+    ma, mb = float(sa.get("morale", 60) or 60), float(sb.get("morale", 60) or 60)
+    age_a, age_b = int(getattr(a, "age", 25) or 25), int(getattr(b, "age", 25) or 25)
+    life_a, life_b = ea.get("life") or {}, eb.get("life") or {}
+    options: List[Tuple[float, Tuple[str, str, float, float, float]]] = []
+    # A teammate who is down gets picked up by one who cares. Most important, so heavy.
+    if mb <= 45 and float(pa.get("empathy", 50)) >= 55 and ma >= 55:
+        options.append((5.0, (f'{na} pulled {nb} aside after practice. "Shake it off, we need you," he said. {nb} left lighter.', "good", 4.0, 0.5, 3.0)))
+    if ma <= 45 and float(pb.get("empathy", 50)) >= 55 and mb >= 55:
+        options.append((5.0, (f"{nb} took {na} for coffee to talk it through. {na} opened up about what is eating at him.", "good", 4.0, 3.0, 0.5)))
+    if (age_a >= 30 and age_b <= 22) or (age_b >= 30 and age_a <= 22):
+        vet, kid = (na, nb) if age_a >= 30 else (nb, na)
+        options.append((2.0, (f"{vet} has been staying late with {kid}, walking him through video. {kid} called him the best teammate he has had.", "good", 3.5, 1.0, 1.5)))
+    if form >= 0.1:
+        options.append((1.5, (f'{na} and {nb} were laughing on the bus after another win. "This room feels different," {nb} said.', "good", 2.5, 1.0, 1.0)))
+        options.append((1.0, (f"{na} and {nb} argued over who gets the player-of-the-game belt next. Nobody is complaining about the standings.", "good", 2.0, 0.8, 0.8)))
+    if form <= -0.1:
+        if float(pa.get("volatility", 40)) >= 65 and float(pb.get("volatility", 40)) >= 65:
+            options.append((3.0, (f"{na} and {nb} snapped at each other in the room after another loss. Teammates had to step in.", "bad", -6.0, -1.5, -1.5)))
+        options.append((2.0, (f'{na} and {nb} stayed behind after the loss. "We are better than this," {na} said. {nb} agreed.', "neutral", 2.0, -0.5, -0.5)))
+    if int(life_a.get("dependents") or 0) and int(life_b.get("dependents") or 0):
+        options.append((1.5, (f"{na} and {nb} swapped stories about their kids before warmups. Their families are planning a weekend together.", "good", 3.0, 0.8, 0.8)))
+    elif int(life_a.get("dependents") or 0) or int(life_b.get("dependents") or 0):
+        dad, other = (na, nb) if int(life_a.get("dependents") or 0) else (nb, na)
+        options.append((1.0, (f"{dad} showed {other} videos of his kids on the flight. {other} has been told he is babysitting on the next off day.", "good", 2.0, 0.6, 0.4)))
+    nat_a = str(getattr(a, "nationality", "") or "")
+    if nat_a and nat_a == str(getattr(b, "nationality", "") or ""):
+        options.append((1.2, (f"{na} and {nb} went out for dinner on the road, talking about home.", "good", 2.5, 0.6, 0.6)))
+    if float(pa.get("sociability", 50)) >= 65 or float(pb.get("sociability", 50)) >= 65:
+        host = na if float(pa.get("sociability", 50)) >= float(pb.get("sociability", 50)) else nb
+        options.append((1.0, (f"{host} talked {na if host == nb else nb} into a round of golf on the off day. Long walk, a lot of laughing.", "good", 2.5, 0.5, 0.5)))
+    options.append((1.0, (f"{na} and {nb} played cards on the flight. Small stuff, but the room is closer for it.", "neutral", 1.2, 0.3, 0.3)))
+    weights = [w for w, _ in options]
+    return rng.choices([o for _, o in options], weights=weights, k=1)[0]
+
+
+def _u_teammate_chatter(session: Any, rng: random.Random, elapsed_days: int = 1) -> int:
+    """Each day a couple of pairs on your club talk. Bonds and moods move a little."""
+    team_id = str(getattr(session, "user_team_id", "") or "")
+    if not team_id:
+        return 0
+    entities = getattr(session, "universe_players", None) or {}
+    players = [p for p in _u_team_players(session, team_id) if str(getattr(p, "id", "") or "") in entities]
+    if len(players) < 4:
+        return 0
+    day, iso, _ = _u_current_meta(session)
+    form, _rec = _u_team_form(session, team_id)
+    made = 0
+    used: set = set()
+    for _ in range(min(8, CHATTER_PAIRS_PER_DAY * max(1, int(elapsed_days)))):
+        pool = [p for p in players if str(getattr(p, "id", "")) not in used]
+        if len(pool) < 2:
+            used.clear()
+            pool = list(players)
+        a = rng.choice(pool)
+        aid = str(getattr(a, "id", ""))
+        # Lean toward players who already get along, so friendships form.
+        others = [p for p in pool if p is not a]
+        weights = [0.5 + _u_bond(session, aid, str(getattr(p, "id", ""))) / 50.0 for p in others]
+        b = rng.choices(others, weights=weights, k=1)[0]
+        bid = str(getattr(b, "id", ""))
+        ea, eb = entities.get(aid) or {}, entities.get(bid) or {}
+        text, tone, bond_d, ma_d, mb_d = _u_chatter_topic(a, b, ea, eb, form, rng)
+        _u_shift_bond(session, aid, bid, bond_d)
+        for ent, delta, other, other_name in (
+            (ea, ma_d, bid, str(getattr(b, "name", ""))),
+            (eb, mb_d, aid, str(getattr(a, "name", ""))),
+        ):
+            st = ent.setdefault("state", {})
+            cur = float(st.get("morale", 60) or 60)
+            if delta > 0:
+                # A good chat matters less to a player who is already flying.
+                delta *= max(0.0, min(1.0, (85.0 - cur) / 25.0))
+            st["morale"] = _u_clip(cur + delta)
+            _u_life_post(ent, day=day, iso=iso, text=text, tone=tone, with_id=other, with_name=other_name)
+        _u_push_morale_to_player(session, aid, float((ea.get("state") or {}).get("morale", 60)))
+        _u_push_morale_to_player(session, bid, float((eb.get("state") or {}).get("morale", 60)))
+        used.update((aid, bid))
+        made += 1
+    return made
+
+
+def player_closest_teammates(session: Any, player_id: str, n: int = 3) -> List[Dict[str, Any]]:
+    book = getattr(session, "universe_bonds", None) or {}
+    rows = []
+    for key, val in book.items():
+        a, _, b = str(key).partition("|")
+        if str(player_id) not in (a, b):
+            continue
+        other = b if a == str(player_id) else a
+        pl = _player_from_roster(session, other)
+        if pl is None:
+            continue
+        rows.append({"player_id": other, "name": str(getattr(pl, "name", "") or ""), "bond": round(float(val))})
+    rows.sort(key=lambda r: -r["bond"])
+    close = [r for r in rows if r["bond"] >= 55][:n]
+    friction = [r for r in reversed(rows) if r["bond"] <= 40][:1]
+    return close + friction
+
+
 def get_player_meeting_detail(session: Any, player_id: str) -> Dict[str, Any]:
     ctx = _gm_build_context(session, player_id)
     profile = player_universe_profile(session, player_id)
@@ -13459,4 +13979,7 @@ def get_player_meeting_detail(session: Any, player_id: str) -> Dict[str, Any]:
         "memories": list((ctx.get("entity") or {}).get("memories") or [])[-12:],
         "promises": [p for p in (getattr(session, "universe_promises", None) or []) if str(p.get("player_id") or "") == str(player_id)],
         "history": [h for h in (getattr(session, "gm_meeting_history", None) or []) if str(h.get("player_id") or "") == str(player_id)][-15:],
+        "emotion": player_emotion(session, str(player_id), ctx.get("entity")),
+        "life_feed": list(reversed(list(((ctx.get("entity") or {}).get("life_feed") or [])[-10:]))),
+        "closest_teammates": player_closest_teammates(session, str(player_id)),
     }
