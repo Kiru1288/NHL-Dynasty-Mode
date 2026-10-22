@@ -734,6 +734,48 @@ def _transition_to_playoff_ready(session: FranchiseSession) -> Dict[str, Any]:
     }
 
 
+def _award_history_inputs(session: FranchiseSession, calder_history: Any) -> Dict[str, Any]:
+    """Per-player facts the award engine can't see on a stat row: NHL rookie facts for the
+    Calder, and games lost to injury this season for the Masterton."""
+    hist = calder_history(
+        session,
+        int(getattr(session, "season_calendar_year", 0) or 0),
+        dict(getattr(session, "player_award_history", None) or {}),
+    )
+    lost: Dict[str, int] = {}
+    seen: set = set()
+    for entry in list(getattr(session, "injury_log_all", None) or []) + list(getattr(session, "injury_log_major", None) or []):
+        if not isinstance(entry, dict):
+            continue
+        pid = str(entry.get("player_id") or "")
+        # the major log repeats injuries already in the full log; count each injury once
+        dedupe = f"{pid}:{entry.get('calendar_day')}"
+        if not pid or dedupe in seen:
+            continue
+        seen.add(dedupe)
+        try:
+            lost[pid] = lost.get(pid, 0) + int(entry.get("games_initial") or entry.get("games") or 0)
+        except (TypeError, ValueError):
+            continue
+    for pid, games in lost.items():
+        row = dict(hist.get(pid) or {})
+        row["games_lost_to_injury"] = games
+        hist[pid] = row
+    return hist
+
+
+def _regular_season_award_rows(session: FranchiseSession) -> List[Dict[str, Any]]:
+    """The season ledger is the regular season by construction: playoff games write to
+    ``session.playoff_player_stats``. Rows stamped "playoffs" by the old phase test
+    (the whole ledger, in bulk-simmed seasons) are put back to regular season here, so
+    saves made before that fix still get their player awards."""
+    rows = [dict(v) for v in (getattr(session, "player_season_stats", None) or {}).values() if isinstance(v, dict)]
+    for row in rows:
+        if str(row.get("stat_scope") or "") in ("", "playoffs", "playoff"):
+            row["stat_scope"] = "regular_season"
+    return rows
+
+
 def complete_playoffs_from_live_result(session: FranchiseSession, live: Dict[str, Any]) -> Dict[str, Any]:
     """
     Finish postseason using an already-simulated live bracket (interactive mode).
@@ -788,9 +830,7 @@ def complete_playoffs_from_live_result(session: FranchiseSession, live: Dict[str
     sim = session.sim
     teams = list(sim.league.teams)
     season_year = int(getattr(session, "season_calendar_year", 0) or 0)
-    award_rows = [dict(v) for v in (list((session.player_season_stats or {}).values()) if session.player_season_stats else [])]
-    for row in award_rows:
-        row.setdefault("stat_scope", "regular_season")
+    award_rows = _regular_season_award_rows(session)
     playoff_rows = []
     for key in ("playoff_player_stats", "player_playoff_stats", "playoff_stats"):
         raw = getattr(session, key, None)
@@ -819,7 +859,7 @@ def complete_playoffs_from_live_result(session: FranchiseSession, live: Dict[str
 
     from services.season_carryover import calder_history
 
-    history_by_player = calder_history(session, int(getattr(session, "season_calendar_year", 0) or 0), dict(getattr(session, "player_award_history", None) or {}))
+    history_by_player = _award_history_inputs(session, calder_history)
     awards = compute_awards(
         session.standings,
         playoff_result,
@@ -944,9 +984,7 @@ def complete_playoffs(session: FranchiseSession) -> Dict[str, Any]:
     playoff_result = simulate_playoffs(sim.rng, session.standings, teams, session.strength_map)
 
     # Freeze input snapshots before any offseason mutation.
-    award_rows = [dict(v) for v in (list((session.player_season_stats or {}).values()) if session.player_season_stats else [])]
-    for row in award_rows:
-        row.setdefault("stat_scope", "regular_season")
+    award_rows = _regular_season_award_rows(session)
     playoff_rows = []
     for key in ("playoff_player_stats", "player_playoff_stats", "playoff_stats"):
         raw = getattr(session, key, None)
@@ -975,7 +1013,7 @@ def complete_playoffs(session: FranchiseSession) -> Dict[str, Any]:
 
     from services.season_carryover import calder_history
 
-    history_by_player = calder_history(session, int(getattr(session, "season_calendar_year", 0) or 0), dict(getattr(session, "player_award_history", None) or {}))
+    history_by_player = _award_history_inputs(session, calder_history)
     awards = compute_awards(
         session.standings,
         playoff_result,
@@ -1129,7 +1167,21 @@ def _franchise_awards_are_complete(session: FranchiseSession) -> bool:
     if not bool(getattr(session, "awards_generated", False)):
         return False
     payload = dict(getattr(session, "awards_payload", None) or {})
-    return bool(payload.get("awards"))
+    if not payload.get("awards"):
+        return False
+    return not _awards_payload_broken(session, payload)
+
+
+def _awards_payload_broken(session: FranchiseSession, payload: Dict[str, Any]) -> bool:
+    """Saves from before the stat-scope fix hold awards where every player trophy came back
+    "no eligible candidates" while the season ledger was full. Those get recomputed once."""
+    src = payload.get("official_results") or payload.get("awards") or []
+    items = [a for a in (src.values() if isinstance(src, dict) else src) if isinstance(a, dict)]
+    player_awards = [a for a in items if str(a.get("award_id") or "") in ("hart", "art_ross", "norris", "vezina", "calder")]
+    ledger_has_players = any(
+        isinstance(r, dict) and int(r.get("gp") or 0) > 0 for r in (getattr(session, "player_season_stats", None) or {}).values()
+    )
+    return bool(player_awards) and ledger_has_players and all(str(a.get("status")) == "unavailable" for a in player_awards)
 
 
 def _playoff_result_from_session(session: FranchiseSession):
@@ -1186,7 +1238,7 @@ def _ensure_franchise_awards_computed(session: FranchiseSession) -> bool:
     season_year = int(getattr(session, "season_calendar_year", 0) or 0)
     existing = dict(getattr(session, "awards_payload", None) or {})
     existing_meta = dict(existing.get("metadata") or {})
-    if existing.get("awards") and str(existing_meta.get("season_year") or "") == str(season_year):
+    if existing.get("awards") and str(existing_meta.get("season_year") or "") == str(season_year) and not _awards_payload_broken(session, existing):
         session.awards_generated = True
         return True
 
@@ -1196,12 +1248,7 @@ def _ensure_franchise_awards_computed(session: FranchiseSession) -> bool:
 
     sim = session.sim
     teams = list(sim.league.teams)
-    award_rows = [
-        dict(v)
-        for v in (list((session.player_season_stats or {}).values()) if session.player_season_stats else [])
-    ]
-    for row in award_rows:
-        row.setdefault("stat_scope", "regular_season")
+    award_rows = _regular_season_award_rows(session)
     playoff_rows: List[Dict[str, Any]] = []
     for key in ("playoff_player_stats", "player_playoff_stats", "playoff_stats"):
         raw = getattr(session, key, None)
@@ -1229,7 +1276,7 @@ def _ensure_franchise_awards_computed(session: FranchiseSession) -> bool:
 
     from services.season_carryover import calder_history
 
-    history_by_player = calder_history(session, int(getattr(session, "season_calendar_year", 0) or 0), dict(getattr(session, "player_award_history", None) or {}))
+    history_by_player = _award_history_inputs(session, calder_history)
     playoff_result = _playoff_result_from_session(session)
     awards = compute_awards(
         session.standings,

@@ -1523,14 +1523,19 @@ def propose_and_execute_cpu_trades(
         sid = team_id_of(seller)
         pid = _player_id(player)
         clause = _clause_summary(player)
-        if clause.get("nmc") or _player_recently_acquired(player, ctx):
+        if _player_recently_acquired(player, ctx):
             return False
         dests = {str(x).upper() for x in (getattr(player, "_trade_demand_destinations", None) or []) if x}
-        clause_limited = bool(clause.get("ntc") or clause.get("mntc", 0) > 0)
+        # A player who asked out waives his NMC / NTC for the clubs he wants. NMC players
+        # used to be skipped outright, so their demands could never resolve.
+        clause_limited = bool(clause.get("nmc") or clause.get("ntc") or clause.get("mntc", 0) > 0)
         pool = [t for t in teams if team_id_of(t) != sid]
         if clause_limited:
-            # He waives only for clubs on his own list.
-            pool = [t for t in pool if _team_abbr_upper(t) in dests]
+            # He waives for clubs on his own list; a long standoff widens what he'll accept.
+            on_list = [t for t in pool if _team_abbr_upper(t) in dests]
+            if len(on_list) < 3 and int(days_open) >= 20:
+                on_list = pool
+            pool = on_list
         if not pool:
             return False
         stage = max(1, min(3, _safe_int(getattr(player, "_crisis_trade_stage", 1), 1)))
@@ -1538,7 +1543,8 @@ def propose_and_execute_cpu_trades(
 
         weighted = [(t, _demand_buyer_weight(t, player, dests)) for t in pool]
         tries: List[Any] = []
-        while weighted and len(tries) < CPU_DEMAND_BUYER_TRIES:
+        max_tries = CPU_DEMAND_BUYER_TRIES + min(8, int(days_open) // 7)
+        while weighted and len(tries) < max_tries:
             idx = pair_rng.choices(range(len(weighted)), weights=[w for _, w in weighted], k=1)[0]
             tries.append(weighted.pop(idx)[0])
 
@@ -1612,8 +1618,8 @@ def propose_and_execute_cpu_trades(
                     buyer_pick=buyer_pick,
                     buyer_pick_2=buyer_pick_2,
                     motive="demand_resolution",
-                    attempt_gap_max=gap_max,
-                    min_interest=CPU_DEMAND_MIN_INTEREST,
+                    attempt_gap_max=gap_max + min(15.0, 0.4 * int(days_open)),
+                    min_interest=max(0.15, CPU_DEMAND_MIN_INTEREST - 0.004 * int(days_open)),
                     extra={
                         "demand_player_id": pid,
                         "demand_days_open": int(days_open),

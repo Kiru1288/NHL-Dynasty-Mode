@@ -24,6 +24,8 @@ import { SocialPostCard, PlayerSocialRail } from "../components/franchise/social
 import { PlayerProfileModal, normalizeRosterBrowserPlayer } from "./RosterScreen";
 import { collectLockerPulse, buildHubStoryTicker, isRoutineLeagueTrade } from "../utils/lockerRoomPulse";
 import { resolveChapterMap, chapterNumericValue } from "../utils/chapterAttributes";
+import PlayerRankings from "../components/storylines/PlayerRankings";
+import "../components/storylines/gossip.css";
 
 /*
   StorylinesScreen — franchise narrative command center.
@@ -210,6 +212,7 @@ const FILTER_EMPTY = {
 
 const DEPARTMENTS = [
   { id: "front_page", label: "Stories", glyph: "◉" },
+  { id: "rankings", label: "Hot or Not", glyph: "♛" },
   { id: "trade_desk", label: "Trades", glyph: "⇄" },
   { id: "player_meetings", label: "Meetings", glyph: "◫" },
   { id: "locker_room", label: "Room & Life", glyph: "◍" },
@@ -224,6 +227,24 @@ const DEPARTMENTS = [
 ];
 
 const PRIORITY_RANK = { CRITICAL: 4, HIGH: 3, MEDIUM: 2, LOW: 1 };
+
+/** Bounded search of the loaded state for a player object (rankings rows carry ids only). */
+function findPlayerInState(state, pid) {
+  const want = String(pid || "");
+  if (!want || !state) return null;
+  const seen = new Set();
+  const queue = [[state, 0]];
+  while (queue.length) {
+    const [node, depth] = queue.shift();
+    if (!node || typeof node !== "object" || seen.has(node)) continue;
+    seen.add(node);
+    if (!Array.isArray(node) && String(node.player_id ?? node.id ?? "") === want && (node.name || node.full_name)) return node;
+    if (depth >= 5) continue;
+    const kids = Array.isArray(node) ? node : Object.values(node);
+    for (const k of kids) if (k && typeof k === "object") queue.push([k, depth + 1]);
+  }
+  return null;
+}
 
 const DETAIL_TABS = [
   { id: "details", label: "Case Notes" },
@@ -2456,12 +2477,9 @@ function StoryCard({ story, socialCount, onOpen, index }) {
       style={{ animationDelay: `${Math.min(index, 12) * 28}ms` }}
       onClick={() => onOpen(story.id)}
     >
-      <span className="sl-card__rail" aria-hidden />
       <div className="sl-card__top">
         <CategoryTag story={story} />
-        {story.priorityRank >= 4 ? <span className="sl-card__prio">Critical</span> : null}
-        {story.requiresAction ? <span className="sl-card__decision">On your desk</span> : null}
-        <StatusPill story={story} />
+        {story.requiresAction ? <span className="sl-card__decision">Your call</span> : story.priorityRank >= 4 ? <span className="sl-card__prio">Big one</span> : null}
         <span className="sl-card__age">{story.ageLabel || "—"}</span>
       </div>
       <div className="sl-card__body">
@@ -2480,13 +2498,14 @@ function StoryCard({ story, socialCount, onOpen, index }) {
         </div>
       </div>
       <div className="sl-card__foot">
-        <HeatSpark value={story.heat} />
-        <div className="sl-card__stats">
-          {heatLabel(story.heat) ? <span className="sl-card__heat">{heatLabel(story.heat)}</span> : null}
-          {story.isUserTeam ? <span className="sl-card__ours">Your club</span> : null}
-          {socialCount ? <span className="sl-card__social">{formatCount(socialCount)} posts</span> : null}
-          <span className="sl-card__open">Open file →</span>
-        </div>
+        <span className="sl-card__byline">
+          {[
+            /^\d+$/.test(String(story.teamName || "")) || !story.teamName ? "League" : story.teamName,
+            heatLabel(story.heat),
+            socialCount ? `${formatCount(socialCount)} posts` : null,
+          ].filter(Boolean).join(" · ")}
+        </span>
+        <span className="sl-card__open">Read on</span>
       </div>
     </button>
   );
@@ -2547,20 +2566,27 @@ function RinkOddities({ stories, onOpen, onResolve, busyChoice, onShowAll, limit
 
 function LeadStory({ story, socialCount, onOpen, choiceOptions, onResolve, busyChoice }) {
   if (!story) return null;
-  const meta = categoryMeta(story);
   const tier = heatTier(story.heat);
+  // The sticker says what kind of story this is, from the story's own flags.
+  const sticker = story.requiresAction
+    ? "Your call"
+    : isRumourStory(story)
+      ? "Sources say"
+      : isBreakingStory(story)
+        ? "Breaking"
+        : tier === "hot" || tier === "boiling"
+          ? "Exclusive"
+          : "Top story";
   return (
     <section className={`sl-lead sl-lead--${tier}`} aria-label="Lead story">
-      <div className="sl-lead__glow" aria-hidden style={{ background: `radial-gradient(circle at 22% 40%, ${meta.accent}22, transparent 62%)` }} />
       <div className="sl-lead__portrait">
+        <span className="sl-lead__sticker">{sticker}</span>
         <StoryFace story={story} size={132} />
-        <HeatRing value={story.heat} size={72} />
+        <span className="sl-lead__heat">{heatLabel(story.heat) || "On the wire"}</span>
       </div>
       <div className="sl-lead__main">
         <div className="sl-lead__kickers">
-          <span className="sl-lead__flag">{story.requiresAction ? "Awaiting your call" : "Lead story"}</span>
           <CategoryTag story={story} size="md" />
-          <StatusPill story={story} />
           <span className="sl-lead__age">{story.ageLabel || "—"}</span>
         </div>
         <h2 className="sl-lead__headline">{story.headline}</h2>
@@ -2600,7 +2626,7 @@ function LeadStory({ story, socialCount, onOpen, choiceOptions, onResolve, busyC
         ) : null}
 
         <button type="button" className="sl-lead__open" onClick={() => onOpen(story.id)}>
-          Open the full case file →
+          The full story, continued inside
         </button>
       </div>
     </section>
@@ -4598,7 +4624,7 @@ export default function StorylinesScreen() {
     : [];
 
   return (
-    <div className="nhlcal-sl-root storylines-skin">
+    <div className="nhlcal-sl-root storylines-skin sl-gossip">
       <style>{`
                 .sl-prospect-row { display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; gap: 14px; align-items: center; cursor: pointer; transition: border-color .15s ease, transform .15s ease; }
         .sl-prospect-row:hover, .sl-prospect-row:focus-visible { border-color: rgba(57, 214, 230, 0.55); transform: translateY(-1px); outline: none; }
@@ -5884,32 +5910,23 @@ export default function StorylinesScreen() {
             })()}
           </div>
           <div className="sl-command__id">
-            <p className="sl-command__eyebrow">Franchise newsroom</p>
-            <h1>Storylines</h1>
+            <h1 className="sl-nameplate">The Bench Buzz</h1>
             <p className="sl-command__sub">
-              {prettyDate(calendarLabel(franchiseState))} · {teamLabel(franchiseState)}
+              <span>{prettyDate(calendarLabel(franchiseState))}</span>
+              <span>Home edition: {teamLabel(franchiseState)}</span>
+              <span>{narrativeStories.length} stories · {tradeStories.length} deals · {yourTeamCount} about you</span>
             </p>
           </div>
-          <div className="sl-command__stats">
-            <div className="sl-stat">
-              <strong>{narrativeStories.length}</strong>
-              <span>Stories</span>
-            </div>
-            <div className="sl-stat">
-              <strong>{tradeStories.length}</strong>
-              <span>Trades</span>
-            </div>
-            <div className="sl-stat sl-stat--ours">
-              <strong>{yourTeamCount}</strong>
-              <span>Your club</span>
-            </div>
-            {pendingDecisions.length ? (
-              <div className="sl-stat sl-stat--alert">
-                <strong>{pendingDecisions.length}</strong>
-                <span>On your desk</span>
-              </div>
-            ) : null}
-          </div>
+          {pendingDecisions.length ? (
+            <button
+              type="button"
+              className="sl-desk-sticker"
+              onClick={() => { setDepartment("front_page"); setFilter("team"); openStory(pendingDecisions[0].id); }}
+            >
+              <strong>{pendingDecisions.length}</strong>
+              <span>waiting on your call</span>
+            </button>
+          ) : null}
           <nav className="sl-command__nav" aria-label="Navigation">
             <button type="button" onClick={() => setScreen?.(SCREENS.CALENDAR)}>Calendar</button>
             <button type="button" onClick={() => setScreen?.(SCREENS.HUB)}>Hub</button>
@@ -5974,9 +5991,8 @@ export default function StorylinesScreen() {
                   setOpenCaseId(null);
                 }}
               >
-                <em aria-hidden>{d.glyph}</em>
                 {d.label}
-                {count > 0 ? <span className="sl-dept-count">{count}</span> : null}
+                {count > 0 ? <sup className="sl-dept-count">{count}</sup> : null}
               </button>
             );
           })}
@@ -6004,6 +6020,15 @@ export default function StorylinesScreen() {
             kicker="League wire · idle"
             title="No coverage yet"
             body="Advance the calendar and the newsroom will start filing from backend storylines."
+          />
+        ) : department === "rankings" ? (
+          <PlayerRankings
+            userTeamId={userTeamId(franchiseState)}
+            onOpenPlayer={(pid) => {
+              const p = findPlayerInState(franchiseState, pid);
+              if (p) setDossierProspect(p);
+              else setActionNotice("That player's full file isn't loaded on this screen yet. Open them from the roster.");
+            }}
           />
         ) : department === "player_meetings" ? (
           <PlayerMeetingsPanel
@@ -7138,7 +7163,7 @@ export default function StorylinesScreen() {
             </div>
 
             <div className="sl-gridhead">
-              <h3>The wire</h3>
+              <h3>{department === "trade_desk" ? "The deal sheet" : "The rumour mill"}</h3>
               <span>{filtered.length} filed</span>
             </div>
 

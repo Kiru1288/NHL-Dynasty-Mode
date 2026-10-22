@@ -25,6 +25,8 @@ export const SCREENS = {
   OFFICE: "office",
   GM_WORLD: "gm_world",
   LEAGUE_OPERATIONS: "league_operations",
+  FRANCHISE_IDENTITY: "franchise_identity",
+  LEGACY_HALL: "legacy_hall",
   SETTINGS: "settings",
   PLACEHOLDER: "placeholder",
 };

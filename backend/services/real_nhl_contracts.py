@@ -61,8 +61,13 @@ def _http_get_text(url: str, *, timeout: float = HTTP_TIMEOUT_S) -> str:
         headers={"User-Agent": USER_AGENT, "Accept": "text/html"},
         method="GET",
     )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read().decode("utf-8", "replace")
+    from services.real_nhl_roster_importer import cached_http_text
+
+    def _fetch() -> str:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read().decode("utf-8", "replace")
+
+    return cached_http_text(url, _fetch)
 
 
 def normalize_player_name(name: str) -> str:

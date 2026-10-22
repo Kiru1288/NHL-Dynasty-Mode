@@ -649,6 +649,7 @@ def team_tactic_profile(team: Any) -> Dict[str, float]:
     pct = _identity_pct(team)
     coach_k = _clamp(1.0 + (coach - 72.0) / 60.0, 0.75, 1.35)
     vol = xg = allow = pen = fat = 1.0
+    sp_dx = 0.0
     fit_total = 0.0
     n_fit = 0
     for key, table in _TACTIC_EFFECTS.items():
@@ -656,6 +657,8 @@ def team_tactic_profile(team: Any) -> Dict[str, float]:
         dv, dx, da, dp, df = table.get(val, (0.0, 0.0, 0.0, 0.0, 0.0))
         vol += dv
         xg += dx
+        if key == "shot_priority":
+            sp_dx = dx
         allow += da
         pen += dp
         fat += df
@@ -675,6 +678,8 @@ def team_tactic_profile(team: Any) -> Dict[str, float]:
     prof = {
         "vol": round(vol, 4),
         "xg": round(xg * exec_mult, 4),
+        # Event loop: shot priority already lives in the chance mix (team_chance_mix).
+        "xg_event": round((xg - sp_dx) * exec_mult, 4),
         "allow": round(allow, 4),
         "pen": round(pen, 4),
         "fatigue": round(fat, 4),
@@ -691,11 +696,142 @@ def team_tactic_profile(team: Any) -> Dict[str, float]:
     return prof
 
 
-def game_tactic_mods(home: Any, away: Any) -> Dict[str, float]:
-    """Goal-rate and shot-attempt multipliers for one game (home has the last change)."""
+# What each system plays for: per-chance-type tilt on the attacking club's shot mix.
+# A volume club lives on the perimeter and the rebounds it creates; a quality club
+# passes up point shots for the slot; a 2-3 forecheck turns pucks over at the net.
+_CHANCE_MIX_ATTACK: Dict[str, Dict[str, Dict[str, float]]] = {
+    "shot_priority": {
+        "quality": {"LOW_DANGER_PERIMETER": 0.72, "POINT_SHOT": 0.82, "SLOT": 1.12, "HIGH_DANGER_SLOT": 1.22, "ONE_TIMER": 1.15, "NET_FRONT": 1.05},
+        "volume": {"LOW_DANGER_PERIMETER": 1.28, "POINT_SHOT": 1.25, "REBOUND": 1.22, "SLOT": 0.94, "HIGH_DANGER_SLOT": 0.84, "ONE_TIMER": 0.90},
+    },
+    "forecheck": {
+        "2-3": {"NET_FRONT": 1.12, "REBOUND": 1.14, "RUSH_MEDIUM": 0.88},
+        "1-2-2": {"RUSH_MEDIUM": 1.15, "NET_FRONT": 0.92, "REBOUND": 0.94},
+    },
+    "pace": {
+        "fast": {"RUSH_MEDIUM": 1.28, "POINT_SHOT": 0.90, "LOW_DANGER_PERIMETER": 0.95},
+        "slow": {"RUSH_MEDIUM": 0.78, "POINT_SHOT": 1.08, "LOW_DANGER_PERIMETER": 1.06},
+    },
+    "d_activation": {
+        "active": {"POINT_SHOT": 1.12, "ONE_TIMER": 1.10, "RUSH_MEDIUM": 1.06},
+        "conservative": {"POINT_SHOT": 0.90, "ONE_TIMER": 0.94, "RUSH_MEDIUM": 0.92},
+    },
+    "pp_system": {
+        "umbrella": {"POINT_SHOT": 1.32, "PP_ONE_TIMER": 1.12, "PP_SLOT": 0.88},
+        "1-3-1": {"PP_ONE_TIMER": 1.22, "PP_SLOT": 1.05, "POINT_SHOT": 0.85},
+        "overload": {"NET_FRONT": 1.35, "PP_SLOT": 1.08, "POINT_SHOT": 0.88, "LOW_DANGER_PERIMETER": 0.90},
+    },
+}
+
+# What each defensive system concedes. A collapsing 1-2-2 gives up the outside to
+# protect the house; a pressure kill leaves the seam open behind it.
+_CHANCE_MIX_ALLOW: Dict[str, Dict[str, Dict[str, float]]] = {
+    "forecheck": {
+        "1-2-2": {"LOW_DANGER_PERIMETER": 1.10, "POINT_SHOT": 1.06, "RUSH_MEDIUM": 0.84, "HIGH_DANGER_SLOT": 0.92},
+        "2-3": {"RUSH_MEDIUM": 1.18, "HIGH_DANGER_SLOT": 1.04},
+    },
+    "d_activation": {
+        "active": {"RUSH_MEDIUM": 1.10},
+        "conservative": {"RUSH_MEDIUM": 0.90, "NET_FRONT": 0.94},
+    },
+    "pk_system": {
+        "box": {"POINT_SHOT": 1.15, "LOW_DANGER_PERIMETER": 1.12, "PP_SLOT": 0.88},
+        "diamond": {"POINT_SHOT": 1.08, "PP_ONE_TIMER": 0.88},
+        "pressure": {"PP_SLOT": 1.10, "POINT_SHOT": 0.84},
+    },
+}
+
+# Roster identity (percentile groups): the players a club has bend the mix as well.
+_CHANCE_MIX_IDENTITY: Dict[str, Tuple[str, ...]] = {
+    "physical": ("NET_FRONT", "REBOUND"),
+    "pace": ("RUSH_MEDIUM", "SH_RUSH"),
+    "shooting": ("ONE_TIMER", "PP_ONE_TIMER", "SLOT"),
+    "playmaking": ("HIGH_DANGER_SLOT", "PP_SLOT", "ONE_TIMER"),
+}
+
+
+def _mix_from_tables(t: Dict[str, Any], tables: Dict[str, Dict[str, Dict[str, float]]]) -> Dict[str, float]:
+    out: Dict[str, float] = {}
+    for key, opts in tables.items():
+        tilt = opts.get(str(t.get(key, DEFAULT_TACTICS.get(key, ""))))
+        if not tilt:
+            continue
+        for ct, m in tilt.items():
+            out[ct] = out.get(ct, 1.0) * float(m)
+    return out
+
+
+_SPECIAL_TEAMS_KEYS = frozenset({"pp_system", "pk_system"})
+
+
+def team_chance_mix(team: Any) -> Tuple[Dict[str, Dict[str, float]], Dict[str, Dict[str, float]]]:
+    """
+    (attack mix, allowed mix), each keyed by the ATTACKER's strength (EV / PP / SH):
+    per-chance-type multipliers on the shot pool, centred on 1.0, cached on the team.
+
+    Attack: what this club's system and roster generate. Allowed: what its defensive
+    system concedes (allowed["PP"] is this club killing a penalty).
+    """
+    t = getattr(team, "_tactics", None)
+    if not isinstance(t, dict):
+        t = DEFAULT_TACTICS
+    ident = getattr(team, "team_identity", None)
+    ckey = (tuple(str(t.get(k, "")) for k in TACTIC_OPTIONS), id(ident))
+    cached = getattr(team, "_chance_mix_cache", None)
+    if isinstance(cached, tuple) and cached[0] == ckey:
+        return cached[1]
+    ev_atk = {k: v for k, v in _CHANCE_MIX_ATTACK.items() if k not in _SPECIAL_TEAMS_KEYS}
+    ev_allow = {k: v for k, v in _CHANCE_MIX_ALLOW.items() if k not in _SPECIAL_TEAMS_KEYS}
+    attack = {
+        "EV": _mix_from_tables(t, ev_atk),
+        "PP": _mix_from_tables(t, {"pp_system": _CHANCE_MIX_ATTACK["pp_system"]}),
+        "SH": {},
+    }
+    allow = {
+        "EV": _mix_from_tables(t, ev_allow),
+        "PP": _mix_from_tables(t, {"pk_system": _CHANCE_MIX_ALLOW["pk_system"]}),
+        "SH": {},
+    }
+    pct = _identity_pct(team)
+    # Style, not talent: compare each group with the club's own average percentile, so
+    # a deep roster that ranks high everywhere does not just tilt toward every good look.
+    groups = [g for g in _CHANCE_MIX_IDENTITY if g in pct]
+    own_mean = sum(pct[g] for g in groups) / len(groups) if groups else 50.0
+    for group in groups:
+        cts = _CHANCE_MIX_IDENTITY[group]
+        m = 1.0 + 0.30 * _clamp((pct[group] - own_mean) / 40.0, -1.0, 1.0)
+        for mix in attack.values():
+            for ct in cts:
+                mix[ct] = mix.get(ct, 1.0) * m
+    if "defense" in pct:
+        # A structured defence keeps the puck outside: fewer looks from the house.
+        d = _clamp((pct["defense"] - 50.0) / 50.0, -1.0, 1.0)
+        for mix in (allow["EV"], allow["PP"]):
+            for ct in ("HIGH_DANGER_SLOT", "NET_FRONT", "REBOUND", "PP_SLOT"):
+                mix[ct] = mix.get(ct, 1.0) * (1.0 - 0.16 * d)
+            mix["LOW_DANGER_PERIMETER"] = mix.get("LOW_DANGER_PERIMETER", 1.0) * (1.0 + 0.12 * d)
+    out = (attack, allow)
+    try:
+        setattr(team, "_chance_mix_cache", (ckey, out))
+    except Exception:
+        pass
+    return out
+
+
+def game_tactic_mods(home: Any, away: Any, *, event_path: bool = False) -> Dict[str, float]:
+    """Goal-rate and shot-attempt multipliers for one game (home has the last change).
+
+    event_path: the event loop already turns shot priority into a different chance
+    mix (team_chance_mix), so its xG-per-shot term is left out here to avoid
+    counting it twice.
+    """
     ph = team_tactic_profile(home)
     pa = team_tactic_profile(away)
     pp_share = 0.19  # ~0.6 of ~3.1 goals per team-game come on the PP
+
+    if event_path:
+        ph = dict(ph, xg=ph.get("xg_event", ph["xg"]))
+        pa = dict(pa, xg=pa.get("xg_event", pa["xg"]))
 
     def _mu(own: Dict[str, float], opp: Dict[str, float], own_lc: float, opp_lc: float) -> float:
         ev = own["vol"] * own["xg"] * opp["allow"]

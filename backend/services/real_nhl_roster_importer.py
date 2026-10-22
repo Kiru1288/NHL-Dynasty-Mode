@@ -77,7 +77,70 @@ class RealNhlImportError(Exception):
 # ---------------------------------------------------------------------------
 
 
+# NHL API responses are cached on disk for a day. Rosters barely move inside a day, and
+# re-downloading every one on each new franchise was 30-60 s of every start.
+_API_CACHE_TTL_S = 24 * 3600
+
+
+def _api_cache_path(url: str) -> str:
+    import hashlib
+    import os
+    import tempfile
+
+    d = os.path.join(tempfile.gettempdir(), "nhl_dynasty_api_cache")
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, hashlib.sha1(url.encode("utf-8")).hexdigest() + ".json")
+
+
+def cached_http_text(url: str, fetch: Any) -> str:
+    """Day-long disk cache for any text download (contracts, analytics, CapWages pages)."""
+    import os
+    import time as _time
+
+    path = ""
+    try:
+        path = _api_cache_path(url).replace(".json", ".txt")
+        if os.path.exists(path) and _time.time() - os.path.getmtime(path) < _API_CACHE_TTL_S:
+            with open(path, "rb") as fh:
+                return fh.read().decode("utf-8", "replace")
+    except Exception:
+        path = ""
+    text = fetch()
+    if path and text:
+        try:
+            tmp = path + ".tmp"
+            with open(tmp, "wb") as fh:
+                fh.write(str(text).encode("utf-8"))
+            os.replace(tmp, path)
+        except Exception:
+            pass
+    return text
+
+
 def _http_get_json(url: str, *, timeout: float = HTTP_TIMEOUT_S) -> Any:
+    import os
+    import time as _time
+
+    try:
+        path = _api_cache_path(url)
+        if os.path.exists(path) and _time.time() - os.path.getmtime(path) < _API_CACHE_TTL_S:
+            with open(path, "rb") as fh:
+                return json.loads(fh.read().decode("utf-8"))
+    except Exception:
+        path = ""
+    data = _http_get_json_live(url, timeout=timeout)
+    if path:
+        try:
+            tmp = path + ".tmp"
+            with open(tmp, "wb") as fh:
+                fh.write(json.dumps(data).encode("utf-8"))
+            os.replace(tmp, path)
+        except Exception:
+            pass
+    return data
+
+
+def _http_get_json_live(url: str, *, timeout: float = HTTP_TIMEOUT_S) -> Any:
     req = urllib.request.Request(
         url,
         headers={
@@ -913,6 +976,39 @@ def _localized_field(value: Any) -> str:
     return str(value or "")
 
 
+def parse_landing_awards(landing: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Real NHL trophies from a player landing payload ("awards": [{trophy, seasons: [...]}]).
+
+    One entry per trophy-season, newest first, with the stat line the NHL publishes for
+    that season when present. Entries carry ``source="nhl_api"`` so they're never mixed
+    up with trophies won inside the save."""
+    out: List[Dict[str, Any]] = []
+    if not isinstance(landing, dict):
+        return out
+    for award in landing.get("awards") or []:
+        if not isinstance(award, dict):
+            continue
+        trophy = _localized_field(award.get("trophy"))
+        if not trophy:
+            continue
+        for season in award.get("seasons") or []:
+            if not isinstance(season, dict):
+                continue
+            sid = season.get("seasonId")
+            line = {k: season.get(k) for k in ("gamesPlayed", "goals", "assists", "points", "wins", "savePctg", "goalsAgainstAverage", "shutouts") if season.get(k) is not None}
+            out.append({
+                "award_result_id": f"nhl:{trophy}:{sid}",
+                "award_name": trophy,
+                "season": _season_int_to_label(sid),
+                "season_key": sid,
+                "finish": 1,
+                "source": "nhl_api",
+                "stat_line": line,
+            })
+    out.sort(key=lambda a: str(a.get("season_key") or ""), reverse=True)
+    return out
+
+
 def _season_int_to_label(season_int: Any) -> str:
     s = str(season_int or "").strip()
     if len(s) == 8 and s.isdigit():
@@ -1569,6 +1665,12 @@ def _build_player_from_roster_row(
             _swallowed_log.debug("suppressed exception", exc_info=True)
     if landing:
         _attach_career_stats(player, landing=landing, is_goalie=is_goalie)
+        try:
+            # Real trophies from the NHL API, kept apart from awards won inside the save.
+            player.nhl_awards = parse_landing_awards(landing)
+            player.nhl_awards_fetched = True
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     if contract or (r4 and isinstance(r4.get("contract"), dict)):
         _apply_real_contract(

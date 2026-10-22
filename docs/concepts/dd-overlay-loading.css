@@ -1,0 +1,87 @@
+/* Concept overlay: Double Dash loading screen ("starting grid").
+   Same stage as dd-overlay-setup.css. Mockup only. New elements marked [NEW]
+   would need small JSX additions in SetupLoadingScreen (SetupScreen.js). */
+:root{--dd-d:"Luckiest Guy",cursive;--dd-y:#ffe23a;--dd-ink:#1a0d05;--dd-rim:#e2231a;--dd-gh:#f8d58a;--dd-g:#c98a3c;--dd-gl:#6e4314;
+  --dd-teal:#2ee6d6;--dd-peach:#ffb48a;--dd-glass:rgba(16,34,82,.82);--dd-green:#3fdc6a}
+
+.setup-loading-screen{background:
+  radial-gradient(ellipse 55% 50% at 12% 8%,rgba(46,230,214,.30),transparent 70%),
+  radial-gradient(ellipse 50% 45% at 92% 95%,rgba(255,180,138,.32),transparent 70%),
+  radial-gradient(circle at 50% 30%,rgba(255,226,58,.16),transparent 40%),
+  url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='110' height='110'%3E%3Cpath d='M26 14l4 9 9 1-7 6 2 9-8-4-8 4 2-9-7-6 9-1z' fill='%23fff' fill-opacity='.05'/%3E%3Cpath d='M82 70l3 6 6 1-5 4 1 6-5-3-5 3 1-6-5-4 6-1z' fill='%23fff' fill-opacity='.04'/%3E%3C/svg%3E"),
+  linear-gradient(165deg,#2f55a8 0%,#1b3576 45%,#122a5e 100%)!important}
+
+/* Panel: navy glass in the gold bevel frame */
+.setup-loading-panel{width:min(620px,100%)!important;gap:14px!important;padding:34px 36px 30px!important;border:0!important;border-radius:18px!important;background:var(--dd-glass)!important;
+  box-shadow:0 0 0 3px var(--dd-gl),0 0 0 6px var(--dd-gh),0 0 0 9px var(--dd-gl),0 0 40px rgba(46,230,214,.2),0 20px 40px rgba(0,0,0,.55)!important;position:relative;overflow:visible}
+
+/* [NEW] crest hero spinning inside a gold item-box ring */
+.dd-load-crest{position:relative;width:150px;height:150px;margin-top:-90px;display:grid;place-items:center}
+.dd-load-crest::before{content:"";position:absolute;inset:0;border-radius:50%;
+  background:conic-gradient(var(--dd-y),var(--dd-peach),var(--dd-teal),var(--dd-y));animation:ddSpin 2.4s linear infinite;
+  -webkit-mask:radial-gradient(circle,transparent 60%,#000 61%);mask:radial-gradient(circle,transparent 60%,#000 61%);filter:drop-shadow(0 0 14px rgba(255,226,58,.7))}
+.dd-load-crest span{width:118px;height:118px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#2a4c9e,#0d1d4a);border:4px solid var(--dd-ink);display:grid;place-items:center;box-shadow:inset 0 4px 0 rgba(255,255,255,.15),0 8px 18px rgba(0,0,0,.5)}
+.dd-load-crest img{width:86px;height:86px;object-fit:contain;animation:ddBob 1.6s ease-in-out infinite;filter:drop-shadow(0 4px 6px rgba(0,0,0,.6))}
+
+/* Type */
+.setup-loading-panel>small{font-family:var(--dd-d)!important;font-size:14px!important;letter-spacing:.12em!important;color:var(--dd-teal)!important;text-shadow:0 0 10px rgba(46,230,214,.45)}
+.setup-loading-panel h2{font-family:var(--dd-d)!important;font-weight:400!important;font-size:52px!important;line-height:1!important;color:var(--dd-y)!important;letter-spacing:.02em;
+  -webkit-text-stroke:3px var(--dd-ink);paint-order:stroke fill;text-shadow:0 4px 0 var(--dd-ink),0 8px 16px rgba(0,0,0,.55)}
+.setup-loading-panel p{font-size:15px!important;font-weight:800;color:var(--dd-peach)!important}
+
+/* Meta chips -> pills */
+.setup-loading-meta span{font-family:var(--dd-d);font-size:13px!important;letter-spacing:.06em!important;color:var(--dd-ink)!important;border:2px solid var(--dd-ink)!important;border-radius:999px;
+  padding:6px 14px 3px!important;background:linear-gradient(180deg,var(--dd-gh),var(--dd-g));box-shadow:0 3px 0 var(--dd-ink)}
+
+/* Warm-up tasks -> race start lights */
+.setup-loading-tasks{display:flex!important;justify-content:center;gap:34px!important;margin:6px 0 0!important;padding:14px 22px 12px!important;border-radius:16px;
+  background:linear-gradient(180deg,#1a1a22,#0b0b10);border:4px solid var(--dd-ink);box-shadow:inset 0 2px 0 rgba(255,255,255,.08),0 8px 16px rgba(0,0,0,.5);width:auto!important}
+.setup-loading-tasks li{display:flex!important;flex-direction:column;align-items:center;gap:6px!important;border:0!important;padding:0!important;text-align:center!important}
+.setup-loading-tasks i{width:42px!important;height:42px!important;margin:0!important;border:3px solid #000;background:radial-gradient(circle at 35% 30%,#4a1010,#200606)!important;box-shadow:inset 0 -4px 6px rgba(0,0,0,.6)!important}
+.setup-loading-tasks li.is-loading i{background:radial-gradient(circle at 35% 30%,#fff6a0,var(--dd-y) 45%,#c99400)!important;box-shadow:0 0 18px 4px rgba(255,226,58,.8)!important}
+.setup-loading-tasks li.is-ready i{background:radial-gradient(circle at 35% 30%,#d6ffd9,var(--dd-green) 45%,#16852f)!important;box-shadow:0 0 18px 4px rgba(63,220,106,.8)!important}
+.setup-loading-tasks span{font-family:var(--dd-d);font-size:12px!important;letter-spacing:.05em;color:#fff!important;max-width:110px;line-height:1.1}
+.setup-loading-tasks em{font-size:10px!important;color:rgba(255,255,255,.5)!important}
+.setup-loading-tasks li.is-ready em{color:var(--dd-green)!important}.setup-loading-tasks li.is-loading em{color:var(--dd-y)!important}
+
+/* Progress bar -> chunky striped meter */
+.setup-loading-bar{height:22px!important;border-radius:12px;border:3px solid var(--dd-ink);background:#0a0f2a!important;box-shadow:inset 0 2px 4px rgba(0,0,0,.6),0 0 0 2px var(--dd-gh)}
+.setup-loading-bar span{width:66%!important;animation:ddStripe .7s linear infinite!important;border-radius:8px;
+  background:repeating-linear-gradient(-45deg,rgba(255,255,255,.22) 0 10px,transparent 10px 20px),linear-gradient(90deg,var(--dd-teal),var(--dd-y) 70%,var(--dd-peach))!important;
+  background-size:28px 28px,100% 100%!important;box-shadow:inset 0 3px 0 rgba(255,255,255,.35)}
+
+/* Fun fact -> "DID YOU KNOW?" card */
+.setup-loading-panel blockquote{position:relative;margin-top:14px!important;padding:20px 18px 14px!important;border:4px solid var(--dd-rim)!important;border-radius:12px;background:rgba(10,22,54,.65)!important;
+  box-shadow:inset 0 0 0 2px rgba(255,140,120,.35);font-size:14px!important;font-weight:700;color:#fff!important}
+.setup-loading-panel blockquote::before{content:"DID YOU KNOW?";position:absolute;top:-15px;left:14px;font-family:var(--dd-d);font-size:14px;color:#fff;background:var(--dd-rim);border:2px solid var(--dd-ink);border-radius:6px;padding:3px 9px 0;transform:rotate(-3deg)}
+
+/* [NEW] bouncing LOADING letters */
+.dd-load-word{display:flex;gap:2px;font-family:var(--dd-d);font-size:26px;color:#fff;-webkit-text-stroke:2px var(--dd-ink);paint-order:stroke fill;text-shadow:0 3px 0 var(--dd-ink)}
+.dd-load-word b{font-weight:400;animation:ddHop 1.1s ease-in-out infinite}
+.dd-load-word b:nth-child(2){animation-delay:.08s}.dd-load-word b:nth-child(3){animation-delay:.16s}.dd-load-word b:nth-child(4){animation-delay:.24s}
+.dd-load-word b:nth-child(5){animation-delay:.32s}.dd-load-word b:nth-child(6){animation-delay:.4s}.dd-load-word b:nth-child(7){animation-delay:.48s}
+
+/* Error buttons -> lacquer */
+.setup-loading-retry,.setup-loading-back{font-family:var(--dd-d)!important;font-size:18px!important;color:#ffe7c4!important;border:3px solid!important;border-color:var(--dd-gh) var(--dd-g) var(--dd-gl) var(--dd-g)!important;border-radius:6px!important;
+  padding:12px 20px 8px!important;background:linear-gradient(180deg,#e0521f,#a8300f 55%,#5e1606)!important;box-shadow:0 0 0 2px var(--dd-gl),0 0 0 4px var(--dd-gh),0 0 0 6px var(--dd-gl),0 6px 12px rgba(0,0,0,.5)!important}
+.setup-loading-back{background:linear-gradient(180deg,#2f5fd0,#183a94 55%,#0a1d55)!important}
+
+@keyframes ddSpin{to{transform:rotate(360deg)}}
+@keyframes ddBob{50%{transform:translateY(-6px) scale(1.04)}}
+@keyframes ddHop{0%,60%,100%{transform:translateY(0)}30%{transform:translateY(-10px)}}
+@keyframes ddStripe{to{background-position:28px 0,0 0}}
+@media (prefers-reduced-motion:reduce){.dd-load-crest::before,.dd-load-crest img,.dd-load-word b,.setup-loading-bar span{animation:none!important}}
+.setup-loading-panel{margin-top:70px}
+.dd-load-crest{width:170px;height:170px;margin-top:-110px}
+.setup-loading-panel{gap:10px!important;padding:26px 32px 22px!important;margin-top:60px}
+.setup-loading-panel h2{font-size:44px!important}
+.setup-loading-panel blockquote{margin-top:10px!important}
+
+/* ---- Rules-audit fixes ---- */
+/* Hick/Miller: one progress signal per job. Lights = what's loading, LOADING word = alive; bar was a 3rd duplicate */
+.setup-loading-bar{display:none!important}
+/* Word cut: "Franchise Mode" kicker repeats what the player just chose */
+.setup-loading-panel>small{display:none!important}
+/* Readability: queued state was low-contrast grey */
+.setup-loading-tasks em{color:rgba(255,255,255,.75)!important;font-size:11px!important}
+.setup-loading-tasks span{font-size:13px!important;max-width:120px}

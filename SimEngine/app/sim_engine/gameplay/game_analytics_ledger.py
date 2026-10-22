@@ -30,8 +30,10 @@ _FLOAT_KEYS = frozenset(
 )
 
 # Single league-scoring calibration point. Structure, finishing and goalie quality
-# supply the spread; this only sets the overall goal environment.
-GOAL_PROBABILITY_CALIBRATION: float = 0.81
+# supply the spread; this only sets the overall goal environment. (0.81 before block
+# and miss rates depended on chance type; that sends richer shots to the net, so it
+# was re-tuned to keep league goals per game where they were.)
+GOAL_PROBABILITY_CALIBRATION: float = 0.743
 
 # Abstract chance types: midpoint raw xG vs average shooter / average goalie.
 CHANCE_TYPE_RAW_XG: Dict[str, float] = {
@@ -74,6 +76,112 @@ _CHANCE_SH_WEIGHTS: List[Tuple[str, float]] = [
     ("LOW_DANGER_PERIMETER", 0.18),
     ("SLOT", 0.16),
 ]
+
+# Where a chance comes from decides how often it reaches the net. Point shots run
+# into shin pads through three bodies; a rebound at the paint almost never gets
+# blocked. One-timers and perimeter looks miss wide; a tap-in rarely does.
+_CHANCE_BLOCK_SHAPE: Dict[str, float] = {
+    "LOW_DANGER_PERIMETER": 1.10,
+    "POINT_SHOT": 1.70,
+    "RUSH_MEDIUM": 0.80,
+    "SLOT": 0.90,
+    "HIGH_DANGER_SLOT": 0.70,
+    "NET_FRONT": 0.40,
+    "REBOUND": 0.35,
+    "ONE_TIMER": 1.00,
+    "PP_SLOT": 0.85,
+    "PP_ONE_TIMER": 1.05,
+    "SH_RUSH": 0.65,
+}
+
+_CHANCE_ON_GOAL_SHAPE: Dict[str, float] = {
+    "LOW_DANGER_PERIMETER": 0.92,
+    "POINT_SHOT": 0.95,
+    "RUSH_MEDIUM": 1.02,
+    "SLOT": 1.03,
+    "HIGH_DANGER_SLOT": 1.05,
+    "NET_FRONT": 1.10,
+    "REBOUND": 1.08,
+    "ONE_TIMER": 0.93,
+    "PP_SLOT": 1.04,
+    "PP_ONE_TIMER": 0.95,
+    "SH_RUSH": 1.00,
+}
+
+# League-average on-goal rate of an unblocked attempt by strength, for an average
+# shooter (matches the base on-goal formula in the event loop at shot quality ~0.70).
+UNBLOCKED_ON_GOAL_BASE: Dict[str, float] = {"EV": 0.676, "PP": 0.776, "SH": 0.616}
+
+# Recorded xG = chance of a goal from an UNBLOCKED attempt for a league-average
+# shooter vs a league-average goalie, so league goals ~= league xG at each strength.
+# Tuned against simulated games; it only scales the stat, never the goal roll.
+XG_RECORD_CALIBRATION: Dict[str, float] = {"EV": 0.84, "PP": 0.89, "SH": 0.88}
+
+
+# The mix of chance types the event loop actually produces (league pool after shot
+# quality bias and shooter diets), measured over simulated games. Per-type rates are
+# centred on THIS mix, not the raw pool, which is far heavier on perimeter looks.
+_REALISED_EV_MIX: List[Tuple[str, float]] = [
+    ("LOW_DANGER_PERIMETER", 0.152), ("POINT_SHOT", 0.174), ("RUSH_MEDIUM", 0.156),
+    ("SLOT", 0.171), ("HIGH_DANGER_SLOT", 0.117), ("NET_FRONT", 0.095),
+    ("REBOUND", 0.046), ("ONE_TIMER", 0.090),
+]
+_REALISED_PP_MIX: List[Tuple[str, float]] = [
+    ("PP_ONE_TIMER", 0.364), ("PP_SLOT", 0.256), ("NET_FRONT", 0.139),
+    ("POINT_SHOT", 0.117), ("SLOT", 0.108), ("LOW_DANGER_PERIMETER", 0.016),
+]
+_REALISED_SH_MIX: List[Tuple[str, float]] = [
+    ("SH_RUSH", 0.416), ("RUSH_MEDIUM", 0.321), ("SLOT", 0.180), ("LOW_DANGER_PERIMETER", 0.083),
+]
+
+
+def _pool_normalised(shape: Mapping[str, float], pool: Sequence[Tuple[str, float]]) -> Dict[str, float]:
+    # Mean-centre each strength's mix on 1.0 so per-type rates spread without moving
+    # how many attempts get blocked or reach the net league-wide.
+    tot = sum(w for _, w in pool) or 1.0
+    mean = sum(w * float(shape.get(c, 1.0)) for c, w in pool) / tot or 1.0
+    return {c: float(v) / mean for c, v in shape.items()}
+
+
+_BLOCK_MULT_BY_STRENGTH: Dict[str, Dict[str, float]] = {
+    "EV": _pool_normalised(_CHANCE_BLOCK_SHAPE, _REALISED_EV_MIX),
+    "PP": _pool_normalised(_CHANCE_BLOCK_SHAPE, _REALISED_PP_MIX),
+    "SH": _pool_normalised(_CHANCE_BLOCK_SHAPE, _REALISED_SH_MIX),
+}
+_ON_GOAL_MULT_BY_STRENGTH: Dict[str, Dict[str, float]] = {
+    "EV": _pool_normalised(_CHANCE_ON_GOAL_SHAPE, _REALISED_EV_MIX),
+    "PP": _pool_normalised(_CHANCE_ON_GOAL_SHAPE, _REALISED_PP_MIX),
+    "SH": _pool_normalised(_CHANCE_ON_GOAL_SHAPE, _REALISED_SH_MIX),
+}
+
+
+def _strength_key(strength: str) -> str:
+    st = str(strength or "EV").upper()
+    return st if st in ("PP", "SH") else "EV"
+
+
+def chance_block_mult(chance_type: str, strength: str) -> float:
+    """How much more (or less) often this kind of attempt gets blocked."""
+    return float(_BLOCK_MULT_BY_STRENGTH[_strength_key(strength)].get(str(chance_type), 1.0))
+
+
+def chance_on_goal_mult(chance_type: str, strength: str) -> float:
+    """How much more (or less) often an unblocked attempt of this kind hits the net."""
+    return float(_ON_GOAL_MULT_BY_STRENGTH[_strength_key(strength)].get(str(chance_type), 1.0))
+
+
+def unblocked_attempt_xg(raw_xg: float, chance_type: str, strength: str, structural_adj: float = 1.0) -> float:
+    """
+    Recorded xG for one unblocked attempt (Fenwick xG, as public models use).
+
+    Folds in the chance type's league on-goal rate and the shot's structure
+    (screens, traffic, lanes, rush edge, line chemistry), but not who shot it or
+    who was in net, so finishing and goaltending show up as goals above xG.
+    """
+    sk = _strength_key(strength)
+    on_goal = UNBLOCKED_ON_GOAL_BASE[sk] * chance_on_goal_mult(chance_type, strength)
+    sa = max(0.45, min(2.20, float(structural_adj)))
+    return max(0.002, float(raw_xg) * min(0.92, on_goal) * sa * XG_RECORD_CALIBRATION[sk])
 
 
 def ledger_add_value(row: Dict[str, Any], key: str, value: float | int) -> None:
@@ -139,6 +247,7 @@ def pick_chance_type_for_shooter(
     affinity: Optional[Mapping[str, float]] = None,
     *,
     quality_bias: float = 0.5,
+    team_mix: Optional[Mapping[str, float]] = None,
 ) -> str:
     """
     Pick a chance type conditioned on THIS shooter's shot diet.
@@ -146,6 +255,8 @@ def pick_chance_type_for_shooter(
     `affinity` maps chance type -> multiplier centred on 1.0, so a one-timer
     specialist genuinely takes one-timers and a net-front forward genuinely
     lives in the blue paint, instead of every shooter drawing the league pool.
+    `team_mix` does the same for the systems on the ice: what the attacking club
+    plays for and what the defending club concedes.
     """
     st = str(strength or "EV").upper()
     if st == "PP":
@@ -162,6 +273,8 @@ def pick_chance_type_for_shooter(
             wt *= 1.0 + 0.35 * float(quality_bias)
         if affinity:
             wt *= max(0.05, float(affinity.get(c, 1.0)))
+        if team_mix:
+            wt *= max(0.20, float(team_mix.get(c, 1.0)))
         labels.append(c)
         weights.append(max(1e-6, wt))
     return rng.choices(labels, weights=weights, k=1)[0]
@@ -305,6 +418,8 @@ def credit_shot_attempt_event(
     Record one abstract shot attempt and its statistical consequences.
 
     outcome: BLOCKED | MISSED | SAVED | GOAL
+    raw_xg: the attempt's recorded (unblocked-attempt) xG. Misses carry it too,
+    as in public Fenwick-based models; goalie xGA stays on shots on goal.
     """
     rxg = round(float(raw_xg), 4)
 
@@ -314,8 +429,8 @@ def credit_shot_attempt_event(
         att_kw: Dict[str, Any] = {"cf": 1.0}
         def_kw: Dict[str, Any] = {"ca": 1.0}
     elif outcome == "MISSED":
-        att_kw = {"cf": 1.0, "ff": 1.0}
-        def_kw = {"ca": 1.0, "fa": 1.0}
+        att_kw = {"cf": 1.0, "ff": 1.0, "xgf": rxg}
+        def_kw = {"ca": 1.0, "fa": 1.0, "xga": rxg}
     else:
         att_kw = {"cf": 1.0, "ff": 1.0, "on_ice_shots_for": 1.0, "xgf": rxg}
         def_kw = {"ca": 1.0, "fa": 1.0, "on_ice_shots_against": 1.0, "xga": rxg}
@@ -331,7 +446,7 @@ def credit_shot_attempt_event(
         return
 
     if outcome == "MISSED":
-        ledger_add(ledger, shooter, team_id, missed_shots=1)
+        ledger_add(ledger, shooter, team_id, missed_shots=1, ixg=rxg)
         return
 
     ledger_add(ledger, shooter, team_id, sog=1, ixg=rxg)

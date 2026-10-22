@@ -2078,11 +2078,15 @@ export function buildAwardSocialPulse(awards, options = {}) {
 }
 
 export function normalizeAwardsPayload(franchiseState, eventData) {
-  const rawRoot = pickFranchiseData(franchiseState, eventData, [
-    "awards",
-    "awards_payload",
-    "season_summary.awards",
-  ]);
+  // Prefer the full payload (official_results: finalists, eligibility, evidence, the
+  // "how you win it" rule). The picker below lands on the payload's thin legacy
+  // `awards` map first, which only carries winner fields.
+  const fullRoot = [eventData, franchiseState?.awards, franchiseState?.awards_payload].find(
+    (root) => root && typeof root === "object" && Array.isArray(root.official_results) && root.official_results.length
+  );
+  const rawRoot =
+    fullRoot ||
+    pickFranchiseData(franchiseState, eventData, ["awards", "awards_payload", "season_summary.awards"]);
 
   const ceremony = rawRoot?.ceremony || {};
   const backendCatalog = ceremony?.catalog || rawRoot?.ceremony?.catalog || null;

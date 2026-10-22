@@ -1388,6 +1388,28 @@ import React, {
       enabled: true,
     },
     {
+      id: "franchise-identity",
+      label: "Franchise Identity",
+      eyebrow: "Organization",
+      description: "Branding studio, uniforms, crest, captaincy, and philosophy.",
+      group: "frontOffice",
+      target: "franchise-identity",
+      type: "navigate",
+      screen: SCREENS.FRANCHISE_IDENTITY,
+      enabled: true,
+    },
+    {
+      id: "legacy-hall",
+      label: "Legacy Hall",
+      eyebrow: "History",
+      description: "Champions, careers, records, drafts, trades, and eras of this save.",
+      group: "frontOffice",
+      target: "legacy-hall",
+      type: "navigate",
+      screen: SCREENS.LEGACY_HALL,
+      enabled: true,
+    },
+    {
       id: "settings",
       label: "Settings",
       eyebrow: "Display & Graphics",
@@ -6023,7 +6045,9 @@ import React, {
     useGLTF.preload(RETRO_OFFICE_MODEL_PATH);
   }
 
-  function OfficeScene({
+  // Memoised: hub menus (Directory, quick menu, HUD state) re-render the parent, and the
+  // whole 3D scene used to reconcile on every open/close. Props are values or memoised.
+  const OfficeScene = React.memo(function OfficeScene({
     teamName,
     teamLogo,
     seasonYear,
@@ -6656,7 +6680,7 @@ import React, {
         />
       </HubLowPowerContext.Provider>
     );
-  }
+  });
   
   function OfficeHud({
     teamName,
@@ -7580,6 +7604,36 @@ import React, {
       document.documentElement.classList.toggle("perf-lite", effectiveLowPower);
     }, [effectiveLowPower]);
 
+    // When a menu, event screen or modal covers the room (or the tab is hidden) nothing of
+    // the 3D view is visible, so stop redrawing it. Sampled twice a second; the canvas keeps
+    // its last frame, so nothing changes on screen.
+    const [hubCovered, setHubCovered] = useState(false);
+    useEffect(() => {
+      const check = () => {
+        const host = canvasHostRef.current;
+        if (!host || document.hidden) {
+          setHubCovered(Boolean(document.hidden));
+          return;
+        }
+        const r = host.getBoundingClientRect();
+        if (r.width < 4 || r.height < 4) return;
+        const pts = [[0.5, 0.5], [0.25, 0.3], [0.75, 0.3], [0.25, 0.75], [0.75, 0.75]];
+        const visible = pts.some(([fx, fy]) => {
+          const el = document.elementFromPoint(r.left + r.width * fx, r.top + r.height * fy);
+          // The 3D view's own layers sit inside the host; anything else on top is a menu or modal.
+          return Boolean(el && host.contains(el));
+        });
+        setHubCovered(!visible);
+      };
+      const id = window.setInterval(check, 500);
+      document.addEventListener("visibilitychange", check);
+      check();
+      return () => {
+        window.clearInterval(id);
+        document.removeEventListener("visibilitychange", check);
+      };
+    }, []);
+
     // Once the camera has settled on an open station panel the room is effectively static.
     const [panelSettled, setPanelSettled] = useState(false);
     useEffect(() => {
@@ -7666,7 +7720,7 @@ import React, {
             {canvasReady ? (
             <Canvas
               shadows={!effectiveLowPower}
-              frameloop={effectiveLowPower || panelSettled ? "demand" : "always"}
+              frameloop={effectiveLowPower || panelSettled || hubCovered ? "demand" : "always"}
               dpr={effectiveLowPower ? [1, 1] : [1, 1.5]}
               eventSource={canvasHostRef}
               camera={{
@@ -7687,7 +7741,7 @@ import React, {
                 gl.outputColorSpace = THREE.SRGBColorSpace;
               }}
             >
-              {effectiveLowPower && !panelSettled ? <FrameLimiter fps={30} /> : null}
+              {effectiveLowPower && !panelSettled && !hubCovered ? <FrameLimiter fps={30} /> : null}
               <Suspense fallback={null}>
                 <OfficeScene
                   teamName={teamName}

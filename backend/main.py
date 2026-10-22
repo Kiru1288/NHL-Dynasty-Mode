@@ -574,6 +574,247 @@ def get_franchise_team_identity(x_franchise_session: Optional[str] = Header(defa
     return team_identity_payload(s)
 
 
+# ---------------------------------------------------------------- Franchise Identity + Legacy Hall
+# Everything below reads one slice of session.legacy (services/legacy_hall.py); none of it is
+# attached to /api/franchise/state, which only carries a ~300-byte identity block.
+def _legacy_team(s: Any, team_id: Optional[str]) -> str:
+    tid = str(team_id or s.user_team_id)
+    if tid not in (s.team_by_id or {}):
+        raise HTTPException(status_code=404, detail="Unknown team")
+    return tid
+
+
+def _legacy_user_team(s: Any, team_id: Optional[str]) -> str:
+    tid = _legacy_team(s, team_id)
+    if tid != str(s.user_team_id):
+        raise HTTPException(status_code=403, detail="You can only change your own franchise")
+    return tid
+
+
+@app.get("/api/franchise/identity")
+def get_franchise_identity(team_id: Optional[str] = None, x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    from services.json_safe import json_safe
+    from services.legacy_hall import identity_payload
+
+    s = _session_or_404(x_franchise_session)
+    return json_safe(identity_payload(s, _legacy_team(s, team_id)))
+
+
+@app.post("/api/franchise/identity/rebrand")
+def post_franchise_rebrand(body: dict[str, Any] = Body(default=None), x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    """Validate the whole proposal, then append one identity version (or nothing)."""
+    from services.json_safe import json_safe
+    from services.legacy_hall import rebrand
+
+    s = _session_or_404(x_franchise_session)
+    b = body or {}
+    tid = _legacy_user_team(s, b.get("team_id"))
+    out = rebrand(s, tid, b.get("identity") or {}, reason=str(b.get("reason") or ""), request_id=b.get("request_id"))
+    if not out.get("ok"):
+        raise HTTPException(status_code=422, detail={"errors": out.get("errors") or []})
+    save_session(s)
+    return json_safe(out)
+
+
+@app.post("/api/franchise/identity/validate")
+def post_franchise_identity_validate(body: dict[str, Any] = Body(default=None), x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    from services.legacy_hall import validate_identity
+
+    _session_or_404(x_franchise_session)
+    _, errs = validate_identity((body or {}).get("identity") or {})
+    return {"ok": not errs, "errors": errs}
+
+
+@app.post("/api/franchise/identity/preset")
+def post_franchise_identity_preset(body: dict[str, Any] = Body(default=None), x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    from services.json_safe import json_safe
+    from services.legacy_hall import save_preset
+
+    s = _session_or_404(x_franchise_session)
+    b = body or {}
+    out = save_preset(s, _legacy_user_team(s, b.get("team_id")), str(b.get("name") or ""), b.get("uniform") or {})
+    if not out.get("ok"):
+        raise HTTPException(status_code=422, detail={"errors": out.get("errors") or []})
+    save_session(s)
+    return json_safe(out)
+
+
+@app.post("/api/franchise/identity/philosophy")
+def post_franchise_philosophy(body: dict[str, Any] = Body(default=None), x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    from services.json_safe import json_safe
+    from services.legacy_hall import set_philosophy
+
+    s = _session_or_404(x_franchise_session)
+    b = body or {}
+    try:
+        out = set_philosophy(s, _legacy_user_team(s, b.get("team_id")), str(b.get("philosophy") or ""))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    save_session(s)
+    return json_safe(out)
+
+
+@app.get("/api/franchise/identity/captaincy")
+def get_franchise_captaincy(team_id: Optional[str] = None, x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    from services.json_safe import json_safe
+    from services.legacy_hall import captain_candidates, current_captains, reconcile_captaincy
+
+    s = _session_or_404(x_franchise_session)
+    tid = _legacy_team(s, team_id)
+    reconcile_captaincy(s)
+    return json_safe({**current_captains(s, tid), **captain_candidates(s, tid, limit=12)})
+
+
+@app.post("/api/franchise/identity/captaincy")
+def post_franchise_captaincy(body: dict[str, Any] = Body(default=None), x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    from services.json_safe import json_safe
+    from services.legacy_hall import appoint_captaincy
+
+    s = _session_or_404(x_franchise_session)
+    b = body or {}
+    try:
+        out = appoint_captaincy(s, _legacy_user_team(s, b.get("team_id")), b.get("captain_id"), list(b.get("alternate_ids") or []))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    save_session(s)
+    return json_safe(out)
+
+
+@app.get("/api/franchise/player/{player_id}/awards")
+def get_player_awards_history(player_id: str, x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    """Dossier awards: real NHL trophies (NHL API, fetched once and cached) + awards won in this save."""
+    from services.award_history import player_awards_history
+    from services.json_safe import json_safe
+
+    s = _session_or_404(x_franchise_session)
+    return json_safe(player_awards_history(s, player_id))
+
+
+@app.get("/api/franchise/storylines/rankings")
+def get_storyline_rankings(team_id: Optional[str] = None, x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    """Player rankings boards (best, worst, tallest, most important...) with the numbers behind each spot."""
+    from services.json_safe import json_safe
+    from services.player_rankings import build_rankings
+
+    s = _session_or_404(x_franchise_session)
+    return json_safe(build_rankings(s, team_id=team_id or None))
+
+
+@app.get("/api/franchise/legacy/franchise")
+def get_legacy_franchise(team_id: Optional[str] = None, x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    from services.json_safe import json_safe
+    from services.legacy_hall import franchise_eras, franchise_summary
+
+    s = _session_or_404(x_franchise_session)
+    tid = _legacy_team(s, team_id)
+    return json_safe({**franchise_summary(s, tid), "eras": franchise_eras(s, tid)})
+
+
+@app.get("/api/franchise/legacy/league")
+def get_legacy_league(x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    from services.json_safe import json_safe
+    from services.legacy_hall import league_overview
+
+    return json_safe(league_overview(_session_or_404(x_franchise_session)))
+
+
+@app.get("/api/franchise/legacy/season/{season}")
+def get_legacy_season(season: int, x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    from services.json_safe import json_safe
+    from services.legacy_hall import season_view
+
+    return json_safe(season_view(_session_or_404(x_franchise_session), season))
+
+
+@app.get("/api/franchise/legacy/player/{player_id}")
+def get_legacy_player(player_id: str, x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    from services.json_safe import json_safe
+    from services.legacy_hall import player_dossier
+
+    return json_safe(player_dossier(_session_or_404(x_franchise_session), player_id))
+
+
+@app.get("/api/franchise/legacy/leaders")
+def get_legacy_leaders(stat: str = "pts", scope: str = "career", team_id: Optional[str] = None, position: Optional[str] = None,
+                       limit: int = Query(default=25, le=100), offset: int = Query(default=0, ge=0),
+                       x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    from services.json_safe import json_safe
+    from services.legacy_hall import leaders
+
+    s = _session_or_404(x_franchise_session)
+    return json_safe(leaders(s, stat=stat, scope=scope, team_id=team_id, position=position, limit=limit, offset=offset))
+
+
+@app.get("/api/franchise/legacy/drafts")
+def get_legacy_drafts(season: Optional[int] = None, team_id: Optional[str] = None, x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    from services.json_safe import json_safe
+    from services.legacy_hall import draft_history
+
+    return json_safe(draft_history(_session_or_404(x_franchise_session), season=season, team_id=team_id))
+
+
+@app.get("/api/franchise/legacy/trades")
+def get_legacy_trades(team_id: Optional[str] = None, limit: int = Query(default=30, le=100), offset: int = Query(default=0, ge=0),
+                      x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    from services.json_safe import json_safe
+    from services.legacy_hall import trade_history
+
+    return json_safe(trade_history(_session_or_404(x_franchise_session), team_id=team_id, limit=limit, offset=offset))
+
+
+@app.get("/api/franchise/legacy/rivalries")
+def get_legacy_rivalries(team_id: Optional[str] = None, x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    from services.json_safe import json_safe
+    from services.legacy_hall import rivalries
+
+    return json_safe(rivalries(_session_or_404(x_franchise_session), team_id))
+
+
+@app.get("/api/franchise/legacy/timeline")
+def get_legacy_timeline(team_id: Optional[str] = None, type: Optional[str] = None, limit: int = Query(default=40, le=100),
+                        offset: int = Query(default=0, ge=0), x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    from services.json_safe import json_safe
+    from services.legacy_hall import timeline
+
+    return json_safe(timeline(_session_or_404(x_franchise_session), team_id=team_id, ev_type=type, limit=limit, offset=offset))
+
+
+@app.get("/api/franchise/legacy/trivia")
+def get_legacy_trivia(team_id: Optional[str] = None, x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    from services.json_safe import json_safe
+    from services.legacy_hall import trivia
+
+    s = _session_or_404(x_franchise_session)
+    return json_safe(trivia(s, _legacy_team(s, team_id)))
+
+
+@app.post("/api/franchise/legacy/repair")
+def post_legacy_repair(x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    """Rebuild trade copies and draft classes from their sources. Never rewrites season rows or careers."""
+    from services.json_safe import json_safe
+    from services.legacy_hall import repair_legacy
+
+    s = _session_or_404(x_franchise_session)
+    out = repair_legacy(s)
+    save_session(s)
+    return json_safe(out)
+
+
+@app.post("/api/franchise/legacy/retire-number")
+def post_legacy_retire_number(body: dict[str, Any] = Body(default=None), x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    from services.json_safe import json_safe
+    from services.legacy_hall import retire_number
+
+    s = _session_or_404(x_franchise_session)
+    b = body or {}
+    try:
+        out = retire_number(s, _legacy_user_team(s, b.get("team_id")), str(b.get("player_id") or ""), int(b.get("number")))
+    except (TypeError, ValueError) as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    save_session(s)
+    return json_safe(out)
+
+
 @app.get("/api/franchise/contract-office")
 def get_franchise_contract_office(x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
     from services.contract_economy import get_cached_contract_office

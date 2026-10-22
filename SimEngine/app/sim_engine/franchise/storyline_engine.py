@@ -7659,9 +7659,15 @@ def build_universe_matchup_context(session: Any, home_team_id: str, away_team_id
     """Build both sides together so probability changes remain complementary."""
     meta = dict(game_meta or {})
     base_game_id = str(meta.get("game_id") or f"matchup_{home_team_id}_{away_team_id}_{_u_current_meta(session)[0]}")
-    home = build_universe_game_context(session, home_team_id, away_team_id, {**meta, "game_id": f"{base_game_id}:home"})
-    # The home build just ran a full sync; since then only the home locker room changed,
-    # so re-syncing the home club reproduces a second full sync exactly.
+    # Only these two clubs' rooms feed this game. The daily pass still runs one full
+    # league sync a day; a full sync per game (~900 players) was the slowest step of a sim.
+    home = build_universe_game_context(
+        session,
+        home_team_id,
+        away_team_id,
+        {**meta, "game_id": f"{base_game_id}:home"},
+        _sync_only_team_ids={str(home_team_id), str(away_team_id)},
+    )
     away = build_universe_game_context(
         session,
         away_team_id,
@@ -8093,7 +8099,7 @@ def _u_advance_game_based_state(session: Any, team_id: str) -> None:
 def apply_universe_postgame(session: Any, team_id: str, game_result: Dict[str, Any], rng: Optional[random.Random] = None) -> Dict[str, Any]:
     """Record how character affected a completed game and create follow-up beats."""
     migrate_session_storyline_state(session)
-    _u_sync_player_entities(session)
+    _u_sync_player_entities(session, refresh_team_ids={str(team_id)})
     day, iso, season = _u_current_meta(session)
     local_rng = rng or random.Random(_u_seed("postgame", season, day, team_id, game_result.get("game_id", "")))
     won = bool(game_result.get("won"))
@@ -10451,10 +10457,9 @@ def _u_generate_daily_interactions_impl(session: Any, rng: random.Random) -> int
     ])
     for team_id_raw in team_ids:
         team_id = str(team_id_raw)
-        candidates = _u_interaction_candidates(session, team_id, rng)
-        if not candidates:
-            continue
         is_user = team_id == user_team_id
+        # Cheap gates first: building a club's candidate list is the costly part, and most
+        # days a CPU club produces nothing anyway.
         if is_user and pending >= 2:
             continue
         if is_user:
@@ -10463,13 +10468,18 @@ def _u_generate_daily_interactions_impl(session: Any, rng: random.Random) -> int
             # A room doesn't line up at the GM's door every day — one real request every few days.
             if 0 <= int(day_now) - last_req < 4:
                 continue
+        roll = rng.uniform(0, 100)
+        if roll > (60 if is_user else 28):
+            continue
+        candidates = _u_interaction_candidates(session, team_id, rng)
+        if not candidates:
+            continue
         threshold = 52 if is_user else 61
         picked = _u_pick_weighted_meeting_candidate(candidates, rng)
         if picked is None:
             continue
         score, kind, actor_id, target_id = picked
-        roll = rng.uniform(0, 100)
-        if score + rng.uniform(-12, 12) < threshold or roll > (60 if is_user else 28):
+        if score + rng.uniform(-12, 12) < threshold:
             continue
         interaction = _u_make_extended_interaction(session, team_id, kind, actor_id, target_id, rng, score)
         _u_queue_or_resolve(session, interaction)
@@ -12299,6 +12309,99 @@ def _u_trust_scale_outcome(outcome: Dict[str, Any], rel: Dict[str, Any], persona
     return out
 
 
+def _meeting_upside(outcome: Dict[str, Any]) -> float:
+    """How much good a choice is trying to do (sum of positive deltas, grievance relief)."""
+    up = 0.0
+    for changes in (outcome.get("profile_changes") or {}).values():
+        for delta in (changes or {}).values():
+            try:
+                d = float(delta)
+            except (TypeError, ValueError):
+                continue
+            if d > 0:
+                up += d
+    for key, delta in (outcome.get("relationship") or {}).items():
+        try:
+            d = float(delta)
+        except (TypeError, ValueError):
+            continue
+        if str(key) == "grievance":
+            up += max(0.0, -d)
+        elif d > 0:
+            up += d
+    return up
+
+
+def _meeting_belief_chance(session: Any, ctx: Dict[str, Any], interaction_type: str) -> float:
+    """Chance he actually buys what the GM is selling.
+
+    Words alone used to always land, so a GM could talk anyone into anything. Now a
+    player weighs who is talking: trust, his own character and ego, an open grievance,
+    and how often he has heard this pitch lately.
+    """
+    rel = ctx.get("relationship") or {}
+    personality = ctx.get("personality") or {}
+    entity = ctx.get("entity") or {}
+    trust = float(rel.get("trust", (entity.get("state") or {}).get("gm_trust", 55)) or 55)
+    grievance = float(rel.get("grievance", 0) or 0)
+    character = float(personality.get("character", 55) or 55)
+    ego = float(personality.get("ego", 50) or 50)
+    player_id = str(ctx.get("player_id") or "")
+    day = int(ctx.get("day") or 0)
+    recent = 0
+    for h in (getattr(session, "gm_meeting_history", None) or [])[-40:]:
+        if str(h.get("player_id") or "") != player_id:
+            continue
+        try:
+            if day - int(h.get("calendar_day", h.get("day", day)) or day) <= 21:
+                recent += 1
+        except (TypeError, ValueError):
+            continue
+    chance = (
+        0.30
+        + trust / 200.0
+        + (character - 50.0) / 250.0
+        - (ego - 50.0) / 220.0
+        - grievance / 220.0
+        - 0.09 * recent
+    )
+    # Promises of more ice or a bigger role are cheap to say; he wants to see it first.
+    if any(k in str(interaction_type) for k in ("offer_increased", "promotion", "pp_opportunity", "reassure", "repair")):
+        chance -= 0.06
+    return max(0.12, min(0.9, chance))
+
+
+def _gm_unconvinced_outcome(outcome: Dict[str, Any]) -> Dict[str, Any]:
+    """He heard it and didn't buy it: most of the upside is gone and trust dips a little."""
+    out = dict(outcome)
+    pc = {}
+    for bucket, changes in (outcome.get("profile_changes") or {}).items():
+        new_changes = {}
+        for field, delta in (changes or {}).items():
+            try:
+                d = float(delta)
+            except (TypeError, ValueError):
+                new_changes[field] = delta
+                continue
+            new_changes[field] = round(d * 0.2, 2) if d > 0 else d
+        pc[bucket] = new_changes
+    out["profile_changes"] = pc
+    rel = {}
+    for key, delta in (outcome.get("relationship") or {}).items():
+        try:
+            d = float(delta)
+        except (TypeError, ValueError):
+            rel[key] = delta
+            continue
+        if str(key) == "grievance":
+            rel[key] = round(d * 0.2, 2) if d < 0 else d
+        else:
+            rel[key] = round(d * 0.2, 2) if d > 0 else d
+    rel["trust"] = round(float(rel.get("trust", 0) or 0) - 1.5, 2)
+    out["relationship"] = rel
+    return out
+
+
 def _gm_apply_meeting_outcome(session: Any, ctx: Dict[str, Any], interaction_type: str, choice: Dict[str, Any]) -> Dict[str, Any]:
     entity = ctx["entity"]
     player_id = ctx["player_id"]
@@ -12306,6 +12409,14 @@ def _gm_apply_meeting_outcome(session: Any, ctx: Dict[str, Any], interaction_typ
     personality = dict(ctx.get("personality") or {})
     outcome = _scale_negative_meeting_outcome(dict(choice.get("outcome") or {}), personality)
     outcome = _u_trust_scale_outcome(outcome, ctx.get("relationship") or {}, personality)
+    believed = True
+    belief_chance = 1.0
+    if _meeting_upside(outcome) >= 2.0:
+        belief_chance = _meeting_belief_chance(session, ctx, interaction_type)
+        roll = random.Random(_u_seed("belief", player_id, day, interaction_type, choice.get("id", ""))).random()
+        believed = roll < belief_chance
+        if not believed:
+            outcome = _gm_unconvinced_outcome(outcome)
     morale_before = float((entity.get("state") or {}).get("morale", 55) or 55)
     fake_interaction = {
         "id": f"gm_{uuid.uuid4().hex[:10]}",
@@ -12468,8 +12579,22 @@ def _gm_apply_meeting_outcome(session: Any, ctx: Dict[str, Any], interaction_typ
     )
     if outcome.get("promise_softened"):
         impact.setdefault("notes", []).append("The promise still stands. He heard you pull it back, so the ask is shorter.")
+    if not believed:
+        name_short = str(entity.get("player_name") or "He").split()[-1]
+        reaction = random.Random(_u_seed("unconvinced", player_id, day)).choice((
+            f"{name_short} nods, but it does not reach his eyes. \"I have heard that before.\"",
+            f'"Words are easy," {name_short} says. "Show me."',
+            f'{name_short} listens, says little, and leaves unconvinced.',
+        ))
+        impact.setdefault("notes", []).append(
+            f"He didn't buy it (about {int(round(belief_chance * 100))}% chance he would). "
+            "Trust, his ego, any grievance, and how often you've pitched him decide it."
+        )
+    elif belief_chance < 1.0:
+        impact.setdefault("notes", []).append(f"He bought it (about {int(round(belief_chance * 100))}% chance).")
     return {
         "ok": True,
+        "believed": believed,
         "history": history_row,
         "receipts": receipts,
         "relationship": _gm_relationship_summary(entity, session, player_id),

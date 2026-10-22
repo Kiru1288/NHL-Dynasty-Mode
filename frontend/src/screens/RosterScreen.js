@@ -10,6 +10,7 @@ import { chapterAttributeRows } from "../utils/chapterAttributes";
 import { formatProspectLeague, formatProspectTeam } from "../events/prospectDevelopment/prospectDevelopmentHelpers";
 import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
 import { lookupHumanDossier, playerRoomLine } from "../utils/lockerRoomPulse";
+import { api } from "../services/api";
 import { nationalityCode, ensurePlayerHeadshotFields } from "../utils/playerHeadshots";
 import { nearestFlagApiSize } from "../utils/countryFlags";
 import { getBaseOverall, getOverallDrop, getUniversalOverall } from "../utils/playerOverall";
@@ -5122,27 +5123,100 @@ function CareerSeasonsTable({ seasons, isGoalie }) {
   );
 }
 
-function CareerAwardsCard({ awards }) {
-  const rows = Array.isArray(awards) ? awards : [];
-  if (!rows.length) return null;
+function awardSeasonLabel(season) {
+  const n = Number(season);
+  if (Number.isFinite(n) && n > 1900 && String(season).length === 4) return `${n}-${String(n + 1).slice(-2)}`;
+  return safeStr(season, "");
+}
+
+/**
+ * Trophy case: awards won (or finished top-3 for) in this save, and the real NHL trophies
+ * from the NHL API. Loads from /api/franchise/player/{id}/awards; until that answers it
+ * shows whatever career_awards the player row already carries.
+ */
+function CareerAwardsCard({ awards, playerId }) {
+  const [data, setData] = useState(null);
+  const [status, setStatus] = useState(playerId ? "loading" : "idle");
+  useEffect(() => {
+    if (!playerId) return undefined;
+    let alive = true;
+    setStatus("loading");
+    api
+      .get(`/api/franchise/player/${encodeURIComponent(playerId)}/awards`, { timeout: 25000 })
+      .then(({ data: d }) => {
+        if (!alive) return;
+        setData(d);
+        setStatus("ok");
+      })
+      .catch(() => alive && setStatus("error"));
+    return () => {
+      alive = false;
+    };
+  }, [playerId]);
+
+  const fallback = (Array.isArray(awards) ? awards : []).map((a) =>
+    typeof a === "object" && a
+      ? { award_name: pickFirstDefined(a.award_name, a.name, a.award, a.title), season: pickFirstDefined(a.season, a.year), finish: a.finish || 1 }
+      : { award_name: String(a), finish: 1 }
+  );
+  const saveAwards = data ? data.save_awards || [] : fallback;
+  const nhlAwards = data ? data.nhl_awards || [] : [];
+  const won = saveAwards.filter((a) => Number(a.finish || 1) === 1);
+  const near = saveAwards.filter((a) => Number(a.finish || 1) > 1);
 
   return (
-    <DossierCard eyebrow="Career" title="Awards">
-      <ul className="pdx-list">
-        {rows.map((award, index) => {
-          if (typeof award === "string" || typeof award === "number") {
-            return <li key={index}>{award}</li>;
-          }
-          const name = safeStr(pickFirstDefined(award?.name, award?.award, award?.title), "Award");
-          const year = pickFirstDefined(award?.season, award?.year);
-          return (
-            <li key={index}>
-              <strong>{name}</strong>
-              {year ? <span>{year}</span> : null}
-            </li>
-          );
-        })}
-      </ul>
+    <DossierCard eyebrow="Career" title={`Trophy case${data?.trophy_count ? ` · ${data.trophy_count}` : ""}`}>
+      <div className="pdx-trophies">
+        <div className="pdx-trophies__col">
+          <span className="pdx-trophies__head">Won in this save</span>
+          {won.length ? (
+            <ul className="pdx-trophies__list">
+              {won.map((a, i) => (
+                <li key={`w${i}`}>
+                  <strong>{safeStr(a.award_name, "Award")}</strong>
+                  <span>{awardSeasonLabel(a.season)}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <DossierNote>{status === "loading" ? "Checking the record…" : "No trophies in this save yet."}</DossierNote>
+          )}
+          {near.length ? (
+            <>
+              <span className="pdx-trophies__head">Finalist</span>
+              <ul className="pdx-trophies__list pdx-trophies__list--near">
+                {near.map((a, i) => (
+                  <li key={`n${i}`}>
+                    <strong>{safeStr(a.award_name, "Award")}</strong>
+                    <span>{a.finish === 2 ? "2nd" : a.finish === 3 ? "3rd" : `${a.finish}th`} · {awardSeasonLabel(a.season)}</span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : null}
+        </div>
+        <div className="pdx-trophies__col">
+          <span className="pdx-trophies__head">Real NHL career</span>
+          {nhlAwards.length ? (
+            <ul className="pdx-trophies__list">
+              {nhlAwards.map((a, i) => (
+                <li key={`r${i}`}>
+                  <strong>{safeStr(a.award_name, "Award")}</strong>
+                  <span>{safeStr(a.season, "")}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <DossierNote>
+              {status === "loading"
+                ? "Asking the NHL…"
+                : status === "error"
+                  ? "Couldn't reach the awards service."
+                  : data?.note || "No NHL trophies on record."}
+            </DossierNote>
+          )}
+        </div>
+      </div>
     </DossierCard>
   );
 }
@@ -5213,7 +5287,7 @@ function CareerPanel({ player, franchiseState }) {
         </DossierCard>
       )}
       <div className="pdx-grid-2">
-        <CareerAwardsCard awards={awards} />
+        <CareerAwardsCard awards={awards} playerId={player.player_id || player.id} />
         <CareerTransactionsCard transactions={transactions} />
       </div>
     </section>

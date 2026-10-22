@@ -1,0 +1,204 @@
+/* Awards Night in the Double Dash house style: a gala, not a dashboard.
+   Stage blue under gold spotlights, a red-carpet top bar, trophy plaques for the
+   running order, gold-framed result cards. Scoped to .an-root.an-broadcast.an-dd so it
+   wins over the flat skin in styles/game.css (~30790), answering its !important rules
+   on the same properties only. */
+
+.an-root.an-broadcast.an-dd {
+  --an-gold: var(--dd-gold, #c98a3c);
+  --an-gold-hi: var(--dd-gold-hi, #f8d58a);
+  --an-gold-lo: var(--dd-gold-lo, #6e4314);
+  --an-yellow: var(--dd-yellow, #ffe23a);
+  --an-cream: var(--dd-cream, #ffe7c4);
+  --an-ink: var(--dd-outline, #1a0d05);
+  --an-red: var(--dd-lacquer, #a8300f);
+  --an-red-hi: var(--dd-lacquer-hi, #e0521f);
+  --an-red-lo: var(--dd-lacquer-lo, #5e1606);
+  --an-plate: rgba(8, 18, 62, 0.9);
+  font-family: var(--dd-font-ui, "Nunito", sans-serif);
+  color: var(--an-cream);
+  background:
+    radial-gradient(ellipse 34% 60% at 50% -12%, rgba(255, 226, 58, 0.30), transparent 70%),
+    radial-gradient(ellipse 24% 50% at 14% -6%, rgba(248, 213, 138, 0.16), transparent 70%),
+    radial-gradient(ellipse 24% 50% at 86% -6%, rgba(248, 213, 138, 0.16), transparent 70%),
+    radial-gradient(circle at 1px 1px, rgba(255, 255, 255, 0.06) 1px, transparent 1.6px) 0 0 / 16px 16px,
+    linear-gradient(180deg, var(--dd-stage, #0b1d5c) 0%, var(--dd-stage-deep, #050c2c) 100%);
+}
+
+/* ---- red carpet top bar ---- */
+.an-root.an-broadcast.an-dd .an-topbar {
+  background: linear-gradient(180deg, var(--an-red-hi), var(--an-red) 60%, var(--an-red-lo));
+  border-bottom: 4px solid var(--an-gold-hi);
+  box-shadow: 0 5px 0 var(--an-ink);
+}
+.an-root.an-broadcast.an-dd .an-page-title {
+  font-size: 34px;
+  line-height: 1;
+  color: var(--an-yellow);
+  -webkit-text-stroke: 2px var(--an-ink);
+  paint-order: stroke fill;
+  text-shadow: 0 4px 0 var(--an-ink), 3px 6px 0 var(--an-gold-lo);
+  transform: rotate(-1.2deg);
+}
+.an-root.an-broadcast.an-dd .an-season { color: var(--an-cream); font-weight: 800; }
+.an-root.an-broadcast.an-dd .an-milestones span { color: rgba(255, 231, 196, 0.72) !important; font-weight: 800; }
+.an-root.an-broadcast.an-dd .an-milestones .is-current {
+  color: var(--an-ink) !important;
+  background: var(--an-yellow);
+  border-radius: 4px;
+  padding: 1px 7px;
+  box-shadow: none !important;
+}
+.an-root.an-broadcast.an-dd .an-ghost-btn {
+  font-family: var(--dd-font-display, "Luckiest Guy", sans-serif);
+  letter-spacing: 0.04em;
+  text-transform: uppercase !important;
+  color: var(--an-ink);
+  background: var(--an-cream);
+  border: 2px solid var(--an-ink);
+  border-radius: 6px;
+  box-shadow: 0 3px 0 var(--an-ink);
+  padding: 5px 10px;
+}
+.an-root.an-broadcast.an-dd .an-ghost-btn:hover { background: var(--an-yellow); }
+.an-root.an-broadcast.an-dd .an-ghost-btn.is-on { background: var(--an-gold-hi); }
+
+/* ---- running order: trophy plaques ---- */
+.an-root.an-broadcast.an-dd .an-log,
+.an-root.an-broadcast.an-dd .an-board { background: transparent; border: 0; box-shadow: none; }
+.an-root.an-broadcast.an-dd .an-section-title {
+  font-family: var(--dd-font-display, "Luckiest Guy", sans-serif);
+  font-weight: 400;
+  font-size: 18px;
+  letter-spacing: 0.03em;
+  color: var(--an-yellow);
+  -webkit-text-stroke: 1px var(--an-ink);
+  paint-order: stroke fill;
+  text-shadow: 0 2px 0 var(--an-ink);
+}
+.an-root.an-broadcast.an-dd .an-log-row {
+  margin: 0 0 6px;
+  padding: 7px 10px;
+  border: 2px solid var(--an-gold);
+  border-color: var(--an-gold-hi) var(--an-gold) var(--an-gold-lo) var(--an-gold);
+  border-radius: 6px;
+  background: linear-gradient(180deg, rgba(110, 67, 20, 0.35), rgba(8, 18, 62, 0.85));
+  color: var(--an-cream);
+}
+.an-root.an-broadcast.an-dd .an-log-row:hover { filter: brightness(1.12); }
+.an-root.an-broadcast.an-dd .an-log-row.is-current,
+.an-root.an-broadcast.an-dd .an-log-row[aria-current="true"] {
+  background: linear-gradient(180deg, var(--an-gold-hi), var(--an-gold));
+  color: var(--an-ink);
+}
+.an-root.an-broadcast.an-dd .an-log-num {
+  font-family: var(--dd-font-display, "Luckiest Guy", sans-serif);
+  color: var(--an-yellow);
+  -webkit-text-stroke: 1px var(--an-ink);
+  paint-order: stroke fill;
+}
+
+/* ---- the stage: gold frame, spotlight on the winner ---- */
+.an-root.an-broadcast.an-dd .an-stagehead,
+.an-root.an-broadcast.an-dd .an-card,
+.an-root.an-broadcast.an-dd .an-dock {
+  background: var(--an-plate) !important;
+  border: 3px solid var(--an-gold) !important;
+  border-color: var(--an-gold-hi) var(--an-gold) var(--an-gold-lo) var(--an-gold) !important;
+  border-radius: 10px;
+  box-shadow: 0 0 0 2px var(--an-ink), 0 8px 0 rgba(0, 0, 0, 0.45) !important;
+}
+.an-root.an-broadcast.an-dd .an-stagehead {
+  background:
+    radial-gradient(ellipse 60% 120% at 50% -30%, rgba(255, 226, 58, 0.22), transparent 70%),
+    var(--an-plate) !important;
+}
+.an-root.an-broadcast.an-dd .an-stagehead-num {
+  font-family: var(--dd-font-display, "Luckiest Guy", sans-serif) !important;
+  font-weight: 400 !important;
+  color: var(--an-yellow) !important;
+  -webkit-text-stroke: 1.5px var(--an-ink);
+  paint-order: stroke fill;
+  text-shadow: 0 3px 0 var(--an-ink);
+}
+.an-root.an-broadcast.an-dd .an-stagehead-title,
+.an-root.an-broadcast.an-dd .an-result-title {
+  font-family: var(--dd-font-display, "Luckiest Guy", sans-serif);
+  font-weight: 400;
+  font-size: 30px;
+  line-height: 1.02;
+  letter-spacing: 0.01em;
+  color: var(--an-yellow);
+  -webkit-text-stroke: 1.5px var(--an-ink);
+  paint-order: stroke fill;
+  text-shadow: 0 3px 0 var(--an-ink), 3px 5px 0 var(--an-red);
+}
+.an-root.an-broadcast.an-dd .an-z-result,
+.an-root.an-broadcast.an-dd .an-result-peak {
+  background: linear-gradient(180deg, rgba(248, 213, 138, 0.16), transparent);
+  border-radius: 8px;
+}
+.an-root.an-broadcast.an-dd .an-name,
+.an-root.an-broadcast.an-dd .an-votes__name { font-weight: 900; color: #fff; }
+.an-root.an-broadcast.an-dd .an-headshot {
+  border: 3px solid var(--an-gold-hi);
+  box-shadow: 0 0 0 3px var(--an-ink), 0 0 26px rgba(255, 226, 58, 0.35);
+  border-radius: 50%;
+}
+.an-root.an-broadcast.an-dd .an-why {
+  border-left: 4px solid var(--an-yellow);
+  background: rgba(255, 226, 58, 0.08);
+  padding: 8px 12px;
+  border-radius: 0 6px 6px 0;
+}
+.an-root.an-broadcast.an-dd .an-finalist__label {
+  font-family: var(--dd-font-display, "Luckiest Guy", sans-serif);
+  color: var(--an-gold-hi);
+  letter-spacing: 0.04em;
+  text-transform: uppercase !important;
+}
+
+/* tables: gold-ruled ledger rows instead of grey grid */
+.an-root.an-broadcast.an-dd .an-table-head {
+  color: var(--an-gold-hi);
+  border-bottom: 2px solid var(--an-gold);
+  font-weight: 900;
+}
+.an-root.an-broadcast.an-dd .an-table-row { border-bottom: 1px dashed rgba(248, 213, 138, 0.22); }
+.an-root.an-broadcast.an-dd .an-table-row:first-child .an-cell-name { color: var(--an-yellow); }
+.an-root.an-broadcast.an-dd .an-num { font-variant-numeric: tabular-nums; }
+.an-root.an-broadcast.an-dd .an-muted,
+.an-root.an-broadcast.an-dd .an-cell-muted,
+.an-root.an-broadcast.an-dd .an-section-meta { color: rgba(255, 231, 196, 0.68); }
+
+/* ---- "How it's decided": the plain-language rule for every trophy ---- */
+.an-root.an-broadcast.an-dd .an-criteria {
+  margin: 10px 0 0;
+  padding: 10px 14px;
+  background: var(--an-cream);
+  color: var(--an-ink);
+  border-radius: 4px;
+  box-shadow: 0 0 0 2px var(--an-ink), 4px 5px 0 var(--an-gold-lo);
+  font-weight: 700;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.an-root.an-broadcast.an-dd .an-criteria b {
+  display: block;
+  margin-bottom: 2px;
+  font-family: var(--dd-font-display, "Luckiest Guy", sans-serif);
+  font-weight: 400;
+  letter-spacing: 0.03em;
+  color: var(--an-red);
+  text-transform: uppercase !important;
+}
+
+/* ---- dock: the big lacquer button is the next step ---- */
+.an-root.an-broadcast.an-dd .an-dock-state { color: var(--an-cream); font-weight: 800; }
+
+/* fan pulse keeps its own feed, framed like the rest */
+.an-root.an-broadcast.an-dd .an-pulse-lane { background: transparent; }
+
+@media (prefers-reduced-motion: reduce) {
+  .an-root.an-broadcast.an-dd .an-page-title { transform: none; }
+}

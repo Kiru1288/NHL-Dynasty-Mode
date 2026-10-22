@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import PlayerHeadshot from "../../components/PlayerHeadshot";
 import { pickHeadshotIdentityFields } from "../../utils/playerHeadshots";
 import FanReactionFeed from "../../components/franchise/social/FanReactionFeed";
+import "./awardsNight.dd.css";
 // Theme + fonts: paste the same style imports EntryDraft.jsx has at its top here
 // (the files that define --ops-*, --font-broadcast-display, --font-ops-ui, --font-mono-data).
 import {
@@ -534,7 +535,7 @@ function GateBody({ slides }) {
   );
 }
 
-function TitleBody({ slide, ev, finalistsCount }) {
+function TitleBody({ slide, ev, finalistsCount, rule = "" }) {
   const criteria = safeArray(ev?.criteria).filter((c) => c?.label && toNum(c.weight) !== null);
   const excluded = safeArray(ev?.excluded_criteria).filter((c) => c?.label);
   const eligibility =
@@ -576,11 +577,18 @@ function TitleBody({ slide, ev, finalistsCount }) {
                   </div>
                 ))}
               </div>
-            ) : eligibility ? (
+            ) : eligibility && !rule ? (
               <p className="an-club">{eligibility}</p>
-            ) : (
+            ) : !rule ? (
               <p className="an-muted">Voting criteria weren't published with this season's results.</p>
-            )}
+            ) : null}
+            {rule ? (
+              <p className="an-criteria">
+                <b>How you win it</b>
+                {rule}
+              </p>
+            ) : null}
+            {rule && eligibility ? <p className="an-club">This season: {eligibility}</p> : null}
             {excluded.map((c) => (
               <p key={c.key || c.label} className="an-excluded">
                 {c.label} — not tracked this season
@@ -763,7 +771,7 @@ function VoteTable({ table, format, playerIndex, team }) {
   );
 }
 
-function CitationBody({ slide, ev, finalists, playerIndex }) {
+function CitationBody({ slide, ev, finalists, playerIndex, rule = "" }) {
   const team = isTeamSlide(slide);
   const winnerCard = finalists.find((card) => isWinnerCard(card, slide)) || null;
   const player = team
@@ -825,6 +833,12 @@ function CitationBody({ slide, ev, finalists, playerIndex }) {
           ) : null}
           {!hasCase ? (
             <p className="an-muted">Detailed results weren't recorded for this season.</p>
+          ) : null}
+          {rule ? (
+            <p className="an-criteria">
+              <b>How you win it</b>
+              {rule}
+            </p>
           ) : null}
         </section>
 
@@ -962,6 +976,22 @@ export default function AwardsNight({ franchiseState = {}, eventData = {}, onCon
     [awards, franchiseState]
   );
   const summary = useMemo(() => buildAwardsNightSummary(awards) || {}, [awards]);
+  // Plain-language rule for each trophy (backend AWARD_CRITERIA), keyed like the slides.
+  const ruleByKey = useMemo(() => {
+    const out = {};
+    safeArray(awards).forEach((a) => {
+      if (a?.awardKey && typeof a.criteria === "string" && a.criteria) out[a.awardKey] = a.criteria;
+    });
+    return out;
+  }, [awards]);
+  const evidenceByKey = useMemo(() => {
+    const out = {};
+    safeArray(awards).forEach((a) => {
+      const e = a?.evidence || a?.result?.evidence;
+      if (a?.awardKey && e && typeof e === "object") out[a.awardKey] = e;
+    });
+    return out;
+  }, [awards]);
   const indexGroups = useMemo(() => safeArray(buildCeremonyRailGroups(slides)), [slides]);
   const playerIndex = useMemo(() => buildPlayerIndex(franchiseState), [franchiseState]);
   const fanPool = useMemo(() => buildFallbackAwardFans(24, "awards-night-live"), []);
@@ -1021,7 +1051,8 @@ export default function AwardsNight({ franchiseState = {}, eventData = {}, onCon
   );
 
   const activeSlide = slides[activeIndex] || null;
-  const ev = slideEvidence(activeSlide);
+  // Ceremony slides don't carry the award's evidence; fall back to the award with that key.
+  const ev = slideEvidence(activeSlide) || evidenceByKey[activeSlide?.awardKey] || null;
   const finalists = useMemo(() => slideFinalists(activeSlide), [activeSlide]);
   const roster = isRosterSlide(activeSlide);
   const hasFinalistPhase = finalists.length > 0 && !roster;
@@ -1368,6 +1399,7 @@ export default function AwardsNight({ franchiseState = {}, eventData = {}, onCon
         slide={activeSlide}
         ev={ev}
         finalistsCount={roster ? 0 : finalists.length}
+        rule={ruleByKey[activeSlide?.awardKey] || ""}
       />
     );
   } else if (roster) {
@@ -1390,6 +1422,7 @@ export default function AwardsNight({ franchiseState = {}, eventData = {}, onCon
         key={`citation-${activeSlide.id}`}
         slide={activeSlide}
         ev={ev}
+        rule={ruleByKey[activeSlide?.awardKey] || ""}
         finalists={finalists}
         playerIndex={playerIndex}
       />
@@ -1415,7 +1448,7 @@ export default function AwardsNight({ franchiseState = {}, eventData = {}, onCon
   const isLast = activeIndex >= slides.length - 1;
 
   return (
-    <section className="an-root an-broadcast" aria-label="Awards Night">
+    <section className="an-root an-broadcast an-dd" aria-label="Awards Night">
       <header className="an-topbar">
         <div className="an-topbar-main">
           <h1 className="an-page-title">Awards Night</h1>

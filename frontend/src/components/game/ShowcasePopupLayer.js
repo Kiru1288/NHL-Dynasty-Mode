@@ -27,6 +27,30 @@ function isTradePopup(pop) {
   return teams.some((t) => t && Array.isArray(t.acquired_assets) && t.acquired_assets.length > 0);
 }
 
+const IMPORTANT_POPUP_KINDS = new Set(["injury", "legal_trouble", "player_death", "waiver", "player_meeting", "fa_decision"]);
+
+/** Only what the GM must know or act on interrupts the screen: injuries, suspensions,
+ *  trade demands / stability / morale warnings, bargains, his own trades, and things that
+ *  need an answer. Hat tricks, hot streaks, skids and goofy news stay in the feed. */
+function isImportantPopup(pop, userTeamId) {
+  if (!pop) return false;
+  const kind = String(pop.kind || "").toLowerCase();
+  if (IMPORTANT_POPUP_KINDS.has(kind)) return true;
+  const pt = String(pop.presentation_type || "").toLowerCase();
+  if (pt.startsWith("trade_") || pt.includes("stability") || pt.includes("morale")) return true;
+  const actions = Array.isArray(pop.actions) ? pop.actions : [];
+  if (actions.some((a) => a && String(a.id || "") === "waiver_claim")) return true;
+  const text = `${pop.headline || ""} ${pop.title || ""} ${pop.event_type || ""} ${pop.cause_type || ""}`.toLowerCase();
+  if (/suspen|banned|injur|trade demand|wants out|requested a trade|asked for a trade/.test(text)) return true;
+  if (isTradePopup(pop)) {
+    const uid = String(userTeamId || "");
+    if (!uid) return true;
+    const teams = Array.isArray(pop.teams) ? pop.teams : [];
+    return String(pop.team_id || "") === uid || teams.some((t) => t && String(t.team_id || t.id || "") === uid);
+  }
+  return false;
+}
+
 function StatCard({ label, value, sub }) {
   return (
     <div className="media-alert__fact">
@@ -1385,8 +1409,9 @@ function ShowcasePopupStyles() {
 
 export function ShowcasePopupLayer() {
   const { franchiseState, onDismissShowcasePopups, setScreen } = useGameUI();
+  const userTeamId = franchiseState?.user_team_id || franchiseState?.team?.team_id || "";
   const rawQueue = (franchiseState?.pending_ui_popups || []).filter(
-    (p) => p && !isFranchiseCinematicPopup(p)
+    (p) => p && !isFranchiseCinematicPopup(p) && isImportantPopup(p, userTeamId)
   );
   const hasPendingDecisions =
     Array.isArray(franchiseState?.pending_decisions) && franchiseState.pending_decisions.length > 0;

@@ -12196,6 +12196,20 @@ html.ui-fluid .game-canvas > .tlv-peek { width: auto; height: auto; max-height: 
   white-space: nowrap;
 }
 
+/* Trophy case (CareerAwardsCard): won-in-save | real NHL, gold for wins */
+.pdx-trophies { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.pdx-trophies__col { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.pdx-trophies__head { font-size: 11px; font-weight: 900; letter-spacing: 0.08em; text-transform: uppercase; color: var(--dd-gold-hi, #f8d58a); }
+.pdx-trophies__list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.pdx-trophies__list li {
+  display: flex; justify-content: space-between; gap: 10px; padding: 6px 10px;
+  border-left: 3px solid var(--dd-gold, #c98a3c); background: var(--pdx-card-2); font-size: 13px;
+}
+.pdx-trophies__list li strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pdx-trophies__list li span { color: var(--pdx-muted); white-space: nowrap; }
+.pdx-trophies__list--near li { border-left-color: rgba(201, 138, 60, 0.4); }
+@media (max-width: 900px) { .pdx-trophies { grid-template-columns: 1fr; } }
+
 .pdx-feed {
   list-style: none;
   padding: 0;

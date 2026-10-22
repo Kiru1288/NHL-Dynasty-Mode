@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Double Dash Concepts</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Luckiest+Guy&family=Nunito:wght@700;800;900&display=swap" rel="stylesheet">
+<style>
+:root{--y:#ffe23a;--ink:#1a0d05;--cream:#ffe7c4;--rim:#e2231a;--fill:rgba(10,22,70,.9);--gh:#f8d58a;--g:#c98a3c;--gl:#6e4314;
+--lh:#e0521f;--l:#a8300f;--ll:#5e1606;--blue:#2f5fd0;--green:#2fae4e;--d:"Luckiest Guy",cursive;--b:"Nunito",sans-serif}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#111;font-family:var(--b);color:#fff;padding:24px;display:flex;flex-direction:column;gap:32px;align-items:center}
+.frame{width:960px;height:720px;position:relative;overflow:hidden;border-radius:4px;padding:22px 28px;display:flex;flex-direction:column;gap:14px;
+ background:radial-gradient(ellipse 60% 45% at 50% 0%,rgba(140,180,255,.35),transparent 70%),
+ url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='90' height='90'%3E%3Cpath d='M22 12l4 9 9 1-7 6 2 9-8-4-8 4 2-9-7-6 9-1z' fill='%23fff' fill-opacity='.07'/%3E%3Cpath d='M68 58l3 6 6 1-5 4 1 6-5-3-5 3 1-6-5-4 6-1z' fill='%23fff' fill-opacity='.05'/%3E%3C/svg%3E"),
+ linear-gradient(180deg,#1b3aa8,#0b1d5c 55%,#050c2c)}
+.frame.t-red{background-color:#000}
+.tint{position:absolute;inset:0;pointer-events:none;mix-blend-mode:overlay;opacity:.35}
+.title{font-family:var(--d);font-size:46px;color:var(--y);-webkit-text-stroke:3px var(--ink);paint-order:stroke fill;text-shadow:0 4px 0 var(--ink),0 8px 14px rgba(0,0,0,.5);letter-spacing:.02em;text-align:center;line-height:1}
+.sub{font-family:var(--d);font-size:20px;color:#fff;-webkit-text-stroke:2px var(--ink);paint-order:stroke fill;text-shadow:0 2px 0 var(--ink)}
+.lbl{font-family:var(--d);font-size:14px;letter-spacing:.06em;color:#fff;text-shadow:0 2px 0 var(--ink)}
+.box{border:4px solid var(--rim);border-radius:14px;background:var(--fill);box-shadow:inset 0 0 0 2px rgba(255,140,120,.35),inset 0 0 30px rgba(0,0,0,.5),0 10px 22px rgba(0,0,0,.5);padding:14px;position:relative}
+.box.blue{border-color:#3d8cff;box-shadow:inset 0 0 0 2px rgba(140,190,255,.4),inset 0 0 30px rgba(0,0,0,.5),0 10px 22px rgba(0,0,0,.5)}
+.tag{position:absolute;top:-14px;left:14px;font-family:var(--d);font-size:14px;padding:3px 10px 1px;border-radius:6px;background:var(--rim);border:2px solid var(--ink);color:#fff}
+.tag.b{background:#2b6be0}.tag.g{background:var(--green)}
+.btn{font-family:var(--d);font-size:22px;letter-spacing:.04em;color:var(--cream);text-shadow:0 2px 0 var(--ll),0 3px 6px rgba(0,0,0,.6);
+ border:3px solid;border-color:var(--gh) var(--g) var(--gl) var(--g);border-radius:6px;padding:12px 22px 8px;text-align:center;position:relative;
+ background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='60' preserveAspectRatio='none'%3E%3Cpath d='M182 4l-9 11 5 2-8 10M14 50l10-8-3-4 7-5' stroke='%23300a02' stroke-opacity='.55' stroke-width='1.6' fill='none'/%3E%3C/svg%3E") center/100% 100% no-repeat,linear-gradient(180deg,var(--lh),var(--l) 55%,var(--ll));
+ box-shadow:0 0 0 2px var(--gl),0 0 0 4px var(--gh),0 0 0 6px var(--gl),inset 0 2px 0 rgba(255,200,150,.35),inset 0 -3px 0 rgba(0,0,0,.35),0 8px 14px rgba(0,0,0,.5)}
+.btn.sec{background:linear-gradient(180deg,#2f5fd0,#183a94 55%,#0a1d55);text-shadow:0 2px 0 #071440}
+.btn.hot{filter:brightness(1.15);transform:translateY(-2px);box-shadow:0 0 0 2px var(--gl),0 0 0 4px var(--gh),0 0 0 6px var(--gl),0 0 22px 6px rgba(255,220,90,.55),0 8px 14px rgba(0,0,0,.5)}
+.btn.sm{font-size:16px;padding:8px 14px 5px}
+.btn.off{filter:saturate(.5) brightness(.75);color:rgba(255,231,196,.5)}
+.quiet{font-family:var(--d);font-size:16px;color:var(--cream);opacity:.85;text-shadow:0 2px 0 var(--ink)}
+.row{display:flex;gap:14px}.col{display:flex;flex-direction:column;gap:12px}.grow{flex:1}
+.stars{color:var(--y);font-size:18px;letter-spacing:2px;text-shadow:0 2px 0 var(--ink)}.stars i{color:rgba(255,255,255,.2);font-style:normal}
+.foot{margin-top:auto;display:flex;gap:22px;justify-content:center;font-family:var(--d);font-size:15px;color:#fff;text-shadow:0 2px 0 var(--ink);background:rgba(0,0,0,.35);border-radius:20px;padding:6px 16px;align-self:center}
+.foot b{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:var(--green);border:2px solid var(--ink);margin-right:6px;font-weight:400}
+.foot b.r{background:var(--rim)}.foot b.y{background:#e8b100}
+.step{display:flex;gap:8px;align-items:center;justify-content:center}
+.pip{font-family:var(--d);font-size:14px;padding:6px 12px 3px;border-radius:20px;background:rgba(0,0,0,.4);border:2px solid rgba(255,255,255,.25);color:rgba(255,255,255,.6)}
+.pip.done{background:var(--green);border-color:var(--ink);color:#fff}.pip.on{background:var(--y);color:var(--ink);border-color:var(--ink);box-shadow:0 0 14px rgba(255,226,58,.7)}
+.tile{width:62px;height:62px;border-radius:8px;border:3px solid #9cb6ff;background:linear-gradient(160deg,#4a6fd6,#1d2f7a);display:grid;place-items:center;font-family:var(--d);font-size:18px;color:#fff;text-shadow:0 2px 0 var(--ink);position:relative}
+.tile.sel{border-color:var(--rim);box-shadow:0 0 0 3px var(--y),0 0 18px rgba(255,226,58,.7);transform:scale(1.08)}
+.tile .p{position:absolute;top:-10px;left:-8px;font-size:11px;background:var(--rim);border:2px solid var(--ink);border-radius:5px;padding:1px 4px 0}
+.tile.q{background:repeating-linear-gradient(45deg,#1a1f40 0 6px,#232a55 6px 12px);border-color:#555c8a;color:rgba(255,255,255,.5)}
+.tile.need{border-color:var(--rim);animation:none;box-shadow:0 0 14px rgba(226,35,26,.8)}
+.pos{position:absolute;bottom:-6px;right:-6px;font-size:10px;background:var(--y);color:var(--ink);border:2px solid var(--ink);border-radius:4px;padding:1px 3px 0}
+.chip{font-family:var(--d);font-size:14px;padding:6px 12px 3px;border-radius:8px;background:#14286b;border:2px solid #4067d8;color:#cfe0ff}
+.chip.on{background:linear-gradient(180deg,var(--gh),var(--g));color:var(--ink);border-color:var(--ink)}
+.portrait{border-radius:10px;border:3px solid var(--y);background:radial-gradient(circle at 50% 35%,#ffcf9e 0 22%,transparent 23%),radial-gradient(ellipse 45% 35% at 50% 95%,#c8102e 0 98%,transparent),linear-gradient(180deg,#5b8cff,#1b3aa8);box-shadow:0 6px 14px rgba(0,0,0,.5)}
+.big{font-family:var(--d);color:var(--y);-webkit-text-stroke:2px var(--ink);paint-order:stroke fill;text-shadow:0 3px 0 var(--ink)}
+table{width:100%;border-collapse:collapse;font-size:13px;font-weight:700}
+th{font-family:var(--d);font-weight:400;font-size:13px;letter-spacing:.05em;color:var(--y);text-align:left;padding:6px;border-bottom:2px solid var(--rim);text-shadow:0 2px 0 var(--ink)}
+td{padding:6px;border-bottom:1px solid rgba(255,255,255,.08)}tr:nth-child(even) td{background:rgba(255,255,255,.04)}
+.num{text-align:right;font-variant-numeric:tabular-nums}
+.meter{height:22px;border-radius:12px;border:3px solid var(--ink);background:#0a0f2a;overflow:hidden;box-shadow:inset 0 2px 4px rgba(0,0,0,.6)}
+.meter>div{height:100%;background:linear-gradient(90deg,var(--green),var(--y) 70%,var(--rim));box-shadow:inset 0 3px 0 rgba(255,255,255,.35)}
+.badge{position:absolute;top:-12px;right:-10px;font-family:var(--d);font-size:13px;padding:4px 8px 1px;border-radius:6px;transform:rotate(6deg);border:2px solid var(--ink);color:#fff}
+.note{width:960px;font-size:14px;color:#ccc;font-family:var(--b)}
+.note b{color:var(--y)}
+.logo{font-family:var(--d);font-size:78px;color:var(--y);-webkit-text-stroke:4px var(--ink);paint-order:stroke fill;text-shadow:0 6px 0 #c8102e,0 10px 0 var(--ink),0 16px 24px rgba(0,0,0,.6);text-align:center;line-height:.9;transform:rotate(-3deg)}
+.logo small{display:block;font-size:34px;color:#fff;text-shadow:0 4px 0 #2b6be0,0 7px 0 var(--ink)}
+.path{position:relative;height:300px}
+.node{position:absolute;width:54px;height:54px;border-radius:50%;border:4px solid var(--ink);display:grid;place-items:center;font-family:var(--d);font-size:15px;color:#fff;text-shadow:0 2px 0 var(--ink)}
+.node.w{background:var(--green)}.node.l{background:var(--rim)}.node.nx{background:var(--y);color:var(--ink);text-shadow:none;box-shadow:0 0 0 5px rgba(255,226,58,.35),0 0 26px rgba(255,226,58,.9);width:66px;height:66px}
+.node.f{background:#24306a;border-color:#4a57a0;color:#9aa6d8}.node.tr{background:linear-gradient(180deg,var(--gh),var(--g));font-size:24px}
+.opt{display:flex;align-items:center;justify-content:space-between;padding:12px 18px 9px;border-radius:10px;font-family:var(--d);font-size:20px;text-shadow:0 2px 0 var(--ink)}
+.opt.on{background:linear-gradient(90deg,rgba(255,226,58,.95),rgba(247,169,12,.85));color:var(--ink);text-shadow:none;border:3px solid var(--ink)}
+.opt .v{color:var(--y)}.opt.on .v{color:var(--ink)}
+body:has(section:target){padding:0;background:#000}body:has(section:target) section:not(:target),body:has(section:target) .note{display:none}
+</style></head><body>
+
+<!-- 1 SETUP -->
+<section class="frame" id="c1">
+ <div class="logo">NHL DYNASTY<small>MODE</small></div>
+ <div class="step"><span class="pip done">1 LEAGUE</span><span class="pip on">2 TEAM</span><span class="pip">3 GM</span><span class="pip">4 DIFFICULTY</span></div>
+ <div class="title" style="font-size:32px">SELECT YOUR FRANCHISE</div>
+ <div class="row" style="justify-content:center;flex-wrap:wrap;gap:10px">
+  <div class="tile">BOS</div><div class="tile">BUF</div><div class="tile">DET</div><div class="tile sel"><span class="p">P1</span>TOR</div><div class="tile">MTL</div><div class="tile">OTT</div><div class="tile">TBL</div><div class="tile">FLA</div><div class="tile">NYR</div><div class="tile">PIT</div><div class="tile">EDM</div><div class="tile">VAN</div>
+ </div>
+ <div class="box blue" style="display:flex;gap:18px;align-items:center"><span class="tag b">P1</span>
+  <div class="portrait" style="width:110px;height:110px;background:linear-gradient(180deg,#1e4fd8,#0b2380)"><div class="big" style="font-size:44px;text-align:center;margin-top:30px">TOR</div></div>
+  <div class="col grow"><div class="sub">TORONTO MAPLE LEAFS</div><div class="lbl">ARENA · SCOTIABANK ARENA</div>
+   <div class="row" style="gap:28px"><div><div class="lbl">OFFENCE</div><div class="stars">★★★<i>★★</i></div></div><div><div class="lbl">DEFENCE</div><div class="stars">★★<i>★★★</i></div></div><div><div class="lbl">CAP ROOM</div><div class="stars">★<i>★★★★</i></div></div></div></div>
+  <div class="btn hot" style="align-self:flex-end">OK?</div>
+ </div>
+ <div class="foot"><span><b>A</b>SELECT</span><span><b class="r">B</b>BACK</span></div>
+</section>
+<p class="note"><b>1 · Setup (overhaul).</b> Title-screen logo + 4-step stepper. Crest grid = character select; red frame + "P1" tag on the highlighted team; team-colour preview box; big OK? bottom-right.</p>
+
+<!-- 2 HUB -->
+<section class="frame" id="c2">
+ <div class="row" style="align-items:center"><div class="title" style="font-size:38px;text-align:left">FRANCHISE OFFICE</div><div class="grow"></div>
+  <div class="box" style="padding:8px 14px"><span class="badge" style="background:var(--rim)">3</span><span class="lbl">⚠ OWNER PRESSURE</span></div>
+  <div class="box blue" style="padding:8px 14px"><span class="badge" style="background:var(--green)">NEW</span><span class="lbl">☎ TRADE CALL</span></div></div>
+ <div class="row grow">
+  <div class="col" style="width:300px">
+   <div class="btn hot">▶ PLAY NEXT GAME</div><div class="btn">ROSTER</div><div class="btn">CALENDAR</div><div class="btn">STRATEGY BOARD</div><div class="btn">STANDINGS</div><div class="btn">DRAFT</div>
+  </div>
+  <div class="box grow" style="background:linear-gradient(180deg,rgba(255,190,120,.25),rgba(10,22,70,.85)),repeating-linear-gradient(90deg,#3a2414 0 40px,#2e1c10 40px 80px)"><span class="tag">YOUR OFFICE</span>
+   <div style="position:absolute;left:40px;top:40px;width:280px;height:160px;border:6px solid #6e4314;border-radius:6px;background:linear-gradient(180deg,#8ac4ff,#dff0ff 60%,#fff)"><div class="lbl" style="padding:6px">ARENA WINDOW</div></div>
+   <div style="position:absolute;right:40px;top:50px;width:120px;height:170px;border:5px solid var(--g);border-radius:6px;background:#3a2414;display:grid;place-items:center"><span class="lbl">LEGACY<br>WALL</span></div>
+   <div style="position:absolute;left:30px;right:30px;bottom:30px;height:110px;background:linear-gradient(180deg,#7a4a22,#4a2a10);border-radius:10px;border:4px solid var(--ink);display:flex;align-items:center;justify-content:space-around">
+    <span class="lbl">📞 GM PHONE</span><span class="lbl">📥 INBOX (4)</span><span class="lbl">📋 DECISION DESK</span></div>
+  </div>
+  <div class="col" style="width:46px;gap:8px"><div class="btn sec sm" style="writing-mode:vertical-rl;padding:14px 8px">OPERATIONS ▸</div><div class="btn sec sm" style="writing-mode:vertical-rl;padding:14px 8px">FRONT OFFICE ▸</div></div>
+ </div>
+ <div class="foot"><span><b>A</b>SELECT</span><span><b class="y">Y</b>DRAWERS</span><span><b class="r">B</b>BACK</span></div>
+</section>
+<p class="note"><b>2 · Hub (overhaul).</b> 21 entries cut to 6 primary lacquer buttons; Operations / Front Office become side drawers. Alerts are item-box badges. Office objects stay clickable.</p>
+
+<!-- 3 ROSTER -->
+<section class="frame" id="c3">
+ <div class="title">SELECT PLAYER</div>
+ <div class="row" style="gap:8px;justify-content:center"><span class="chip on">FORWARDS</span><span class="chip">DEFENCE</span><span class="chip">GOALIES</span><span class="chip">▤ TABLE VIEW</span></div>
+ <div class="row" style="flex-wrap:wrap;gap:12px;justify-content:center;padding:6px 40px">
+  <div class="tile sel"><span class="p">P1</span>34<span class="pos">C</span></div><div class="tile">16<span class="pos">RW</span></div><div class="tile">88<span class="pos">RW</span></div><div class="tile">91<span class="pos">C</span></div><div class="tile">11<span class="pos">LW</span></div><div class="tile">19<span class="pos">LW</span></div><div class="tile">28<span class="pos">RW</span></div><div class="tile">64<span class="pos">C</span></div>
+  <div class="tile">23<span class="pos">LW</span></div><div class="tile">47<span class="pos">C</span></div><div class="tile">12<span class="pos">RW</span></div><div class="tile need">?<span class="pos">LW</span></div><div class="tile need">?<span class="pos">C</span></div>
+ </div>
+ <div class="box"><span class="tag">P1</span>
+  <div class="row" style="align-items:center;gap:22px">
+   <div class="portrait" style="width:150px;height:170px"></div>
+   <div class="col grow"><div class="title" style="font-size:36px;text-align:left">AUSTON MATTHEWS</div><div class="lbl">C · AGE 29 · #34 · SHOOTS L</div>
+    <div class="row" style="gap:36px;margin-top:6px"><div><div class="lbl">SHOOTING</div><div class="stars">★★★★★</div></div><div><div class="lbl">SKATING</div><div class="stars">★★★★<i>★</i></div></div><div><div class="lbl">DEFENCE</div><div class="stars">★★★<i>★★</i></div></div></div>
+    <div class="lbl" style="color:var(--y)">CONTRACT · $13.25M × 4 YRS</div></div>
+   <div class="col"><div class="btn hot sm">DOSSIER</div><div class="btn sec sm">TRADE</div></div>
+  </div></div>
+ <div class="foot"><span><b>A</b>DOSSIER</span><span><b class="y">Y</b>TABLE</span><span><b class="r">B</b>BACK</span></div>
+</section>
+<p class="note"><b>3 · Roster + Team Needs (moderate).</b> Portrait grid with position badges; red pulsing "?" tiles = team needs. Bottom P1 box = big preview with ★ ratings. Table view kept behind a toggle.</p>
+
+<!-- 4 LINES -->
+<section class="frame" id="c4">
+ <div class="title">LINE COMBINATION</div>
+ <div class="row" style="gap:8px;justify-content:center"><span class="chip on">EVEN STRENGTH</span><span class="chip">POWER PLAY</span><span class="chip">PENALTY KILL</span></div>
+ <div class="row grow">
+  <div class="col grow">
+   <div class="box"><span class="tag">LINE 1</span><div class="row" style="align-items:center;justify-content:space-around">
+    <div class="tile">KNIES<span class="pos">LW</span></div><div class="col" style="align-items:center;gap:2px"><span class="stars">★★★</span><span class="lbl" style="font-size:11px">CHEM</span></div><div class="tile sel"><span class="p">P1</span>34<span class="pos">C</span></div><div class="col" style="align-items:center;gap:2px"><span class="stars">★★★★</span><span class="lbl" style="font-size:11px">CHEM</span></div><div class="tile">16<span class="pos">RW</span></div></div></div>
+   <div class="box"><span class="tag g">LINE 2</span><div class="row" style="align-items:center;justify-content:space-around">
+    <div class="tile">11<span class="pos">LW</span></div><div class="stars">★★<i>★</i></div><div class="tile">91<span class="pos">C</span></div><div class="stars">★★<i>★</i></div><div class="tile">88<span class="pos">RW</span></div></div></div>
+   <div class="box"><span class="tag b">LINE 3</span><div class="row" style="align-items:center;justify-content:space-around">
+    <div class="tile">19<span class="pos">LW</span></div><div class="stars">★<i>★★</i></div><div class="tile q">DROP</div><div class="stars"><i>★★★</i></div><div class="tile">28<span class="pos">RW</span></div></div></div>
+  </div>
+  <div class="box blue" style="width:200px"><span class="tag b">BENCH</span><div class="col" style="gap:10px;margin-top:8px">
+   <div class="chip">64 · C · ★★★</div><div class="chip">47 · C · ★★</div><div class="chip">23 · LW · ★★</div><div class="chip">12 · RW · ★</div></div>
+   <div class="btn sm" style="margin-top:18px">AUTO-SET</div></div>
+ </div>
+ <div class="foot"><span><b>A</b>PICK UP</span><span><b class="y">Y</b>SWAP TAB</span><span><b class="r">B</b>BACK</span></div>
+</section>
+<p class="note"><b>4 · Lines / PP / PK (merge 3→1).</b> Driver+kart pairing: each line is a framed slot row, chemistry ★ meters between slots, drag from the bench. Three tabs replace three hub entries.</p>
+
+<!-- 5 TRADE -->
+<section class="frame" id="c5">
+ <div class="title">TRADE HUB</div>
+ <div class="step"><span class="pip done">PARTNER</span><span class="pip on">ASSETS</span><span class="pip">REVIEW</span><span class="pip">PROPOSE</span></div>
+ <div class="row grow">
+  <div class="box blue grow"><span class="tag b">P1 · TORONTO</span><div class="row" style="flex-wrap:wrap;gap:12px;margin-top:10px"><div class="tile">16<span class="pos">RW</span></div><div class="tile sel"><span class="p">P1</span>88<span class="pos">RW</span></div><div class="tile">44<span class="pos">D</span></div><div class="tile">1ST</div><div class="tile">2ND</div></div></div>
+  <div class="col" style="width:230px;align-items:center;justify-content:center">
+   <div class="sub">TRADE TRAY</div>
+   <div class="box" style="width:100%;border-color:var(--y);min-height:120px;display:flex;gap:10px;align-items:center;justify-content:center"><div class="tile">88</div><span class="big" style="font-size:30px">⇄</span><div class="tile">D-71</div></div>
+   <div class="lbl">AI INTEREST</div><div class="meter" style="width:100%"><div style="width:68%"></div></div>
+   <div class="big" style="font-size:22px">GETTING WARM!</div>
+  </div>
+  <div class="box grow"><span class="tag">CPU · VANCOUVER</span><div class="row" style="flex-wrap:wrap;gap:12px;margin-top:10px"><div class="tile">71<span class="pos">D</span></div><div class="tile">9<span class="pos">C</span></div><div class="tile">40<span class="pos">G</span></div><div class="tile">1ST</div></div></div>
+ </div>
+ <div class="row" style="justify-content:space-between;align-items:center"><span class="quiet">◀ BACK</span><div class="btn hot">NEXT: REVIEW ▶</div></div>
+</section>
+<p class="note"><b>5 · Trade Hub (overhaul).</b> 2-player versus split: P1 blue vs CPU red, centre trade tray, AI-interest lap meter. 4-step flow; "DEAL!" stamp on confirm.</p>
+
+<!-- 6 FA -->
+<section class="frame" id="c6">
+ <div class="row" style="align-items:center"><div class="title" style="text-align:left">FREE AGENCY</div><div class="grow"></div>
+  <div class="box" style="text-align:center;padding:8px 18px"><div class="lbl">CAP SPACE</div><div class="big" style="font-size:34px">$8.4M</div></div></div>
+ <div class="row" style="gap:8px"><span class="chip on">ALL</span><span class="chip">F</span><span class="chip">D</span><span class="chip">G</span><span class="chip">UNDER 26</span><span class="chip">⚙ MORE FILTERS</span></div>
+ <div class="row" style="gap:18px;align-items:flex-end;justify-content:center;padding-top:20px;flex:1">
+  <div class="box" style="width:170px;opacity:.6;transform:scale(.9)"><div class="portrait" style="height:130px"></div><div class="sub" style="font-size:16px;margin-top:8px">D. PASTRNAK</div><div class="lbl">RW · 🔥🔥</div></div>
+  <div class="box" style="width:230px;border-color:var(--y);box-shadow:0 0 40px rgba(255,226,58,.5),inset 0 0 30px rgba(0,0,0,.5)"><span class="tag">SPOTLIGHT</span><div class="portrait" style="height:190px"></div><div class="sub" style="margin-top:10px">M. MARNER</div><div class="lbl">RW · AGE 29 · ASK $11M</div><div class="lbl">INTEREST 🔥🔥🔥</div><div class="stars">★★★★<i>★</i></div></div>
+  <div class="box" style="width:170px;opacity:.6;transform:scale(.9)"><div class="portrait" style="height:130px"></div><div class="sub" style="font-size:16px;margin-top:8px">S. REINHART</div><div class="lbl">C · 🔥</div></div>
+ </div>
+ <div class="row" style="justify-content:center;gap:20px"><div class="btn sec">◀</div><div class="btn hot">MAKE OFFER</div><div class="btn sec">▶</div></div>
+ <div class="foot"><span><b>A</b>OFFER</span><span><b class="y">Y</b>FILTERS</span><span><b class="r">B</b>BACK</span></div>
+</section>
+<p class="note"><b>6 · Free Agency (reskin).</b> Garage/unlockables carousel with spotlight card, flame interest, big cap-space number. Advanced filters behind a drawer.</p>
+
+<!-- 7 CAP -->
+<section class="frame" id="c7">
+ <div class="title">CAP LEDGER</div>
+ <div class="box"><span class="tag">FUEL GAUGE</span><div class="row" style="align-items:center;gap:18px;margin-top:6px"><div class="grow"><div class="meter" style="height:30px"><div style="width:91%"></div></div></div><div class="big" style="font-size:28px">$8.4M LEFT</div></div>
+  <div class="row" style="justify-content:space-between;margin-top:6px"><span class="lbl">$0</span><span class="lbl" style="color:var(--rim)">CEILING $95.5M</span></div></div>
+ <div class="row" style="gap:8px"><span class="chip on">FORWARDS</span><span class="chip">DEFENCE</span><span class="chip">GOALIES</span><span class="chip">DEAD CAP</span><span class="chip">▸ SHOW FUTURE YEARS</span></div>
+ <div class="box grow" style="padding:8px 12px"><table><tr><th>PLAYER</th><th>POS</th><th class="num">AAV</th><th class="num">YRS</th><th>CLAUSE</th><th>STATUS</th></tr>
+  <tr><td>Auston Matthews</td><td>C</td><td class="num">$13,250,000</td><td class="num">4</td><td>NMC</td><td>—</td></tr>
+  <tr><td>William Nylander</td><td>RW</td><td class="num">$11,500,000</td><td class="num">7</td><td>NMC</td><td>—</td></tr>
+  <tr><td>John Tavares</td><td>C</td><td class="num">$4,375,000</td><td class="num">1</td><td>—</td><td style="color:var(--y)">EXPIRING</td></tr>
+  <tr><td>Matthew Knies</td><td>LW</td><td class="num">$7,750,000</td><td class="num">6</td><td>—</td><td>—</td></tr>
+  <tr><td>Max Domi</td><td>C</td><td class="num">$3,750,000</td><td class="num">3</td><td>M-NTC</td><td>—</td></tr>
+  <tr><td>Bobby McMann</td><td>LW</td><td class="num">$1,350,000</td><td class="num">1</td><td>—</td><td style="color:#ff606d">INJURED</td></tr>
+  <tr><td>Nick Robertson</td><td>LW</td><td class="num">$875,000</td><td class="num">1</td><td>—</td><td style="color:var(--y)">RFA</td></tr></table></div>
+ <div class="row" style="justify-content:flex-end;gap:14px"><div class="btn sec sm">BUYOUT</div><div class="btn sm">RE-SIGN</div></div>
+</section>
+<p class="note"><b>7 · Contracts / Cap Ledger (deliberate rule-break).</b> Dense on purpose: arcade frame + fuel-gauge meter only; the table stays in the plain data font, no outlines. Future years collapsed.</p>
+
+<!-- 8 DRAFT -->
+<section class="frame" id="c8">
+ <div class="row" style="align-items:center"><div class="title" style="text-align:left">DRAFT WAR ROOM</div><div class="grow"></div>
+  <div class="node nx" style="position:relative">0:42</div></div>
+ <div class="row" style="gap:8px"><span class="chip on">BOARD</span><span class="chip">SCOUTS</span><span class="chip">CLASS</span></div>
+ <div class="box"><span class="tag" style="background:linear-gradient(180deg,var(--gh),var(--g));color:var(--ink)">★ TIER 1 · ELITE CUP</span>
+  <div class="row" style="gap:14px;margin-top:8px"><div class="tile sel"><span class="p">P1</span>G.M</div><div class="tile">J.S</div><div class="tile">P.L</div><div class="tile q">?</div></div></div>
+ <div class="box"><span class="tag" style="background:#9aa6c8;color:var(--ink)">★ TIER 2 · SILVER CUP</span>
+  <div class="row" style="gap:14px;margin-top:8px"><div class="tile">A.K</div><div class="tile q">?</div><div class="tile q">?</div><div class="tile">R.T</div><div class="tile q">?</div><div class="tile q">?</div></div></div>
+ <div class="box"><span class="tag" style="background:#b06a2a">★ TIER 3 · BRONZE CUP</span>
+  <div class="row" style="gap:14px;margin-top:8px"><div class="tile q">?</div><div class="tile q">?</div><div class="tile q">?</div><div class="tile q">?</div><div class="tile q">?</div></div></div>
+ <div style="background:linear-gradient(90deg,#c8102e,#7a0a1c);border-top:3px solid var(--g);border-bottom:3px solid var(--g);padding:6px 14px;font-family:var(--d);font-size:15px;text-shadow:0 2px 0 var(--ink)">LIVE ▸ PICK 6 · SAN JOSE SELECTS · D. NOVAK, C · PICK 7 ON THE CLOCK…</div>
+ <div class="row" style="justify-content:flex-end"><div class="btn hot">DRAFT G. MARTIN</div></div>
+</section>
+<p class="note"><b>8 · Draft War Room + Class + Scouting (merge 3→1).</b> Track-select cups as tiers; unscouted = "?" locked silhouettes. Gold-trimmed broadcast ticker kept; countdown ring on your pick.</p>
+
+<!-- 9 STANDINGS -->
+<section class="frame" id="c9">
+ <div class="title">STANDINGS</div>
+ <div class="row" style="justify-content:center;align-items:flex-end;gap:12px">
+  <div class="col" style="align-items:center"><div class="tile">FLA</div><div style="width:120px;height:80px;background:linear-gradient(180deg,#c9ced8,#7c8496);border:3px solid var(--ink);border-radius:6px 6px 0 0;display:grid;place-items:center" class="big"><span style="font-size:40px">2</span></div></div>
+  <div class="col" style="align-items:center"><div class="tile sel"><span class="p">P1</span>TOR</div><div style="width:130px;height:110px;background:linear-gradient(180deg,var(--gh),var(--g));border:3px solid var(--ink);border-radius:6px 6px 0 0;display:grid;place-items:center" class="big"><span style="font-size:52px">1</span></div></div>
+  <div class="col" style="align-items:center"><div class="tile">TBL</div><div style="width:120px;height:60px;background:linear-gradient(180deg,#d48a4a,#7a4416);border:3px solid var(--ink);border-radius:6px 6px 0 0;display:grid;place-items:center" class="big"><span style="font-size:34px">3</span></div></div>
+ </div>
+ <div class="row" style="gap:8px"><span class="chip on">ATLANTIC</span><span class="chip">METRO</span><span class="chip">LEAGUE</span><span class="chip">▸ STATS: SCORING</span><span class="chip">POSSESSION</span><span class="chip">GOALIE</span></div>
+ <div class="box grow" style="padding:8px 12px"><table><tr><th>#</th><th>TEAM</th><th class="num">GP</th><th class="num">W</th><th class="num">L</th><th class="num">OTL</th><th class="num">PTS</th><th class="num">GF</th><th class="num">GA</th></tr>
+  <tr><td class="big" style="font-size:18px">1</td><td>Toronto</td><td class="num">60</td><td class="num">38</td><td class="num">16</td><td class="num">6</td><td class="num">82</td><td class="num">210</td><td class="num">171</td></tr>
+  <tr><td class="big" style="font-size:18px">2</td><td>Florida</td><td class="num">60</td><td class="num">37</td><td class="num">18</td><td class="num">5</td><td class="num">79</td><td class="num">198</td><td class="num">165</td></tr>
+  <tr><td class="big" style="font-size:18px">3</td><td>Tampa Bay</td><td class="num">60</td><td class="num">35</td><td class="num">19</td><td class="num">6</td><td class="num">76</td><td class="num">204</td><td class="num">180</td></tr>
+  <tr><td>4</td><td>Boston</td><td class="num">60</td><td class="num">31</td><td class="num">22</td><td class="num">7</td><td class="num">69</td><td class="num">181</td><td class="num">178</td></tr>
+  <tr><td>5</td><td>Detroit</td><td class="num">60</td><td class="num">29</td><td class="num">25</td><td class="num">6</td><td class="num">64</td><td class="num">176</td><td class="num">190</td></tr></table></div>
+</section>
+<p class="note"><b>9 · Stats / Analytics / Standings (deliberate rule-break).</b> Race-results podium up top; full tables keep their columns but split into toggleable chunks (Scoring / Possession / Goalie).</p>
+
+<!-- 10 CALENDAR -->
+<section class="frame" id="c10">
+ <div class="row" style="align-items:center"><div class="title" style="text-align:left">SEASON CUP</div><div class="grow"></div><span class="chip on">◎ PATH</span>&nbsp;<span class="chip">▦ MONTH GRID</span></div>
+ <div class="sub">ROUND 4 · JANUARY</div>
+ <div class="box grow"><div class="path">
+  <svg width="100%" height="300" style="position:absolute;inset:0"><path d="M40 250 C 160 250, 160 150, 280 150 S 420 60, 540 70 S 720 220, 860 120" stroke="#fff" stroke-opacity=".25" stroke-width="16" fill="none" stroke-dasharray="2 22" stroke-linecap="round"/></svg>
+  <div class="node w" style="left:20px;top:222px">W</div><div class="node w" style="left:120px;top:200px">W</div><div class="node l" style="left:200px;top:150px">L</div><div class="node w" style="left:290px;top:120px">W</div>
+  <div class="node nx" style="left:390px;top:60px">VAN</div><div class="node f" style="left:500px;top:40px">BOS</div><div class="node tr" style="left:600px;top:90px">🏆</div><div class="node f" style="left:700px;top:150px">MTL</div><div class="node f" style="left:820px;top:90px">FLA</div>
+  <div class="box blue" style="position:absolute;left:330px;top:150px;width:260px;padding:10px"><span class="tag b">NEXT GAME</span><div class="sub" style="font-size:17px">VS VANCOUVER · HOME</div><div class="lbl">JAN 14 · 7:00 PM</div></div>
+  <div class="lbl" style="position:absolute;left:590px;top:160px;color:var(--y)">TRADE DEADLINE</div>
+ </div></div>
+ <div class="row" style="justify-content:center;gap:18px"><div class="btn sec">SIM TO DATE…</div><div class="btn hot">▶ PLAY GAME</div></div>
+</section>
+<p class="note"><b>10 · Calendar (moderate).</b> Season as a Grand Prix: winding path of game nodes with W/L stamps, glowing next node, trophy icons for key dates. Month grid available as a toggle.</p>
+
+<!-- 11 STORYLINES -->
+<section class="frame" id="c11">
+ <div class="title">LOCKER ROOM & NEWS</div>
+ <div class="row grow">
+  <div class="col grow">
+   <div class="box"><span class="badge" style="background:var(--rim)">INJURY!</span><div class="sub" style="font-size:18px">KNIES DAY-TO-DAY</div><div style="font-size:13px;opacity:.85">Lower-body injury vs. Ottawa; re-evaluated Friday.</div></div>
+   <div class="box blue"><span class="badge" style="background:#8b3fd6">RUMOUR!</span><div class="sub" style="font-size:18px">CANUCKS CALLING ABOUT #88</div><div style="font-size:13px;opacity:.85">Sources say Vancouver has checked in twice this week.</div></div>
+   <div class="box" style="border-color:var(--y)"><span class="badge" style="background:var(--green)">MILESTONE!</span><div class="sub" style="font-size:18px">MATTHEWS HITS 400 GOALS</div></div>
+  </div>
+  <div class="col" style="width:400px">
+   <div class="box"><span class="tag">TEAM MORALE</span><div class="meter" style="margin-top:8px"><div style="width:62%"></div></div>
+    <div class="row" style="flex-wrap:wrap;gap:10px;margin-top:12px">
+     <div class="tile" style="border-color:var(--green)">34</div><div class="tile" style="border-color:var(--green)">16</div><div class="tile" style="border-color:var(--y)">88</div><div class="tile" style="border-color:var(--rim);box-shadow:0 0 12px rgba(226,35,26,.8)">91</div><div class="tile" style="border-color:var(--green)">44</div></div></div>
+   <div class="box blue"><span class="tag b">MEETING · #91</span>
+    <div class="row" style="gap:12px;align-items:center;margin-top:6px"><div class="portrait" style="width:70px;height:70px"></div><div style="font-size:14px;font-weight:800">"Coach, I need more ice time or I want out."</div></div>
+    <div class="col" style="gap:8px;margin-top:12px"><div class="btn hot sm">PROMISE TOP-6 ROLE</div><div class="btn sec sm">ASK FOR PATIENCE</div><div class="btn sec sm">SHOP HIM</div></div></div>
+  </div>
+ </div>
+</section>
+<p class="note"><b>11 · Storylines + Chemistry (reskin).</b> News as stamped cards ("INJURY!", "RUMOUR!"); mood rings on locker-room faces; meetings as dialogue boxes capped at 3 big choices.</p>
+
+<!-- 12 SETTINGS -->
+<section class="frame" id="c12">
+ <div class="title">OPTIONS</div>
+ <div class="row" style="gap:8px;justify-content:center"><span class="chip on">GAME</span><span class="chip">LEAGUE OPS</span><span class="chip">AHL</span><span class="chip">DISPLAY</span></div>
+ <div class="box" style="width:640px;align-self:center;display:flex;flex-direction:column;gap:6px">
+  <div class="opt on"><span>SIM SPEED</span><span class="v">◀ FAST ▶</span></div>
+  <div class="opt"><span>DIFFICULTY</span><span class="v">◀ GM ▶</span></div>
+  <div class="opt"><span>TRADE AI</span><span class="v">◀ REALISTIC ▶</span></div>
+  <div class="opt"><span>INJURIES</span><span class="v">◀ ON ▶</span></div>
+  <div class="opt"><span>MENU SOUNDS</span><span class="v">◀ ON ▶</span></div>
+  <div class="opt" style="opacity:.75"><span>▸ ADVANCED</span><span class="v">6 MORE</span></div>
+ </div>
+ <div class="row" style="justify-content:center;gap:18px"><div class="btn sec">DEFAULTS</div><div class="btn hot">SAVE</div></div>
+ <div class="foot"><span><b>A</b>CHANGE</span><span><b class="y">◀▶</b>CYCLE</span><span><b class="r">B</b>BACK</span></div>
+</section>
+<p class="note"><b>12 · Settings + League Ops (deliberate rule-break).</b> Classic options list with yellow highlight bar and ◀ ▶ value cycling. No cracks or bounce — just frame, bar and font. Advanced collapsed.</p>
+</body></html>

@@ -47,8 +47,13 @@ def fetch_capwages_term(name: str, *, timeout: float = 12.0) -> Optional[Dict[st
         return None
     url = f"https://capwages.com/players/{slug}"
     req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT, "Accept": "text/html"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        html = resp.read().decode("utf-8", "replace")
+    from services.real_nhl_roster_importer import cached_http_text
+
+    def _fetch() -> str:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read().decode("utf-8", "replace")
+
+    html = cached_http_text(url, _fetch)
     m = re.search(
         r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>',
         html,

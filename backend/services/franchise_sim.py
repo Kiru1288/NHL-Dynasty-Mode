@@ -2222,6 +2222,9 @@ def start_franchise(
         phase="preseason",
         season_phase="preseason",
     )
+    # New franchise: junior leagues were just built for this season, so the old-save
+    # draft-class repair in the prospect sync must not run (it cost ~17 s per start).
+    session._draft_class_roll_year = int(season_y or 0) or None
     try:
         from services.franchise_store import live_code_revision  # noqa: WPS433
 
@@ -2337,6 +2340,14 @@ def start_franchise(
         session.financials_status = "failed"
         session.notifications.append(f"Contract bootstrap incomplete: {e}")
     try:
+        # A brand-new franchise's junior leagues were just built for this season; the
+        # draft-class roll in the sync is a repair for older saves and cost ~17 s here.
+        try:
+            _sy = int(getattr(session, "season_calendar_year", 0) or 0)
+            if _sy and getattr(session, "_draft_class_roll_year", None) is None:
+                session._draft_class_roll_year = _sy
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         _sync_prospect_stats_to_calendar(session)
         # Defer initial draft board rank snapshot until first real board access.
         # This avoids paying draft ranking compute cost during franchise creation.
@@ -3793,9 +3804,20 @@ def _franchise_stat_scope(session: FranchiseSession, *, is_playoff: bool = False
     phase = str(getattr(session, "phase", "") or getattr(session, "season_phase", "") or "").lower()
     if "preseason" in phase:
         return "preseason"
-    if "playoff" in phase:
+    # Only the playoffs themselves. "playoff_ready" is the moment the regular season
+    # ends: the bulk-sim catch-up stamps the whole season ledger right then, and the old
+    # substring test tagged every regular-season row "playoffs", so the award engine
+    # (which keeps regular-season rows only) found no candidates for any player award.
+    if phase == "playoffs":
         return "playoffs"
     return "regular_season"
+
+
+def _stamp_ledger_scope(row: Dict[str, Any], stat_scope: str) -> None:
+    """Season-ledger rows are never playoff rows (playoffs keep their own ledger), so a
+    "playoffs" stamp left by the old phase test is corrected rather than kept."""
+    if str(row.get("stat_scope") or "") in ("", "playoffs", "playoff"):
+        row["stat_scope"] = "regular_season" if stat_scope == "playoffs" else stat_scope
 
 
 def _stable_franchise_game_id_for(
@@ -4021,7 +4043,7 @@ def _accumulate_franchise_game_stats(
     if not light_stats:
         for row in list((getattr(session, "player_season_stats", None) or {}).values()):
             if isinstance(row, dict):
-                row.setdefault("stat_scope", stat_scope)
+                _stamp_ledger_scope(row, stat_scope)
                 row["stat_authority"] = "session.player_season_stats"
 
     _box_lines = box.pop("player_lines", None)
@@ -6345,9 +6367,24 @@ def _build_stats_central_payload(session: FranchiseSession) -> Dict[str, Any]:
             league = getattr(getattr(session, "sim", None), "league", None)
             league_teams = list(getattr(league, "teams", None) or [])
             season_year = int(getattr(session, "season_calendar_year", 2026) or 2026)
+            # Same rookie facts the season-end Calder vote uses (per-season NHL GP + age on
+            # Sept. 15), so the live race and the trophy can't disagree on who is a rookie.
+            try:
+                from services.season_carryover import calder_history
+
+                rookie_facts = calder_history(session, season_year)
+            except Exception:
+                rookie_facts = {}
             for race_row in skater_rows + goalie_rows:
                 if isinstance(race_row, dict):
-                    _stamp_calder_facts(race_row, player_by_id.get(str(race_row.get("player_id") or race_row.get("id") or "")), season_year)
+                    rpid = str(race_row.get("player_id") or race_row.get("id") or "")
+                    _stamp_calder_facts(race_row, player_by_id.get(rpid), season_year)
+                    facts = rookie_facts.get(rpid)
+                    if isinstance(facts, dict):
+                        for key in ("max_prior_season_gp", "prior_seasons_6plus_gp", "age_sept15", "calder_basis", "is_rookie"):
+                            if key in facts:
+                                race_row[key] = facts[key]
+                        race_row["rookie"] = bool(facts.get("is_rookie"))
             cursor = int(getattr(session, "calendar_cursor", 0) or 0)
             last_reg = int(getattr(session, "nhl_regular_season_last_index", 0) or 0)
             race_sealed = last_reg > 0 and cursor >= (last_reg - 15)
@@ -14136,7 +14173,7 @@ def _run_bulk_finalize_catchup(
         stat_scope = _franchise_stat_scope(session, is_playoff=False)
         for row in (getattr(session, "player_season_stats", None) or {}).values():
             if isinstance(row, dict):
-                row.setdefault("stat_scope", stat_scope)
+                _stamp_ledger_scope(row, stat_scope)
                 row["stat_authority"] = "session.player_season_stats"
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
@@ -25277,6 +25314,14 @@ def _build_state_payload_impl(session: FranchiseSession, *, include_heavy: bool 
                 payload["awards"] = slim_awards_payload_for_client(payload.get("awards"))
             except Exception:
                 _swallowed_log.debug("suppressed exception", exc_info=True)
+    # Current presentation of the user's club only (~300 bytes). History stays behind
+    # /api/franchise/legacy/*; nothing from the archive rides on the lean state.
+    try:
+        from services.legacy_hall import lean_identity_block
+
+        payload["franchise_identity"] = lean_identity_block(session)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return payload
 
 

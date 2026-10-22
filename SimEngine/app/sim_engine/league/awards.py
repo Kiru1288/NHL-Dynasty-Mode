@@ -50,17 +50,29 @@ def ballot_config_for(award_id: str) -> Dict[str, Any]:
     if cfg:
         return dict(cfg)
     return {"voters": VOTER_COUNT, "points": list(BALLOT_POINTS), "body": "PHWA"}
-SUBJECTIVE_TROPHY_PUBLIC_CASE = {
-    "hart": "Most valuable to his team — not the scoring race.",
-    "norris": "Premier defenseman season.",
-    "selke": "Elite defensive forward. PK and 5-on-5, not the Art Ross.",
-    "vezina": "Best goaltender season.",
-    "calder": "Top first-year NHL player.",
-    "lady_byng": "Production with exceptional discipline.",
-    "ted_lindsay": "Players' view of most outstanding player.",
-    "conn_smythe": "Most valuable playoff performer.",
-    "jack_adams": "Coach who most outperformed his roster's expectations.",
-    "gm_of_the_year": "Front office that built the season's biggest overachiever.",
+# How each award is actually decided, in plain words. Shown on every award card so a
+# subjective trophy never looks random. Keep in step with the scoring functions below.
+AWARD_CRITERIA = {
+    "presidents": "Most standings points. Ties: regulation wins, wins, goal differential.",
+    "stanley": "Win the playoffs.",
+    "conference_champions": "Win your conference's playoff bracket.",
+    "art_ross": "Most points. Ties: more goals.",
+    "rocket": "Most goals. Ties: fewer games played.",
+    "hart": "190 writers vote for the player most valuable to his team: scoring (with diminishing returns), how much of his team's offence runs through him, whether the team wins, ice time and two-way play. Goalies qualify with a starter's workload and an elite season.",
+    "norris": "Writers vote for the best all-round defenceman: points, team success, how his team out-chances opponents when he's on the ice, and suppressing chances against. 45%+ of games and 12+ minutes a night.",
+    "selke": "Writers vote for the best defensive forward: penalty killing, shot blocks, keeping chances against down at 5-on-5, faceoffs for centres. Power-play specialists with little PK time don't qualify.",
+    "calder": "Writers vote for the best rookie. NHL rule: not more than 25 NHL games in any earlier season, not 6+ games in each of two earlier seasons, under 26 on Sept. 15, and 30%+ of games played. Judged on one scale for every position.",
+    "vezina": "The 32 GMs vote for the best goalie: goals saved above expected first, then save % against the league average, with wins, shutouts and a starter's workload as tiebreak-sized extras.",
+    "lady_byng": "Writers vote for sportsmanship with skill: equal weight to discipline (penalty minutes per game) and production. Needs 55%+ of games and roughly half a point per game.",
+    "ted_lindsay": "The players vote for the most outstanding player: individual scoring rate, goals, and how much he tilts the ice. No team-standings factor, so a star on a losing club can win.",
+    "conn_smythe": "An 18-writer panel picks the playoff MVP from totals over the whole run (6+ games): points, goals and games for skaters, save % and goals saved for goalies. The champion's players are strongly favoured.",
+    "jennings": "Goalies on the team that allowed the fewest goals, with enough appearances.",
+    "masterton": "Perseverance: players who came back from 10+ games lost to injury and played a real season. In a year with no comebacks, a 34+ veteran still playing a full season.",
+    "messier": "Leadership: the leadership and professionalism ratings, captaincy, team success and his own production.",
+    "jack_adams": "Coach whose team most beat the wins its roster was expected to get.",
+    "gm_of_the_year": "Wins above the roster's expectation, plus how good the club he built finished.",
+    "all_star_1": "Best centre, two wingers, two defencemen and a goalie by the Hart, Norris and Vezina scores.",
+    "all_star_2": "The next best at each position.",
 }
 
 VOTER_ARCHETYPES = (
@@ -1057,9 +1069,43 @@ def calder_eligibility(
     age = _player_age(row, teams)
     # NHL age rule is "under 26 on Sept. 15 of the season" — prefer the season-start
     # age computed from the birth date over the (possibly already aged-up) roster age.
-    if hist.get("age_sept15") is not None:
-        age = _safe_int(hist.get("age_sept15"), 0) or age
+    sept15 = hist.get("age_sept15") if hist.get("age_sept15") is not None else row.get("age_sept15")
+    if sept15 is not None:
+        age = _safe_int(sept15, 0) or age
     per_season_facts = hist.get("max_prior_season_gp") is not None
+    live_min = 1 if row.get("live_race") or hist.get("live_race") else min_gp
+
+    # The NHL rule, when we know each prior season's NHL games: not a rookie after 26+ GP
+    # in any one prior season, or 6+ GP in each of two prior seasons; under 26 on Sept 15.
+    # This is authoritative. Row flags such as prior_nhl_seasons / is_rookie were stamped
+    # by older code that counted any drafted-in-an-earlier-year player (and junior/AHL
+    # seasons) as an NHL veteran, which emptied the Calder of actual rookies.
+    facts = hist if per_season_facts else (row if row.get("max_prior_season_gp") is not None else None)
+    if facts is not None:
+        max_prior = _safe_int(facts.get("max_prior_season_gp"), 0)
+        six_plus = _safe_int(facts.get("prior_seasons_6plus_gp"), 0)
+        rookie = max_prior <= 25 and six_plus < 2
+        age_ok = age is None or age <= 25
+        reasons = [str(facts.get("calder_basis") or ("Rookie by the NHL games rule." if rookie else "Played too many prior NHL games."))]
+        if not age_ok:
+            reasons.append(f"Age {age} on Sept. 15 (must be under 26).")
+        if gp < live_min:
+            reasons.append(f"{gp} GP; needs {live_min} to be considered.")
+        return {
+            "eligible": bool(rookie and age_ok and gp >= live_min),
+            "confidence": "full",
+            "eligibility_confidence": "full",
+            "details": {
+                "gp": gp,
+                "min_gp": live_min,
+                "age": age,
+                "max_prior_season_gp": max_prior,
+                "prior_seasons_6plus_gp": six_plus,
+                "is_rookie_flag": rookie,
+                "age_ok": age_ok,
+                "reasons": reasons,
+            },
+        }
 
     prior_gp = None
     for key in ("previous_nhl_gp", "prior_nhl_gp", "nhl_gp_before", "career_nhl_gp_before_season"):
@@ -1082,7 +1128,6 @@ def calder_eligibility(
     # A stored false flag used to make every NHL player ineligible, because the
     # stats row writes is_rookie=False whenever the field was missing.
     # Rookies are the current draft class, or players with no prior season rows.
-    live_min = 1 if row.get("live_race") or hist.get("live_race") else min_gp
     if draft_year and rookie_class and draft_year == rookie_class:
         return {
             "eligible": gp >= live_min,
@@ -1697,6 +1742,25 @@ def prepare_award_context(rows: Sequence[Any]) -> None:
             bucket[key][1] += 1.0
         if not _is_goalie(row):
             points[tid] = points.get(tid, 0.0) + float(_pts(row))
+    # Goalies: league save % (starters' pool) and goals saved above expected from the
+    # ledger's expected goals against, when the row has no GSAx of its own.
+    sa_tot = ga_tot = 0.0
+    for row in rows:
+        if isinstance(row, dict) and _is_goalie(row):
+            sa = _safe_float(row.get("shots_against"), _safe_float(row.get("goalie_shots_against"), 0.0))
+            if sa >= 300:
+                sa_tot += sa
+                ga_tot += _safe_float(row.get("ga"), _safe_float(row.get("goalie_ga"), 0.0))
+    lg_sv = (1.0 - ga_tot / sa_tot) if sa_tot > 0 else 0.905
+    for row in rows:
+        if not isinstance(row, dict) or not _is_goalie(row):
+            continue
+        row["_lg_sv"] = lg_sv
+        if row.get("gsax") is None and row.get("goalie_xga") is not None:
+            row["_gsax"] = _safe_float(row.get("goalie_xga"), 0.0) - _safe_float(row.get("ga"), _safe_float(row.get("goalie_ga"), 0.0))
+        else:
+            row["_gsax"] = _safe_float(row.get("gsax"), 0.0)
+
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -1740,7 +1804,7 @@ def _hart_goalie_score(row: Mapping[str, Any], team_context_by_tid: Optional[Map
     sv = goalie_sv_pct(row)
     wins = _safe_float(row.get("w", row.get("wins")), 0.0)
     so = _safe_float(row.get("so", row.get("shutouts")), 0.0)
-    gsax = _safe_float(row.get("gsax"), 0.0)
+    gsax = _row_gsax(row)
     success = _team_success(row, team_context_by_tid)
     return (
         max(0.0, sv - 0.905) * 2200.0
@@ -1834,34 +1898,62 @@ def selke_ballot_score(row: Mapping[str, Any]) -> float:
 
 
 def vezina_ballot_score(row: Mapping[str, Any], team_context_by_tid: Optional[Mapping[str, Mapping[str, Any]]] = None) -> float:
+    """Best goaltender: how many goals he saved, then how well he stopped pucks.
+
+    GMs vote on stopping pucks. Goals saved above expected leads, save % against the
+    league average follows, wins and workload are a tiebreak-sized nudge. (The old mix
+    gave save % about one point per .020, so whoever started the most games won.)
+    """
     ctx = dict((team_context_by_tid or {}).get(_tid(row), {}))
     sv = goalie_sv_pct(row)
-    hd = normalize_percentage(row.get("high_danger_save_pct")) if row.get("high_danger_save_pct") is not None else sv
-    gsax = _safe_float(row.get("gsax"), 0.0)
-    workload = _safe_float(row.get("games_started"), _safe_float(row.get("gs"), float(_gp(row))))
-    steal = _safe_float(row.get("steal_rate"), _safe_float(row.get("quality_start_pct"), 0.0))
-    consistency = _safe_float(row.get("quality_start_pct"), sv)
-    # Soft team defence adjustment: harder workload (worse team GD) gets slight lift.
+    lg = _safe_float(row.get("_lg_sv"), 0.905)
+    gsax = _safe_float(row.get("_gsax"), _safe_float(row.get("gsax"), 0.0))
+    gp = float(_gp(row))
+    wins = _safe_float(row.get("w", row.get("wins")), 0.0)
+    shutouts = _safe_float(row.get("so", row.get("shutouts")), 0.0)
+    workload = min(1.0, gp / 55.0)
     team_def = 1.0 - _safe_float(ctx.get("goal_diff_norm"), 0.5)
     return (
-        gsax * 2.2
-        + sv * 40.0
-        + hd * 18.0
-        + (workload / 70.0) * 12.0
-        + normalize_percentage(steal) * 10.0
-        + normalize_percentage(consistency) * 8.0
-        + team_def * 6.0
-        + min(1.0, float(_gp(row)) / 60.0) * 5.0
+        gsax * 2.4
+        + (sv - lg) * 1400.0 * workload
+        + wins * 0.35
+        + shutouts * 0.8
+        + workload * 10.0
+        + team_def * 3.0
     )
 
 
+def _row_gsax(row: Mapping[str, Any]) -> float:
+    """GSAx from the row, else expected-goals-against minus goals against (see prepare_award_context)."""
+    if row.get("_gsax") is not None:
+        return _safe_float(row.get("_gsax"), 0.0)
+    return _safe_float(row.get("gsax"), 0.0)
+
+
 def lady_byng_score(row: Mapping[str, Any]) -> float:
-    """Most points, fewest penalty minutes."""
-    return float(_pts(row)) - _safe_float(row.get("pim"), 0.0) * 0.85
+    """Sportsmanship with a high standard of play: discipline counts as much as scoring.
+
+    Real voters pick a productive player who almost never takes a penalty. Discipline is
+    0-1 from PIM per game (0 PIM = 1.0, a minor every four games = 0). Points are capped so
+    the scoring champion doesn't win it by default; eligibility needs a real scoring year.
+    """
+    gp = max(1, _gp(row))
+    pim_pg = _safe_float(row.get("pim"), 0.0) / gp
+    discipline = max(0.0, 1.0 - pim_pg / 0.5)
+    production = min(110.0, float(_pts(row))) / 110.0
+    return production * 50.0 + discipline * 50.0
 
 
 def ted_lindsay_score(row: Mapping[str, Any], team_context_by_tid: Optional[Mapping[str, Mapping[str, Any]]] = None) -> float:
-    """Hart formula, with on-ice xGF% and GF% where Hart uses relative corsi."""
+    """The players' pick for most outstanding player: individual brilliance, not standings.
+
+    Unlike the Hart there is no team-success term, so a star on a non-playoff club can win
+    it. Rate scoring, goals, and how much he tilts the ice when he's out there.
+    """
+    if _is_goalie(row):
+        return _hart_goalie_score(row, None) * 0.9
+    gp = max(1, _gp(row))
+    ppg = float(_pts(row)) / gp
     xgf = row.get("_xgf_pct")
     if xgf is None:
         xgf = _as_share(row.get("xgf_pct"))
@@ -1869,9 +1961,12 @@ def ted_lindsay_score(row: Mapping[str, Any], team_context_by_tid: Optional[Mapp
     if gf is None:
         gf = _as_share(row.get("gf_pct") if row.get("gf_pct") is not None else row.get("on_ice_gf_pct"))
     return (
-        _hart_core(row, team_context_by_tid)
-        + ((float(xgf) if xgf is not None else 0.5) - 0.5) * 90.0
-        + ((float(gf) if gf is not None else 0.5) - 0.5) * 80.0
+        ppg * 60.0
+        + float(_goals(row)) * 0.45
+        + math.sqrt(max(0.0, float(_pts(row)))) * 4.0
+        + ((float(xgf) if xgf is not None else 0.5) - 0.5) * 70.0
+        + ((float(gf) if gf is not None else 0.5) - 0.5) * 60.0
+        + min(1.0, gp / 70.0) * 6.0
     )
 
 
@@ -1882,7 +1977,7 @@ def calder_position_score(row: Mapping[str, Any], team_context_by_tid: Optional[
     if _is_goalie(row):
         sv = goalie_sv_pct(row)
         wins = _safe_float(row.get("w", row.get("wins")), 0.0)
-        val = (sv - 0.900) * 1500.0 + wins * 0.9 + _safe_float(row.get("gsax"), 0.0) * 1.5
+        val = (sv - _safe_float(row.get("_lg_sv"), 0.905)) * 1500.0 + wins * 0.9 + _row_gsax(row) * 1.5
         return val * min(1.0, gp / 40.0)
     pts = float(_pts(row))
     toi_pg = _toi_pg_minutes(row)
@@ -1890,20 +1985,30 @@ def calder_position_score(row: Mapping[str, Any], team_context_by_tid: Optional[
     return val + _safe_float(row.get("plus_minus"), 0.0) * 0.15
 
 
-def conn_smythe_score(row: Mapping[str, Any], *, champion_id: Optional[str] = None) -> float:
+def conn_smythe_score(row: Mapping[str, Any], *, champion_id: Optional[str] = None, finalist_ids: Sequence[str] = ()) -> float:
+    """Playoff MVP: the whole run, not a hot two games.
+
+    Totals over the run (points, goals, games), save % and GSAx for goalies. Voters
+    almost always pick from the champion, sometimes the beaten finalist, so the
+    team's depth into the playoffs scales the score. The old version used points per
+    game with a one-game floor, so a call-up with 3 points in 1 game could top it.
+    """
     gp = max(1, _gp(row))
-    base = (float(_pts(row)) / gp) * 30.0 + float(_goals(row)) * 1.2
     if _is_goalie(row):
-        base = goalie_sv_pct(row) * 55.0 + _safe_float(row.get("gsax"), 0.0) * 2.0 + float(gp) * 1.5
-    elif _is_defense(row):
-        base += _safe_float(row.get("defense_score"), 40.0) * 0.2
+        base = (goalie_sv_pct(row) - 0.900) * 900.0 + _row_gsax(row) * 2.4 + float(gp) * 1.6
     else:
-        base += _safe_float(row.get("defense_score"), 30.0) * 0.12
-    base += _safe_float(row.get("elimination_game_points"), 0.0) * 2.5
-    base += _safe_float(row.get("clutch_score"), 0.0) * 0.2
-    base += _safe_float(row.get("final_round_points"), 0.0) * 2.0
-    if champion_id and str(_tid(row)) == str(champion_id):
-        base *= 1.18
+        base = float(_pts(row)) * 2.4 + float(_goals(row)) * 1.3 + float(gp) * 0.4
+        if _is_defense(row):
+            base *= 1.15
+    base += _safe_float(row.get("elimination_game_points"), 0.0) * 2.0
+    base += _safe_float(row.get("final_round_points"), 0.0) * 1.5
+    tid = str(_tid(row))
+    if champion_id and tid == str(champion_id):
+        base *= 1.35
+    elif tid in {str(f) for f in finalist_ids or ()}:
+        base *= 1.0
+    else:
+        base *= 0.6
     return base
 
 
@@ -1958,42 +2063,44 @@ def simulate_award_ballots(
         "traditional": 0.06,
     }
 
+    # Each voter type leans on one criterion. Criteria come in different units (points per
+    # game ~1, ballot scores ~100), so each is turned into a z-score across the candidates
+    # first; otherwise one voter type's "preference" was the raw score again, or a number
+    # 100x smaller than it, and the archetypes did nothing. Noise and lean are both sized
+    # to the spread of the field, so a clear winner stays clear and a close race is a race.
+    arch_keys = {
+        "production": ("pts_pg", "production_component"),
+        "two_way": ("onice", "two_way_component", "defensive_value"),
+        "team_success": ("team", "team_context_component"),
+        "analytics": ("value", "individual_value_component", "goals_saved_above_expected"),
+        "workload": ("avail", "availability_component", "workload"),
+    }
+    scores_only = [float(sc) for sc, _ in ordered[:10]]  # the contenders, not the whole pool
+    mean_s = sum(scores_only) / len(scores_only)
+    spread = math.sqrt(sum((x - mean_s) ** 2 for x in scores_only) / len(scores_only)) or max(1.0, abs(mean_s) * 0.05)
+    pref_z: Dict[str, Dict[str, float]] = {}
+    for arch, keys in arch_keys.items():
+        raw: Dict[str, Optional[float]] = {}
+        for score, row in ordered:
+            comps = tallies[_pid(row)]["component_scores"] or {}
+            val = next((comps.get(k) for k in keys if comps.get(k) is not None), None)
+            raw[_pid(row)] = _safe_float(val, 0.0) if val is not None else None
+        have = [v for v in raw.values() if v is not None]
+        if len(have) < 2:
+            pref_z[arch] = {}
+            continue
+        m = sum(have) / len(have)
+        sd = math.sqrt(sum((v - m) ** 2 for v in have) / len(have)) or 1.0
+        pref_z[arch] = {pid: max(-2.0, min(2.0, (v - m) / sd)) for pid, v in raw.items() if v is not None}
+
     for v in range(int(voter_count)):
         arch = VOTER_ARCHETYPES[v % len(VOTER_ARCHETYPES)]
         ranked = []
         for score, row in ordered:
             pid = _pid(row)
-            noise = rng.uniform(-0.045, 0.045)
-            pref = 0.0
-            comps = tallies[pid]["component_scores"] or derive_pseudo_components(row, award_id, float(score))
-            if arch == "production":
-                pref = _safe_float(
-                    comps.get("pts_pg", comps.get("production_component")),
-                    float(score),
-                )
-            elif arch == "two_way":
-                pref = _safe_float(
-                    comps.get("onice", comps.get("two_way_component", comps.get("defensive_value"))),
-                    float(score),
-                )
-            elif arch == "team_success":
-                pref = _safe_float(
-                    comps.get("team", comps.get("team_context_component")),
-                    float(score),
-                )
-            elif arch == "analytics":
-                pref = _safe_float(
-                    comps.get("value", comps.get("individual_value_component", comps.get("goals_saved_above_expected"))),
-                    float(score),
-                )
-            elif arch == "workload":
-                pref = _safe_float(
-                    comps.get("avail", comps.get("availability_component", comps.get("workload"))),
-                    float(score),
-                )
-            else:
-                pref = float(score)
-            adj = float(score) + float(pref) * float(archetype_bias[arch]) + noise * max(0.15, abs(float(score)))
+            lean = pref_z.get(arch, {}).get(pid, 0.0) * float(archetype_bias.get(arch, 0.0)) * 4.0
+            noise = rng.gauss(0.0, 0.30)
+            adj = float(score) + (lean + noise) * spread
             ranked.append((adj, pid))
         ranked.sort(key=lambda x: x[0], reverse=True)
         for place, (_adj, pid) in enumerate(ranked[: len(curve)]):
@@ -2094,13 +2201,16 @@ def _build_award_evidence(
     why: List[str] = []
     if voting and winner_row.get("ballot_points") is not None:
         margin = float(voting.get("margin") or 0.0)
-        fpv = int(winner_row.get("first_place_votes") or 0)
-        vc = int(voting.get("voter_count") or VOTER_COUNT)
+        vc = int(voting.get("voter_count") or 0)
         ru_name = str(runner.get("name") or "the field") if runner else "the field"
-        why.append(
-            f"{fpv} of {vc} first-place votes · {float(winner_row.get('ballot_points') or 0):.0f} points · "
-            f"+{margin:.0f} over {ru_name}"
-        )
+        if vc > 0:
+            fpv = int(winner_row.get("first_place_votes") or 0)
+            why.append(
+                f"{fpv} of {vc} first-place votes · {float(winner_row.get('ballot_points') or 0):.0f} points · "
+                f"+{margin:.0f} over {ru_name}"
+            )
+        else:
+            why.append(f"Award score {float(winner_row.get('canonical_score') or 0):.1f} · +{margin:.1f} over {ru_name}")
     if not why and winner_stats:
         lead = winner_stats[0]
         why.append(f"{lead['label']}: {lead.get('display') or _fmt_stat_value(lead['value'], lead['fmt'])}")
@@ -2491,10 +2601,13 @@ def _run_ballot_award(
                 "ballot_points": float(score),
                 "first_place_votes": None,
                 "votes": int(round(float(score))),
-                "display_value": round(float(score), 2),
-                "display_metric": str(defn.get("display_metric") or ""),
+                "display_value": round(float(score), 1),
+                # The formula leader wins (see above), so this is a score, not ballot points.
+                "display_metric": "Award score" if str(defn.get("display_metric") or "").endswith("ballot points") or str(defn.get("display_metric") or "") == "Ballot points" else str(defn.get("display_metric") or ""),
                 "component_scores": {},
                 "eligibility": dict(row.get("_eligibility") or {}),
+                # the season line the "why" text reads (pts, PIM, goalie W/SV%...)
+                **_award_stat_fields(row),
                 "points": _pts(row),
                 "goals": _goals(row),
                 "assists": _safe_int(row.get("a")),
@@ -2514,7 +2627,7 @@ def _run_ballot_award(
             "margin": float(scored[0][0] - scored[1][0]) if len(scored) > 1 else 0.0,
             "seed": _seed_int(season_seed, aid),
             "ballot_points_curve": [],
-            "voting_body": "Season formula",
+            "voting_body": "Award formula (the top score wins; see criteria)",
             "leader_locked": True,
         },
     )
@@ -2649,8 +2762,8 @@ def eligible_selke(rows: Sequence[Dict[str, Any]], season_length: int) -> List[D
 
 
 def eligible_lady_byng(rows: Sequence[Dict[str, Any]], season_length: int) -> List[Dict[str, Any]]:
-    need = _season_games_threshold(season_length, 0.40, minimum=28)
-    return [r for r in rows if not _is_goalie(r) and _gp(r) >= need and _pts(r) > 0]
+    need = _season_games_threshold(season_length, 0.55, minimum=40)
+    return [r for r in rows if not _is_goalie(r) and _gp(r) >= need and _pts(r) >= max(30, int(_gp(r) * 0.5))]
 
 
 def eligible_vezina(rows: Sequence[Dict[str, Any]], season_length: int) -> List[Dict[str, Any]]:
@@ -3044,12 +3157,18 @@ def _why_lines(
         )
 
     if voting and winner.get("ballot_points") is not None:
-        fpv = _safe_int(winner.get("first_place_votes"))
-        vc = _safe_int(voting.get("voter_count"), VOTER_COUNT)
+        vc = _safe_int(voting.get("voter_count"), 0)
         margin = float(voting.get("margin") or 0.0)
-        v = f"Voting: {fpv} of {vc} first-place votes and {float(winner.get('ballot_points') or 0):.0f} points"
-        if rname:
-            v += f", {margin:.0f} ahead of {rname}"
+        if vc > 0:
+            fpv = _safe_int(winner.get("first_place_votes"))
+            v = f"Voting: {fpv} of {vc} first-place votes and {float(winner.get('ballot_points') or 0):.0f} points"
+            if rname:
+                v += f", {margin:.0f} ahead of {rname}"
+        else:
+            # Formula-decided (top score wins): say so, with the margin in score points.
+            v = f"Award score {float(winner.get('canonical_score') or winner.get('ballot_points') or 0):.1f}"
+            if rname:
+                v += f", {margin:.1f} ahead of {rname}"
         lines.append(v + ".")
     return lines
 
@@ -3069,6 +3188,9 @@ def _attach_award_explanations(awards: Mapping[str, Award], team_ctx: Mapping[st
             why = _why_lines(aid, winner, full, team_ctx=team_ctx, voting=voting)
             if not why:
                 continue
+            if aid == "conn_smythe" and str(award.stat_scope or "") == "regular_season":
+                # quick-simmed playoffs: the panel judged season form, so don't call it playoff numbers
+                why = [w.replace(" playoff games", " regular-season games").replace("playoff skaters", "Cup finalists' skaters") for w in why]
             ev["why"] = why[:5]
             ev.setdefault("winner", {})
             ev["winner"] = dict(ev.get("winner") or {})
@@ -3880,33 +4002,55 @@ def compute_awards(
             },
         )
     elif not po_rows:
-        awards[AWARD_REGISTRY["conn_smythe"]["name"]] = _unavailable_award(
-            AWARD_REGISTRY["conn_smythe"],
-            reason="Playoff player statistics unavailable.",
-            season=season,
-        )
+        # Quick-simmed playoffs keep series results but no player box scores. Rather than
+        # skip the trophy, the panel judges the champion's and finalist's players on their
+        # regular season, and the award says so in its eligibility line.
+        champ = str(getattr(playoff_result, "champion_id", "") or "")
+        finalists = [str(f) for f in (getattr(playoff_result, "finalist_ids", None) or [])]
+        cup_rows = [r for r in snap_rows if str(_tid(r)) in ({champ} | set(finalists)) and _gp(r) >= 20]
+        if cup_rows:
+            awards[AWARD_REGISTRY["conn_smythe"]["name"]] = _run_ballot_award(
+                AWARD_REGISTRY["conn_smythe"],
+                cup_rows,
+                lambda r: (hart_ballot_score(r, team_ctx) if not _is_goalie(r) else vezina_ballot_score(r, team_ctx) * 2.2)
+                * (1.35 if str(_tid(r)) == champ else 1.0),
+                team_map=team_map,
+                season_seed=season_seed,
+                season=season,
+                eligibility_summary="Playoff box scores weren't kept for this quick-simmed run, so voters judged the Cup finalists' players on their season form.",
+                required_fields=["gp"],
+                stat_scope="regular_season",
+            )
+        else:
+            awards[AWARD_REGISTRY["conn_smythe"]["name"]] = _unavailable_award(
+                AWARD_REGISTRY["conn_smythe"],
+                reason="Playoff player statistics unavailable.",
+                season=season,
+            )
     else:
         champ = str(getattr(playoff_result, "champion_id", "") or "")
-        need = 1
-        pool = _isolated_scoring_pool([snapshot_row(r, teams=teams) for r in po_rows if _gp(r) >= need])
+        finalists = [str(f) for f in (getattr(playoff_result, "finalist_ids", None) or [])]
+        po_snap = [snapshot_row(r, teams=teams) for r in po_rows]
+        # A real run: at least 6 playoff games (a skater swept in round one can't be MVP).
+        pool = _isolated_scoring_pool([r for r in po_snap if _gp(r) >= 6]) or _isolated_scoring_pool(po_snap)
         awards[AWARD_REGISTRY["conn_smythe"]["name"]] = _run_ballot_award(
             AWARD_REGISTRY["conn_smythe"],
             pool,
-            lambda r: conn_smythe_score(r, champion_id=champ),
+            lambda r: conn_smythe_score(r, champion_id=champ, finalist_ids=finalists),
             team_map=team_map,
             season_seed=season_seed,
             season=season,
-            eligibility_summary="Playoff-only participation after Cup Final.",
+            eligibility_summary="Playoff totals over 6+ games; voters lean heavily to the champion.",
             required_fields=["gp"],
-            fallback_fn=lambda r: float(_pts(r)) + float(_goals(r)),
+            fallback_fn=lambda r: conn_smythe_score(r, champion_id=champ, finalist_ids=finalists),
             stat_scope="playoffs",
         )
 
-    awards[AWARD_REGISTRY["masterton"]["name"]] = _try_oldest_on_club(
-        AWARD_REGISTRY["masterton"], skaters, teams, team_ctx, team_map, season, season_seed, best_club=False,
+    awards[AWARD_REGISTRY["masterton"]["name"]] = _try_masterton(
+        snap_rows, teams, team_ctx, team_map, season, season_seed, season_length, history_by_player,
     )
-    awards[AWARD_REGISTRY["messier"]["name"]] = _try_oldest_on_club(
-        AWARD_REGISTRY["messier"], skaters, teams, team_ctx, team_map, season, season_seed, best_club=True,
+    awards[AWARD_REGISTRY["messier"]["name"]] = _try_messier(
+        skaters, teams, team_ctx, team_map, season, season_seed, season_length,
     )
     awards[AWARD_REGISTRY["jack_adams"]["name"]] = _try_expectation_award(
         AWARD_REGISTRY["jack_adams"], teams, team_ctx, team_map, season, season_seed, kind="coach",
@@ -4036,25 +4180,96 @@ def _club_id_by_standing(team_ctx: Mapping[str, Mapping[str, Any]], *, best: boo
     return ranked[0][3]
 
 
-def _try_oldest_on_club(defn, rows, teams, team_ctx, team_map, season, season_seed, *, best_club: bool) -> Award:
-    tid = _club_id_by_standing(team_ctx, best=best_club)
-    pool = [r for r in rows if tid and str(_tid(r)) == str(tid) and _gp(r) >= 1 and not _is_goalie(r)]
-    if not pool:
-        label = "best" if best_club else "worst"
-        return _unavailable_award(defn, reason=f"No skaters on the {label} club.", season=season)
-    summary = (
-        "Oldest skater on the first-place club."
-        if best_club
-        else "Oldest skater on the last-place club."
-    )
+def _rating_of(teams: Optional[Sequence[Any]], pid: str, key: str) -> Optional[float]:
+    p = _player_from_rosters(teams, pid)
+    r = getattr(p, "ratings", None) if p is not None else None
+    if isinstance(r, Mapping) and r.get(key) is not None:
+        return _safe_float(r.get(key), 0.0)
+    return None
+
+
+def _try_masterton(rows, teams, team_ctx, team_map, season, season_seed, season_length, history_by_player) -> Award:
+    """Perseverance and dedication: players who lost real time to injury and came back
+    to play a meaningful season. If nobody qualifies, long-serving veterans (34+) still
+    playing a full season are considered instead, and the award says which it was.
+    (It used to go to the oldest skater on the last-place club.)"""
+    defn = AWARD_REGISTRY["masterton"]
+    hist = history_by_player or {}
+    need_gp = _season_games_threshold(season_length, 0.35, minimum=25)
+    max_gp = max([_gp(r) for r in rows] or [season_length])
+
+    def games_lost(r) -> int:
+        logged = _safe_int((hist.get(_pid(r)) or {}).get("games_lost_to_injury"), 0)
+        # Injury logs are thin for CPU clubs in bulk sims, so also infer it: a regular
+        # (15+ min a night) who missed a big share of the season wasn't scratched.
+        inferred = 0
+        if not _is_goalie(r) and _toi_pg_minutes(r) >= 15.0:
+            inferred = max(0, max_gp - _gp(r))
+        return max(logged, inferred)
+
+    comeback = [r for r in rows if games_lost(r) >= 10 and _gp(r) >= need_gp]
+    if comeback:
+        def score(r):
+            gp = max(1, _gp(r))
+            lost = games_lost(r)
+            prod = (goalie_sv_pct(r) - 0.89) * 400.0 if _is_goalie(r) else float(_pts(r)) / gp * 22.0
+            age = _player_age(r, teams) or 27
+            return min(60.0, float(lost)) * 0.45 + prod + gp * 0.15 + (5.0 if age >= 33 else 0.0)
+        return _run_ballot_award(
+            defn, comeback, score, team_map=team_map, season_seed=season_seed, season=season,
+            eligibility_summary=f"Came back from 10+ games lost to injury and played {need_gp}+ games.",
+            required_fields=["gp"],
+        )
+    veterans = [r for r in rows if (_player_age(r, teams) or 0) >= 34 and _gp(r) >= _season_games_threshold(season_length, 0.7, 50)]
+    if not veterans:
+        return _unavailable_award(defn, reason="No injury comebacks or 34+ full-season veterans this year.", season=season)
     return _run_ballot_award(
-        defn,
-        pool,
-        lambda r: float(_player_age(r, teams) or 0),
-        team_map=team_map,
-        season_seed=season_seed,
-        season=season,
-        eligibility_summary=summary,
+        defn, veterans,
+        lambda r: float(_player_age(r, teams) or 0) * 1.5 + float(_pts(r)) / max(1, _gp(r)) * 20.0 + _gp(r) * 0.1,
+        team_map=team_map, season_seed=season_seed, season=season,
+        eligibility_summary="No injury comebacks this year; voters honoured a 34+ veteran still playing a full season.",
+        required_fields=["gp"],
+    )
+
+
+def _try_messier(rows, teams, team_ctx, team_map, season, season_seed, season_length) -> Award:
+    """Leadership on and off the ice: the leadership and professionalism ratings the sim
+    tracks, the captaincy, a team that won, and a player who still produced.
+    (It used to go to the oldest skater on the first-place club.)"""
+    defn = AWARD_REGISTRY["messier"]
+    need = _season_games_threshold(season_length, 0.5, minimum=40)
+    pool = []
+    facts: Dict[str, Tuple[float, float, int]] = {}
+    for r in rows:
+        if _gp(r) < need:
+            continue
+        lead = _rating_of(teams, _pid(r), "per_leadership")
+        if lead is None:
+            continue
+        p = _player_from_rosters(teams, _pid(r))
+        cap = str(getattr(p, "captaincy", "") or "").upper() if p is not None else ""
+        # looked up by id in score(): the pool scorer re-snapshots rows and drops extra keys
+        facts[_pid(r)] = (
+            lead,
+            _rating_of(teams, _pid(r), "per_professionalism") or 50.0,
+            2 if (p is not None and getattr(p, "is_captain", False)) or cap == "C" else (1 if cap == "A" else 0),
+        )
+        pool.append(r)
+    if not pool:
+        return _unavailable_award(defn, reason="No leadership ratings on file for eligible players.", season=season)
+
+    def score(r):
+        lead, prof, captain = facts.get(_pid(r), (50.0, 50.0, 0))
+        return (
+            lead * 0.45
+            + prof * 0.15
+            + (14.0 if captain == 2 else 6.0 if captain == 1 else 0.0)
+            + _team_success(r, team_ctx) * 18.0
+            + float(_pts(r)) / max(1, _gp(r)) * 12.0
+        )
+    return _run_ballot_award(
+        defn, pool, score, team_map=team_map, season_seed=season_seed, season=season,
+        eligibility_summary=f"Leaders with {need}+ GP: leadership and professionalism ratings, captaincy, team success, production.",
         required_fields=["gp"],
     )
 
@@ -4101,6 +4316,22 @@ def _try_expectation_award(defn, teams, team_ctx, team_map, season, season_seed,
     if not rows:
         return _unavailable_award(defn, reason="Standings are not available yet.", season=season)
     who = "General manager" if kind == "gm" else "Coach"
+    if kind == "gm":
+        # The coach is judged on beating the roster's expectation. The GM built that roster,
+        # so his ballot also credits how good the club finished outright.
+        def gm_score(r):
+            ctx = (team_ctx or {}).get(str(r.get("team_id")), {})
+            return _safe_float(r.get("wins_above"), 0.0) * 0.6 + _safe_float(ctx.get("points_pct_norm"), 0.5) * 22.0
+        return _run_ballot_award(
+            defn,
+            rows,
+            gm_score,
+            team_map=team_map,
+            season_seed=season_seed,
+            season=season,
+            eligibility_summary="Wins above the roster's expectation, plus how good the club he built finished.",
+            required_fields=["gp"],
+        )
     return _run_ballot_award(
         defn,
         rows,
@@ -4206,6 +4437,7 @@ def serialize_award(award: Award) -> Dict[str, Any]:
         "season": award.season,
         "voting": award.voting,
         "evidence": (award.result or {}).get("evidence") if award.result else None,
+        "criteria": AWARD_CRITERIA.get(award.award_id or NAME_TO_ID.get(award.name, ""), ""),
     }
     if award.result:
         base.update({k: v for k, v in award.result.items() if k not in base or base.get(k) in (None, "", [], {})})
@@ -4366,6 +4598,28 @@ def apply_career_award_history(
             if history_by_player is not None:
                 history_by_player[pid] = hist_blob
             writes += 1
+    # Top-3 placings on player trophies (finalists), so a dossier can say "Hart finalist".
+    for _name, award in awards.items():
+        if getattr(award, "status", "complete") != "complete" or award.recipient_type not in ("player", "goalie"):
+            continue
+        for cand in list(award.full_results or [])[:3]:
+            pid = str(cand.get("player_id") or cand.get("entity_id") or "")
+            player = _player_from_rosters(teams, pid) if pid else None
+            if player is None:
+                continue
+            blob = dict(getattr(player, "player_award_history", None) or {})
+            fins = list(blob.get("finishes") or [])
+            aid = award.award_id or NAME_TO_ID.get(award.name, "")
+            if any(f.get("award_id") == aid and str(f.get("season")) == str(season) for f in fins if isinstance(f, dict)):
+                continue
+            fins.append({"award_id": aid, "award_name": award.name, "season": season,
+                         "finish": int(cand.get("finish") or 0) or (list(award.full_results).index(cand) + 1),
+                         "team_name": cand.get("team_name")})
+            blob["finishes"] = fins
+            try:
+                player.player_award_history = blob
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
     return writes
 
 

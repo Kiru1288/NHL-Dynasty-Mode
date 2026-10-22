@@ -180,7 +180,12 @@ def archive_completed_season(session: Any, history_entry: Dict[str, Any]) -> Dic
     session.team_luck_carryover = {t: {"season": sy, "pdo": r.get("pdo"), "luck_goals": r.get("luck_goals"), "regression_pts": r.get("regression_pts"),
                                         "luck_label": r.get("luck_label"), "xgf_pct": r.get("xgf_pct"), "pts": r.get("pts")} for t, r in teams.items()}
     try:
-        archive_legacy_season(session, sy)
+        import os
+
+        if os.environ.get("NHL_LEGACY_DISABLED") != "1":  # perf A/B and emergency off switch
+            from services.legacy_hall import archive_legacy_season
+
+            archive_legacy_season(session, sy)
     except Exception:
         _swallowed_log.warning("legacy season archive failed", exc_info=True)
     session._season_archived_year = sy
