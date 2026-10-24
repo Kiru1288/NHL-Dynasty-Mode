@@ -12156,6 +12156,23 @@ class SimEngine:
             p, "shot_involvement", "effort", "shooting", "overall_equivalent"
         ))
 
+    def _gm_bulk_unit_shot_tendency(self, p: Any) -> float:
+        """Shot-selection weight inside a deployed five (no line usage / OVR redeployment)."""
+        shoot = self._gm_rating_avg(p, OFFENSE_KEYS) / 99.0
+        passing = self._gm_rating_avg(p, PASSING_KEYS) / 99.0
+        gap_pts = (shoot * 99.0) - (passing * 99.0)
+        tend = 0.65 + 0.70 * max(0.0, min(1.0, (gap_pts + 6.0) / 12.0))
+        pt = self._gm_player_type_str(p)
+        if "playmaker" in pt and passing >= shoot:
+            tend *= 0.88
+        elif "sniper" in pt or "finisher" in pt or "shooter" in pt:
+            tend *= 1.10
+        elif "power" in pt or "net" in pt:
+            tend *= 1.05
+        if self._gm_pos_str(p).upper() == "D":
+            tend *= 0.72
+        return max(0.08, min(1.35, shoot * tend))
+
     def _gm_shot_quality_weight(self, p: Any) -> float:
         cache = getattr(p, "_gm_runtime_cache", None)
         if isinstance(cache, dict) and "shot_quality" in cache:
@@ -13308,6 +13325,14 @@ class SimEngine:
                         return
                 else:
                     seen.add(pid)
+            day_set = getattr(self, "_franchise_gp_by_day_set", None)
+            if isinstance(day_set, set):
+                if pid in day_set:
+                    kwargs = {k: v for k, v in kwargs.items() if k != "gp"}
+                    if not kwargs:
+                        return
+                else:
+                    day_set.add(pid)
         pos_u = str(row.get("position") or "").upper()
         for k, v in kwargs.items():
             if not v:
@@ -16536,20 +16561,7 @@ class SimEngine:
             return five, f_key
 
         def _shooter(five: List[Any]) -> Any:
-            weights = []
-            for p in five:
-                vol = min(1.55, max(0.08, self._gm_shot_volume_weight(p) ** 0.72))
-                shoot = self._gm_rating_avg(p, OFFENSE_KEYS) / 99.0
-                w = (0.42 * vol + 0.38 * shoot + 0.20 * self._gm_offensive_skill_composite(p)) ** 2.0
-                if self._gm_is_certified_sniper(p):
-                    w *= 1.21
-                elif self._gm_is_certified_playmaker(p):
-                    w *= 0.72
-                elif self._gm_is_assist_leaning_forward(p):
-                    w *= 0.74
-                if self._gm_pos_str(p).upper() == "D":
-                    w *= 0.68
-                weights.append(max(0.02, w))
+            weights = [max(0.02, self._gm_bulk_unit_shot_tendency(p) ** 2.0) for p in five]
             return rng.choices(five, weights=weights, k=1)[0]
 
         def _assist_w(p: Any) -> float:
@@ -16831,6 +16843,8 @@ class SimEngine:
         home_b2b: bool = False,
         away_b2b: bool = False,
         strength_mu: Optional[Tuple[float, float]] = None,
+        shootout: bool = False,
+        shootout_winner: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Fast bulk path: allocates G/A/SOG plus talent-driven CF/CA/xGF/xGA so
@@ -17004,11 +17018,21 @@ class SimEngine:
                 ledger, p, aid, toi_sec=toi, ev_toi_sec=ev_toi, pp_toi_sec=pp_toi, pk_toi_sec=pk_toi,
             )
 
-        def _penalties_drawn(_tm: Any) -> int:
-            return max(0, min(8, int(round(rng.gauss(3.0, 1.05)))))
+        def _penalties_drawn(tm: Any, dressed: List[Any]) -> int:
+            if not dressed:
+                return max(0, min(8, int(round(rng.gauss(3.0, 1.05)))))
+            avg_risk = sum(self._gm_penalty_risk_weight(p) for p in dressed) / float(len(dressed))
+            base = 2.10 + 1.15 * float(avg_risk)
+            tac = getattr(tm, "_tactics", None) or {}
+            style = str(tac.get("forecheck") or tac.get("physicality") or "").lower()
+            if style in ("aggressive", "heavy", "high"):
+                base += 0.35
+            elif style in ("passive", "trap", "low"):
+                base -= 0.25
+            return max(0, min(8, int(round(rng.gauss(base, 1.05)))))
 
-        home_pen = _penalties_drawn(home)
-        away_pen = _penalties_drawn(away)
+        home_pen = _penalties_drawn(home, home_dressed)
+        away_pen = _penalties_drawn(away, away_dressed)
         home_ppo_est = max(0, away_pen)
         away_ppo_est = max(0, home_pen)
 
@@ -17330,7 +17354,6 @@ class SimEngine:
         pre_home_gas = _snapshot_g_a_sog(home_sk)
         pre_away_gas = _snapshot_g_a_sog(away_sk)
 
-        shift_done = False
         home_sog_n = home_ppg = away_sog_n = away_ppg = 0
         _home_xg = _away_xg = 0.0
         try:
@@ -17358,10 +17381,9 @@ class SimEngine:
                 sh_pk1=away_units.get("pk1"), sh_pk2=away_units.get("pk2"),
                 sh_opp_pp1=home_units.get("pp1"), sh_opp_pp2=home_units.get("pp2"),
             )
-            shift_done = True
         except Exception:
             logging.getLogger(__name__).exception(
-                "Bulk shift attribute failed for %s vs %s — refusing legacy allocator", hid, aid
+                "Bulk shift attribute failed for %s vs %s", hid, aid
             )
             raise
         _light_team_xg[hid] = float(_home_xg)
@@ -17505,166 +17527,11 @@ class SimEngine:
                 for p in five:
                     self._gm_ledger_add(ledger, p, tid, ga_on=1.0, plus_minus=-1)
 
-        if not shift_done:
-            _credit_ev_plus_minus(home_sk, home_toi, hid, hg, ag, home_ppg, away_ppg)
-            _credit_ev_plus_minus(away_sk, away_toi, aid, ag, hg, away_ppg, home_ppg)
-
-        def _team_sog_target(goals: int, team_cf: int) -> int:
-            # SOG tracks talent-driven attempts. A higher on-net share lifts team
-            # and player shot totals without turning every shot into a goal.
-            base = float(team_cf) * 0.51
-            n = int(round(rng.gauss(base, 1.6)))
-            return max(int(goals), min(max(int(goals), int(team_cf)), max(8, n)))
-
-        def _allocate_team_sog(
-            skaters: List[Any],
-            tid: str,
-            goals: int,
-            off_w: Dict[str, float],
-            pre_gas: Dict[str, Tuple[int, int, int]],
-            team_cf: int,
-        ) -> int:
-            if not skaters:
-                return 0
-            already = 0
-            for p in skaters:
-                pid = _id_str(p, "id")
-                if not pid:
-                    continue
-                row = ledger.get(pid) or {}
-                pre_sog = int(pre_gas.get(pid, (0, 0, 0))[2])
-                already += max(0, int(row.get("sog", 0) or 0) - pre_sog)
-            if already > 0:
-                atk_tm, def_tm = (home, away) if tid == hid else (away, home)
-                del atk_tm, def_tm
-                for p in skaters:
-                    pid = _id_str(p, "id")
-                    if not pid:
-                        continue
-                    row = ledger.get(pid) or {}
-                    pre_a = int(pre_gas.get(pid, (0, 0, 0))[1])
-                    game_a = max(0, int(row.get("a", 0) or 0) - pre_a)
-                    if game_a <= 0:
-                        continue
-                    ovr_n = max(0.40, self._gm_ovr_norm(p))
-                    xa = max(0.0, float(game_a) * (0.55 + 0.20 * ovr_n))
-                    if xa > 0:
-                        self._gm_ledger_add(ledger, p, tid, xa=round(xa, 4))
-                return already
-            sog_n = _team_sog_target(goals, team_cf)
-            sog_w = []
-            for p in skaters:
-                pid = _id_str(p, "id") or str(id(p))
-                ovr_n = self._gm_ovr_norm(p)
-                pos = self._gm_pos_str(p).upper()
-                # Prefer same offensive weights as goals so SH% stays believable.
-                base_w = float(off_w.get(pid, 0.0) or 0.0)
-                if base_w <= 0:
-                    # D still shoot less than F, but elite D need volume for ~70–100 P seasons.
-                    d_sog = 0.68 if ovr_n >= 0.86 else (0.58 if ovr_n >= 0.80 else 0.48)
-                    base_w = max(0.08, (ovr_n ** 1.35) * (d_sog if pos == "D" else 1.0))
-                else:
-                    # Extra shot volume for finishers / wings — do not shrink D off the same offensive weights.
-                    if pos == "D":
-                        base_w *= 1.05
-                    elif pos in ("LW", "RW", "C", "F"):
-                        base_w *= 1.15
-                sog_w.append(max(0.06, base_w))
-            shares = self._gm_distribute_integer_shares(rng, sog_w, sog_n)
-            for p, n in zip(skaters, shares):
-                if n:
-                    self._gm_ledger_add(ledger, p, tid, sog=int(n))
-            # Floor: this-game scorers need enough THIS-GAME SOG (~25% SH% cap).
-            for p in skaters:
-                pid = _id_str(p, "id")
-                if not pid:
-                    continue
-                row = ledger.get(pid) or {}
-                pre_g, _pre_a, pre_sog = pre_gas.get(pid, (0, 0, 0))
-                game_g = max(0, int(row.get("g", 0) or 0) - int(pre_g))
-                if game_g <= 0:
-                    continue
-                game_sog = max(0, int(row.get("sog", 0) or 0) - int(pre_sog))
-                need = game_g * 5 + (1 if game_g >= 2 else 0)
-                if game_sog >= need:
-                    continue
-                deficit = need - game_sog
-                donors = sorted(
-                    (
-                        q
-                        for q in skaters
-                        if q is not p
-                        and max(
-                            0,
-                            int((ledger.get(_id_str(q, "id")) or {}).get("g", 0) or 0)
-                            - int(pre_gas.get(_id_str(q, "id") or "", (0, 0, 0))[0]),
-                        )
-                        == 0
-                    ),
-                    key=lambda q: max(
-                        0,
-                        int((ledger.get(_id_str(q, "id")) or {}).get("sog", 0) or 0)
-                        - int(pre_gas.get(_id_str(q, "id") or "", (0, 0, 0))[2]),
-                    ),
-                    reverse=True,
-                )
-                for donor in donors:
-                    if deficit <= 0:
-                        break
-                    did = _id_str(donor, "id")
-                    drow = ledger.get(did) or {}
-                    d_pre_sog = int(pre_gas.get(did or "", (0, 0, 0))[2])
-                    d_game_sog = max(0, int(drow.get("sog", 0) or 0) - d_pre_sog)
-                    avail = max(0, d_game_sog - 1)
-                    take = min(avail, deficit)
-                    if take <= 0:
-                        continue
-                    drow["sog"] = int(drow.get("sog", 0) or 0) - take
-                    row["sog"] = int(row.get("sog", 0) or 0) + take
-                    deficit -= take
-                if deficit > 0:
-                    row["sog"] = int(row.get("sog", 0) or 0) + deficit
-                    sog_n += deficit
-            # Individual xG / xA for THIS GAME only (ledger_add accumulates season).
-            # xG comes from the shots he takes (his diet, both systems), never from
-            # whether they went in: goals above xG is finishing and goaltending.
-            atk_tm, def_tm = (home, away) if tid == hid else (away, home)
-            team_ixg = 0.0
-            for p in skaters:
-                pid = _id_str(p, "id")
-                if not pid:
-                    continue
-                row = ledger.get(pid) or {}
-                pre_g, pre_a, pre_sog = pre_gas.get(pid, (0, 0, 0))
-                game_sog = max(0, int(row.get("sog", 0) or 0) - int(pre_sog))
-                game_a = max(0, int(row.get("a", 0) or 0) - int(pre_a))
-                if game_sog <= 0 and game_a <= 0:
-                    continue
-                ovr_n = max(0.40, self._gm_ovr_norm(p))
-                ixg = float(game_sog) * self._gm_light_xg_per_sog(p, atk_tm, def_tm)
-                team_ixg += ixg
-                xa = max(0.0, float(game_a) * (0.55 + 0.20 * ovr_n))
-                if ixg > 0 or xa > 0:
-                    self._gm_ledger_add(ledger, p, tid, ixg=round(ixg, 4), xa=round(xa, 4))
-            _light_team_xg[tid] = team_ixg
-            return sog_n
-
-        if not shift_done:
-            home_sog_n = _allocate_team_sog(home_sk, hid, hg, home_off_w, pre_home_gas, home_cf_n)
-            away_sog_n = _allocate_team_sog(away_sk, aid, ag, away_off_w, pre_away_gas, away_cf_n)
-
         # Peripherals — without these, bulk seasons show nearly empty hit/block columns.
         home_hits = int(max(10, round(rng.gauss(22.5, 4.0))))
         away_hits = int(max(10, round(rng.gauss(22.5, 4.0))))
-        def _non_sog(cf: int, sog: int) -> Tuple[int, int]:
-            gap = max(0, int(cf) - int(sog))
-            misses = int(round(gap * 0.42))
-            return misses, max(0, gap - misses)
-
-        _hm, away_blocked = _non_sog(home_cf_n, home_sog_n)
-        _am, home_blocked = _non_sog(away_cf_n, away_sog_n)
-        home_blks = 0 if shift_done else int(home_blocked)
-        away_blks = 0 if shift_done else int(away_blocked)
+        home_blks = 0
+        away_blks = 0
         if home_sk and home_hits > 0:
             hit_w = [
                 max(0.05, self._gm_physical_weight(p) * (home_toi.get(_id_str(p, "id"), 600) / 600.0))
@@ -17702,10 +17569,27 @@ class SimEngine:
 
         home_team_xga = float(_light_team_xg.get(aid, 0.0)) or (away_sog_n * 0.105)
         away_team_xga = float(_light_team_xg.get(hid, 0.0)) or (home_sog_n * 0.105)
-        goalie_toi = int(3600 + (150 if ot else 0))
+        ot_periods = int(getattr(self, "_last_ot_periods", 0) or 0)
+        goalie_toi = int(3600 + (150 * max(1, ot_periods) if ot else 0))
+        so_tid = str(shootout_winner or "") if bool(shootout) else ""
+        home_won_so = bool(so_tid) and so_tid == str(hid)
+        away_won_so = bool(so_tid) and so_tid == str(aid)
+
+        def _goalie_decision(home_side: bool) -> Tuple[str, bool]:
+            if bool(shootout) and so_tid:
+                if home_side:
+                    return ("w", True) if home_won_so else ("otl", False)
+                return ("w", True) if away_won_so else ("otl", False)
+            if hg > ag:
+                return ("w", True) if home_side else ("l", False)
+            if ag > hg:
+                return ("w", True) if not home_side else ("l", False)
+            return ("otl", True)
+
         if home_starter is not None:
             sa = max(ag, away_sog_n)
             saves = max(0, sa - ag)
+            dec, home_side = _goalie_decision(True)
             kw: Dict[str, Any] = {
                 "gp": 1,
                 "starts": 1,
@@ -17718,18 +17602,14 @@ class SimEngine:
                 "toi_sec": goalie_toi,
                 "goalie_xga": round(home_team_xga, 4),
             }
-            if hg > ag:
-                kw["w"] = 1
-            elif ot:
-                kw["otl"] = 1
-            else:
-                kw["l"] = 1
-            if ag == 0:
+            kw[dec] = 1
+            if ag == 0 and (dec == "w" or (bool(shootout) and home_won_so)):
                 kw["so"] = 1
             self._gm_ledger_add(ledger, home_starter, hid, **kw)
         if away_starter is not None:
             sa = max(hg, home_sog_n)
             saves = max(0, sa - hg)
+            dec, _ = _goalie_decision(False)
             kw = {
                 "gp": 1,
                 "starts": 1,
@@ -17742,13 +17622,8 @@ class SimEngine:
                 "toi_sec": goalie_toi,
                 "goalie_xga": round(away_team_xga, 4),
             }
-            if ag > hg:
-                kw["w"] = 1
-            elif ot:
-                kw["otl"] = 1
-            else:
-                kw["l"] = 1
-            if hg == 0:
+            kw[dec] = 1
+            if hg == 0 and (dec == "w" or (bool(shootout) and away_won_so)):
                 kw["so"] = 1
             self._gm_ledger_add(ledger, away_starter, aid, **kw)
 
@@ -17831,10 +17706,6 @@ class SimEngine:
                     analytics_gp=1,
                 )
 
-        if not shift_done:
-            _alloc_possession(home_sk, home_toi, hid, home_cf_n, home_ca_n, home_xgf_n, home_xga_n, home_sog_n, away_sog_n)
-            _alloc_possession(away_sk, away_toi, aid, away_cf_n, away_ca_n, away_xgf_n, away_xga_n, away_sog_n, home_sog_n)
-
         # Special-teams counting for light boxes (CPU–CPU). Without this, Stats Central
         # PP%/PK% only reflect the handful of full-event games vs the user club.
         home_ppo = max(int(home_ppo_est), int(home_ppg))
@@ -17875,7 +17746,8 @@ class SimEngine:
             "home_goals": hg,
             "away_goals": ag,
             "overtime": bool(ot),
-            "shootout": False,
+            "shootout": bool(shootout),
+            "shootout_winner": str(shootout_winner or ""),
             "scoring_events": [],
             "home_dressed": home_dressed,
             "away_dressed": away_dressed,
@@ -17932,6 +17804,8 @@ class SimEngine:
         is_playoff: bool = False,
         home_b2b: bool = False,
         away_b2b: bool = False,
+        shootout: bool = False,
+        shootout_winner: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Event-driven game stat pipeline. Score and stats share one simulation universe.
@@ -17978,6 +17852,8 @@ class SimEngine:
                 home_b2b=bool(home_b2b),
                 away_b2b=bool(away_b2b),
                 strength_mu=_mu_pair,
+                shootout=bool(shootout),
+                shootout_winner=str(shootout_winner or "") or None,
             )
             if not build_game_payload:
                 return {
@@ -17985,7 +17861,8 @@ class SimEngine:
                     "home_goals": int(hg),
                     "away_goals": int(ag),
                     "overtime": bool(ot),
-                    "shootout": False,
+                    "shootout": bool(shootout),
+                    "shootout_winner": str(shootout_winner or ""),
                     "stat_scope": str(stat_scope or "regular_season"),
                     "home_sog": int(result.get("home_sog", 0) or 0),
                     "away_sog": int(result.get("away_sog", 0) or 0),
@@ -18670,12 +18547,20 @@ class SimEngine:
             home_p += float(getattr(self, "_franchise_home_win_prob_delta", 0) or 0)
             home_p = max(0.28, min(0.72, home_p))
             overtime = True
+            ot_periods = 1
             if bool(is_playoff):
                 while home_goals == away_goals:
                     if rng.random() < home_p:
                         home_goals += 1
                     else:
                         away_goals += 1
+                    ot_periods += 1
+                    if ot_periods > 6:
+                        break
+                try:
+                    setattr(self, "_last_ot_periods", int(ot_periods))
+                except Exception:
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
             elif rng.random() < 0.38:
                 if rng.random() < home_p:
                     home_goals += 1
@@ -18686,6 +18571,10 @@ class SimEngine:
                     home_goals += 1
                 else:
                     away_goals += 1
+                try:
+                    setattr(self, "_last_ot_periods", 1)
+                except Exception:
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
 
         if _tac is not None:
             try:

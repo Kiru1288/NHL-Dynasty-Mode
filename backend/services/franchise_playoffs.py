@@ -760,7 +760,7 @@ def _simulate_one_game(
             light_mode=True,
         )
         hs, as_ = int(hg), int(ag)
-        ot_periods = 1 if bool(ot) else 0
+        ot_periods = int(getattr(sim, "_last_ot_periods", 0) or 0) or (1 if bool(ot) else 0)
         box = _accumulate_franchise_game_stats(
             session,
             home=home,

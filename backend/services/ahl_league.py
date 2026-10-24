@@ -104,6 +104,11 @@ def _assist_weight(player: Any, toi_min: float) -> float:
     return float(toi_min) * (pm / 70.0) ** 3 * mult
 
 
+def _finish_factor(player: Any) -> float:
+    fin = _skill_rating(player, "shooting", "wrist_shot", "finishing", default=player_ovr(player))
+    return max(0.85, min(1.15, 0.88 + (fin - 72.0) / 80.0))
+
+
 def _discipline_weight(player: Any, toi_min: float) -> float:
     disc = _skill_rating(player, "discipline", "composure", default=68.0)
     phys = _skill_rating(player, "physicality", "checking", "aggression", default=player_ovr(player))
@@ -358,6 +363,11 @@ def _play_game(session: Any, st: Dict[str, Any], home: Any, away: Any, iso: str)
         else:
             a["goals"] += 1
     winner, loser = (h, a) if h["goals"] > a["goals"] else (a, h)
+    for side in (h, a):
+        if ot_shootout and side is winner:
+            side["_stat_goals"] = max(0, int(side["goals"]) - 1)
+        else:
+            side["_stat_goals"] = int(side["goals"])
 
     def _prepare_shot_chart(side: Dict[str, Any]) -> None:
         shoot_w = [(_scoring_weight(p, toi), p, toi) for p, toi, _ in side["skaters"]]
@@ -368,7 +378,7 @@ def _play_game(session: Any, st: Dict[str, Any], home: Any, away: Any, iso: str)
                 continue
             if rng.random() < 0.54:
                 sog_list.append(shooter)
-        goals_target = int(side["goals"])
+        goals_target = int(side.get("_stat_goals", side["goals"]))
         while len(sog_list) < goals_target:
             extra = _pick(rng, [(p, w) for w, p, _ in shoot_w])
             if extra is not None:
@@ -380,8 +390,7 @@ def _play_game(session: Any, st: Dict[str, Any], home: Any, away: Any, iso: str)
                 weights = []
                 for i in pool:
                     sh = sog_list[i]
-                    toi = next((t for p, t, _ in side["skaters"] if p is sh), 12.0)
-                    weights.append(max(0.02, _scoring_weight(sh, toi) ** 1.35))
+                    weights.append(max(0.02, _finish_factor(sh)))
                 pick = rng.choices(pool, weights=weights, k=1)[0]
                 goal_idx.add(pick)
                 pool.remove(pick)
@@ -420,17 +429,16 @@ def _play_game(session: Any, st: Dict[str, Any], home: Any, away: Any, iso: str)
         assist_w = [(_assist_weight(p, toi), p) for p, toi, _ in side["skaters"]]
         sog_list = list(side.get("_sog_list") or [])
         goal_idx = set(side.get("_goal_idx") or set())
-        pp_slots = max(0, int(side.get("penalties", 0) or 0))
+        opp_pp_left = max(0, int(opp.get("penalties", 0) or 0))
         on_ice_unit = {player_key(p): (position_bucket(p), i) for p, _, i in side["skaters"]}
-        pp_used = 0
         for i, scorer in enumerate(sog_list):
             sk = player_key(scorer)
             rows[sk]["shots"] += 1
             if i not in goal_idx:
                 continue
-            is_pp = pp_used < pp_slots and rng.random() < 0.72
+            is_pp = opp_pp_left > 0 and rng.random() < 0.20
             if is_pp:
-                pp_used += 1
+                opp_pp_left -= 1
             rows[sk]["goals"] += 1
             game_pts[sk] += 1
             if is_pp:
@@ -471,7 +479,7 @@ def _play_game(session: Any, st: Dict[str, Any], home: Any, away: Any, iso: str)
             gr = _player_row(st, g, side["team"])
             gr["gp"] += 1
             gr["shots_against"] += opp["shots"]
-            gr["goals_against"] += opp["goals"]
+            gr["goals_against"] += int(opp.get("_stat_goals", opp["goals"]))
             gr["toi_sec"] += 3600 + (300 if ot else 0)
             if side is winner:
                 gr["wins"] += 1

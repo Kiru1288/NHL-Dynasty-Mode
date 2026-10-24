@@ -3783,6 +3783,8 @@ def _accumulate_franchise_game_stats(
     is_playoff: bool = False,
     home_b2b: bool = False,
     away_b2b: bool = False,
+    shootout: bool = False,
+    shootout_winner: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Single pipeline: SimEngine accumulates skater/goalie stats from the same _simulate_game outcome.
@@ -3837,6 +3839,17 @@ def _accumulate_franchise_game_stats(
     }
     if _accepts_light_mode(sim.accumulate_unified_game_stats):
         stat_kw["light_mode"] = light_stats
+    if shootout:
+        stat_kw["shootout"] = True
+        if shootout_winner:
+            stat_kw["shootout_winner"] = str(shootout_winner)
+
+    by_day = getattr(session, "_players_gp_by_calendar_day", None)
+    if not isinstance(by_day, dict):
+        by_day = {}
+        session._players_gp_by_calendar_day = by_day
+    sim._franchise_gp_calendar_day = int(calendar_day)
+    sim._franchise_gp_by_day_set = by_day.setdefault(int(calendar_day), set())
 
     if bool(is_playoff):
         stat_ledger = _ensure_playoff_player_stats(session)
@@ -13333,11 +13346,18 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
         session, home, away, home_id=hid, away_id=aid, user_tid=user_tid
     )
     stat_hg, stat_ag = int(hg), int(ag)
-    if _fast_shootout and stat_hg != stat_ag:
-        if stat_hg > stat_ag:
-            stat_hg -= 1
+    shootout_winner: Optional[str] = None
+    if _fast_shootout:
+        if hg > ag:
+            shootout_winner = hid
+            stat_hg = max(0, int(hg) - 1)
+            stat_ag = int(ag)
+        elif ag > hg:
+            shootout_winner = aid
+            stat_ag = max(0, int(ag) - 1)
+            stat_hg = int(hg)
         else:
-            stat_ag -= 1
+            shootout_winner = hid if r.random() < 0.52 else aid
     box = _accumulate_franchise_game_stats(
         session,
         home=home,
@@ -13353,6 +13373,8 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
         is_playoff=is_playoff_slot,
         home_b2b=hb2b,
         away_b2b=ab2b,
+        shootout=bool(_fast_shootout),
+        shootout_winner=shootout_winner,
     )
     _clear_franchise_saved_lineups(home, away)
     if not isinstance(box, dict):
@@ -13448,7 +13470,27 @@ def _simulate_slots_for_day(
         if hid and aid:
             expected_keys.add((hid, aid))
 
-        ul, ll = _simulate_franchise_slot(session, slot)
+        try:
+            ul, ll = _simulate_franchise_slot(session, slot)
+        except Exception as exc:
+            if bulk_light:
+                logging.getLogger(__name__).exception(
+                    "Skipping broken game on calendar day %s: %s vs %s",
+                    calendar_day,
+                    hid,
+                    aid,
+                )
+                _franchise_enqueue_critical_notice(
+                    session,
+                    title="Game simulation failed",
+                    description=(
+                        f"Calendar day {calendar_day}: {hid} vs {aid} could not be simulated "
+                        f"({exc}). The day advanced without that result."
+                    ),
+                    source=f"sim-fail:{calendar_day}:{hid}:{aid}",
+                )
+                continue
+            raise
 
         if hid and aid:
             completed_keys.add((hid, aid))
