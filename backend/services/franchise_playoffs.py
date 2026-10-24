@@ -712,6 +712,11 @@ def _simulate_one_game(
     home_high = _home_is_high(game_no)
     home_id = hi if home_high else lo
     away_id = lo if home_high else hi
+    from services.franchise_sim import (  # noqa: WPS433
+        _franchise_stat_scope,
+        _processed_playoff_game_ids,
+        _stable_franchise_game_id_for,
+    )
 
     day = 0
     live = getattr(session, "playoff_live", None)
@@ -751,6 +756,17 @@ def _simulate_one_game(
         rng = _random.Random(seed)
         smap = dict(getattr(session, "strength_map", None) or {})
         po_day = int(day)
+        po_scope = _franchise_stat_scope(session, is_playoff=True)
+        po_gid = _stable_franchise_game_id_for(
+            session,
+            calendar_day=po_day,
+            hid=home_id,
+            aid=away_id,
+            stat_scope=po_scope,
+            extra=f"{row.get('series_id')}:{game_no}",
+        )
+        if po_gid in _processed_playoff_game_ids(session):
+            raise RuntimeError(f"Playoff game already recorded: {po_gid}")
         user_tid = str(getattr(session, "user_team_id", "") or "")
         _attach_franchise_saved_lineups(
             session, home, away, home_id=home_id, away_id=away_id, user_tid=user_tid
@@ -775,8 +791,6 @@ def _simulate_one_game(
         from app.sim_engine.engine import ScoreResult
 
         if not isinstance(score_res, ScoreResult):
-            score_res = getattr(sim, "_last_score_result", None)
-        if not isinstance(score_res, ScoreResult):
             raise RuntimeError(f"Playoff score sim failed for {home_id} vs {away_id}")
         hs, as_ = int(score_res.home), int(score_res.away)
         ot = bool(score_res.overtime)
@@ -798,6 +812,7 @@ def _simulate_one_game(
             strength_mu=score_res.mu,
             en_home=int(score_res.en_home),
             en_away=int(score_res.en_away),
+            game_key_extra=f"{row.get('series_id')}:{game_no}",
         )
         _clear_franchise_saved_lineups(home, away)
     else:

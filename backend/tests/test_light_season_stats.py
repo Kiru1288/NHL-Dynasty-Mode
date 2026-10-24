@@ -605,11 +605,88 @@ def test_awards_p0_fixture_winner_diff_table(capsys):
     assert "norris" in captured.out
 
 
-def test_bulk_event_shot_share_parity_placeholder():
-    """P4-3: 400-game bulk vs event shot-share parity harness (run locally)."""
-    pytest.skip("Manual parity harness")
+def test_validate_final_allows_tie_when_requested():
+    from services.franchise_sim import _validate_final_game_result_payload
+
+    hg, ag = _validate_final_game_result_payload(
+        home_id="T1",
+        away_id="T2",
+        home_goals=3,
+        away_goals=3,
+        calendar_day=0,
+        allow_tie=True,
+    )
+    assert hg == 3 and ag == 3
+    with pytest.raises(ValueError):
+        _validate_final_game_result_payload(
+            home_id="T1",
+            away_id="T2",
+            home_goals=3,
+            away_goals=3,
+            calendar_day=0,
+            allow_tie=False,
+        )
 
 
-def test_gp_day_guard_season_two_placeholder():
-    """P4-3: season-2 day-0 gp increments for prior season day-0 skaters."""
-    pytest.skip("Manual two-season GP guard harness")
+def test_stable_franchise_game_id_playoff_series_extra():
+    from types import SimpleNamespace
+
+    from services.franchise_sim import _stable_franchise_game_id_for
+
+    session = SimpleNamespace(season_calendar_year=2026)
+    a = _stable_franchise_game_id_for(
+        session, calendar_day=0, hid="H", aid="A", stat_scope="playoffs", extra="s1:1"
+    )
+    b = _stable_franchise_game_id_for(
+        session, calendar_day=0, hid="H", aid="A", stat_scope="playoffs", extra="s1:2"
+    )
+    assert a != b
+
+
+def test_shootout_score_result_final_not_tied():
+    from app.sim_engine.engine import ScoreResult
+
+    res = ScoreResult(
+        home=4,
+        away=3,
+        overtime=True,
+        ot_periods=1,
+        ot_sec=300,
+        mu=(3.0, 3.0),
+        en_home=0,
+        en_away=0,
+        pulled_tie=False,
+        shootout=True,
+        shootout_winner_home=True,
+        tie=False,
+    )
+    assert res.home > res.away
+    stat_h, stat_a = 3, 3
+    if res.shootout and res.shootout_winner_home:
+        stat_h = res.home - 1
+    assert stat_h == stat_a
+
+
+def test_apply_goalie_pull_v2_margin_two_trailer_scores_not_ot():
+    import random
+
+    from app.sim_engine.economy.coaching_ai import apply_goalie_pull_v2
+
+    rng = random.Random(0)
+    hg, ag, ot, _, _, _ = apply_goalie_pull_v2(rng, 3, 1, False, object(), object())
+    assert hg == 3 and ag == 2 and ot is False
+
+
+def test_apply_goalie_pull_v2_margin_one_tie_for_ot_block():
+    import random
+
+    from app.sim_engine.economy.coaching_ai import apply_goalie_pull_v2
+
+    rng = random.Random(1)
+    for _ in range(200):
+        hg, ag, ot, _, _, pulled = apply_goalie_pull_v2(rng, 3, 2, False, object(), object())
+        if pulled:
+            assert hg == ag and ot is False
+            break
+    else:
+        pytest.fail("expected pulled tie within 200 draws")

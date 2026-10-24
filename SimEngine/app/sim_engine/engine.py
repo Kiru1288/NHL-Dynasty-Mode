@@ -69,6 +69,8 @@ class ScoreResult(NamedTuple):
     en_away: int
     pulled_tie: bool
     shootout: bool = False
+    shootout_winner_home: Optional[bool] = None
+    tie: bool = False
 
 
 _GM_FLOAT_LEDGER_KEYS = frozenset(
@@ -12187,18 +12189,37 @@ class SimEngine:
             tend *= 0.72
         return max(0.08, min(1.35, shoot * tend))
 
-    def _gm_shot_selection_weight(
-        self, p: Any, *, driver: Any = None, chance_type: str = "", strength: str = "EV"
-    ) -> float:
+    def _gm_shootout_home_win_p(self, home: Any, away: Any) -> float:
+        def _shooters(team: Any) -> float:
+            sk = [
+                p
+                for p in (getattr(team, "roster", None) or [])
+                if self._gm_pos_str(p).upper() != "G" and not getattr(p, "retired", False)
+            ]
+            scored = sorted(
+                (
+                    0.55 * self._gm_rating_avg(p, OFFENSE_KEYS)
+                    + 0.45 * self._gm_rating_lookup(p, "deking", "pc_deking")
+                )
+                for p in sk
+            )
+            top = scored[-3:] if scored else [50.0]
+            return float(sum(top) / max(1, len(top)))
+
+        def _goalie(team: Any) -> float:
+            gl = self._gm_goalies(team)
+            if not gl:
+                return 50.0
+            return float(self._gm_goalie_ovr_0_100(gl[0]))
+
+        edge = (_shooters(home) - _shooters(away)) * 0.004 + (_goalie(home) - _goalie(away)) * 0.006
+        return max(0.35, min(0.65, 0.50 + edge))
+
+    def _gm_shot_selection_weight(self, p: Any, *, strength: str = "EV") -> float:
         cache = self._gm_player_runtime_cache(p)
         if "bulk_tend" not in cache:
             cache["bulk_tend"] = self._gm_bulk_unit_shot_tendency(p)
         w = float(cache["bulk_tend"]) ** 2.0
-        if p is driver:
-            w *= 1.08
-        ct = str(chance_type or "")
-        if ct in ("ONE_TIMER", "PP_ONE_TIMER", "HIGH_DANGER_SLOT") and p is driver:
-            w *= 1.05
         if str(strength or "").upper() == "PP" and self._gm_pos_str(p).upper() == "D":
             w *= 1.15
         return max(0.02, w)
@@ -12674,11 +12695,9 @@ class SimEngine:
         self._scoring_count_touch()
 
         def _shooter_weight(p: Any) -> float:
-            return self._gm_shot_selection_weight(
-                p, driver=driver, chance_type=str(chance_type or ""), strength=str(strength or "EV")
-            )
+            return self._gm_shot_selection_weight(p, strength=str(strength or "EV"))
 
-        return self._gm_pick_weighted(rng, unit, _shooter_weight, temperature=1.10, weight_floor=0.04)
+        return self._gm_pick_weighted(rng, unit, _shooter_weight, temperature=1.0, weight_floor=0.02)
 
     def _gm_possession_weight(self, p: Any) -> float:
         puck = self._gm_rating_lookup(p, "puck_control", "pc_puck_control")
@@ -17004,6 +17023,46 @@ class SimEngine:
                 ledger, p, aid, toi_sec=toi, ev_toi_sec=ev_toi, pp_toi_sec=pp_toi, pk_toi_sec=pk_toi,
             )
 
+        _ot_sk = int(ot_sec or 0) if bool(ot) else 0
+        if _ot_sk > 0:
+
+            def _ot_add(team: Any, tid: str, dressed: List[Any], toi_map: Dict[str, int], units: Dict[str, Any]) -> None:
+                sk = [p for p in dressed if self._gm_pos_str(p).upper() != "G"]
+                if not sk:
+                    return
+                if bool(is_playoff):
+                    ev_sum = float(sum(int(toi_map.get(_id_str(p, "id"), 0) or 0) for p in sk)) or 1.0
+                    pool = 5 * _ot_sk
+                    for p in sk:
+                        pid = _id_str(p, "id")
+                        share = int(toi_map.get(pid, 0) or 0) / ev_sum
+                        add = int(round(pool * share))
+                        if add > 0:
+                            self._gm_ledger_add(ledger, p, tid, toi_sec=add, ev_toi_sec=add)
+                else:
+                    pool = 3 * _ot_sk
+                    lines = list(units.get("lines") or [[], [], [], []])
+                    pairs = list(units.get("pairs") or [[], [], []])
+                    groups = [
+                        (0.40, [p for p in (lines[0] if lines else []) if p in sk]),
+                        (0.25, [p for p in (lines[1] if len(lines) > 1 else []) if p in sk]),
+                        (0.22, [p for p in (pairs[0] if pairs else []) if p in sk]),
+                        (0.13, [p for p in (pairs[1] if len(pairs) > 1 else []) if p in sk]),
+                    ]
+                    for frac, grp in groups:
+                        if not grp:
+                            continue
+                        chunk = int(round(pool * frac))
+                        per = max(0, chunk // len(grp))
+                        rem = chunk - per * len(grp)
+                        for i, p in enumerate(grp):
+                            add = per + (1 if i < rem else 0)
+                            if add > 0:
+                                self._gm_ledger_add(ledger, p, tid, toi_sec=add, ev_toi_sec=add)
+
+            _ot_add(home, hid, home_dressed, home_toi, home_units)
+            _ot_add(away, aid, away_dressed, away_toi, away_units)
+
         def _penalties_drawn(tm: Any, dressed: List[Any]) -> int:
             if not dressed:
                 return max(0, min(8, int(round(rng.gauss(3.0, 1.05)))))
@@ -17815,6 +17874,13 @@ class SimEngine:
         """
         from app.sim_engine.gameplay.game_analytics_ledger import estimate_pp_opportunities
 
+        for tm in (home, away):
+            for p in list(getattr(tm, "roster", None) or []):
+                try:
+                    setattr(p, "_gm_runtime_cache", {})
+                except Exception:
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
+
         # ``ledger`` is the SEASON ledger. Snapshot every rostered player's line before the
         # game so the box score carries this game's numbers, not season totals (season
         # totals in boxes made every 3+ goal scorer "record a hat trick" every night).
@@ -18546,6 +18612,8 @@ class SimEngine:
         ot_periods = 0
         ot_sec = 0
         shootout = False
+        shootout_winner_home: Optional[bool] = None
+        tie = False
 
         try:
             from app.sim_engine.economy.coaching_ai import apply_goalie_pull_v2
@@ -18561,8 +18629,9 @@ class SimEngine:
             home_p += float(getattr(self, "_franchise_home_win_prob_delta", 0) or 0)
             home_p = max(0.28, min(0.72, home_p))
             overtime = True
+            ot_len = int(round(60.0 * float((_rules or {}).get("ot_minutes", 5) or 5)))
             if bool(is_playoff):
-                p_period = 0.62
+                p_period = max(0.55, min(0.72, 0.62 + abs(float(diff)) * 0.10))
                 lam = -math.log(1.0 - p_period) / 1200.0
                 while True:
                     ot_periods += 1
@@ -18586,13 +18655,22 @@ class SimEngine:
                 ot_periods = 1
                 shootout = rng.random() < so_share
                 if shootout:
-                    ot_sec = 300
+                    ot_sec = ot_len
+                    if bool((_rules or {}).get("ties_allowed")):
+                        tie = True
+                    else:
+                        so_home = rng.random() < self._gm_shootout_home_win_p(home, away)
+                        shootout_winner_home = so_home
+                        if so_home:
+                            home_goals += 1
+                        else:
+                            away_goals += 1
                 else:
                     p_ot = max(0.05, min(0.95, 1.0 - so_share))
-                    lam = -math.log(1.0 - p_ot) / 300.0
+                    lam = -math.log(1.0 - p_ot) / float(max(1, ot_len))
                     u = rng.random()
                     t = int(-math.log(1.0 - u * p_ot) / lam) if lam > 0 else 150
-                    t = max(1, min(299, t))
+                    t = max(1, min(max(1, ot_len - 1), t))
                     ot_sec = t
                     if rng.random() < home_p:
                         home_goals += 1
@@ -18611,6 +18689,8 @@ class SimEngine:
             en_away=int(en_away),
             pulled_tie=bool(pulled_tie),
             shootout=bool(shootout),
+            shootout_winner_home=shootout_winner_home,
+            tie=bool(tie),
         )
 
     def _simulate_game_strength(
@@ -18639,8 +18719,51 @@ class SimEngine:
             away_b2b=away_b2b,
             is_playoff=is_playoff,
         )
-        setattr(self, "_last_score_result", res)
         return res.home, res.away, res.overtime
+
+    def _score_result_from_event(
+        self,
+        result: Dict[str, Any],
+        home: Any,
+        away: Any,
+        hid: str,
+        aid: str,
+        *,
+        is_playoff: bool = False,
+    ) -> ScoreResult:
+        hg = int(result.get("home_goals", 0) or 0)
+        ag = int(result.get("away_goals", 0) or 0)
+        ot = bool(result.get("overtime", False))
+        shootout = bool(result.get("shootout", False))
+        so_home = bool(result.get("shootout_home_win", False))
+        en_h = en_a = 0
+        for ev in list(result.get("scoring_events") or []):
+            if not isinstance(ev, dict):
+                continue
+            if ev.get("empty_net"):
+                tid = str(ev.get("for_team_id") or "")
+                if tid == str(hid):
+                    en_h += 1
+                elif tid == str(aid):
+                    en_a += 1
+        ot_sec = int(result.get("ot_seconds", 0) or 0)
+        if ot and ot_sec <= 0:
+            ot_len = 300 if not is_playoff else 1200
+            ot_sec = ot_len
+        return ScoreResult(
+            home=hg,
+            away=ag,
+            overtime=ot,
+            ot_periods=1 if ot else 0,
+            ot_sec=int(ot_sec) if ot else 0,
+            mu=(0.0, 0.0),
+            en_home=int(en_h),
+            en_away=int(en_a),
+            pulled_tie=False,
+            shootout=shootout,
+            shootout_winner_home=so_home if shootout else None,
+            tie=bool(shootout and hg == ag),
+        )
 
     def _simulate_game(
         self,
@@ -18669,7 +18792,7 @@ class SimEngine:
         if light_mode:
             setattr(self, "_pending_event_game", None)
             t0 = time.perf_counter()
-            out = self._simulate_game_strength(
+            res = self._simulate_game_strength_ex(
                 rng,
                 home,
                 away,
@@ -18683,8 +18806,6 @@ class SimEngine:
             )
             prof = self._scoring_profile()
             prof["chance_s"] = float(prof.get("chance_s") or 0.0) + (time.perf_counter() - t0)
-            # Remember fast-path finals so stat accumulation uses the same (light) model
-            # instead of re-simulating a different event game for the box score.
             try:
                 lk = getattr(self, "_light_scored_games", None)
                 if not isinstance(lk, set) or len(lk) > 256:
@@ -18692,15 +18813,14 @@ class SimEngine:
                 lk.add((
                     str(getattr(home, "team_id", getattr(home, "id", "H"))),
                     str(getattr(away, "team_id", getattr(away, "id", "A"))),
-                    int(out[0]), int(out[1]), bool(out[2]),
+                    int(res.home), int(res.away), bool(res.overtime),
                 ))
                 setattr(self, "_light_scored_games", lk)
             except Exception:
                 _swallowed_log.debug("suppressed exception", exc_info=True)
-            res = getattr(self, "_last_score_result", None)
-            if bool(return_meta) and isinstance(res, ScoreResult):
+            if bool(return_meta):
                 return res
-            return out
+            return res.home, res.away, res.overtime
 
         hid = str(getattr(home, "team_id", getattr(home, "id", "H")))
         aid = str(getattr(away, "team_id", getattr(away, "id", "A")))
@@ -18749,6 +18869,8 @@ class SimEngine:
             pend.clear()
         pend[entry["_key"]] = entry
         setattr(self, "_pending_event_games", pend)
+        if bool(return_meta):
+            return self._score_result_from_event(result, home, away, hid, aid, is_playoff=bool(is_playoff))
         return hg, ag, ot
 
     def _standings_sync_team_metrics(self, standings: StandingsTable, teams: List[Any]) -> None:

@@ -3673,6 +3673,7 @@ def _stat_add(session: FranchiseSession, p: Any, team_id: str, **kwargs: int) ->
 
 # Stats ledger epoch: 2+ skips legacy on-ice repair / destructive backfills on new saves.
 STATS_LEDGER_EPOCH = 3
+LEGACY_REPAIR_EPOCH = 2
 
 
 def _stats_ledger_epoch(session: FranchiseSession) -> int:
@@ -3721,11 +3722,99 @@ def _stable_franchise_game_id_for(
     hid: str,
     aid: str,
     stat_scope: str,
+    extra: str = "",
 ) -> str:
     season = int(getattr(session, "season_calendar_year", 0) or 0)
-    raw = f"{season}:{stat_scope}:{int(calendar_day)}:{str(hid)}:{str(aid)}"
+    raw = f"{season}:{stat_scope}:{int(calendar_day)}:{str(hid)}:{str(aid)}:{str(extra or '')}"
     digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:14]
     return f"g_{digest}"
+
+
+def _standings_recorded_gids(session: FranchiseSession) -> set:
+    gids = getattr(session, "_standings_recorded_gids", None)
+    if gids is None:
+        gids = set()
+        setattr(session, "_standings_recorded_gids", gids)
+    if isinstance(gids, list):
+        gids = set(str(x) for x in gids if str(x or "").strip())
+        setattr(session, "_standings_recorded_gids", gids)
+    return gids
+
+
+def _processed_playoff_game_ids(session: FranchiseSession) -> set:
+    gids = getattr(session, "processed_playoff_game_ids", None)
+    if gids is None:
+        gids = set()
+        setattr(session, "processed_playoff_game_ids", gids)
+    if isinstance(gids, list):
+        gids = set(str(x) for x in gids if str(x or "").strip())
+        setattr(session, "processed_playoff_game_ids", gids)
+    return gids
+
+
+def _franchise_resolve_game_score(
+    session: FranchiseSession,
+    sim: Any,
+    rng: random.Random,
+    home: Any,
+    away: Any,
+    hid: str,
+    aid: str,
+    calendar_day: int,
+    *,
+    is_playoff: bool,
+    home_b2b: bool,
+    away_b2b: bool,
+    light_mode: bool,
+    home_strength_scale: float,
+    away_strength_scale: float,
+    noise_scale: float,
+) -> Any:
+    from app.sim_engine.engine import ScoreResult
+
+    import zlib as _zlib
+
+    seed = _zlib.crc32(
+        f"{getattr(session, 'session_id', '')}|{hid}|{aid}|{int(calendar_day)}".encode()
+    ) & 0xFFFFFFFF
+    smap = dict(getattr(session, "strength_map", None) or {})
+    kw = {
+        "home_strength_scale": float(home_strength_scale),
+        "away_strength_scale": float(away_strength_scale),
+        "noise_scale": float(noise_scale),
+        "is_playoff": bool(is_playoff),
+        "calendar_day": int(calendar_day),
+        "home_b2b": bool(home_b2b),
+        "away_b2b": bool(away_b2b),
+        "light_mode": bool(light_mode),
+        "return_meta": True,
+    }
+    try:
+        out = sim._simulate_game(rng, home, away, smap, **kw)
+        if isinstance(out, ScoreResult):
+            return out
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    r2 = random.Random(int(seed) ^ 0x9E3779B9)
+    try:
+        kw["light_mode"] = True
+        out = sim._simulate_game(r2, home, away, smap, **kw)
+        if isinstance(out, ScoreResult):
+            return out
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    return sim._simulate_game_strength_ex(
+        r2,
+        home,
+        away,
+        smap,
+        home_strength_scale=float(home_strength_scale),
+        away_strength_scale=float(away_strength_scale),
+        noise_scale=float(noise_scale),
+        home_b2b=bool(home_b2b),
+        away_b2b=bool(away_b2b),
+        is_playoff=bool(is_playoff),
+    )
 
 
 def _processed_game_ids(session: FranchiseSession) -> set:
@@ -3770,6 +3859,10 @@ def _accepts_light_mode(fn: Any) -> bool:
 def _merge_franchise_stat_scratch(
     target: Dict[str, Dict[str, Any]], scratch: Dict[str, Dict[str, Any]]
 ) -> None:
+    from app.sim_engine.engine import _GM_FLOAT_LEDGER_KEYS
+
+    _ALWAYS_OVERWRITE = ("team_id", "name", "position")
+    _NEVER_SUM = {"player_id", "id", "team_id", "position", "stat_scope", "stat_authority"}
     for pid, row in (scratch or {}).items():
         if not isinstance(row, dict):
             continue
@@ -3777,26 +3870,27 @@ def _merge_franchise_stat_scratch(
         if not isinstance(dst, dict):
             target[pid] = dict(row)
             continue
+        for k in _ALWAYS_OVERWRITE:
+            if row.get(k) not in (None, ""):
+                dst[k] = row[k]
         for k, v in row.items():
-            if isinstance(v, bool) or v is None:
-                if k not in dst:
-                    dst[k] = v
+            if k in _NEVER_SUM or k in _ALWAYS_OVERWRITE:
                 continue
-            if isinstance(v, (int, float)) and k not in (
-                "player_id",
-                "id",
-                "team_id",
-                "position",
-                "stat_scope",
-                "stat_authority",
-            ):
-                dst[k] = int(dst.get(k, 0) or 0) + int(v) if isinstance(v, int) else float(dst.get(k, 0) or 0) + float(v)
-            elif k not in dst:
-                dst[k] = v
+            if isinstance(v, bool) or v is None:
+                dst.setdefault(k, v)
+                continue
+            if k in _GM_FLOAT_LEDGER_KEYS:
+                dst[k] = round(float(dst.get(k, 0) or 0) + float(v), 4)
+            elif isinstance(v, (int, float)):
+                dst[k] = int(dst.get(k, 0) or 0) + int(v)
+            else:
+                dst.setdefault(k, v)
+        if str(dst.get("position") or "").upper() != "G":
+            dst["pts"] = int(dst.get("g", 0) or 0) + int(dst.get("a", 0) or 0)
 
 
 def _migrate_stats_ledger_epoch_v3(session: FranchiseSession) -> None:
-    if bool(getattr(session, "_stats_ledger_epoch_v3_migrated", False)):
+    if bool(getattr(session, "_gp_repair_v3_done", False)):
         return
     if hasattr(session, "_players_gp_by_calendar_day"):
         try:
@@ -3807,93 +3901,81 @@ def _migrate_stats_ledger_epoch_v3(session: FranchiseSession) -> None:
         session._gp_day_guard = None
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
-    if _stats_ledger_epoch(session) < STATS_LEDGER_EPOCH:
-        try:
-            _repair_gp_from_game_boxes(session)
-        except Exception:
-            logging.getLogger(__name__).exception("GP recount repair (epoch v3) failed")
-        try:
-            session._stats_ledger_epoch = STATS_LEDGER_EPOCH
-        except Exception:
-            _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
-        session._stats_ledger_epoch_v3_migrated = True
+        _repair_gp_from_game_boxes(session)
+        session._gp_repair_v3_done = True
+        session._stats_ledger_epoch = STATS_LEDGER_EPOCH
     except Exception:
-        _swallowed_log.debug("suppressed exception", exc_info=True)
+        logging.getLogger(__name__).exception("GP recount repair (epoch v3) failed")
 
 
 def _repair_gp_from_game_boxes(session: FranchiseSession) -> None:
-    """Recount skater/goalie gp from distinct final game boxes (toi_sec > 0)."""
+    """Recount gp from compact box_score_book lines (toi_sec > 0)."""
+    from app.sim_engine.franchise.serialization import _BOX_IDX
+
     log = logging.getLogger(__name__)
     season_y = int(getattr(session, "season_calendar_year", 0) or 0)
+    toi_i = _BOX_IDX["toi_sec"]
+    book = getattr(session, "box_score_book", None) or {}
+    seasons = (book.get("seasons") or {}).get(str(season_y)) or {}
+    games = seasons.get("games") or {}
+    gp_by_player: Dict[str, set] = {}
+    gp_by_player_po: Dict[str, set] = {}
+    boxes_per_team_rs: Dict[str, int] = {}
+    for gid, compact in games.items():
+        if not isinstance(compact, dict):
+            continue
+        scope = str(compact.get("scope") or "regular_season")
+        hid = str(compact.get("home") or "")
+        aid = str(compact.get("away") or "")
+        lines = compact.get("lines") or {}
+        if not isinstance(lines, dict):
+            continue
+        for pid, row in lines.items():
+            if not isinstance(row, (list, tuple)) or len(row) <= toi_i:
+                continue
+            if int(row[toi_i] or 0) <= 0:
+                continue
+            if scope == "playoffs":
+                gp_by_player_po.setdefault(str(pid), set()).add(str(gid))
+            else:
+                gp_by_player.setdefault(str(pid), set()).add(str(gid))
+        if scope != "playoffs":
+            if hid:
+                boxes_per_team_rs[hid] = boxes_per_team_rs.get(hid, 0) + 1
+            if aid:
+                boxes_per_team_rs[aid] = boxes_per_team_rs.get(aid, 0) + 1
 
-    def _lines_for_game(g: Dict[str, Any]) -> List[Dict[str, Any]]:
-        lines: List[Dict[str, Any]] = []
-        for key in ("home_skaters", "away_skaters", "home_goalies", "away_goalies", "player_lines"):
-            block = g.get(key)
-            if isinstance(block, list):
-                lines.extend([r for r in block if isinstance(r, dict)])
-            elif isinstance(block, dict):
-                for side in ("home", "away"):
-                    lines.extend([r for r in (block.get(side) or []) if isinstance(r, dict)])
-        return lines
+    standings = getattr(session, "standings", None)
+    team_gp: Dict[str, int] = {}
+    if standings is not None:
+        for tid, rec in (getattr(standings, "records", None) or {}).items():
+            team_gp[str(tid)] = int(getattr(rec, "gp", 0) or 0)
 
-    def _recount_ledger(ledger: Dict[str, Dict[str, Any]], games: List[Dict[str, Any]], scope: str) -> None:
-        gp_by_player: Dict[str, set] = {}
-        for g in games:
-            gid = str(g.get("game_id") or g.get("id") or "")
-            if not gid:
-                continue
-            team_ids = {str(g.get("home_id") or ""), str(g.get("away_id") or "")}
-            team_ids.discard("")
-            if len(team_ids) != 2:
-                log.warning("GP repair skip game %s: missing team ids", gid)
-                continue
-            lines = _lines_for_game(g)
-            if not lines:
-                continue
-            teams_with_box = set()
-            for ln in lines:
-                tid = str(ln.get("team_id") or "")
-                if tid:
-                    teams_with_box.add(tid)
-            if teams_with_box and teams_with_box != team_ids:
-                log.warning("GP repair skip game %s: incomplete box lines", gid)
-                continue
-            for ln in lines:
-                pid = str(ln.get("player_id") or ln.get("id") or "")
-                if not pid:
-                    continue
-                if int(ln.get("toi_sec", 0) or 0) <= 0:
-                    continue
-                gp_by_player.setdefault(pid, set()).add(gid)
+    eligible_rs = {
+        tid
+        for tid, n in boxes_per_team_rs.items()
+        if int(n) == int(team_gp.get(tid, n))
+    }
+
+    def _apply(ledger: Dict[str, Dict[str, Any]], gp_map: Dict[str, set], scope: str) -> None:
         for pid, row in ledger.items():
             if not isinstance(row, dict):
                 continue
             if str(row.get("stat_scope") or scope) != scope:
                 continue
-            new_gp = len(gp_by_player.get(str(pid), set()))
+            tid = str(row.get("team_id") or "")
+            if scope == "regular_season" and tid and tid not in eligible_rs:
+                continue
+            new_gp = len(gp_map.get(str(pid), set()))
             if new_gp > 0:
-                row["gp"] = int(new_gp)
+                row["gp"] = max(int(row.get("gp", 0) or 0), int(new_gp))
 
-    reg_games = [
-        g
-        for g in list(getattr(session, "game_results", None) or [])
-        if isinstance(g, dict)
-        and str(g.get("stat_scope") or "regular_season") == "regular_season"
-        and _saved_game_is_final(g)
-        and int(g.get("season_calendar_year", season_y) or season_y) == season_y
-    ]
-    po_stats = getattr(session, "playoff_player_stats", None) or {}
     if isinstance(session.player_season_stats, dict):
-        _recount_ledger(session.player_season_stats, reg_games, "regular_season")
+        _apply(session.player_season_stats, gp_by_player, "regular_season")
+    po_stats = getattr(session, "playoff_player_stats", None) or {}
     if isinstance(po_stats, dict):
-        po_games = [
-            g
-            for g in reg_games
-            if bool(g.get("is_playoff"))
-        ]
-        _recount_ledger(po_stats, po_games, "playoffs")
+        _apply(po_stats, gp_by_player_po, "playoffs")
 
 
 def _accumulate_franchise_game_stats(
@@ -3920,6 +4002,7 @@ def _accumulate_franchise_game_stats(
     strength_mu: Optional[Tuple[float, float]] = None,
     en_home: int = 0,
     en_away: int = 0,
+    game_key_extra: str = "",
 ) -> Optional[Dict[str, Any]]:
     """
     Single pipeline: SimEngine accumulates skater/goalie stats from the same _simulate_game outcome.
@@ -3939,9 +4022,12 @@ def _accumulate_franchise_game_stats(
         hid=str(hid),
         aid=str(aid),
         stat_scope=stat_scope,
+        extra=str(game_key_extra or ""),
     )
     processed = _processed_game_ids(session)
     if gid in processed:
+        return _find_game_result_by_id(session, gid)
+    if bool(is_playoff) and gid in _processed_playoff_game_ids(session):
         return _find_game_result_by_id(session, gid)
 
     hg = _coerce_final_score(hg)
@@ -4093,6 +4179,10 @@ def _accumulate_franchise_game_stats(
             "ot": bool(ot),
             "ot_periods": int(ot_periods or 0),
             "ot_sec": int(ot_sec or 0),
+            "en_home": int(en_home or 0),
+            "en_away": int(en_away or 0),
+            "tie": bool(tie),
+            "shootout": bool(shootout),
             "day": int(calendar_day),
             "calendar_day": int(calendar_day),
             "iso": str(calendar_iso or box.get("iso") or ""),
@@ -4120,6 +4210,8 @@ def _accumulate_franchise_game_stats(
     if not bool(is_playoff):
         session.game_results.append(box)
         processed.add(gid)
+    else:
+        _processed_playoff_game_ids(session).add(gid)
     try:
         from app.sim_engine.franchise.serialization import store_compact_box_score  # noqa: WPS433
         from app.sim_engine.franchise.storyline_stat_bridge import update_box_score_records  # noqa: WPS433
@@ -5026,7 +5118,7 @@ def _backfill_player_analytics_from_game_boxes(session: FranchiseSession) -> boo
             _swallowed_log.debug("suppressed exception", exc_info=True)
         return False
 
-    if _stats_ledger_epoch(session) >= STATS_LEDGER_EPOCH:
+    if _stats_ledger_epoch(session) >= LEGACY_REPAIR_EPOCH:
         try:
             setattr(session, "_analytics_backfill_v2", True)
         except Exception:
@@ -5230,7 +5322,7 @@ def _repair_on_ice_share_to_team_box(session: FranchiseSession) -> bool:
     """
     if bool(getattr(session, "_on_ice_share_repair_v2", False)):
         return False
-    if _stats_ledger_epoch(session) >= STATS_LEDGER_EPOCH:
+    if _stats_ledger_epoch(session) >= LEGACY_REPAIR_EPOCH:
         try:
             setattr(session, "_on_ice_share_repair_v2", True)
         except Exception:
@@ -6188,6 +6280,9 @@ def _league_weighted_shooting_metrics(session: FranchiseSession) -> Dict[str, An
 def _log_season_scoring_calibration(session: FranchiseSession) -> None:
     """Read-only season scoring audit (targets documented in P1-4)."""
     log = logging.getLogger(__name__)
+    season_y = int(getattr(session, "season_calendar_year", 0) or 0)
+    if int(getattr(session, "_scoring_audit_logged_season", -1) or -1) == season_y:
+        return
     skaters = [
         r
         for r in list((getattr(session, "player_season_stats", None) or {}).values())
@@ -6220,11 +6315,27 @@ def _log_season_scoring_calibration(session: FranchiseSession) -> None:
     so_games = sum(1 for g in games if bool(g.get("shootout", False)))
     ot_share = ot_games / len(games) if games else 0.0
     so_of_ot = so_games / ot_games if ot_games else 0.0
+    en_goals = sum(
+        int(g.get("en_home", 0) or 0) + int(g.get("en_away", 0) or 0) for g in games
+    )
+    en_per_game = en_goals / len(games) if games else 0.0
+    total_game_goals = sum(
+        int(g.get("home_goals", g.get("home_score", 0)) or 0)
+        + int(g.get("away_goals", g.get("away_score", 0)) or 0)
+        for g in games
+    )
+    goals_per_game = total_game_goals / len(games) if games else 0.0
+    try:
+        session._scoring_audit_logged_season = season_y
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     log.info(
         "season_scoring_audit sy=%s med_top20_g=%s sixty_plus=%s shots_leader=%s "
         "top20_sh_pct=[%.1f,%.1f] ppg_share=%.3f ot_share=%.3f so_of_ot=%.3f "
-        "(targets: top20_g 35-40, 60+ 0-2, shots 330-380, sh%% 11-20, ppg 0.20-0.23, ot 0.21-0.25)",
-        int(getattr(session, "season_calendar_year", 0) or 0),
+        "en_per_game=%.3f goals_per_game=%.3f "
+        "(targets: top20_g 35-40, 60+ 0-2, shots 330-380, sh%% 11-20, ppg 0.20-0.23, "
+        "ot 0.21-0.25, so_of_ot 0.35-0.40, en 0.25-0.35)",
+        season_y,
         med_top20_g,
         sixty_plus,
         shots_leader_n,
@@ -6233,6 +6344,8 @@ def _log_season_scoring_calibration(session: FranchiseSession) -> None:
         ppg_share,
         ot_share,
         so_of_ot,
+        en_per_game,
+        goals_per_game,
     )
 
 
@@ -6333,16 +6446,18 @@ def _build_stats_central_payload(session: FranchiseSession) -> Dict[str, Any]:
     """
     stats_rev = int(getattr(session, "_stats_revision", 0) or 0)
     skip_backfill = int(getattr(session, "_stats_backfill_revision", -1) or -1) == stats_rev
-    if _stats_ledger_epoch(session) < STATS_LEDGER_EPOCH:
-        try:
-            _migrate_stats_ledger_epoch_v3(session)
-        except Exception:
-            logging.getLogger(__name__).exception("Stats ledger epoch v3 migration failed")
+    epoch0 = _stats_ledger_epoch(session)
+    if epoch0 < LEGACY_REPAIR_EPOCH:
         try:
             _repair_on_ice_share_to_team_box(session)
         except Exception:
             logging.getLogger(__name__).exception("On-ice CF share repair failed")
-    if not skip_backfill and _stats_ledger_epoch(session) < STATS_LEDGER_EPOCH:
+    if epoch0 < STATS_LEDGER_EPOCH:
+        try:
+            _migrate_stats_ledger_epoch_v3(session)
+        except Exception:
+            logging.getLogger(__name__).exception("Stats ledger epoch v3 migration failed")
+    if not skip_backfill and epoch0 < LEGACY_REPAIR_EPOCH:
         try:
             _purge_synthetic_universe_artifacts(session)
         except Exception:
@@ -7154,6 +7269,7 @@ def _validate_final_game_result_payload(
     home_goals: Any,
     away_goals: Any,
     calendar_day: int,
+    allow_tie: bool = False,
 ) -> Tuple[int, int]:
     """
     Hard validator for a completed game.
@@ -7175,7 +7291,7 @@ def _validate_final_game_result_payload(
     hg = _coerce_final_score(home_goals)
     ag = _coerce_final_score(away_goals)
 
-    if hg == ag:
+    if hg == ag and not bool(allow_tie):
         raise ValueError(
             f"Final game result cannot be tied on calendar day {calendar_day}: {hid} {hg}, {aid} {ag}."
         )
@@ -13135,21 +13251,7 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
         stat_scope=stat_scope,
     )
     if stable_gid in _processed_game_ids(session):
-        saved = _find_game_result_by_id(session, stable_gid)
-        if isinstance(saved, dict):
-            shg = int(saved.get("home_goals", saved.get("home_score", 0)) or 0)
-            sag = int(saved.get("away_goals", saved.get("away_score", 0)) or 0)
-            sot = bool(saved.get("overtime", saved.get("ot", False)))
-            hn = (_display_team(home) or "?")[:24]
-            an = (_display_team(away) or "?")[:24]
-            league_line = f"{hn} {shg}-{sag} {an}{' OT' if sot else ''}"
-            user_line: Optional[str] = None
-            if hid == user_tid or aid == user_tid:
-                opp = away if hid == user_tid else home
-                won = (shg > sag) if hid == user_tid else (sag > shg)
-                gs = f"{shg}-{sag}" + (" OT" if sot else "")
-                user_line = f"{'W' if won else 'L'} vs {_display_team(opp)} ({gs}) - calendar day {d}"
-            return user_line, league_line
+        return None, None
 
     h_goal = _ensure_goalie_for_game(home)
     a_goal = _ensure_goalie_for_game(away)
@@ -13200,6 +13302,7 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
 
     hb2b = _team_b2b(hid)
     ab2b = _team_b2b(aid)
+    score_res: Any = None
 
     try:
         if not cpu_only_bulk:
@@ -13228,19 +13331,31 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
             _, nh = sim._identity_runner_strength_noise_factors(home)
             _, na = sim._identity_runner_strength_noise_factors(away)
             noise_scale = min(1.04, 0.5 * (nh + na))
-            hg, ag, ot = sim._simulate_game(
+            score_res = _franchise_resolve_game_score(
+                session,
+                sim,
                 r,
                 home,
                 away,
-                session.strength_map,
-                home_strength_scale=h_scale,
-                away_strength_scale=a_scale,
-                noise_scale=noise_scale,
+                hid,
+                aid,
+                int(d),
                 is_playoff=is_playoff_slot,
-                calendar_day=int(d),
                 home_b2b=hb2b,
                 away_b2b=ab2b,
                 light_mode=True,
+                home_strength_scale=h_scale,
+                away_strength_scale=a_scale,
+                noise_scale=noise_scale,
+            )
+            hg, ag, ot = int(score_res.home), int(score_res.away), bool(score_res.overtime)
+            hg, ag = _validate_final_game_result_payload(
+                home_id=hid,
+                away_id=aid,
+                home_goals=hg,
+                away_goals=ag,
+                calendar_day=d,
+                allow_tie=bool(score_res.tie),
             )
             if world_injuries is not None:
                 for tm in (home, away):
@@ -13307,19 +13422,31 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
             use_light = bool(getattr(session, "_light_game_stat_accumulation", False)) or (
                 manual_hybrid and not is_user_game
             )
-            hg, ag, ot = sim._simulate_game(
+            score_res = _franchise_resolve_game_score(
+                session,
+                sim,
                 r,
                 home,
                 away,
-                session.strength_map,
-                home_strength_scale=h_scale,
-                away_strength_scale=a_scale,
-                noise_scale=noise_scale,
+                hid,
+                aid,
+                int(d),
                 is_playoff=is_playoff_slot,
-                calendar_day=int(d),
                 home_b2b=hb2b,
                 away_b2b=ab2b,
                 light_mode=use_light,
+                home_strength_scale=h_scale,
+                away_strength_scale=a_scale,
+                noise_scale=noise_scale,
+            )
+            hg, ag, ot = int(score_res.home), int(score_res.away), bool(score_res.overtime)
+            hg, ag = _validate_final_game_result_payload(
+                home_id=hid,
+                away_id=aid,
+                home_goals=hg,
+                away_goals=ag,
+                calendar_day=d,
+                allow_tie=bool(score_res.tie),
             )
 
             world_momentum.update_momentum_after_game(home, hg, ag, r)
@@ -13449,19 +13576,31 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
         _attach_franchise_saved_lineups(
             session, home, away, home_id=hid, away_id=aid, user_tid=user_tid
         )
-        hg, ag, ot = sim._simulate_game(
+        score_res = _franchise_resolve_game_score(
+            session,
+            sim,
             r,
             home,
             away,
-            session.strength_map,
-            home_strength_scale=h_inj,
-            away_strength_scale=a_inj,
-            noise_scale=id_noise,
+            hid,
+            aid,
+            int(d),
             is_playoff=is_playoff_slot,
-            calendar_day=int(d),
             home_b2b=hb2b,
             away_b2b=ab2b,
             light_mode=bool(getattr(session, "_light_game_stat_accumulation", False)),
+            home_strength_scale=h_inj,
+            away_strength_scale=a_inj,
+            noise_scale=id_noise,
+        )
+        hg, ag, ot = int(score_res.home), int(score_res.away), bool(score_res.overtime)
+        hg, ag = _validate_final_game_result_payload(
+            home_id=hid,
+            away_id=aid,
+            home_goals=hg,
+            away_goals=ag,
+            calendar_day=d,
+            allow_tie=bool(score_res.tie),
         )
 
         if world_injuries is not None:
@@ -13532,17 +13671,11 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
                             game_day_injury=bool(slot_user_game and tid_inj.lower() == user_tid.lower()),
                         )
 
-        hg, ag = _validate_final_game_result_payload(
-        home_id=hid,
-        away_id=aid,
-        home_goals=hg,
-        away_goals=ag,
-        calendar_day=d,
-    )
+    if score_res is None:
+        raise RuntimeError(f"Score simulation did not run for {hid} vs {aid} on calendar day {d}")
 
     _board_rules: Dict[str, Any] = {}
     _fast_game = getattr(sim, "_pending_event_game", None) is None
-    _score_res = getattr(sim, "_last_score_result", None)
     try:
         from app.sim_engine.league.game_rules import rules_for as _rules_for
 
@@ -13552,15 +13685,7 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
         }
     except Exception:
         _board_rules = {}
-    _fast_shootout = False
-    if _fast_game and not is_playoff_slot and bool(ot):
-        try:
-            from app.sim_engine.engine import ScoreResult
-
-            if isinstance(_score_res, ScoreResult):
-                _fast_shootout = bool(_score_res.shootout)
-        except Exception:
-            _fast_shootout = False
+    _fast_shootout = bool(score_res.shootout) and not is_playoff_slot and not bool(score_res.tie)
 
     # Saved lines were attached for score sim; re-attach before stat allocation so
     # TOI/G/A follow Edit Lines (they were previously cleared too early).
@@ -13570,68 +13695,100 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
     stat_hg, stat_ag = int(hg), int(ag)
     shootout_winner: Optional[str] = None
     if _fast_shootout:
-        if hg > ag:
+        if score_res.shootout_winner_home is True:
             shootout_winner = hid
             stat_hg = max(0, int(hg) - 1)
             stat_ag = int(ag)
-        elif ag > hg:
+        elif score_res.shootout_winner_home is False:
             shootout_winner = aid
             stat_ag = max(0, int(ag) - 1)
             stat_hg = int(hg)
         else:
-            shootout_winner = hid if r.random() < 0.52 else aid
-    _tie_stat = bool(
-        _fast_shootout
-        and _board_rules.get("ties_allowed")
-        and not is_playoff_slot
-        and int(stat_hg) == int(stat_ag)
-    )
-    _ot_periods = 0
-    _ot_sec = 0
-    _en_home = 0
-    _en_away = 0
-    _strength_mu = None
+            logging.getLogger(__name__).warning(
+                "Shootout without winner day=%s %s vs %s tie=%s",
+                d,
+                hid,
+                aid,
+                score_res.tie,
+            )
+    _tie_stat = bool(score_res.tie)
+    _ot_periods = int(score_res.ot_periods) if bool(ot) else 0
+    _ot_sec = int(score_res.ot_sec) if bool(ot) else 0
+    _en_home = int(score_res.en_home)
+    _en_away = int(score_res.en_away)
+    _strength_mu = score_res.mu
     try:
-        from app.sim_engine.engine import ScoreResult
-
-        if isinstance(_score_res, ScoreResult):
-            _ot_periods = int(_score_res.ot_periods) if bool(ot) else 0
-            _ot_sec = int(_score_res.ot_sec) if bool(ot) else 0
-            _en_home = int(_score_res.en_home)
-            _en_away = int(_score_res.en_away)
-            _strength_mu = _score_res.mu
-    except Exception:
-        _swallowed_log.debug("suppressed exception", exc_info=True)
-    box = _accumulate_franchise_game_stats(
-        session,
-        home=home,
-        away=away,
-        hid=hid,
-        aid=aid,
-        hg=stat_hg,
-        ag=stat_ag,
-        ot=bool(ot),
-        calendar_day=d,
-        rng=r,
-        calendar_iso=cal_iso,
-        is_playoff=is_playoff_slot,
-        home_b2b=hb2b,
-        away_b2b=ab2b,
-        shootout=bool(_fast_shootout),
-        shootout_winner=shootout_winner,
-        tie=_tie_stat,
-        ot_periods=_ot_periods,
-        ot_sec=_ot_sec,
-        strength_mu=_strength_mu,
-        en_home=_en_home,
-        en_away=_en_away,
-    )
+        box = _accumulate_franchise_game_stats(
+            session,
+            home=home,
+            away=away,
+            hid=hid,
+            aid=aid,
+            hg=stat_hg,
+            ag=stat_ag,
+            ot=bool(ot),
+            calendar_day=d,
+            rng=r,
+            calendar_iso=cal_iso,
+            is_playoff=is_playoff_slot,
+            home_b2b=hb2b,
+            away_b2b=ab2b,
+            shootout=bool(_fast_shootout),
+            shootout_winner=shootout_winner,
+            tie=_tie_stat,
+            ot_periods=_ot_periods,
+            ot_sec=_ot_sec,
+            strength_mu=_strength_mu,
+            en_home=_en_home,
+            en_away=_en_away,
+        )
+    except Exception as stat_exc:
+        logging.getLogger(__name__).exception(
+            "Stat accumulation failed for %s vs %s day %s", hid, aid, d
+        )
+        _franchise_enqueue_critical_notice(
+            session,
+            title="Stats missing",
+            description=f"Stats missing for {_display_team(away)} @ {_display_team(home)} (day {d}).",
+            source=f"stats-missing:{stable_gid}",
+        )
+        box = {
+            "game_id": stable_gid,
+            "id": stable_gid,
+            "home_id": hid,
+            "away_id": aid,
+            "home_goals": int(hg),
+            "away_goals": int(ag),
+            "home_score": int(hg),
+            "away_score": int(ag),
+            "overtime": bool(ot),
+            "ot": bool(ot),
+            "shootout": bool(_fast_shootout or score_res.shootout),
+            "tie": bool(_tie_stat),
+            "ot_periods": _ot_periods,
+            "ot_sec": _ot_sec,
+            "en_home": _en_home,
+            "en_away": _en_away,
+            "day": int(d),
+            "calendar_day": int(d),
+            "calendar_iso": cal_iso,
+            "final": True,
+            "stats_missing": True,
+            "stat_scope": stat_scope,
+            "status": "final",
+            "completed": True,
+            "is_final": True,
+        }
+        session.game_results.append(box)
+        _processed_game_ids(session).add(stable_gid)
     _clear_franchise_saved_lineups(home, away)
     if not isinstance(box, dict):
         box = {}
 
     _shootout = bool(box.get("shootout", False)) or _fast_shootout
-    _tie = bool(_shootout and _board_rules.get("ties_allowed") and not is_playoff_slot)
+    _tie = bool(_tie_stat) or (
+        bool(_shootout and _board_rules.get("ties_allowed") and not is_playoff_slot)
+    )
     _stats_hg = int(box.get("player_home_goals", box.get("home_goals", hg)) or 0)
     _stats_ag = int(box.get("player_away_goals", box.get("away_goals", ag)) or 0)
     if _tie and _fast_game and _stats_hg != _stats_ag:
@@ -13640,17 +13797,19 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
             _stats_hg -= 1
         else:
             _stats_ag -= 1
-    session.standings.record_game(
-        slot.home_id,
-        slot.away_id,
-        hg,
-        ag,
-        overtime=ot,
-        shootout=_shootout,
-        stats_home_goals=_stats_hg,
-        stats_away_goals=_stats_ag,
-        tie=_tie,
-    )
+    if stable_gid not in _standings_recorded_gids(session):
+        session.standings.record_game(
+            slot.home_id,
+            slot.away_id,
+            hg,
+            ag,
+            overtime=ot,
+            shootout=_shootout,
+            stats_home_goals=_stats_hg,
+            stats_away_goals=_stats_ag,
+            tie=_tie,
+        )
+        _standings_recorded_gids(session).add(stable_gid)
     
 
     if cpu_only_bulk:
@@ -13716,32 +13875,24 @@ def _simulate_slots_for_day(
     for slot in slots or []:
         hid = _safe_slot_team_id(slot, "home_id")
         aid = _safe_slot_team_id(slot, "away_id")
-
         if hid and aid:
             expected_keys.add((hid, aid))
+            if hid == aid:
+                raise RuntimeError(
+                    f"Invalid schedule on calendar day {calendar_day}: self-play {hid}"
+                )
+            if not session.team_by_id.get(hid) or not session.team_by_id.get(aid):
+                raise RuntimeError(
+                    f"Invalid schedule on calendar day {calendar_day}: missing team for {hid} vs {aid}"
+                )
+
+    for slot in slots or []:
+        hid = _safe_slot_team_id(slot, "home_id")
+        aid = _safe_slot_team_id(slot, "away_id")
 
         try:
             ul, ll = _simulate_franchise_slot(session, slot)
-        except Exception as exc:
-            if bulk_light:
-                logging.getLogger(__name__).exception(
-                    "Skipping broken game on calendar day %s: %s vs %s",
-                    calendar_day,
-                    hid,
-                    aid,
-                )
-                _franchise_enqueue_critical_notice(
-                    session,
-                    title="Game simulation failed",
-                    description=(
-                        f"Calendar day {calendar_day}: {hid} vs {aid} could not be simulated "
-                        f"({exc}). That game was skipped; re-run the day to fill the result."
-                    ),
-                    source=f"sim-fail:{calendar_day}:{hid}:{aid}",
-                )
-                if hid and aid:
-                    expected_keys.discard((hid, aid))
-                continue
+        except Exception:
             raise
 
         if hid and aid:
