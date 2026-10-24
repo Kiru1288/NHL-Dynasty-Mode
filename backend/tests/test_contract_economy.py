@@ -1408,14 +1408,11 @@ def test_cpu_rfa_pass_re_signs_valuable_player():
     _rfa_on_team(team, "rfa_star", 84, 23, "C", prev_aav=2.5)
 
     session = _cpu_session(team, league, user_tid="OTHER")
-    # Opening Day: a notable RFA is qualified and held for the offer-sheet window.
+    # The club has cap room, so an 84 is signed in the re-sign pass. Only an 84
+    # on a tight cap is held for the offer-sheet window.
     opening = run_cpu_rfa_decisions(session)
-    assert opening["deferred_count"] == 1
-    assert len(team.rfa_rights) == 1
-    # The club settles him before camp.
-    result = run_cpu_rfa_decisions(session, final=True)
-    assert result["re_signed_count"] == 1
-    assert result["walked_count"] == 0
+    assert opening["deferred_count"] == 0
+    assert opening["re_signed_count"] == 1
     assert any(_player_id(p) == "rfa_star" for p in team.roster)
     assert len(team.rfa_rights) == 0
 

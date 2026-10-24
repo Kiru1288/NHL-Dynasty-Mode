@@ -1053,6 +1053,69 @@ def _prospect_path_bucket(player: Any) -> str:
     return "other"
 
 
+def _signing_position_bucket(player: Any) -> str:
+    from app.sim_engine.trades.team_assessment import position_group  # noqa: WPS433
+
+    g = position_group(player)
+    return "G" if g == "G" else ("D" if g in ("LD", "RD") else "F")
+
+
+def display_ovr_for_signing(player: Any) -> float:
+    """Display OVR (0–100) for ELC decisions.
+
+    ``nhl_readiness`` is a different score: an 18-year-old at 80 overall sits near 50.
+    An ``ovr()`` that just echoes that readiness is not a signing overall.
+    """
+    from services.contract_economy import _player_ovr  # noqa: WPS433
+
+    for key in ("overall", "ovr_display"):
+        raw = getattr(player, key, None)
+        if callable(raw):
+            continue
+        try:
+            val = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if val <= 1.5:
+            val *= 99.0
+        if 35.0 <= val <= 99.0:
+            return val
+    try:
+        ovr = float(_player_ovr(player))
+    except Exception:
+        ovr = 0.0
+    if 0.0 < ovr <= 1.5:
+        ovr *= 99.0
+    ready = getattr(player, "nhl_readiness", None)
+    try:
+        ready_f = float(ready) if ready is not None else None
+    except (TypeError, ValueError):
+        ready_f = None
+    if ready_f is not None:
+        ready99 = ready_f * 99.0 if ready_f <= 1.5 else ready_f
+        if abs(ovr - ready99) < 0.75 and ovr < 70.0:
+            return 0.0
+    return ovr
+
+
+def would_crack_nhl_roster(player: Any, team: Any) -> bool:
+    """True if the prospect would be among the club's top 9 F or top 6 D by OVR."""
+    bucket = _signing_position_bucket(player)
+    if bucket == "G" or team is None:
+        return False
+    from services.contract_economy import _player_ovr  # noqa: WPS433
+
+    ovr = display_ovr_for_signing(player)
+    roster = list(getattr(team, "roster", None) or [])
+    same = [p for p in roster if _signing_position_bucket(p) == bucket]
+    limit = 6 if bucket == "D" else 9
+    if len(same) < limit:
+        return ovr >= (74.0 if bucket == "D" else 72.0)
+    ranked = sorted(same, key=_player_ovr, reverse=True)
+    cutoff = float(_player_ovr(ranked[min(limit - 1, len(ranked) - 1)]))
+    return ovr >= cutoff
+
+
 def should_cpu_auto_sign_elc(
     player: Any,
     team: Any,
@@ -1076,40 +1139,26 @@ def should_cpu_auto_sign_elc(
 
     expiry = getattr(player, "rights_expiry_year", None)
     status = str(getattr(player, "rights_status", "") or "")
-    readiness_raw = getattr(player, "nhl_readiness", None) or getattr(player, "overall", None)
-    if readiness_raw is None:
-        # `ovr` is a method on real player entities — resolve it like the rest of
-        # the codebase instead of calling float() on a bound method.
-        ov = getattr(player, "ovr", None)
-        if callable(ov):
-            try:
-                ov = ov()
-            except Exception:
-                ov = None
-        readiness_raw = ov
-    try:
-        readiness = float(readiness_raw if readiness_raw is not None else 50)
-    except (TypeError, ValueError):
-        readiness = 50.0
-    if readiness <= 1.5:  # 0–1 scale from ovr() → 0–99 scale
-        readiness *= 99.0
+    ovr = display_ovr_for_signing(player)
     age = int(getattr(player, "age", 18) or 18)
     path = _prospect_path_bucket(player)
+    # Ready now is overall, or a top-9 forward / top-6 defender. Readiness is not the bar.
+    nhl_ready = ovr >= 74.0 or would_crack_nhl_roster(player, team)
 
     # Rights about to expire / marked expiring
     if status == "rights_expiring" or (expiry is not None and int(expiry) <= int(season_year) + 1):
         return True, "rights_expiration_risk"
 
-    # Clearly NHL-ready. NCAA teenagers stay in school.
-    if readiness >= 70 and path != "ncaa":
+    # Clearly NHL-ready (OVR / depth chart). NCAA teenagers stay in school.
+    if nhl_ready and path != "ncaa":
         return True, "prospect_readiness"
-    if path == "ncaa" and age >= 21 and readiness >= 64:
+    if path == "ncaa" and age >= 21 and (ovr >= 78.0 or would_crack_nhl_roster(player, team)):
         return True, "age_and_readiness"
 
     # Juniors turning pro, and European pros old enough to come over.
-    if path == "junior" and age >= 20 and readiness >= 60:
+    if path == "junior" and age >= 20 and ovr >= 74.0:
         return True, "age_and_readiness"
-    if path == "europe" and age >= 21 and readiness >= 62:
+    if path == "europe" and age >= 21 and ovr >= 76.0:
         return True, "age_and_readiness"
 
     # Cap / slots: do not auto-sign if org is near contract limit

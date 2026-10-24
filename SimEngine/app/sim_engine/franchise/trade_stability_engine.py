@@ -641,6 +641,16 @@ def audit_lineup_toi_consistency(
         deploy = resolve_player_deployment(session, player, team)
         if deploy.scratched or deploy.gp < min_gp:
             continue
+        # Season minutes belong to the line he has actually played. A line that
+        # was just saved has not earned a "saved as L1 but averaging 11" warning
+        # until he has played 3 games on it.
+        assigned_gp = getattr(player, "_line_sheet_gp_at_assign", None)
+        if assigned_gp is not None:
+            try:
+                if int(deploy.gp) < int(assigned_gp) + 3:
+                    continue
+            except (TypeError, ValueError):
+                pass
         avg = deploy.avg_toi_min
         if avg is None:
             continue
@@ -742,6 +752,23 @@ def _pos_group_of(player: Any) -> str:
     return "F"
 
 
+def _line_gap_is_a_complaint(player: Any, played_rank: Any, deserved_rank: Any) -> bool:
+    """Two lines is a complaint. One line is a complaint only after three games in a row."""
+    try:
+        gap = abs(int(played_rank) - int(deserved_rank))
+    except (TypeError, ValueError):
+        return False
+    if gap >= 2:
+        return True
+    if gap <= 0:
+        return False
+    try:
+        streak = int(getattr(player, "_line_gap_streak", 0) or 0)
+    except (TypeError, ValueError):
+        streak = 0
+    return streak >= 3
+
+
 def deserved_depth_standing(player: Any, team: Any) -> Dict[str, Any]:
     """Where a skater ranks on his own club by OVR — what he can fairly expect to play.
 
@@ -769,6 +796,7 @@ def deserved_depth_standing(player: Any, team: Any) -> Dict[str, Any]:
     if idx is None:
         return {"rank": max_rank, "extra": False, "bubble": False, "group": grp}
     if idx < regulars:
+        # Top 3 forwards (or top 2 defencemen) by overall are the first unit, then the next, and so on.
         return {"rank": min(max_rank, idx // per_line + 1), "extra": False, "bubble": False, "group": grp}
     last_regular_ovr = _player_ovr(mates[regulars - 1]) if len(mates) >= regulars else 0.0
     bubble = _player_ovr(player) >= last_regular_ovr - DEPTH_BUBBLE_OVR_GAP
@@ -871,7 +899,12 @@ def infer_role_satisfaction_from_deployment(
             rank = max(1, deploy.ev_line_rank or _project_ev_line_rank(player, team))
             if knows_his_place:
                 return 60.0
-            if rank >= 4 and ovr >= 82 and int(standing.get("rank") or 4) <= 2:
+            if (
+                rank >= 4
+                and ovr >= 82
+                and int(standing.get("rank") or 4) <= 2
+                and _line_gap_is_a_complaint(player, rank, standing.get("rank"))
+            ):
                 return 36.0
             if rank <= 2 and ovr >= 86:
                 return 74.0
@@ -880,6 +913,17 @@ def infer_role_satisfaction_from_deployment(
         ice = getattr(psych, "ice_time_satisfaction", None) if psych is not None else None
         if ice is not None:
             return _to_0_100(float(ice) * 100.0 if float(ice) <= 1.5 else float(ice))
+        return None
+
+    assigned_gp = getattr(player, "_line_sheet_gp_at_assign", None)
+    if assigned_gp is not None:
+        try:
+            if int(deploy.gp) < int(assigned_gp) + 3:
+                return None
+        except (TypeError, ValueError):
+            pass
+    played_vs_earned = abs(int(deploy.ev_line_rank or 0) - int(standing.get("rank") or 0))
+    if played_vs_earned == 1 and not _line_gap_is_a_complaint(player, deploy.ev_line_rank, standing.get("rank")):
         return None
 
     ratio = avg_toi / max(7.5, expected)
@@ -1566,13 +1610,9 @@ def formal_demand_eligible(stability_row: Dict[str, Any]) -> bool:
     pressures = dict(stability_row.get("pressures") or {})
     sig = count_significant_pressures(pressures)
     personal = count_personal_significant_pressures(pressures)
-    if score <= 22:
+    if score <= 22 and personal >= 1:
         return True
-    if sig >= 2 and personal >= 1:
-        return True
-    personal_vals = [float(v or 0) for k, v in pressures.items() if k not in TEAM_WIDE_PRESSURES]
-    top = max(personal_vals) if personal_vals else 0.0
-    return top >= 14.0 and score <= 32
+    return sig >= 2 and personal >= 1
 
 
 def readiness_penalties(stability: float, character: float, mental: float, escalation: int) -> Dict[str, float]:

@@ -166,8 +166,20 @@ def _player_ovr01(player: Any) -> float:
         return 0.5
 
 
+def engine_ovr99(player: Any) -> int:
+    """The sim overall on a 0–99 scale. Lines, growth, and trade value use this number."""
+    try:
+        fn = getattr(player, "ovr", None)
+        value = float(fn() if callable(fn) else (fn if fn is not None else 0))
+    except (TypeError, ValueError):
+        value = 0.0
+    if value <= 1.5:
+        value *= 99.0
+    return int(round(max(0.0, min(99.0, value))))
+
+
 def _ovr_display(player: Any) -> int:
-    return int(round(_player_ovr01(player) * 99.0))
+    return engine_ovr99(player)
 
 
 def _ensure_modifiers(player: Any) -> List[Dict[str, Any]]:
@@ -206,12 +218,49 @@ def sum_active_modifier_amount(player: Any) -> int:
 
 
 def get_base_ovr_display(player: Any) -> int:
-    """Roster-aligned true OVR (ratings blend), not raw sim engine ovr()."""
+    """Engine overall. Modifiers are a badge beside this number, not part of it."""
+    shown = engine_ovr99(player)
+    if shown > 0:
+        return shown
     return _compute_true_ovr_display(player)
 
 
 def get_effective_ovr_display(player: Any) -> int:
-    return max(40, min(99, get_base_ovr_display(player) + sum_active_modifier_amount(player)))
+    base = get_base_ovr_display(player)
+    if base <= 0:
+        return 0
+    return max(40, min(99, base + sum_active_modifier_amount(player)))
+
+
+def format_ovr_modifier_badge(player: Any) -> str:
+    """Short label for the roster, like '−3 conduct'. The overall number stays the base."""
+    mods = serialize_ovr_modifiers_for_ui(player)
+    if not mods:
+        return ""
+    total = 0
+    for mod in mods:
+        try:
+            total += int(mod.get("amount") or 0)
+        except (TypeError, ValueError):
+            continue
+    if total == 0:
+        return ""
+    primary = max(mods, key=lambda mod: abs(int(mod.get("amount") or 0)))
+    cause = str(primary.get("cause_type") or "").upper()
+    source = str(primary.get("source") or "").lower()
+    if "CONDUCT" in cause or "conduct" in source:
+        label = "conduct"
+    elif "TRADE" in cause or "rumor" in source:
+        label = "trade"
+    elif "LINE" in cause or "SCRATCH" in cause or "lineup" in source:
+        label = "lineup"
+    else:
+        reason = str(primary.get("reason") or "").strip()
+        label = reason.split(":")[0].split("—")[0].strip().lower() if reason else "story"
+        if len(label) > 22:
+            label = "story"
+    mag = f"−{abs(total)}" if total < 0 else f"+{total}"
+    return f"{mag} {label}".strip()
 
 
 def apply_permanent_ovr_delta(
@@ -516,6 +565,7 @@ def apply_conduct_suspension(
         severity=str(severity or "major"),
         storyline_id=str(storyline_id or ""),
         cause_event_id=str(cause_event_id or ""),
+        cause_type=str(cause_type or ""),
         player_fame=float(player_fame),
         rng=rng,
     )

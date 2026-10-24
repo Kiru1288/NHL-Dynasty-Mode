@@ -14,6 +14,9 @@ for p in (ROOT, SIM, os.path.join(ROOT, "backend")):
         sys.path.insert(0, p)
 
 from app.sim_engine.franchise.conduct_incidents import (  # noqa: E402
+    create_on_ice_discipline_incident,
+    list_league_suspensions,
+    serialize_incident_for_ui,
     apply_dress_backlash,
     apply_gm_conduct_choice,
     create_conduct_incident,
@@ -181,6 +184,42 @@ class ConductIncidentLifecycleTests(unittest.TestCase):
         self.assertIsNotNone(cleared)
         self.assertIn(cleared["status"], ("cleared", "disciplined"))
         self.assertTrue(player_eligible_to_dress(pl, host))
+
+    def test_on_ice_incident_shows_category_reason_and_games(self):
+        host = SimpleNamespace()
+        pl = _player(pid="p_onice")
+        inc = create_on_ice_discipline_incident(
+            host,
+            player=pl,
+            team_id="T1",
+            reason_id="boarding",
+            reason_label="Boarding",
+            games=3,
+        )
+        ui = serialize_incident_for_ui(inc)
+        self.assertEqual(ui["category"], "On-ice")
+        self.assertEqual(ui["reason"], "Boarding")
+        self.assertEqual(ui["games_initial"], 3)
+        self.assertEqual(ui["games_remaining"], 3)
+        self.assertFalse(player_eligible_to_dress(pl, host))
+        rows = list_league_suspensions(host)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["category"], "On-ice")
+
+    def test_off_ice_under_investigation_reason_is_neutral(self):
+        host = SimpleNamespace()
+        pl = _player(pid="p_neutral")
+        inc = create_conduct_incident(
+            host,
+            player=pl,
+            team_id="T1",
+            storyline_text="DUI arrest reported overnight",
+            severity="moderate",
+            rng=__import__("random").Random(3),
+        )
+        ui = serialize_incident_for_ui(inc)
+        self.assertEqual(ui["category"], "Off-ice")
+        self.assertEqual(ui["reason"], "Matter under league review")
 
     def test_apply_conduct_suspension_wrapper_uses_state_machine(self):
         host = SimpleNamespace()

@@ -13,6 +13,7 @@ import { SCREENS, teamNameToNhlAbbr } from "../game/constants";
 import {
   getBaseOverall,
   getOverallDrop,
+  getOverallModifierBadge,
   getOverallTooltip,
   getUniversalOverall,
 } from "../utils/playerOverall";
@@ -342,7 +343,8 @@ function fmtMaybePct(value, digits = 1) {
   return fmtPct(value, digits);
 }
 
-function fmtRelPct(value) {
+function fmtRelPct(value, gp) {
+  if (Number(gp) < 20) return "—";
   if (!hasRealPct(value)) return "—";
   const n = normalizePct(value, 0) * 100;
   const sign = n > 0 ? "+" : "";
@@ -1883,10 +1885,18 @@ function applyPlayerOverallLookup(rows, rosterRowById, franchiseState) {
     );
 
     const meta = resolvePlayerOverallMeta(row, rosterRowById, index);
+    const rosterPosition = firstPresent(rosterRow?.position, rosterRow?.pos);
+    const rosterJersey = firstPresent(
+      rosterRow?.jersey_number,
+      rosterRow?.number,
+      rosterRow?.sweater
+    );
     const merged = mergePlayerHeadshotIdentity(
       {
         ...row,
         ...meta,
+        position: firstPresent(row?.position, row?.pos, rosterPosition),
+        jersey_number: firstPresent(row?.jersey_number, row?.number, rosterJersey),
         ...(overall > 0
           ? {
               overall,
@@ -2774,7 +2784,12 @@ function PlayerStatsPage({
     >
       <PlayerStatsWorkspaceHeader
         submenu={submenu}
-        onSubmenuChange={setSubmenu}
+        onSubmenuChange={(id) => {
+          setSubmenu(id);
+          setSortKey("pts");
+          setSortDir("desc");
+          setPage(1);
+        }}
         scope={scope}
         onScopeChange={onScopeChange}
         search={search}
@@ -4457,6 +4472,7 @@ function PlayerNameCell({
     firstPresent(player?.position, player?.pos, "F")
   );
   const positionLabel = getPositionFullName(position);
+  const jersey = firstPresent(player?.jersey_number, player?.number, player?.sweater);
 
   return (
     <div className="sc-name-cell sc-player-name-cell-simple">
@@ -4483,6 +4499,9 @@ function PlayerNameCell({
           >
             {position}
           </em>
+          {jersey ? (
+            <em className="sc-player-num-inline">#{jersey}</em>
+          ) : null}
 
           {overall > 0 ? (
             <em
@@ -4491,7 +4510,11 @@ function PlayerNameCell({
               aria-label={getOverallTooltip(player)}
             >
               {fmtZero(overall)}
-              {overallDrop >= 1 ? (
+              {getOverallModifierBadge(player) ? (
+                <span className="sc-player-ovr-drop" title={getOverallModifierBadge(player)}>
+                  {getOverallModifierBadge(player)}
+                </span>
+              ) : overallDrop >= 1 ? (
                 <span className="sc-player-ovr-drop" title={`Down ${overallDrop} from base ${baseOverall}`}>
                   ↓{overallDrop}
                 </span>
@@ -5559,9 +5582,7 @@ function PlayersTab({
         <SkaterStatCell
           value={
             safe(row.sog, 0) > 0
-              ? fmtMaybePct(
-                  row.shooting_pct
-                )
+              ? `${((safe(row.g, 0) / safe(row.sog, 1)) * 100).toFixed(1)}%`
               : "—"
           }
           sub={rankSub(
@@ -5585,7 +5606,11 @@ function PlayersTab({
       align: "right",
       render: (row) => (
         <SkaterStatCell
-          value={fmtMaybeNumber(row.ixg)}
+          value={
+            hasRealNumber(row.ixg)
+              ? Number(row.ixg).toFixed(1)
+              : "—"
+          }
           sub={rankSub(row, "ixg")}
         />
       ),
@@ -5602,7 +5627,7 @@ function PlayersTab({
             hasRealNumber(row.finishing)
               ? formatSigned(
                   row.finishing,
-                  0
+                  1
                 )
               : "—"
           }
@@ -5734,8 +5759,8 @@ function PlayersTab({
       align: "right",
       render: (row) => (
         <SkaterStatCell
-          value={fmtRelPct(row.rel_cf_pct)}
-          sub={rankSub(row, "rel_cf_pct")}
+          value={fmtRelPct(row.rel_cf_pct, row.gp)}
+          sub={Number(row.gp) >= 20 ? rankSub(row, "rel_cf_pct") : ""}
         />
       ),
       onClick: () => changeSort("rel_cf_pct"),
@@ -5747,8 +5772,8 @@ function PlayersTab({
       align: "right",
       render: (row) => (
         <SkaterStatCell
-          value={fmtRelPct(row.rel_ff_pct)}
-          sub={rankSub(row, "rel_ff_pct")}
+          value={fmtRelPct(row.rel_ff_pct, row.gp)}
+          sub={Number(row.gp) >= 20 ? rankSub(row, "rel_ff_pct") : ""}
         />
       ),
       onClick: () => changeSort("rel_ff_pct"),
@@ -5760,8 +5785,8 @@ function PlayersTab({
       align: "right",
       render: (row) => (
         <SkaterStatCell
-          value={fmtRelPct(row.rel_xgf_pct)}
-          sub={rankSub(row, "rel_xgf_pct")}
+          value={fmtRelPct(row.rel_xgf_pct, row.gp)}
+          sub={Number(row.gp) >= 20 ? rankSub(row, "rel_xgf_pct") : ""}
         />
       ),
       onClick: () => changeSort("rel_xgf_pct"),
@@ -5773,8 +5798,8 @@ function PlayersTab({
       align: "right",
       render: (row) => (
         <SkaterStatCell
-          value={fmtRelPct(row.rel_gf_pct)}
-          sub={rankSub(row, "rel_gf_pct")}
+          value={fmtRelPct(row.rel_gf_pct, row.gp)}
+          sub={Number(row.gp) >= 20 ? rankSub(row, "rel_gf_pct") : ""}
         />
       ),
       onClick: () => changeSort("rel_gf_pct"),
@@ -6855,7 +6880,7 @@ function AdvancedTab({
       sortKey: "ixg",
       align: "right",
       render: (row) =>
-        fmtMaybeNumber(row.ixg),
+        hasRealNumber(row.ixg) ? Number(row.ixg).toFixed(1) : "—",
       onClick: () => changeSort("ixg"),
     },
     {
@@ -6874,7 +6899,7 @@ function AdvancedTab({
         hasRealNumber(row.finishing)
           ? formatSigned(
               row.finishing,
-              0
+              1
             )
           : "—",
       onClick: () =>

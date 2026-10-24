@@ -27,6 +27,14 @@ def _prospect(age: int = 18, potential: float = 0.88, seed: int = 7):
     p = _make_player("C", seed=seed)
     p.identity.age = age
     p.potential = potential
+    # These tests cover the growth schedule. The hidden roll is covered on its own;
+    # this prospect still has most of the gap in front of him.
+    ovr99 = float(player_current_ovr_01(p)) * 99.0
+    pot99 = float(potential) * 99.0 if float(potential) <= 1.5 else float(potential)
+    p._dev_realization = 0.80
+    p._dev_realization_base_ovr = ovr99
+    p._dev_realization_pot = pot99
+    p._dev_real_ceiling = ovr99 + 0.80 * max(0.0, pot99 - ovr99)
     return p
 
 

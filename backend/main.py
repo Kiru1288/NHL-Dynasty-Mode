@@ -464,6 +464,9 @@ def get_franchise_state_heavy(
         out["roster_browser"] = franchise_sim.get_cached_roster_browser(
             s, sim, str(getattr(s, "user_team_id", "") or "")
         )
+        if getattr(s, "_growth_needs_save", False):
+            s._growth_needs_save = False
+            save_session(s)
     draft_board = None
     if include_draft_class_rankings or include_draft_class_hud:
         draft_board = franchise_sim.get_cached_draft_class_rankings(s, sim)
@@ -687,7 +690,46 @@ def get_player_awards_history(player_id: str, x_franchise_session: Optional[str]
     from services.json_safe import json_safe
 
     s = _session_or_404(x_franchise_session)
-    return json_safe(player_awards_history(s, player_id))
+    try:
+        return json_safe(player_awards_history(s, player_id))
+    except Exception as e:
+        log.exception("player awards history failed for %s", player_id)
+        return json_safe(
+            {
+                "player_id": str(player_id),
+                "found": False,
+                "save_awards": [],
+                "nhl_awards": [],
+                "nhl_status": "unavailable",
+                "career_seasons": [],
+                "career_totals": {},
+                "trophy_count": 0,
+                "note": str(e),
+            }
+        )
+
+
+@app.get("/api/franchise/player/{player_id}/career")
+def get_player_career_history(player_id: str, x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    """Dossier career: real NHL season lines from the NHL API landing (lazy, cached on the player)."""
+    from services.award_history import player_career_history
+    from services.json_safe import json_safe
+
+    s = _session_or_404(x_franchise_session)
+    try:
+        return json_safe(player_career_history(s, player_id, fetch=True))
+    except Exception as e:
+        log.exception("player career history failed for %s", player_id)
+        return json_safe(
+            {
+                "found": False,
+                "player_id": str(player_id),
+                "career_seasons": [],
+                "career_totals": {},
+                "status": "error",
+                "error": str(e),
+            }
+        )
 
 
 @app.get("/api/franchise/storylines/rankings")
@@ -1184,8 +1226,30 @@ def get_franchise_player_game_log(
     """Per-game lines, season totals by scope, ledger analytics and WJC history for one player."""
     from app.sim_engine.franchise.serialization import get_player_game_log_payload  # noqa: WPS433
 
+    from services.json_safe import json_safe
+
     s = _session_or_404(x_franchise_session)
-    return get_player_game_log_payload(s, player_id, season)
+    try:
+        return json_safe(get_player_game_log_payload(s, player_id, season))
+    except Exception as e:
+        log.exception("player game log failed for %s", player_id)
+        sy = int(getattr(s, "season_calendar_year", 0) or 0)
+        want = int(season) if season else sy
+        season_label = f"{want}-{str(want + 1)[-2:]}" if want > 1900 else ""
+        return json_safe(
+            {
+                "player_id": str(player_id),
+                "season": want,
+                "season_label": season_label,
+                "seasons": [],
+                "is_goalie": False,
+                "games": [],
+                "totals": {},
+                "season_ledger": {},
+                "wjc": [],
+                "error": str(e),
+            }
+        )
 
 
 @app.get("/api/franchise/records")
@@ -1452,6 +1516,25 @@ def get_franchise_free_agency_desk(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     return json_safe(desk)
+
+
+@app.post("/api/franchise/free-agency/sim-to-season")
+def post_franchise_fa_sim_to_season(
+    x_franchise_session: Optional[str] = Header(default=None),
+) -> dict[str, Any]:
+    from services.json_safe import json_safe
+    from services.franchise_offseason import sim_free_agency_to_season_start
+
+    s = _session_or_404(x_franchise_session)
+    try:
+        result = sim_free_agency_to_season_start(s)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    save_session(s)
+    state = franchise_sim.build_state_payload_safe(s, include_heavy=False)
+    return json_safe({**result, "state": state})
 
 
 @app.post("/api/franchise/free-agency/advance-day")

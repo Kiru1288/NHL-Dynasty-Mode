@@ -11,9 +11,11 @@ import { ensurePlayerHeadshotFields } from "../utils/playerHeadshots";
 import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
 import CapContractNegotiation from "../components/contracts/CapContractNegotiation";
 import NegotiationMeetingPanel, { InterestFactors } from "../components/contracts/NegotiationMeetingPanel";
-import { getContractOffice, qualifyRfa, releaseRfaRights, evaluateContractOffer, prospectRightsDecision, previewElcOffer, submitElcOffer, fileArbitration, settleArbitration, matchOfferSheet, declineOfferSheet, submitOfferSheet, advanceFreeAgencyDay, advanceContractNegotiationDay, signFreeAgent, getFreeAgentDetail, getFreeAgencyDesk, getSocialFeed } from "../services/franchiseService";
+import { getContractOffice, qualifyRfa, releaseRfaRights, evaluateContractOffer, prospectRightsDecision, previewElcOffer, submitElcOffer, fileArbitration, settleArbitration, matchOfferSheet, declineOfferSheet, submitOfferSheet, advanceFreeAgencyDay, simFreeAgencyToSeasonStart, advanceContractNegotiationDay, signFreeAgent, getFreeAgentDetail, getFreeAgencyDesk, getSocialFeed } from "../services/franchiseService";
+import { useGameUI } from "../game/GameUIContext";
 import { projectNegotiationCap } from "../utils/contractNegotiation";
 import { formatMoney, formatPick, getPlayerName, getPlayerOverall, getPlayerPosition, pickFranchiseData, safeArray } from "./shared/eventHelpers";
+import { getOverallModifierBadge } from "../utils/playerOverall";
 
 function computeOfferCapHitM(aav, years, signingBonus = 0) {
   const y = Math.max(1, Number(years) || 1);
@@ -778,7 +780,10 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
                               <span className={`${prefix}-shot-frame`}>
                                 <PlayerHeadshot player={headshotPlayer} size="sm" />
                               </span>
-                              <strong>{row.name || getPlayerName(row)}</strong>
+                              <strong>
+                                {row.name || getPlayerName(row)}
+                                {row.roster_level && row.roster_level !== "NHL" ? ` · ${row.roster_level}` : ""}
+                              </strong>
                             </div>
                           </td>
                           <td>{row.position || getPlayerPosition(row)}</td>
@@ -848,7 +853,10 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
                       <span className={`${prefix}-ovr-badge tone-${resignOvrTone(selectedOvr)}`}>
                         {selectedOvr ?? "—"} <em>OVR</em>
                       </span>
-                      <h3>{String(selected.name || getPlayerName(selected) || "")}</h3>
+                      <h3>
+                        {String(selected.name || getPlayerName(selected) || "")}
+                        {selected.roster_level && selected.roster_level !== "NHL" ? ` · ${selected.roster_level}` : ""}
+                      </h3>
                       <p>
                         {[
                           selected.position || getPlayerPosition(selected),
@@ -1391,6 +1399,7 @@ export function FreeAgencyEventMenu({
   ctaLabel: ctaLabelProp,
 }) {
   const prefix = "fa";
+  const { mergeFranchiseState, setFranchiseEventForceOpen } = useGameUI();
   const phase = String(franchiseState?.phase || franchiseState?.season_phase || "").toLowerCase();
   const inOffseasonWire =
     phase === "offseason" && String(franchiseState?.offseason_stage || "") === "free_agency";
@@ -1440,6 +1449,7 @@ export function FreeAgencyEventMenu({
   const [offerNtc, setOfferNtc] = React.useState(false);
   const [offerNtcModified, setOfferNtcModified] = React.useState(false);
   const [offerNmc, setOfferNmc] = React.useState(false);
+  const [nhlRoster, setNhlRoster] = React.useState(false);
   const offerNtcMode = offerNmc ? "NONE" : offerNtc ? (offerNtcModified ? "MODIFIED" : "FULL") : "NONE";
   const [offerBonus, setOfferBonus] = React.useState("0");
   const [contractCategory, setContractCategory] = React.useState("nhl_one_way");
@@ -1579,6 +1589,7 @@ export function FreeAgencyEventMenu({
         ? (Math.ceil(Number(ask) * term * bonusPct * 40) / 40).toFixed(3)
         : "0"
     );
+    setNhlRoster(false);
     setError("");
     setFeedback("");
     setResponse(null);
@@ -1627,6 +1638,8 @@ export function FreeAgencyEventMenu({
           signing_bonus_m: offerBonusNum,
           contract_category: contractCategory,
           two_way: contractCategory === "nhl_two_way",
+          nhl_roster: nhlRoster,
+          nhl_only: nhlRoster,
           context: "ufa",
         });
         if (!cancelled && result?.evaluation) setResponse(result);
@@ -1639,7 +1652,7 @@ export function FreeAgencyEventMenu({
       window.clearTimeout(t);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId, offerAav, offerYears, offerNtcMode, offerNmc, offerBonus, contractCategory, faMeetingRev]);
+  }, [selectedId, offerAav, offerYears, offerNtcMode, offerNmc, offerBonus, contractCategory, nhlRoster, faMeetingRev]);
 
   const filtered = React.useMemo(() => {
     let list = filter === "offersheet" ? [...sheetTargets] : [...rows];
@@ -1858,6 +1871,22 @@ export function FreeAgencyEventMenu({
     }
   };
 
+  const jumpToSeason = async () => {
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      const result = await simFreeAgencyToSeasonStart();
+      if (result?.state) mergeFranchiseState(result.state);
+      setFranchiseEventForceOpen(false);
+    } catch (e) {
+      const detail = e?.response?.data?.detail;
+      setError(typeof detail === "string" ? detail : e?.message || "Could not open the season");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const submitSign = async () => {
     if (!selected || busy) return;
     setBusy(true);
@@ -1876,6 +1905,8 @@ export function FreeAgencyEventMenu({
         signing_bonus_m: offerBonusNum,
         contract_category: contractCategory,
         two_way: contractCategory === "nhl_two_way",
+        nhl_roster: nhlRoster,
+        nhl_only: nhlRoster,
         context: "ufa",
       });
       setResponse(result);
@@ -2076,6 +2107,9 @@ export function FreeAgencyEventMenu({
               <button type="button" className={`${prefix}-sim-btn`} disabled={busy} onClick={() => advanceDay(7)}>
                 Sim a week
               </button>
+              <button type="button" className={`${prefix}-sim-btn`} disabled={busy} onClick={jumpToSeason}>
+                Sim to season start
+              </button>
             </div>
           </div>
           {market.cap_release?.text ? (
@@ -2192,6 +2226,7 @@ export function FreeAgencyEventMenu({
                         <span>
                           <b>{getPlayerOverall(p) ?? "—"}</b>
                           <i>OVR</i>
+                          {getOverallModifierBadge(p) ? <em className="ovr-mod-badge">{getOverallModifierBadge(p)}</em> : null}
                         </span>
                         <span className="is-pot">
                           <b>{p.potential ?? p.pot ?? "—"}</b>
@@ -2419,6 +2454,20 @@ export function FreeAgencyEventMenu({
                           ))}
                         </div>
                       </div>
+                      {isOfferSheet || offerAavNum > 1.15 ? null : (
+                        <div className="nd2-field nd2-field--row">
+                          <span>NHL roster</span>
+                          <label className="nd2-note">
+                            <input
+                              type="checkbox"
+                              checked={nhlRoster}
+                              disabled={busy}
+                              onChange={(e) => setNhlRoster(e.target.checked)}
+                            />
+                            {" "}Keep him up. Off, and a deal at $1.15M or less reports to the AHL. Waiver-exempt and two-way deals go straight down; anyone else has to clear waivers. The hit is $0 once he's down.
+                          </label>
+                        </div>
+                      )}
                       {isOfferSheet ? null : (
                         <div className="nd2-field nd2-field--row">
                           <span>Protection</span>

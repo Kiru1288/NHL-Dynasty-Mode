@@ -18,6 +18,9 @@ _swallowed_log = _logging_swallow.getLogger(__name__)
 # Players up to this age are treated as growing prospects.
 PROSPECT_MAX_AGE_DEV_LEAGUE = 23
 PROSPECT_MAX_AGE_ORG = 22
+# AHL players stay on the prospect pulse through 24. The NHL in-season pulse
+# starts at 25 so a player is never paid by both.
+PROSPECT_MAX_AGE_AHL = 24
 
 
 def _age(p: Any) -> int:
@@ -54,9 +57,13 @@ def iter_growth_prospects(league: Any) -> Iterable[Any]:
                 if _ok(p, PROSPECT_MAX_AGE_DEV_LEAGUE):
                     yield p
     for tm in getattr(league, "teams", None) or []:
-        for attr in ("prospect_pool", "ahl_roster", "echl_roster"):
+        for attr, max_age in (
+            ("prospect_pool", PROSPECT_MAX_AGE_ORG),
+            ("ahl_roster", PROSPECT_MAX_AGE_AHL),
+            ("echl_roster", PROSPECT_MAX_AGE_ORG),
+        ):
             for p in getattr(tm, attr, None) or []:
-                if _ok(p, PROSPECT_MAX_AGE_ORG):
+                if _ok(p, max_age):
                     yield p
 
 
@@ -181,7 +188,7 @@ def apply_pool_range_pulse(p: Any, team: Optional[Any], rng: random.Random, seas
     need not move together. The offseason pass subtracts ``_pool_inseason_spent``.
     """
     from app.sim_engine.progression.development import (
-        _PROSPECT_POT_SEASON_CAP,
+        _POOL_RANGE_SEASON_CAP,
         _PROSPECT_POT_SEASON_CAP_TRANSCENDENT,
         _PROSPECT_PULSES_PER_SEASON,
         prospect_performance_evidence,
@@ -190,14 +197,20 @@ def apply_pool_range_pulse(p: Any, team: Optional[Any], rng: random.Random, seas
     lo, hi = float(p.draft_value_range[0]), float(p.draft_value_range[1])
     plan = getattr(p, "_pool_season_plan", None)
     if not isinstance(plan, dict) or plan.get("season") != season_id:
-        tier = _pool_tier(p, (lo + hi) / 2.0)
-        base_lo, base_hi = _POOL_TIER_GROWTH[tier]
-        curve = str(getattr(p, "_pipeline_dev_curve", "normal") or "normal").lower()
         pscore = 0.5
         if team is not None:
             pscore = max(0.0, min(1.0, float(getattr(team, "prospect_pipeline_score", 0.5) or 0.5)))
         env = 0.82 + 0.36 * pscore
-        total = rng.uniform(base_lo, base_hi) * _POOL_CURVE_MULT.get(curve, 1.0) * env * _POOL_INSEASON_SHARE
+        try:
+            from app.sim_engine.progression.development import prospect_year_payment
+
+            annual = float(prospect_year_payment(p))
+        except Exception:
+            tier = _pool_tier(p, (lo + hi) / 2.0)
+            base_lo, base_hi = _POOL_TIER_GROWTH[tier]
+            curve = str(getattr(p, "_pipeline_dev_curve", "normal") or "normal").lower()
+            annual = rng.uniform(base_lo, base_hi) * _POOL_CURVE_MULT.get(curve, 1.0)
+        total = annual * env * _POOL_INSEASON_SHARE
         plan = {"season": season_id, "total": total, "spent": 0.0, "pulses": 0, "hi_gain": 0.0,
                 "start_hi": hi}
         setattr(p, "_pool_season_plan", plan)
@@ -215,7 +228,7 @@ def apply_pool_range_pulse(p: Any, team: Optional[Any], rng: random.Random, seas
     cap = (
         _PROSPECT_POT_SEASON_CAP_TRANSCENDENT
         if getattr(p, "_pipeline_franchise_flag", False)
-        else _PROSPECT_POT_SEASON_CAP
+        else _POOL_RANGE_SEASON_CAP
     ) / 99.0
     hi_gain = min(step * factor, max(0.0, cap - plan["hi_gain"]))
     ceil = float(getattr(p, "_pipeline_ceiling", plan["start_hi"]))
@@ -297,13 +310,10 @@ def prospect_in_season_tick(session: Any) -> Dict[str, int]:
     if moved or pot_moved:
         try:
             session._cached_roster_browser_payload = None
-            # The draft board / prospect pages are cached on _prospect_revision, which
-            # growth never bumped — prospects grew but the draft screens kept showing
-            # October ratings all season.
+            from services.franchise_sim import _bump_draft_board_revision
+
+            _bump_draft_board_revision(session)
             session._prospect_revision = int(getattr(session, "_prospect_revision", 0) or 0) + 1
-            session._cached_draft_class_rankings = None
-            session._cached_draft_class_hud_payload = None
-            session._draft_class_detail_cache = None
             session._prospect_profile_by_id_cache = None
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)

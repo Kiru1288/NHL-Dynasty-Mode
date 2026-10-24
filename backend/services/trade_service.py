@@ -710,6 +710,32 @@ def execute_franchise_trade(
                     from_team_id=from_tid,
                     to_team_id=to_tid,
                 )
+                try:
+                    from services.contract_economy import append_player_transaction
+
+                    teams = ctx.get("team_by_id") or {}
+                    found = None
+                    for _tid in (to_tid, from_tid):
+                        _tm = teams.get(_tid)
+                        for _p in list(getattr(_tm, "roster", None) or []) + list(getattr(_tm, "ahl_roster", None) or []):
+                            if str(getattr(_p, "id", "") or getattr(_p, "player_id", "") or "") == pid:
+                                found = _p
+                                break
+                        if found is not None:
+                            break
+                    if found is not None:
+                        def _club(tid: str) -> str:
+                            tm = teams.get(tid)
+                            return str(getattr(tm, "abbr", None) or getattr(tm, "name", None) or tid)
+
+                        append_player_transaction(
+                            found,
+                            kind="trade",
+                            summary=f"Traded from {_club(from_tid)} to {_club(to_tid)}",
+                            season=getattr(session, "season_calendar_year", None),
+                        )
+                except Exception:
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
 
@@ -722,6 +748,46 @@ def execute_franchise_trade(
                 if str((a or {}).get("type") or "") in ("player", "prospect"):
                     moved.append(str((a or {}).get("id") or ""))
         clear_demands_on_trade(session, moved)
+        try:
+            from services.trade_demand_engine import invalidate_trade_demand_player_index  # noqa: WPS433
+
+            invalidate_trade_demand_player_index(session)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+        try:
+            from app.sim_engine.systems.chemistry import (  # noqa: WPS433
+                handle_trade_chemistry_separation,
+                invalidate_team_chemistry_cache,
+            )
+
+            teams = ctx.get("team_by_id") or {}
+            for move in list((history or {}).get("moved_players") or []):
+                if str((move or {}).get("asset_type") or "") != "player":
+                    continue
+                pid = str((move or {}).get("asset_id") or "")
+                from_tid = str((move or {}).get("source_team_id") or "")
+                to_tid = str((move or {}).get("acquiring_team_id") or "")
+                if not pid or not from_tid or not to_tid or from_tid == to_tid:
+                    continue
+                former_team = teams.get(from_tid)
+                player_obj = None
+                for _tm in (teams.get(to_tid), former_team):
+                    if _tm is None:
+                        continue
+                    for _p in list(getattr(_tm, "roster", None) or []):
+                        if str(getattr(_p, "id", "") or getattr(_p, "player_id", "") or "") == pid:
+                            player_obj = _p
+                            break
+                    if player_obj is not None:
+                        break
+                if player_obj is not None and former_team is not None:
+                    handle_trade_chemistry_separation(player_obj, former_team)
+                if former_team is not None:
+                    invalidate_team_chemistry_cache(former_team)
+                if teams.get(to_tid) is not None:
+                    invalidate_team_chemistry_cache(teams.get(to_tid))
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         if exec_result and (not isinstance(exec_result, dict) or exec_result.get("ok", True)):
             from app.sim_engine.trades.clause_consent import consume_consents
 

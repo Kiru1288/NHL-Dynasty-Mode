@@ -1682,7 +1682,7 @@ def _goofy_awards(F: "sfe._Pass", g: Dict[str, Any]) -> None:
             out.append({"award": "Best Celly", "player_id": celly_pid, "player_name": pp["name"],
                         "why": f"{cel[celly_pid].get('celly')}, deployed {cel[celly_pid].get('n')} times"})
             _goofy_story(F.session, pid=celly_pid, name=pp["name"], tid=F.utid, kind="celly_of_year", heat=55,
-                         headline=f"Celly of the year: {pp['last']}", summary=f"{pp['name']}'s {cel[celly_pid].get('celly')} wins celly of the year.")
+                         headline=f"Celly of the year: {pp['last']}", summary=f"{pp['name']} wins celly of the year for {cel[celly_pid].get('celly')}.")
     if not out:
         return
     session = F.session

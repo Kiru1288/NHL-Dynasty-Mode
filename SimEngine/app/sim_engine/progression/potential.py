@@ -298,6 +298,77 @@ def write_player_potential99(player: Any, pot99: float) -> float:
     return pot99
 
 
+def nudge_shown_potential(
+    player: Any,
+    rng: Any,
+    *,
+    ovr_delta: float = 0.0,
+    winning: Optional[bool] = None,
+    production_gap: float = 0.0,
+) -> float:
+    """Move the number on the card. The hidden ceiling is left alone.
+
+    A checkpoint is usually a point either way. A strong stretch can be two.
+    One season cannot climb more than three or fall more than two.
+    """
+    import random
+
+    if player is None:
+        return 0.0
+    if not isinstance(rng, random.Random):
+        rng = random.Random()
+    pot = read_player_potential99(player)
+    if pot < 1.0:
+        return 0.0
+    raw_age = getattr(getattr(player, "identity", None), "age", None)
+    if raw_age is None:
+        raw_age = getattr(player, "age", None)
+    try:
+        age = int(raw_age) if raw_age is not None else 21
+    except (TypeError, ValueError):
+        age = 21
+    # Potential can rise only while the player is still young. From 28 it
+    # cannot sit above the overall on the card.
+    if age >= 28:
+        try:
+            from app.sim_engine.entities.player import player_current_ovr_01
+
+            ovr99 = float(player_current_ovr_01(player)) * 99.0
+        except Exception:
+            ovr99 = pot
+        if pot > ovr99 + 0.05:
+            write_player_potential99(player, ovr99)
+            try:
+                setattr(player, "_pot_checkpoint_moved", float(getattr(player, "_pot_checkpoint_moved", 0.0) or 0.0) + (ovr99 - pot))
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+            return float(ovr99 - pot)
+    moved = float(getattr(player, "_pot_checkpoint_moved", 0.0) or 0.0)
+    hot = ovr_delta >= 0.35 or production_gap >= 0.08 or winning is True
+    cold = ovr_delta <= -0.35 or production_gap <= -0.08 or winning is False
+    step = 0.0
+    if age >= 25:
+        hot = False
+    if hot and not cold:
+        step = 1.0 if rng.random() < 0.62 else 0.0
+        if step and rng.random() < 0.12 and (ovr_delta >= 0.8 or production_gap >= 0.16):
+            step = 2.0
+    elif cold and not hot:
+        step = -1.0 if rng.random() < 0.7 else 0.0
+    if moved + step > 3.0:
+        step = max(0.0, 3.0 - moved)
+    if moved + step < -2.0:
+        step = min(0.0, -2.0 - moved)
+    if abs(step) < 0.5:
+        return 0.0
+    write_player_potential99(player, pot + step)
+    try:
+        setattr(player, "_pot_checkpoint_moved", moved + step)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    return step
+
+
 def lift_potential_with_growth(player: Any, ovr_before_01: float, ovr_after_01: float) -> Optional[float]:
     """Potential leads. An overall gain is not evidence the ceiling moved.
 

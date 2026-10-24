@@ -258,7 +258,18 @@ def calder_history(session: Any, season_year: int, base: Optional[Dict[str, Any]
             by_season[str(s.get("season"))] = by_season.get(str(s.get("season")), 0) + _i(s.get("gp"))
         basis = "recorded NHL seasons"
         estimated = 0
-        if not bool(getattr(p, "real_nhl_import", False)):
+        real_import = bool(getattr(p, "real_nhl_import", False))
+        if not by_season and real_import:
+            imp = getattr(p, "real_nhl_import_stats", None) or {}
+            prior_gp = 0
+            if isinstance(imp, dict):
+                prior_gp = _i(imp.get("gp") or imp.get("gamesPlayed") or imp.get("games"))
+            if prior_gp > 0:
+                by_season["import-rating-season"] = prior_gp
+                basis = "imported NHL games (rating-year stats)"
+            else:
+                basis = "real NHL import; career seasons not loaded yet"
+        if not by_season and not real_import:
             pre_known = any(k < season_label(first) for k in by_season)
             in_prospect_pool = getattr(p, "_prospect_season_year", None) is not None
             if not pre_known and not in_prospect_pool:
@@ -267,6 +278,22 @@ def calder_history(session: Any, season_year: int, base: Optional[Dict[str, Any]
                 a0 = _age_on_sept15(p, first)
                 # Age 23 and under with no recorded NHL seasons are still rookies.
                 # Inventing a full 82-game career emptied the Calder ballot.
+                if a0 is not None and a0 <= 23:
+                    estimated = 0
+                elif dy > 0:
+                    estimated = max(0, first - dy - 3)
+                else:
+                    estimated = max(0, (a0 or 0) - 23)
+                if estimated > 0:
+                    by_season["pre-franchise-0"] = 30
+                    basis = f"estimated {estimated} NHL season(s) before the save began"
+        elif not by_season and real_import:
+            pre_known = any(k < season_label(first) for k in by_season)
+            in_prospect_pool = getattr(p, "_prospect_season_year", None) is not None
+            if not pre_known and not in_prospect_pool:
+                ident = getattr(p, "identity", None)
+                dy = _i(getattr(ident, "draft_year", 0))
+                a0 = _age_on_sept15(p, first)
                 if a0 is not None and a0 <= 23:
                     estimated = 0
                 elif dy > 0:

@@ -414,11 +414,13 @@ def validate_offer(player: Any, offer: Dict[str, Any], season_year: int) -> Dict
 
 
 def agent_wants(player: Any, legal: Dict[str, Any]) -> List[Dict[str, Any]]:
+    from services.draft_rights_engine import display_ovr_for_signing  # noqa: WPS433
+
     wants = []
     age = _age(player)
-    readiness = float(getattr(player, "nhl_readiness", None) or getattr(player, "overall", None) or 55)
+    skill = display_ovr_for_signing(player)
     wants.append({"id": "signing_bonus", "label": "Signing bonus", "priority": "high" if age <= 20 else "med"})
-    if readiness >= 68:
+    if skill >= 76:
         wants.append({"id": "nhl_opportunity", "label": "NHL opportunity", "priority": "high"})
     else:
         wants.append({"id": "ahl_role", "label": "Featured AHL role", "priority": "high"})
@@ -436,10 +438,12 @@ def evaluate_offer_acceptance(
     season_year: int,
     prior_rejects: int = 0,
 ) -> Dict[str, Any]:
+    from services.draft_rights_engine import display_ovr_for_signing  # noqa: WPS433
+
     legal = legal_elc_terms(player, season_year)
     age = _age(player)
     path = _path(player)
-    readiness = float(getattr(player, "nhl_readiness", None) or getattr(player, "overall", None) or 55)
+    skill = display_ovr_for_signing(player)
     relationship = float(getattr(player, "org_relationship", None) or 0.55)
     expiry = getattr(player, "rights_expiry_year", None)
     willingness = getattr(player, "willingness_to_sign", None)
@@ -486,13 +490,13 @@ def evaluate_offer_acceptance(
         concerns.append("depth-only promise")
 
     assign = str(offer.get("assignment_plan") or "")
-    if assign == "assign_ahl" and readiness < 62:
+    if assign == "assign_ahl" and skill < 72:
         score -= 0.08
         concerns.append("AHL assignment may be early")
-    if assign == "return_junior" and readiness >= 70:
+    if assign == "return_junior" and skill >= 76:
         score -= 0.05
         concerns.append("wants pro opportunity")
-    if assign in ("return_junior", "keep_college", "keep_europe") and readiness < 65:
+    if assign in ("return_junior", "keep_college", "keep_europe") and skill < 74:
         score += 0.04
         positives.append("assignment matches development stage")
 
@@ -506,7 +510,7 @@ def evaluate_offer_acceptance(
     if "NCAA" in path and age <= 21 and assign != "keep_college":
         score -= 0.15
         concerns.append("NCAA return remains attractive")
-    if ("EUROPE" in path) and readiness < 70 and assign != "keep_europe":
+    if ("EUROPE" in path) and skill < 76 and assign != "keep_europe":
         score -= 0.12
         concerns.append("European contract still in play")
 
@@ -514,10 +518,10 @@ def evaluate_offer_acceptance(
         score += 0.2
         positives.append("rights deadline pressure")
 
-    if readiness >= 72:
+    if skill >= 78:
         score += 0.14
         positives.append("NHL readiness supports turning pro")
-    elif readiness < 58:
+    elif skill < 70:
         score -= 0.1
         concerns.append("not yet ready for pro hockey")
 

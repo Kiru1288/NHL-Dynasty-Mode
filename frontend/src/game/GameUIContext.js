@@ -426,6 +426,9 @@ function mergeFranchisePayload(prev, incoming) {
       storyline_choices: incoming.storyline_choices ?? prior.storyline_choices,
       flags: incoming.flags ?? prior.flags,
     };
+    if (incoming.lines && typeof incoming.lines === "object") {
+      merged.lines = incoming.lines;
+    }
     return applyLeanProgressFields(merged, incoming);
   }
   const revisionChanged =
@@ -1243,7 +1246,7 @@ export function GameUIProvider({ children }) {
         const stopped = String(step?.stopped_reason || lastStep?.reason || "").toLowerCase();
         const completed = step?.bulk ? Number(step?.steps_completed || 0) : status === "ok" ? 1 : 0;
         const pending = (step?.pending_decisions || lastStep?.pending_decisions || [])[0];
-        const pausedForDesk = step?.bulk && stopped === "user_action";
+        const pausedForDesk = step?.bulk && (stopped === "user_action" || stopped === "trade_demand");
         const stalled =
           status === "blocked"
           || (step?.bulk && completed <= 0 && Boolean(stopped) && stopped !== "count" && stopped !== "user_stop");
@@ -1254,7 +1257,9 @@ export function GameUIProvider({ children }) {
               || step?.message
               || pending?.title
               || (pausedForDesk
-                ? "Sim paused. A player meeting, waiver, or press availability is waiting on the desk."
+                ? stopped === "trade_demand"
+                  ? "Sim stopped. A player on your team has demanded a trade."
+                  : "Sim paused. A player meeting, waiver, or press availability is waiting on the desk."
                 : "Sim stopped. Resolve the alert on the desk, then try again.")
             )
           );

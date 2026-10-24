@@ -2087,7 +2087,7 @@ def _offense_opportunity_weight(p: Any) -> float:
     pm = _rating_avg(p, PLAYMAKING_ATTRS)
     iq = _rating_avg(p, IQ_ATTRS)
     pos = _pos_str(p).upper()
-    pos_mult = 0.86 if pos == "D" else 1.0
+    pos_mult = 0.98 if pos == "D" else 1.0
     usage_mult = _player_role_usage_mult(p)
     base = (0.40 * off + 0.34 * pm + 0.26 * iq) / 99.0
     return max(0.04, (ovr ** 1.22) * (base ** 1.08) * usage_mult * pos_mult)

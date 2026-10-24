@@ -154,6 +154,26 @@ def _nhl_form(session: Any, p: Any) -> float:
     return max(-3.0, min(3.0, (ppg - exp) * (20.0 if is_d else 12.0))) * min(1.0, gp / 25.0)
 
 
+def _prospect_pool_callup_eligible(session: Any, p: Any, nhl: List[Any], tried: set) -> bool:
+    """Signed CHL/Europe pool players: big in-season jump or clear upgrade at a position."""
+    from app.sim_engine.trades.trade_asset import player_holds_nhl_spc  # noqa: WPS433
+    from services.contract_economy import _player_ovr  # noqa: WPS433
+
+    if not (_healthy(p) and player_holds_nhl_spc(p) and id(p) not in tried):
+        return False
+    if _season_jump(p) >= 4.0:
+        return True
+    b = _bucket(p)
+    same = [x for x in nhl if _bucket(x) == b]
+    ovr = _player_ovr(p)
+    if not same:
+        return ovr >= (72 if b == "F" else 74)
+    weakest = min(_value(session, x, nhl=True)[0] for x in same)
+    up_val, _ = _value(session, p, nhl=False)
+    margin = 1.0 if b == "F" else 1.5
+    return up_val >= weakest + margin
+
+
 def _value(session: Any, p: Any, *, nhl: bool) -> tuple:
     """(rating + form, reason) used to compare a call-up with the player he replaces."""
     from services.contract_economy import _player_ovr  # noqa: WPS433
@@ -243,10 +263,9 @@ def _team_moves(session: Any, team: Any, league: Any) -> int:
     while moves < MAX_MOVES_PER_TEAM + 2:
         nhl = [p for p in list(getattr(team, "roster", None) or []) if _healthy(p)]
         ahl = [p for p in list(getattr(team, "ahl_roster", None) or []) if _healthy(p) and player_holds_nhl_spc(p) and id(p) not in tried]
-        # Signed prospects playing junior/Europe whose rating has jumped this season.
         juniors = [
             p for p in list(getattr(team, "prospect_pool", None) or [])
-            if _healthy(p) and player_holds_nhl_spc(p) and id(p) not in tried and _season_jump(p) >= 4.0
+            if _prospect_pool_callup_eligible(session, p, nhl, tried)
         ]
         if not (ahl or juniors) or not nhl:
             return moves

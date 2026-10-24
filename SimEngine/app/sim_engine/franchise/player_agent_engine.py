@@ -300,6 +300,23 @@ def agent_crisis_initial_seconds(
     return max(120, min(360, seconds))
 
 
+def agent_crisis_initial_days(
+    *,
+    character: int,
+    agent: Dict[str, Any],
+    gm_rel: Dict[str, Any],
+    previous_demands: int = 0,
+) -> int:
+    """Sim-day crisis window (14–30 days) mapped from the legacy second budget."""
+    seconds = agent_crisis_initial_seconds(
+        character=character,
+        agent=agent,
+        gm_rel=gm_rel,
+        previous_demands=previous_demands,
+    )
+    return int(max(14, min(30, round(14 + (seconds - 120) * (16.0 / 240.0)))))
+
+
 def agent_leak_probability(agent: Dict[str, Any], *, crisis_stage: int, gm_rel: Dict[str, Any]) -> float:
     base = float(agent.get("leak_tendency", 0.3) or 0.3)
     trust = float(gm_rel.get("agent_gm_trust", 0.55) or 0.55)

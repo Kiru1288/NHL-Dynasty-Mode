@@ -1072,6 +1072,8 @@ import React, {
     MATCHUP: "matchup",
 
     TEAM_PROFILE: "team-profile",
+    FRANCHISE_IDENTITY: "franchise-identity",
+    LEGACY_HALL: "legacy-hall",
     FANBASE: "fanbase",
     MORALE: "morale",
     OWNERSHIP: "ownership",
@@ -1432,17 +1434,6 @@ import React, {
       enabled: true,
     },
     {
-      id: "legacy-wall",
-      label: "Legacy Wall",
-      eyebrow: "History",
-      description: "Awards, records, banners, and retired numbers.",
-      group: "future",
-      target: "legacy-wall",
-      type: "placeholder",
-      placeholder: PLACEHOLDER_COPY.legacyWall,
-      enabled: true,
-    },
-    {
       id: "arena-window",
       label: "Arena Window",
       eyebrow: "Game Day",
@@ -1551,18 +1542,17 @@ import React, {
       OFFICE_NAV_TARGETS.URGENT_DECISIONS
     );
     routes[OFFICE_NAV_TARGETS.STAFF_NOTES] = ph(PLACEHOLDER_COPY.decisionDesk, OFFICE_NAV_TARGETS.STAFF_NOTES);
-    routes[OFFICE_NAV_TARGETS.AWARDS] = screenRoute(SCREENS.STATS, { statsTab: "overview" });
-    routes[OFFICE_NAV_TARGETS.RECORDS] = ph(PLACEHOLDER_COPY.legacyWall, OFFICE_NAV_TARGETS.RECORDS);
-    routes[OFFICE_NAV_TARGETS.HISTORY] = ph(PLACEHOLDER_COPY.legacyWall, OFFICE_NAV_TARGETS.HISTORY);
-    routes[OFFICE_NAV_TARGETS.RETIRED_NUMBERS] = ph(
-      PLACEHOLDER_COPY.legacyWall,
-      OFFICE_NAV_TARGETS.RETIRED_NUMBERS
-    );
+    routes[OFFICE_NAV_TARGETS.AWARDS] = screenRoute(SCREENS.LEGACY_HALL);
+    routes[OFFICE_NAV_TARGETS.RECORDS] = screenRoute(SCREENS.LEGACY_HALL);
+    routes[OFFICE_NAV_TARGETS.HISTORY] = screenRoute(SCREENS.LEGACY_HALL);
+    routes[OFFICE_NAV_TARGETS.RETIRED_NUMBERS] = screenRoute(SCREENS.LEGACY_HALL);
+    routes[OFFICE_NAV_TARGETS.LEGACY_HALL] = screenRoute(SCREENS.LEGACY_HALL);
+    routes[OFFICE_NAV_TARGETS.FRANCHISE_IDENTITY] = screenRoute(SCREENS.FRANCHISE_IDENTITY);
     routes[OFFICE_NAV_TARGETS.GAME_PREVIEW] = ph(PLACEHOLDER_COPY.arenaWindow, OFFICE_NAV_TARGETS.GAME_PREVIEW);
     routes[OFFICE_NAV_TARGETS.BROADCAST] = ph(PLACEHOLDER_COPY.arenaWindow, OFFICE_NAV_TARGETS.BROADCAST);
     routes[OFFICE_NAV_TARGETS.MATCHUP] = ph(PLACEHOLDER_COPY.arenaWindow, OFFICE_NAV_TARGETS.MATCHUP);
     routes[OFFICE_NAV_TARGETS.SIM_GAME] = null;
-    routes[OFFICE_NAV_TARGETS.TEAM_PROFILE] = ph(PLACEHOLDER_COPY.cultureWall, OFFICE_NAV_TARGETS.TEAM_PROFILE);
+    routes[OFFICE_NAV_TARGETS.TEAM_PROFILE] = screenRoute(SCREENS.FRANCHISE_IDENTITY);
     routes[OFFICE_NAV_TARGETS.FANBASE] = ph(PLACEHOLDER_COPY.cultureWall, OFFICE_NAV_TARGETS.FANBASE);
     routes[OFFICE_NAV_TARGETS.OWNERSHIP] = ph(PLACEHOLDER_COPY.cultureWall, OFFICE_NAV_TARGETS.OWNERSHIP);
     routes[OFFICE_NAV_TARGETS.LEAGUE_CENTRAL] = screenRoute(SCREENS.LEAGUE_OPERATIONS);
@@ -1573,10 +1563,10 @@ import React, {
       OFFICE_NAV_TARGETS.ASSIGN_SCOUTS
     );
     routes["gm-phone"] = ph(PLACEHOLDER_COPY.gmPhone, "gm-phone");
-    routes["legacy-wall"] = ph(PLACEHOLDER_COPY.legacyWall, "legacy-wall");
+    routes["legacy-wall"] = screenRoute(SCREENS.LEGACY_HALL);
     routes["arena-window"] = ph(PLACEHOLDER_COPY.arenaWindow, "arena-window");
     routes["decision-desk"] = ph(PLACEHOLDER_COPY.decisionDesk, "decision-desk");
-    routes["culture-wall"] = ph(PLACEHOLDER_COPY.cultureWall, "culture-wall");
+    routes["culture-wall"] = screenRoute(SCREENS.FRANCHISE_IDENTITY);
 
     return routes;
   })();
@@ -1606,13 +1596,13 @@ import React, {
     [OFFICE_PANEL_IDS.STATS]: "stats-analytics",
     [OFFICE_PANEL_IDS.LINES]: "lines",
     [OFFICE_PANEL_IDS.NEWS]: "storylines",
-    [OFFICE_PANEL_IDS.AWARDS]: "stats-analytics",
+    [OFFICE_PANEL_IDS.AWARDS]: "legacy-hall",
     [OFFICE_PANEL_IDS.DRAFT]: "draft-war-room",
     [OFFICE_PANEL_IDS.DRAFT_CLASS]: "draft-class",
     [OFFICE_PANEL_IDS.ROSTER]: "roster",
     [OFFICE_PANEL_IDS.STANDINGS]: "standings",
     [OFFICE_PANEL_IDS.GAME_DAY]: "arena-window",
-    [OFFICE_PANEL_IDS.TEAM_IDENTITY]: "culture-wall",
+    [OFFICE_PANEL_IDS.TEAM_IDENTITY]: "franchise-identity",
     [OFFICE_PANEL_IDS.TASKS]: "decision-desk",
     [OFFICE_PANEL_IDS.LEAGUE_CENTRAL]: "league-central",
   };
@@ -1744,15 +1734,15 @@ import React, {
     },
   
     [OFFICE_PANEL_IDS.AWARDS]: {
-      title: "Legacy Wall",
-      eyebrow: "Trophy Shelf",
+      title: "Legacy Hall",
+      eyebrow: "Archive",
       description:
-        "View awards, records, team history, retired numbers, banners, and legacy moments.",
+        "Champions, careers, records, drafts, trades, and eras of this save.",
       actions: [
-        ["Awards", OFFICE_NAV_TARGETS.AWARDS],
-        ["Records", OFFICE_NAV_TARGETS.RECORDS],
-        ["Team History", OFFICE_NAV_TARGETS.HISTORY],
-        ["Retired Numbers", OFFICE_NAV_TARGETS.RETIRED_NUMBERS],
+        ["Open Legacy Hall", OFFICE_NAV_TARGETS.LEGACY_HALL],
+        ["League History", OFFICE_NAV_TARGETS.HISTORY],
+        ["Player Legacy", OFFICE_NAV_TARGETS.RECORDS],
+        ["Franchise Identity", OFFICE_NAV_TARGETS.FRANCHISE_IDENTITY],
       ],
     },
   
@@ -1822,15 +1812,15 @@ import React, {
     },
   
     [OFFICE_PANEL_IDS.TEAM_IDENTITY]: {
-      title: "Franchise Culture Wall",
-      eyebrow: "Logo Wall",
+      title: "Franchise Identity",
+      eyebrow: "Branding Studio",
       description:
-        "Review team branding, culture, fanbase, morale, ownership direction, and long-term identity.",
+        "Branding studio, uniforms, crest, captaincy, philosophy, and club presentation.",
       actions: [
-        ["Team Profile", OFFICE_NAV_TARGETS.TEAM_PROFILE],
-        ["Fanbase", OFFICE_NAV_TARGETS.FANBASE],
+        ["Open Identity HQ", OFFICE_NAV_TARGETS.FRANCHISE_IDENTITY],
+        ["Legacy Hall", OFFICE_NAV_TARGETS.LEGACY_HALL],
         ["Morale", OFFICE_NAV_TARGETS.MORALE],
-        ["Ownership", OFFICE_NAV_TARGETS.OWNERSHIP],
+        ["Captaincy & Crest", OFFICE_NAV_TARGETS.TEAM_PROFILE],
       ],
     },
   
@@ -5686,7 +5676,7 @@ import React, {
         hovered={hovered}
         prefersReducedMotion={prefersReducedMotion}
         kicker="Honours"
-        name="Legacy Wall"
+        name="Legacy Hall"
         accent="#e6c878"
         mount="plinth"
         mountAccent="#c9a468"

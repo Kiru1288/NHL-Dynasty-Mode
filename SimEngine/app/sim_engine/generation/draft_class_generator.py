@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 """
+TEST / RUNNER ONLY — not used by live franchise draft boards.
+
 Draft class generator (prospects) using the full human generation system.
 
 Outputs a list of dict "player profiles" with structured pipeline tiers so each class
@@ -421,7 +423,8 @@ def generate_draft_class(
     pipeline_boost_elite: int = 0,
 ) -> List[Dict[str, Any]]:
     """
-    Draft class of prospects (age 18–20). Structured pipeline tiers per class (weak/normal/strong/legendary).
+    Draft class of prospects. First-time players are 17 or 18 at the draft.
+    Older players reach the board only as undrafted re-entries.
     Ensures exactly goalie_count goalies; rest are skaters (C/W/D).
     """
     if goalie_count > size:
@@ -430,7 +433,7 @@ def generate_draft_class(
     slots, qual = _build_skater_pipeline_slots(rng, sk, elite_boost=max(0, int(pipeline_boost_elite)))
     players: List[Dict[str, Any]] = []
     for i in range(goalie_count):
-        age = rng.choices([18, 19, 20], weights=[0.64, 0.28, 0.08], k=1)[0]
+        age = rng.choices([17, 18], weights=[0.20, 0.80], k=1)[0]
         g_tier = rng.choices(["elite", "top", "middle", "middle"], weights=[0.18, 0.28, 0.42, 0.12], k=1)[0]
         prof = generate_player_profile_forced_position(
             rng,
@@ -442,7 +445,7 @@ def generate_draft_class(
         prof["_draft_class_quality"] = qual
         players.append(prof)
     for i, slot in enumerate(slots):
-        age = rng.choices([18, 19, 20], weights=[0.64, 0.28, 0.08], k=1)[0]
+        age = rng.choices([17, 18], weights=[0.20, 0.80], k=1)[0]
         pos = rng.choices(["C", "W", "D"], weights=[0.26, 0.34, 0.40], k=1)[0]
         prof = generate_player_profile_for_pipeline_slot(
             rng,

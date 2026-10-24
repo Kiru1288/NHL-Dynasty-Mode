@@ -53,26 +53,70 @@ _DEFAULT_PROFILE = {
 
 _ARCHETYPE_PLAYSTYLE_MAP = {
     "playmaker": "playmaker",
+    "playmaker_f": "playmaker",
+    "playmaker_w": "playmaker",
+    "playmaker_c": "playmaker",
     "sniper": "sniper",
+    "sniper_f": "sniper",
+    "sniper_w": "sniper",
     "power_forward": "power_forward",
+    "power_forward_f": "power_forward",
     "power": "power_forward",
     "two_way": "two_way",
     "two_way_f": "two_way",
+    "two_way_forward": "two_way",
+    "two_way_w": "two_way",
     "two_way_d": "two_way",
+    "two_way_defenseman": "two_way",
     "grinder": "grinder",
+    "grinder_f": "grinder",
     "enforcer": "grinder",
+    "enforcer_f": "grinder",
+    "scoring_forward": "sniper",
+    "scoring_w": "sniper",
     "puck_mover": "puck_mover",
+    "puck_moving_d": "puck_mover",
+    "puck_moving_defenseman": "puck_mover",
+    "mobile_defenseman": "puck_mover",
     "shutdown": "shutdown",
+    "shutdown_d": "shutdown",
     "stay_at_home": "defensive_defenseman",
+    "stay_at_home_d": "defensive_defenseman",
     "defensive_d": "defensive_defenseman",
     "defensive_defenseman": "defensive_defenseman",
     "offensive_d": "offensive_defenseman",
     "offensive_defenseman": "offensive_defenseman",
     "hybrid_g": "hybrid_goalie",
     "hybrid_goalie": "hybrid_goalie",
+    "hybrid": "hybrid_goalie",
     "butterfly_g": "butterfly_goalie",
     "butterfly_goalie": "butterfly_goalie",
+    "balanced_g": "balanced",
+    "balanced_f": "two_way",
+    "balanced": "balanced",
 }
+
+# Coach system string (normalized) -> (favored playstyles, penalized playstyles)
+_COACH_SYSTEM_FIT: Dict[str, Tuple[Tuple[str, ...], Tuple[str, ...]]] = {
+    "balanced": (("two_way", "playmaker", "sniper", "shutdown", "puck_mover"), ()),
+    "defense_first": (("shutdown", "defensive_defenseman", "grinder", "two_way"), ("offensive_defenseman",)),
+    "defensive": (("shutdown", "defensive_defenseman", "grinder", "two_way"), ("offensive_defenseman", "sniper")),
+    "shutdown": (("shutdown", "defensive_defenseman", "grinder"), ("offensive_defenseman", "playmaker")),
+    "offense_first": (("sniper", "playmaker", "offensive_defenseman", "power_forward"), ("grinder",)),
+    "offensive": (("sniper", "playmaker", "offensive_defenseman", "power_forward"), ("grinder",)),
+    "attack": (("sniper", "playmaker", "offensive_defenseman"), ("shutdown",)),
+    "run_and_gun": (("sniper", "playmaker", "offensive_defenseman"), ("grinder", "shutdown")),
+    "young_fast": (("sniper", "playmaker", "puck_mover", "two_way"), ("grinder",)),
+    "speed": (("sniper", "playmaker", "puck_mover"), ("grinder", "power_forward")),
+    "puck_possession": (("playmaker", "puck_mover", "two_way"), ("enforcer",)),
+    "forecheck": (("grinder", "power_forward", "two_way"), ("playmaker",)),
+    "trap": (("shutdown", "defensive_defenseman", "grinder"), ("offensive_defenseman", "sniper")),
+}
+
+_FAMILIARITY_GAME_BASE = 0.42
+_FAMILIARITY_HEAVY_MINUTES_MULT = 1.55
+_FAMILIARITY_WEEKLY_DECAY = 0.35
+_EGO_TENSION_EACH_THRESHOLD = 80.0
 
 _PERSONALITY_SYNERGY_POINTS = {
     ("leader", "young_skilled"): 10,
@@ -89,22 +133,25 @@ _PERSONALITY_SYNERGY_POINTS = {
 }
 
 _PLAYSTYLE_SYNERGY_POINTS = {
-    ("playmaker", "sniper"): 14,
-    ("sniper", "playmaker"): 14,
-    ("playmaker", "power_forward"): 6,
-    ("power_forward", "playmaker"): 6,
-    ("sniper", "power_forward"): 5,
-    ("power_forward", "sniper"): 5,
-    ("puck_mover", "shutdown"): 12,
-    ("shutdown", "puck_mover"): 12,
-    ("offensive_defenseman", "defensive_defenseman"): 10,
-    ("defensive_defenseman", "offensive_defenseman"): 10,
-    ("two_way", "sniper"): 4,
-    ("two_way", "playmaker"): 4,
-    ("sniper", "sniper"): -3,
-    ("playmaker", "playmaker"): -2,
-    ("offensive_defenseman", "offensive_defenseman"): -4,
-    ("puck_mover", "puck_mover"): -3,
+    ("playmaker", "sniper"): 18,
+    ("sniper", "playmaker"): 18,
+    ("playmaker", "power_forward"): 9,
+    ("power_forward", "playmaker"): 9,
+    ("sniper", "power_forward"): 7,
+    ("power_forward", "sniper"): 7,
+    ("puck_mover", "shutdown"): 15,
+    ("shutdown", "puck_mover"): 15,
+    ("offensive_defenseman", "defensive_defenseman"): 14,
+    ("defensive_defenseman", "offensive_defenseman"): 14,
+    ("two_way", "sniper"): 6,
+    ("two_way", "playmaker"): 6,
+    ("two_way", "power_forward"): 5,
+    ("grinder", "sniper"): 5,
+    ("grinder", "playmaker"): 4,
+    ("sniper", "sniper"): -5,
+    ("playmaker", "playmaker"): -3,
+    ("offensive_defenseman", "offensive_defenseman"): -6,
+    ("puck_mover", "puck_mover"): -4,
 }
 
 
@@ -112,16 +159,265 @@ def _chemistry_profile_is_materialized(raw: Any) -> bool:
     return isinstance(raw, dict) and raw.get("_materialized") is True
 
 
+def _normalize_arch_key(raw: Any) -> str:
+    return str(raw or "").lower().replace(" ", "_").replace("-", "_")
+
+
+def resolve_playstyle_from_player(player: Any) -> str:
+    """Authoritative playstyle for chemistry from archetype, player_type, and dossier playstyle."""
+    ps = str(getattr(player, "playstyle", None) or getattr(player, "player_type", "") or "").lower().replace(" ", "_").replace("-", "_")
+    if ps in PLAYSTYLES:
+        return ps
+    if ps in _ARCHETYPE_PLAYSTYLE_MAP:
+        return _ARCHETYPE_PLAYSTYLE_MAP[ps]
+    for key in ("archetype", "_generated_profile", "player_type"):
+        arch = _normalize_arch_key(getattr(player, key, ""))
+        if arch in _ARCHETYPE_PLAYSTYLE_MAP:
+            return _ARCHETYPE_PLAYSTYLE_MAP[arch]
+        for frag, mapped in _ARCHETYPE_PLAYSTYLE_MAP.items():
+            if frag and frag in arch:
+                return mapped
+    prof = getattr(player, "chemistry_profile", None)
+    if isinstance(prof, dict):
+        cur = str(prof.get("playstyle") or "")
+        if cur in PLAYSTYLES and cur not in ("", "balanced", "two_way"):
+            return cur
+    inferred = _inferred_playstyle_cached(player)
+    return inferred if inferred in PLAYSTYLES else "two_way"
+
+
+def sync_chemistry_playstyle_from_player(player: Any) -> bool:
+    """Refresh stored chemistry playstyle when archetype/ratings identity changes."""
+    if player is None:
+        return False
+    want = resolve_playstyle_from_player(player)
+    prof = getattr(player, "chemistry_profile", None)
+    if not isinstance(prof, dict):
+        return False
+    cur = str(prof.get("playstyle") or "")
+    if cur == want:
+        return False
+    prof = dict(prof)
+    prof["playstyle"] = want
+    prof["_materialized"] = True
+    setattr(player, "chemistry_profile", prof)
+    try:
+        player._chem_profile_memo = None
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    return True
+
+
 def _chemistry_profile_is_stub(player: Any, raw: Any) -> bool:
     if not isinstance(raw, dict) or not raw:
         return True
     if raw.get("_materialized") is not True:
         return True
+    want = resolve_playstyle_from_player(player)
     current = str(raw.get("playstyle") or "")
-    # Only a generic stored playstyle can be a stub; skip the (seeded) inference otherwise.
+    if current in ("two_way", "balanced", "") and want not in ("two_way", "balanced", ""):
+        return True
     if current not in ("two_way", "balanced", ""):
         return False
     return _inferred_playstyle_cached(player) in _DISTINCTIVE_PLAYSTYLES
+
+
+def invalidate_team_chemistry_cache(team: Any) -> None:
+    try:
+        setattr(team, "_chemistry_cache", None)
+        setattr(team, "_unit_chem_cache", {})
+        setattr(team, "_chemistry_room_sig", "")
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+
+
+def bump_team_familiarity_version(team: Any) -> None:
+    try:
+        v = int(getattr(team, "_chemistry_fam_version", 0) or 0) + 1
+        setattr(team, "_chemistry_fam_version", v)
+        setattr(team, "_unit_chem_cache", {})
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+
+
+def _roster_signature(team: Any) -> str:
+    ids = sorted(_player_id(p) for p in _team_players(team) if _player_id(p))
+    return "|".join(ids)
+
+
+def _bump_pair_familiarity(a: Any, b: Any, delta: float) -> None:
+    ida, idb = _player_id(a), _player_id(b)
+    if not ida or not idb:
+        return
+    ra = dict(getattr(a, "chemistry_relationships", None) or {})
+    rb = dict(getattr(b, "chemistry_relationships", None) or {})
+    ra[idb] = clamp(_to_num(ra.get(idb), 50.0) + delta, 0.0, 100.0)
+    rb[ida] = clamp(_to_num(rb.get(ida), 50.0) + delta, 0.0, 100.0)
+    setattr(a, "chemistry_relationships", ra)
+    setattr(b, "chemistry_relationships", rb)
+
+
+def apply_post_game_familiarity(team: Any, rng: Optional[random.Random] = None) -> int:
+    """After each game, linemates who shared ice build familiarity (TOI-weighted)."""
+    rng = rng if isinstance(rng, random.Random) else random.Random()
+    updated = 0
+    roster = _team_players(team)
+    if not roster:
+        return 0
+
+    def _toi_weight(p: Any) -> float:
+        sec = float(getattr(p, "toi_sec", 0) or getattr(p, "_gm_segment_toi_sec", 0) or 0)
+        if sec <= 0:
+            share = float(getattr(p, "_gm_toi_share", 0) or 0)
+            sec = share * 1200.0 if share > 0 else 600.0
+        return clamp(0.55 + (sec / 1140.0) * 0.9, 0.55, 1.55)
+
+    fwd_groups: Dict[int, List[Any]] = {}
+    def_groups: Dict[int, List[Any]] = {}
+    for p in roster:
+        pos = _player_position(p)
+        if pos == "G":
+            continue
+        if pos in ("D", "LD", "RD"):
+            idx = getattr(p, "_gm_game_pair_idx", None)
+            if idx is None:
+                idx = getattr(p, "_deployed_pair_rank", None)
+            if idx is not None:
+                def_groups.setdefault(int(idx), []).append(p)
+        else:
+            idx = getattr(p, "_gm_game_line_idx", None)
+            if idx is None:
+                idx = getattr(p, "_deployed_line_rank", None)
+            if idx is not None:
+                fwd_groups.setdefault(int(idx), []).append(p)
+
+    for group in list(fwd_groups.values()) + list(def_groups.values()):
+        if len(group) < 2:
+            continue
+        unit_mult = sum(_toi_weight(p) for p in group) / len(group)
+        delta = _FAMILIARITY_GAME_BASE * unit_mult + rng.uniform(-0.05, 0.08)
+        for i in range(len(group)):
+            for j in range(i + 1, len(group)):
+                _bump_pair_familiarity(group[i], group[j], delta)
+                updated += 2
+    if updated:
+        bump_team_familiarity_version(team)
+        invalidate_team_chemistry_cache(team)
+    return updated
+
+
+def decay_familiarity_on_trade(player: Any, former_teammate_ids: List[str]) -> None:
+    """Slow fade when separated; remove direct link when traded away."""
+    rel = dict(getattr(player, "chemistry_relationships", None) or {})
+    for tid in former_teammate_ids:
+        if tid in rel:
+            rel[tid] = clamp(_to_num(rel.get(tid), 50.0) - 8.0, 0.0, 100.0)
+            if rel[tid] < 12.0:
+                rel.pop(tid, None)
+    setattr(player, "chemistry_relationships", rel)
+
+
+def _current_teammate_units(team: Any, session: Optional[Any] = None) -> Dict[str, int]:
+    """Map player id -> unit id (line or pair index) for current projected deployment."""
+    projected = _project_lines_for_team(team, session=session)
+    out: Dict[str, int] = {}
+    for li, group in enumerate(projected.get("forward_lines") or []):
+        for p in group:
+            pid = _player_id(p)
+            if pid:
+                out[pid] = int(li)
+    for pi, group in enumerate(projected.get("defense_pairs") or []):
+        for p in group:
+            pid = _player_id(p)
+            if pid:
+                out[pid] = 100 + int(pi)
+    return out
+
+
+def apply_familiarity_apart_decay(team: Any, session: Optional[Any] = None) -> int:
+    """Decay familiarity only between teammates no longer on the same line/pair."""
+    roster = _team_players(team)
+    units = _current_teammate_units(team, session=session)
+    roster_ids = {_player_id(p) for p in roster}
+    touched = 0
+    for p in roster:
+        pid = _player_id(p)
+        rel = dict(getattr(p, "chemistry_relationships", None) or {})
+        if not rel:
+            continue
+        my_unit = units.get(pid)
+        for tid, v in list(rel.items()):
+            if str(tid).startswith("_") or tid not in roster_ids:
+                continue
+            if my_unit is not None and units.get(tid) == my_unit:
+                continue
+            rel[tid] = clamp(_to_num(v, 50.0) - _FAMILIARITY_WEEKLY_DECAY, 0.0, 100.0)
+            if rel[tid] < 8.0:
+                rel.pop(tid, None)
+        setattr(p, "chemistry_relationships", rel)
+        touched += 1
+    if touched:
+        bump_team_familiarity_version(team)
+        invalidate_team_chemistry_cache(team)
+    return touched
+
+
+def handle_trade_chemistry_separation(player: Any, former_team: Any) -> None:
+    """Fade pair familiarity when a player leaves the organization."""
+    if player is None or former_team is None:
+        return
+    pid = _player_id(player)
+    former_ids = [_player_id(p) for p in _team_players(former_team) if _player_id(p) and _player_id(p) != pid]
+    decay_familiarity_on_trade(player, former_ids)
+    for tm in _team_players(former_team):
+        tid = _player_id(tm)
+        if not tid or tid == pid:
+            continue
+        rel = dict(getattr(tm, "chemistry_relationships", None) or {})
+        if pid not in rel:
+            continue
+        rel[pid] = clamp(_to_num(rel.get(pid), 50.0) - 8.0, 0.0, 100.0)
+        if rel[pid] < 12.0:
+            rel.pop(pid, None)
+        setattr(tm, "chemistry_relationships", rel)
+    bump_team_familiarity_version(former_team)
+    invalidate_team_chemistry_cache(former_team)
+
+
+def _deployed_unit_signature(team: Any) -> str:
+    parts: List[str] = []
+    for p in _team_players(team):
+        parts.append(
+            f"{_player_id(p)}:{getattr(p, '_deployed_line_rank', '')}:{getattr(p, '_deployed_pair_rank', '')}"
+        )
+    return "|".join(sorted(parts))
+
+
+def get_cached_unit_chemistry_score(
+    team: Any,
+    unit_kind: str,
+    players: List[Any],
+    calc_fn: Any,
+    context: Optional[Dict[str, Any]] = None,
+) -> float:
+    ids = tuple(sorted(_player_id(p) for p in players if _player_id(p)))
+    if len(ids) < 2:
+        return 55.0
+    fam_ver = int(getattr(team, "_chemistry_fam_version", 0) or 0)
+    deploy_sig = _deployed_unit_signature(team)
+    key = (str(unit_kind), ids, fam_ver, deploy_sig)
+    cache = getattr(team, "_unit_chem_cache", None)
+    if not isinstance(cache, dict):
+        cache = {}
+        setattr(team, "_unit_chem_cache", cache)
+    hit = cache.get(key)
+    if hit is not None:
+        return float(hit)
+    ctx = dict(context or {})
+    ctx["team"] = team
+    val = float(calc_fn(players, context=ctx).get("chemistry", 55))
+    cache[key] = val
+    return val
 
 
 _DISTINCTIVE_PLAYSTYLES = frozenset(
@@ -419,6 +715,7 @@ def ensure_player_chemistry_profile(player: Any, rng: Optional[random.Random] = 
         return dict(_DEFAULT_PROFILE)
     raw_prof = getattr(player, "chemistry_profile", None)
     if not _chemistry_profile_is_stub(player, raw_prof):
+        sync_chemistry_playstyle_from_player(player)
         existing = get_player_chemistry_profile(player)
         if getattr(player, "chemistry_relationships", None) is None:
             setattr(player, "chemistry_relationships", {})
@@ -448,7 +745,7 @@ def ensure_player_chemistry_profile(player: Any, rng: Optional[random.Random] = 
 
     prof = {
         "personality": _infer_personality(player, rng),
-        "playstyle": _infer_playstyle(player, rng),
+        "playstyle": resolve_playstyle_from_player(player),
         "leadership": leadership,
         "ego": ego,
         "work_ethic": work_ethic,
@@ -470,9 +767,14 @@ def ensure_player_chemistry_profile(player: Any, rng: Optional[random.Random] = 
     return prof
 
 
-def personality_compatibility(player_a: Any, player_b: Any) -> float:
-    pa = ensure_player_chemistry_profile(player_a)
-    pb = ensure_player_chemistry_profile(player_b)
+def personality_compatibility(
+    player_a: Any,
+    player_b: Any,
+    profile_a: Optional[Dict[str, Any]] = None,
+    profile_b: Optional[Dict[str, Any]] = None,
+) -> float:
+    pa = profile_a if profile_a is not None else ensure_player_chemistry_profile(player_a)
+    pb = profile_b if profile_b is not None else ensure_player_chemistry_profile(player_b)
     comp = 0.58
     combos = {
         ("leader", "young_skilled"): 0.16,
@@ -489,9 +791,14 @@ def personality_compatibility(player_a: Any, player_b: Any) -> float:
     return clamp(comp, 0.0, 1.0)
 
 
-def playstyle_compatibility(player_a: Any, player_b: Any) -> float:
-    sa = ensure_player_chemistry_profile(player_a).get("playstyle", "balanced")
-    sb = ensure_player_chemistry_profile(player_b).get("playstyle", "balanced")
+def playstyle_compatibility(
+    player_a: Any,
+    player_b: Any,
+    profile_a: Optional[Dict[str, Any]] = None,
+    profile_b: Optional[Dict[str, Any]] = None,
+) -> float:
+    sa = (profile_a or ensure_player_chemistry_profile(player_a)).get("playstyle", "balanced")
+    sb = (profile_b or ensure_player_chemistry_profile(player_b)).get("playstyle", "balanced")
     if sa == sb:
         return 0.62
     bonuses = {
@@ -540,22 +847,73 @@ def position_fit_score(player: Any, slot: str = "") -> float:
     return 70.0
 
 
-def coach_system_fit_score(player: Any, team: Any = None) -> float:
-    prof = ensure_player_chemistry_profile(player)
+def _normalize_coach_system_key(raw: Any) -> str:
+    s = str(raw or "").lower().replace(" ", "_").replace("-", "_")
+    if not s:
+        return "balanced"
+    for key in _COACH_SYSTEM_FIT:
+        if key in s:
+            return key
+    if "defense" in s or "shutdown" in s or "trap" in s:
+        return "defensive"
+    if "offense" in s or "attack" in s or "gun" in s:
+        return "offensive"
+    if "young" in s or "fast" in s or "speed" in s:
+        return "young_fast"
+    if "possession" in s or "cycle" in s:
+        return "puck_possession"
+    if "forecheck" in s or "pressure" in s:
+        return "forecheck"
+    return "balanced"
+
+
+def coach_system_fit_score(
+    player: Any,
+    team: Any = None,
+    profile: Optional[Dict[str, Any]] = None,
+) -> float:
+    prof = profile if profile is not None else ensure_player_chemistry_profile(player)
     buy_in = _to_num(prof.get("defensive_buy_in", 50), 50.0)
     coachability = _to_num(prof.get("coachability", 50), 50.0)
     adaptability = _to_num(prof.get("adaptability", 50), 50.0)
-    psych = safe_get_psych(player)
     coach = getattr(team, "coach", None) if team is not None else None
-    style = str(getattr(coach, "system", None) or getattr(coach, "style", None) or "").lower()
+    style_raw = getattr(coach, "system", None) or getattr(coach, "style", None) or getattr(team, "system", None)
+    sys_key = _normalize_coach_system_key(style_raw)
+    favored, penalized = _COACH_SYSTEM_FIT.get(sys_key, _COACH_SYSTEM_FIT["balanced"])
     playstyle = str(prof.get("playstyle", "balanced"))
     bonus = 0.0
-    if "defense" in style or "shutdown" in style:
-        bonus += 6.0 if playstyle in ("shutdown", "two_way", "defensive_defenseman", "grinder") else -3.0
-    elif "offense" in style or "attack" in style:
-        bonus += 6.0 if playstyle in ("sniper", "playmaker", "offensive_defenseman", "puck_mover") else -2.0
-    score = 0.34 * buy_in + 0.28 * coachability + 0.22 * adaptability + 0.16 * (psych["role_satisfaction"] * 100.0) + bonus
+    if playstyle in favored:
+        bonus += 10.0
+    if playstyle in penalized:
+        bonus -= 7.0
+    score = 0.40 * buy_in + 0.32 * coachability + 0.28 * adaptability + bonus
     return clamp(score, 0.0, 100.0)
+
+
+def _played_unit_index(player: Any) -> Optional[float]:
+    """0-based sheet rank, or the last game's line when no sheet has been saved.
+
+    Defence reads ``_deployed_pair_rank``. A stored 0 is the top unit, not a missing value.
+    """
+    pos = str(
+        getattr(getattr(getattr(player, "identity", None), "position", None), "value", None)
+        or getattr(getattr(player, "identity", None), "position", None)
+        or getattr(player, "position", "")
+        or ""
+    ).upper()
+    keys = ("_deployed_pair_rank", "_gm_game_pair_idx") if pos in ("D", "LD", "RD", "DEF", "DEFENSE") else (
+        "_deployed_line_rank",
+        "_gm_game_line_idx",
+    )
+    for key in keys:
+        raw = getattr(player, key, None)
+        if raw is None:
+            continue
+        try:
+            return float(int(raw))
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 def usage_satisfaction_score(player: Any) -> float:
@@ -563,21 +921,18 @@ def usage_satisfaction_score(player: Any) -> float:
     role = psych["role_satisfaction"] * 100.0
     conf = psych["confidence"] * 100.0
     morale = psych["morale"] * 100.0
-    deployed = getattr(player, "_gm_game_line_idx", None)
-    if deployed is None:
-        deployed = getattr(player, "_deployed_line_rank", None)
-    expect = 1.5
-    try:
-        ovr_f = getattr(player, "ovr", None)
-        ov = float(ovr_f() if callable(ovr_f) else (ovr_f or 0.7))
-        if ov > 1.5:
-            ov = ov / 99.0
-        expect = 0.6 if ov >= 0.86 else 1.4 if ov >= 0.80 else 2.2 if ov >= 0.74 else 3.0
-    except Exception:
-        _swallowed_log.debug("suppressed exception", exc_info=True)
-    if deployed is not None:
-        gap = abs(float(deployed) - float(expect))
-        role = clamp(role - gap * 8.0, 0.0, 100.0)
+    deployed = _played_unit_index(player)
+    expect = getattr(player, "_deserved_line_idx", None)
+    if deployed is not None and expect is not None:
+        try:
+            gap = abs(float(deployed) - float(expect))
+            streak = int(getattr(player, "_line_gap_streak", 0) or 0)
+        except (TypeError, ValueError):
+            gap, streak = 0.0, 0
+        # One line for a game or two is a coach's choice. Two lines, or one line
+        # held for three games, is the complaint.
+        if gap >= 2.0 or (gap >= 0.99 and streak >= 3):
+            role = clamp(role - gap * 8.0, 0.0, 100.0)
     return clamp(0.45 * role + 0.30 * morale + 0.25 * conf, 0.0, 100.0)
 
 
@@ -619,38 +974,40 @@ def calculate_pair_chemistry(player_a: Any, player_b: Any, context: Optional[Dic
         fam_count += 1
     familiarity = familiarity / fam_count if fam_count else 50.0
 
-    p_comp = personality_compatibility(player_a, player_b)
-    s_comp = playstyle_compatibility(player_a, player_b)
+    p_comp = personality_compatibility(player_a, player_b, profile_a=pa, profile_b=pb)
+    s_comp = playstyle_compatibility(player_a, player_b, profile_a=pa, profile_b=pb)
     mood = (psych_a["morale"] + psych_b["morale"] + psych_a["confidence"] + psych_b["confidence"]) / 4.0
-    tension_pen = max(0.0, (pa["ego"] + pb["ego"] - 120.0) / 220.0)
+    ego_a = _to_num(pa.get("ego"), 50.0)
+    ego_b = _to_num(pb.get("ego"), 50.0)
+    tension_pen = max(0.0, (ego_a + ego_b - 120.0) / 220.0)
     team = context.get("team")
     pos_fit = (
         position_fit_score(player_a, str(context.get("slot_a") or ""))
         + position_fit_score(player_b, str(context.get("slot_b") or ""))
     ) / 2.0
-    coach_fit = (coach_system_fit_score(player_a, team) + coach_system_fit_score(player_b, team)) / 2.0
+    coach_fit = (
+        coach_system_fit_score(player_a, team, profile=pa)
+        + coach_system_fit_score(player_b, team, profile=pb)
+    ) / 2.0
     usage = (usage_satisfaction_score(player_a) + usage_satisfaction_score(player_b)) / 2.0
-    role_balance = clamp(100.0 - abs(_to_num(pa.get("ego"), 50) - _to_num(pb.get("ego"), 50)) * 0.55, 0.0, 100.0)
+    role_balance = clamp(100.0 - abs(ego_a - ego_b) * 0.55, 0.0, 100.0)
     morale = mood * 100.0
 
-    # Chemistry is a property of the pairing, not of how last night went. Mood and
-    # usage satisfaction are deliberately minor: two players who fit still fit after
-    # a loss, and a score that swings game to game is unreadable as a lineup signal.
+    # Fit-only blend: morale and usage are reported in scheme_fit but not in the score.
     score01 = (
-        0.26 * p_comp
-        + 0.25 * s_comp
-        + 0.05 * (mood)
-        + 0.14 * (familiarity / 100.0)
+        0.28 * p_comp
+        + 0.27 * s_comp
+        + 0.15 * (familiarity / 100.0)
         + 0.14 * (pos_fit / 100.0)
         + 0.10 * (coach_fit / 100.0)
-        + 0.03 * (usage / 100.0)
         + 0.06 * (role_balance / 100.0)
-        - 0.10 * tension_pen
+        - 0.08 * tension_pen
     )
     synergy_bonus = _playstyle_synergy_points(pa.get("playstyle"), pb.get("playstyle"))
     synergy_bonus += _personality_synergy_points(pa.get("personality"), pb.get("personality"))
-    if _to_num(pa.get("ego"), 50.0) > 72.0 and _to_num(pb.get("ego"), 50.0) > 72.0:
-        synergy_bonus -= 12.0
+    if ego_a > _EGO_TENSION_EACH_THRESHOLD and ego_b > _EGO_TENSION_EACH_THRESHOLD:
+        over = min(ego_a, ego_b) - _EGO_TENSION_EACH_THRESHOLD
+        synergy_bonus -= min(14.0, 4.0 + over * 0.35)
     # Time together is upside, not a prerequisite. An untested pairing of two players
     # who fit reads as promising; only a genuinely long, unproductive history drags.
     if familiarity >= 80.0:
@@ -914,6 +1271,11 @@ def _team_players(team: Any) -> List[Any]:
 
 
 def calculate_team_room_chemistry(team: Any, session: Optional[Any] = None) -> Dict[str, Any]:
+    sig = _roster_signature(team)
+    cached_sig = str(getattr(team, "_chemistry_room_sig", "") or "")
+    cached = getattr(team, "_chemistry_cache", None)
+    if isinstance(cached, dict) and cached_sig == sig and cached:
+        return dict(cached)
     players = _team_players(team)
     if not players:
         return {
@@ -964,6 +1326,11 @@ def calculate_team_room_chemistry(team: Any, session: Optional[Any] = None) -> D
         "chaos_resistance": int(round(clamp(chaos_res, 0, 100))),
     }
     out["label"] = chemistry_label(out["overall"])
+    try:
+        setattr(team, "_chemistry_cache", dict(out))
+        setattr(team, "_chemistry_room_sig", sig)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return out
 
 
@@ -1155,6 +1522,8 @@ def apply_daily_chemistry_tick(team: Any, session: Optional[Any] = None, rng: Op
     roster = _team_players(team)
     if not roster:
         return {"updated": 0}
+    invalidate_team_chemistry_cache(team)
+    apply_familiarity_apart_decay(team, session=session)
     room_before = calculate_team_room_chemistry(team, session=session)
     for p in roster:
         ensure_player_chemistry_profile(p, rng)

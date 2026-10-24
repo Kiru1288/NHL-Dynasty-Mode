@@ -148,11 +148,17 @@ def test_cpu_rfas_held_for_offer_sheet_window():
         sim=types.SimpleNamespace(league=league), season_calendar_year=2026, user_team_id="T1"
     )
     orig = ce._player_ovr
+    orig_snap = ce.get_team_cap_snapshot_full
     ce._player_ovr = lambda p: 85.0
+    # Tight cap: an 85 is a real offer-sheet target and stays qualified.
+    ce.get_team_cap_snapshot_full = lambda *a, **k: {
+        "usable_cap_space_m": 1.0, "contract_slots_limit": 50, "contract_slots_used": 0,
+    }
     try:
         out = ce.run_cpu_rfa_decisions(session)
     finally:
         ce._player_ovr = orig
+        ce.get_team_cap_snapshot_full = orig_snap
     assert out["deferred_count"] == 1
     assert team.rfa_rights and team.rfa_rights[0]["qualified"] is True
     assert 3 <= team.rfa_rights[0]["cpu_resolve_day"] <= 6

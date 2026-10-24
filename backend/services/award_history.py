@@ -18,9 +18,14 @@ log = logging.getLogger(__name__)
 
 def _find_player(session: Any, pid: str) -> Any:
     try:
+        from app.sim_engine.systems.chemistry import _canonical_player_id, _canonical_player_id_from_string  # noqa: WPS433
         from services.franchise_sim import _iter_league_players_for_aging
+
+        want = _canonical_player_id_from_string(pid)
+        raw = str(pid or "").strip()
         for p in _iter_league_players_for_aging(getattr(session.sim, "league", None)):
-            if str(getattr(p, "id", "")) == str(pid):
+            canon = _canonical_player_id(p) or str(getattr(p, "id", "") or "")
+            if canon == want or str(getattr(p, "id", "") or "") == raw:
                 return p
     except Exception:
         log.debug("player lookup failed", exc_info=True)
@@ -28,17 +33,56 @@ def _find_player(session: Any, pid: str) -> Any:
 
 
 def _nhl_id(p: Any) -> Optional[int]:
-    for key in ("nhl_player_id", "nhl_id"):
-        v = getattr(p, key, None) or getattr(getattr(p, "identity", None), key, None)
-        try:
-            if v:
-                return int(v)
-        except (TypeError, ValueError):
-            continue
-    return None
+    try:
+        from services.real_nhl_roster_importer import nhl_player_id_from_obj  # noqa: WPS433
+
+        return nhl_player_id_from_obj(p)
+    except Exception:
+        log.debug("nhl id resolve failed", exc_info=True)
+        return None
 
 
-def nhl_awards_for(p: Any, *, fetch: bool = True) -> Dict[str, Any]:
+def _draft_payload_from_player(p: Any) -> Dict[str, Any]:
+    ident = getattr(p, "identity", None)
+    dy = getattr(p, "draft_year", None)
+    if dy is None and ident is not None:
+        dy = getattr(ident, "draft_year", None)
+    dr = getattr(p, "draft_round", None)
+    if dr is None and ident is not None:
+        dr = getattr(ident, "draft_round", None)
+    overall = getattr(p, "draft_overall_pick", None)
+    if overall is None and ident is not None:
+        overall = getattr(ident, "draft_pick", None)
+    try:
+        dy_i = int(dy) if dy is not None and int(dy) > 0 else None
+    except (TypeError, ValueError):
+        dy_i = None
+    try:
+        dr_i = int(dr) if dr is not None and int(dr) > 0 else None
+    except (TypeError, ValueError):
+        dr_i = None
+    try:
+        ov_i = int(overall) if overall is not None and int(overall) > 0 else None
+    except (TypeError, ValueError):
+        ov_i = None
+    team_id = (
+        getattr(p, "drafted_by_team_id", None)
+        or getattr(p, "draft_team_id", None)
+        or getattr(p, "drafted_by", None)
+    )
+    return {
+        "drafted": bool(getattr(p, "drafted", False) or dy_i or ov_i),
+        "undrafted": bool(getattr(p, "undrafted", False)) and not (dy_i or ov_i),
+        "draft_year": dy_i,
+        "draft_round": dr_i,
+        "draft_overall_pick": ov_i,
+        "draft_team_abbr": getattr(p, "draft_team_abbr", None),
+        "drafted_by_team_id": team_id,
+        "draft_team_id": getattr(p, "draft_team_id", None),
+    }
+
+
+def nhl_awards_for(p: Any, *, fetch: bool = True, league: Any = None) -> Dict[str, Any]:
     if p is None:
         return {"status": "unknown", "awards": []}
     if getattr(p, "nhl_awards_fetched", False):
@@ -49,20 +93,114 @@ def nhl_awards_for(p: Any, *, fetch: bool = True) -> Dict[str, Any]:
     if not fetch:
         return {"status": "not_fetched", "awards": []}
     try:
-        from services.real_nhl_roster_importer import _PLAYER_LANDING_CACHE, _fetch_player_landing, parse_landing_awards
+        from services.real_nhl_roster_importer import ensure_player_nhl_landing_data
 
-        landing = _PLAYER_LANDING_CACHE.get(nid) or _fetch_player_landing(nid)
+        if not ensure_player_nhl_landing_data(p, fetch=True, league=league):
+            return {"status": "unavailable", "awards": []}
     except Exception:
-        landing = None
-    if not landing:
         return {"status": "unavailable", "awards": []}
-    awards = parse_landing_awards(landing)
+    return {"status": "ok", "awards": list(getattr(p, "nhl_awards", None) or [])}
+
+
+def player_career_history(session: Any, pid: str, *, fetch: bool = True) -> Dict[str, Any]:
+    """Pre-franchise NHL seasons for dossiers (NHL API landing, cached on the player)."""
+    p = _find_player(session, pid)
+    if p is None:
+        return {"found": False, "player_id": str(pid), "career_seasons": [], "status": "unknown"}
+    league = getattr(getattr(session, "sim", None), "league", None)
+    if fetch:
+        try:
+            from services.real_nhl_roster_importer import ensure_player_nhl_landing_data
+
+            if bool(getattr(p, "real_nhl_import", False)):
+                ensure_player_nhl_landing_data(p, fetch=True, league=league)
+            else:
+                from services.real_nhl_roster_importer import player_missing_nhl_career_seasons
+
+                if player_missing_nhl_career_seasons(p):
+                    ensure_player_nhl_landing_data(p, fetch=True, league=league)
+        except Exception:
+            log.debug("career landing fetch failed", exc_info=True)
+    cs = getattr(p, "career_stats", None)
+    seasons: List[Dict[str, Any]] = []
+    totals: Dict[str, Any] = {}
     try:
-        p.nhl_awards = awards
-        p.nhl_awards_fetched = True
+        from services.season_carryover import _franchise_first_season
     except Exception:
-        pass
-    return {"status": "ok", "awards": awards}
+        _franchise_first_season = lambda session, season_year: int(season_year)  # type: ignore
+
+    cur_sy = int(getattr(session, "season_calendar_year", 0) or 0)
+    franchise_sy = int(_franchise_first_season(session, cur_sy) or cur_sy or 0)
+    franchise_label = ""
+    if franchise_sy > 0:
+        try:
+            from services.real_nhl_roster_importer import franchise_season_label_from_start_year
+
+            franchise_label = franchise_season_label_from_start_year(franchise_sy)
+        except Exception:
+            franchise_label = f"{franchise_sy}-{str(franchise_sy + 1)[-2:]}"
+    if isinstance(cs, dict):
+        raw = cs.get("seasons") or cs.get("by_season") or cs.get("history") or []
+        if isinstance(raw, list):
+            seasons = [dict(s) for s in raw if isinstance(s, dict)][-24:]
+        t = cs.get("totals") or cs.get("career") or cs.get("nhl")
+        if isinstance(t, dict):
+            totals = dict(t)
+    if franchise_sy > 0:
+        try:
+            from services.real_nhl_roster_importer import drop_nhl_import_from_franchise_open
+
+            seasons = drop_nhl_import_from_franchise_open(seasons, franchise_sy)
+        except Exception:
+            log.debug("franchise season strip failed", exc_info=True)
+    if p is not None and franchise_sy > 0 and isinstance(getattr(p, "career_stats", None), dict):
+        try:
+            from services.real_nhl_roster_importer import drop_nhl_import_from_franchise_open
+
+            cs_clean = dict(getattr(p, "career_stats") or {})
+            cs_clean["seasons"] = drop_nhl_import_from_franchise_open(
+                list(cs_clean.get("seasons") or []), franchise_sy
+            )
+            setattr(p, "career_stats", cs_clean)
+        except Exception:
+            log.debug("player career_stats strip failed", exc_info=True)
+    status = "ok" if seasons else ("not_fetched" if not fetch else "empty")
+    if not seasons and bool(getattr(p, "real_nhl_import", False)):
+        imp = getattr(p, "real_nhl_import_stats", None) or {}
+        if isinstance(imp, dict) and int(imp.get("gp") or imp.get("gamesPlayed") or 0) > 0:
+            status = "partial_import_stats_only"
+    draft = _draft_payload_from_player(p)
+    nhl_awards: List[Dict[str, Any]] = []
+    nhl_awards_status = "not_fetched"
+    if p is not None:
+        if getattr(p, "nhl_awards_fetched", False):
+            nhl_awards_status = "ok"
+            nhl_awards = list(getattr(p, "nhl_awards", None) or [])
+            if franchise_sy > 0:
+                try:
+                    from services.real_nhl_roster_importer import drop_nhl_awards_from_franchise_open
+
+                    nhl_awards = drop_nhl_awards_from_franchise_open(nhl_awards, franchise_sy)
+                    setattr(p, "nhl_awards", nhl_awards)
+                except Exception:
+                    log.debug("nhl awards strip failed", exc_info=True)
+        elif _nhl_id(p) is None:
+            nhl_awards_status = "no_nhl_record"
+        elif fetch:
+            nhl_awards_status = "unavailable"
+    return {
+        "found": True,
+        "player_id": str(pid),
+        "name": getattr(getattr(p, "identity", None), "name", None) or getattr(p, "name", None),
+        "career_seasons": seasons,
+        "career_totals": totals,
+        "status": status,
+        "franchise_season_year": franchise_sy or None,
+        "franchise_season_label": franchise_label or None,
+        "nhl_awards": nhl_awards,
+        "nhl_awards_status": nhl_awards_status,
+        **draft,
+    }
 
 
 def player_awards_history(session: Any, pid: str) -> Dict[str, Any]:
@@ -99,15 +237,52 @@ def player_awards_history(session: Any, pid: str) -> Dict[str, Any]:
                 continue
             sim.append({"award_name": a.get("award"), "season": a.get("season"), "finish": 1, "source": "save"})
     sim.sort(key=lambda a: (str(a.get("season") or ""), -int(a.get("finish") or 1)), reverse=True)
-    nhl = nhl_awards_for(p)
-    trophies = sum(1 for a in sim if a.get("finish") == 1) + len(nhl["awards"])
-    return {
+    try:
+        from services.season_carryover import _franchise_first_season
+    except Exception:
+        _franchise_first_season = lambda session, season_year: int(season_year)  # type: ignore
+
+    cur_sy = int(getattr(session, "season_calendar_year", 0) or 0)
+    franchise_sy = int(_franchise_first_season(session, cur_sy) or cur_sy or 0)
+    league = getattr(getattr(session, "sim", None), "league", None)
+    nhl = nhl_awards_for(p, fetch=True, league=league)
+    nhl_awards = list(nhl.get("awards") or [])
+    if franchise_sy > 0 and p is not None:
+        try:
+            from services.real_nhl_roster_importer import drop_nhl_awards_from_franchise_open
+
+            nhl_awards = drop_nhl_awards_from_franchise_open(nhl_awards, franchise_sy)
+            if getattr(p, "nhl_awards_fetched", False):
+                setattr(p, "nhl_awards", nhl_awards)
+        except Exception:
+            log.debug("awards history nhl strip failed", exc_info=True)
+    trophies = sum(1 for a in sim if a.get("finish") == 1) + len(nhl_awards)
+    career_seasons: List[Dict[str, Any]] = []
+    career_totals: Dict[str, Any] = {}
+    cs = getattr(p, "career_stats", None) if p is not None else None
+    if isinstance(cs, dict):
+        raw = cs.get("seasons") or cs.get("by_season") or cs.get("history") or []
+        if isinstance(raw, list):
+            career_seasons = [dict(s) for s in raw if isinstance(s, dict)][-24:]
+        t = cs.get("totals") or cs.get("career") or cs.get("nhl")
+        if isinstance(t, dict):
+            career_totals = dict(t)
+    if franchise_sy > 0:
+        try:
+            from services.real_nhl_roster_importer import drop_nhl_import_from_franchise_open
+
+            career_seasons = drop_nhl_import_from_franchise_open(career_seasons, franchise_sy)
+        except Exception:
+            log.debug("awards history career strip failed", exc_info=True)
+    out: Dict[str, Any] = {
         "player_id": str(pid),
         "found": p is not None,
         "name": getattr(getattr(p, "identity", None), "name", None) or getattr(p, "name", None),
         "save_awards": sim,
-        "nhl_awards": nhl["awards"],
+        "nhl_awards": nhl_awards,
         "nhl_status": nhl["status"],
+        "career_seasons": career_seasons,
+        "career_totals": career_totals,
         "trophy_count": trophies,
         "note": {
             "no_nhl_record": "Generated player: no real NHL record.",
@@ -115,3 +290,6 @@ def player_awards_history(session: Any, pid: str) -> Dict[str, Any]:
             "unknown": "Player not found in this league.",
         }.get(nhl["status"]),
     }
+    if p is not None:
+        out.update(_draft_payload_from_player(p))
+    return out

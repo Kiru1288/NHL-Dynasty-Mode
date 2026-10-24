@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 # Bump when the talent curve / depth-star spread changes so Trade Hub caches rebuild
 # without requiring a new franchise save.
-TRADE_VALUE_FORMULA_VERSION = 18  # v18: everyday/tweener discount, 1st/2nd pick premium
+TRADE_VALUE_FORMULA_VERSION = 19  # v19: performance-implied market OVR in talent anchor
 # Soft ceiling used only for UI-relative clamps / legacy helpers — player totals are uncapped.
 TRADE_VALUE_SOFT_CEIL = 450.0
 LEAGUE_MINIMUM_AAV_M = 0.775
@@ -967,7 +967,12 @@ def _elc_value_mod(
             mod += 2.0
         elif age <= 22:
             mod -= 1.5
-    if cap_pressure in ("cap_hell", "critical") and cap_hit <= 1.05:
+    # Cap-exempt ELCs (and other sub-minimum deals) are a cap-saving acquisition.
+    # A tight club should go get them instead of treating the $0.95 label as a real hit.
+    exempt = cap_hit <= 0.05 or _is_elc_contract(player)
+    if cap_pressure in ("cap_hell", "critical", "tight", "high", "over", "strapped") and exempt:
+        mod += 4.0
+    elif cap_pressure in ("cap_hell", "critical") and cap_hit <= 1.05:
         mod += 2.5
     elif cap_pressure in ("cap_hell", "critical") and cap_hit > 2.0:
         mod -= 1.0
@@ -1096,6 +1101,35 @@ def _ledger_production(player: Any, league: Any) -> Optional[Tuple[float, int]]:
         return _clamp((sv - 0.88) * 120.0, 0.0, 18.0), gp
     pts = _safe_float(row.get("pts"), _safe_float(row.get("g"), 0) + _safe_float(row.get("a"), 0))
     return _clamp((pts / gp) * 14.0, 0.0, 16.0), gp
+
+
+def _ledger_gp(player: Any, league: Any) -> int:
+    if league is None:
+        return 0
+    reg = getattr(league, "player_season_stats", None)
+    if not isinstance(reg, dict):
+        return 0
+    row = reg.get(str(getattr(player, "id", "") or ""))
+    if not isinstance(row, dict):
+        return 0
+    return max(0, _safe_int(row.get("gp"), 0))
+
+
+def _resolve_market_ovr(player: Any, league: Any, display_ovr: float) -> Tuple[float, float, float, float]:
+    """
+    Returns (market_ovr, perf_ovr, reliability_w, display_ovr_used).
+    Prospects with <20 NHL GP keep display OVR only (no performance blend).
+    """
+    from app.sim_engine.progression.development import market_ovr_from_performance
+
+    gp = _ledger_gp(player, league)
+    age = _player_age(player)
+    pot = _player_potential_ovr(player, display_ovr)
+    is_prospect_val = is_prospect_for_valuation(player, age=age, ovr_display=display_ovr)
+    if is_prospect_val and gp < 20:
+        return float(display_ovr), float(display_ovr), 0.0, float(display_ovr)
+    market, perf, w = market_ovr_from_performance(player, league, display_ovr=float(display_ovr))
+    return float(market), float(perf), float(w), float(display_ovr)
 
 
 def _production_score(player: Any, league: Any = None) -> float:
@@ -1497,6 +1531,7 @@ def _evaluate_player_asset_value_impl(
     ovr = _player_ovr(player)
     age = _player_age(player)
     pos = _player_pos(player)
+    market_ovr, perf_ovr, perf_w, _ = _resolve_market_ovr(player, league, ovr)
     full_cap_hit = player_cap_hit_millions(player)
     retained_frac = _clamp(float(retained_pct or 0.0), 0.0, 50.0) / 100.0
     # Acquiring club only carries the non-retained share — price the contract on that.
@@ -1507,7 +1542,7 @@ def _evaluate_player_asset_value_impl(
     is_prospect_val = is_prospect_for_valuation(player, age=age, ovr_display=ovr)
     val_ovr = _trade_valuation_ovr(
         player,
-        ovr=ovr,
+        ovr=market_ovr,
         pot=pot,
         age=age,
         is_prospect_val=is_prospect_val,
@@ -1552,14 +1587,16 @@ def _evaluate_player_asset_value_impl(
     else:
         potential_mod = _clamp(residual_upside * 0.06, 0.0, 2.0)
 
-    production_mod = min(_production_score(player, league), 8.0) * talent_fit
+    production_mod = min(_production_score(player, league), 2.5) * talent_fit
     # Young high-upside assets are priced on projection until production proves otherwise.
-    if age <= 23 and upside >= 6.0:
-        production_mod *= 0.50
-    elif age <= 25 and upside >= 4.0:
-        production_mod *= 0.68
-    elif age >= 28 and ovr >= 78 and val_ovr == ovr:
-        production_mod = min(production_mod, 5.5)
+    proving = perf_ovr > ovr + 0.4
+    if not proving:
+        if age <= 23 and upside >= 6.0:
+            production_mod *= 0.50
+        elif age <= 25 and upside >= 4.0:
+            production_mod *= 0.68
+    elif age >= 28 and ovr >= 78 and abs(market_ovr - ovr) < 0.5:
+        production_mod = min(production_mod, 2.0)
 
     pos_mod = 0.0
     if pos == "C":
@@ -1801,6 +1838,9 @@ def _evaluate_player_asset_value_impl(
         "prospect_upside": round(prospect_upside, 2),
         "valued_on": "potential" if is_prospect_val else "overall",
         "valuation_ovr": round(val_ovr, 1),
+        "display_ovr": round(ovr, 1),
+        "market_ovr": round(market_ovr, 1),
+        "perf_ovr": round(perf_ovr, 1),
         "production": round(production_mod, 2),
         "contract": round(contract_mod, 2),
         "team_need": round(need_mod, 2),
@@ -1951,12 +1991,27 @@ def _evaluate_player_asset_value_impl(
         components["injury_share_discount"] = round(inj_discount, 3)
         total *= 1.0 - inj_discount
     total = max(hockey_floor, float(total))
+    # A winning club's players are worth more. A losing club's players are worth less.
+    result_pct = _team_points_pct(source_team)
+    if result_pct is not None and total > 0:
+        if result_pct >= 0.575:
+            total *= 1.14
+        elif result_pct <= 0.425:
+            total *= 0.84
     # Contract burden sits outside the context clamp so albatross deals go negative.
     # Depth players are also measured against what their ROLE is worth.
     total = max(PLAYER_VALUE_FLOOR, total + min(cap_dump_mod, role_burden))
     tier = player_value_tier(total)
 
     explain: List[str] = []
+    if result_pct is not None and result_pct >= 0.575:
+        explain.append("Winning season — trade value up")
+    elif result_pct is not None and result_pct <= 0.425:
+        explain.append("Losing season — trade value down")
+    if abs(market_ovr - ovr) >= 1.5:
+        explain.append(
+            f"Market view: playing like a {int(round(market_ovr))} ({int(round(ovr))} OVR)"
+        )
     if is_prospect_val and val_ovr >= 84:
         explain.append("Elite prospect ceiling")
     elif not is_prospect_val and ovr >= 85:

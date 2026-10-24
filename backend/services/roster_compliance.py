@@ -353,3 +353,77 @@ def evaluate_roster_compliance(
         "issues": [b["message"] for b in blocking],
         "warning_messages": [w["message"] for w in warnings],
     }
+
+
+def fill_team_roster_minimum(team: Any, rng: Any) -> int:
+    """Add low-overall league-minimum bodies until the roster meets the minimum.
+
+    Those deals do not count against the cap. Stops at the 23-man maximum.
+    """
+    if team is None or rng is None:
+        return 0
+    from app.sim_engine.entities.player import Position
+    from app.sim_engine.league_hierarchy_bootstrap import _spawn_player
+
+    added = 0
+    used: set = set()
+    for _ in range(18):
+        cap = summarize_team_roster_capacity(team)
+        if int(cap["nhl_count"]) >= ACTIVE_ROSTER_MAX:
+            break
+        need_g = int(cap["goalies"]) < MIN_GOALIES
+        need_d = int(cap["defense"]) < MIN_DEFENSE
+        need_f = int(cap["forwards"]) < MIN_FORWARDS
+        short = int(cap["nhl_count"]) < ACTIVE_ROSTER_MIN
+        if not (need_g or need_d or need_f or short):
+            break
+        if need_g:
+            pos = Position.G
+        elif need_d:
+            pos = Position.D
+        elif need_f or short:
+            pos = rng.choice([Position.C, Position.LW, Position.RW])
+        else:
+            break
+        player = _spawn_player(
+            rng,
+            pos=pos,
+            ovr_lo=0.54,
+            ovr_hi=0.66,
+            age_lo=24,
+            age_hi=34,
+            used_names=used,
+            league_players=[],
+            pool_context="echl",
+        )
+        aav = 0.85
+        player.contract = {
+            "type": "STANDARD",
+            "contract_type": "STANDARD",
+            "years": 1,
+            "years_remaining": 1,
+            "aav_m": aav,
+            "cap_hit_m": aav,
+            "salary_m": aav,
+            "rights_status": "UFA",
+            "source": "roster_minimum_fill",
+        }
+        player.aav_m = aav
+        player.cap_hit_m = aav
+        roster = list(getattr(team, "roster", None) or [])
+        roster.append(player)
+        team.roster = roster
+        added += 1
+    return added
+
+
+def fill_league_roster_minimums(league: Any, rng: Any) -> int:
+    if league is None or rng is None:
+        return 0
+    total = 0
+    for team in list(getattr(league, "teams", None) or []):
+        try:
+            total += fill_team_roster_minimum(team, rng)
+        except Exception:
+            continue
+    return total

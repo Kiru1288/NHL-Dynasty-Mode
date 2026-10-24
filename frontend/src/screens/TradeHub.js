@@ -23,6 +23,7 @@ import { normalizeRosterBrowserPlayer } from "./RosterScreen";
 import {
   getBaseOverall,
   getOverallDrop,
+  getOverallModifierBadge,
   getOverallTooltip,
   getUniversalOverall,
 } from "../utils/playerOverall";
@@ -631,6 +632,8 @@ function displayOvr(player) {
   const pct = Number(player?.scouted_pct) || 0;
   const conf = String(player?.ovr_confidence || "");
   if (!player?.is_user_roster && (conf === "hidden" || pct < 25)) return "??";
+  const badge = getOverallModifierBadge(player);
+  if (badge) return `${ovr} · ${badge}`;
   const drop = getOverallDrop(player);
   if (drop >= 1) return `${ovr}↓${drop}`;
   return String(ovr);

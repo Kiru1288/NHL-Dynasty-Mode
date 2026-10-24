@@ -2361,6 +2361,13 @@ def start_franchise(
             _schedule_draft_class_cache_warm(session)
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
+    if universe == "real_nhl":
+        try:
+            from services.real_nhl_roster_importer import schedule_real_nhl_landing_career_bootstrap
+
+            schedule_real_nhl_landing_career_bootstrap(session)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         from app.sim_engine.systems.chemistry import materialize_roster_chemistry_profiles  # noqa: WPS433
 
@@ -2996,12 +3003,7 @@ def _player_ovr99(player: Any) -> float:
 
 
 def _player_display_ovr99(player: Any) -> float:
-    """Canonical user-facing OVR.
-
-    Must match what the roster screen shows, otherwise a prospect's overall
-    visibly changes the moment he is drafted. Sim-internal decisions keep using
-    `_player_ovr99`; anything a user reads goes through here.
-    """
+    """Engine overall, the same number the roster, wire, and sim decisions show."""
     try:
         from app.sim_engine.franchise.storyline_conduct import get_base_ovr_display
 
@@ -3011,6 +3013,38 @@ def _player_display_ovr99(player: Any) -> float:
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
     return _player_ovr99(player)
+
+
+def shown_ovr_and_potential(player: Any) -> tuple:
+    """The overall and potential every post-draft screen shows.
+
+    One rounding of the engine overall and the scout potential. The hidden
+    ceiling and the draft headroom clamp stay off the card.
+    """
+    try:
+        ovr = int(round(float(_player_display_ovr99(player) or 0)))
+    except (TypeError, ValueError):
+        ovr = 0
+    ovr = max(0, min(99, ovr))
+    raw = None
+    ratings = getattr(player, "ratings", None)
+    if isinstance(ratings, dict):
+        raw = ratings.get("dev_potential")
+    if raw is None:
+        raw = getattr(player, "potential", None)
+    pot = 0.0
+    try:
+        if raw is not None:
+            pot = float(raw)
+    except (TypeError, ValueError):
+        pot = 0.0
+    if 0 < pot <= 1.5:
+        pot *= 99.0
+    pot_i = int(round(pot)) if pot > 0 else ovr
+    pot_i = max(0, min(99, pot_i))
+    if pot_i <= 0:
+        pot_i = ovr
+    return ovr, pot_i
 
 
 class _GeneratedContract:
@@ -3534,7 +3568,7 @@ def _offense_opportunity_weight(p: Any) -> float:
     pm = _rating_avg(p, PLAYMAKING_ATTRS)
     iq = _rating_avg(p, IQ_ATTRS)
     pos = _pos_str(p).upper()
-    pos_mult = 0.86 if pos == "D" else 1.0
+    pos_mult = 0.98 if pos == "D" else 1.0
     usage_mult = _player_role_usage_mult(p)
     base = (0.40 * off + 0.34 * pm + 0.26 * iq) / 99.0
     return max(0.04, (ovr ** 1.22) * (base ** 1.08) * usage_mult * pos_mult)
@@ -3550,6 +3584,37 @@ def _team_shooting_profile(team: Any) -> float:
     iq = sum(_rating_avg(p, IQ_ATTRS) for p in top) / max(1, len(top))
     profile = 0.092 + 0.00028 * (off - 68.0) + 0.00012 * (iq - 68.0)
     return max(0.08, min(0.12, profile))
+
+
+_TEAM_SLICE_KEYS = (
+    "gp", "g", "a", "pts", "sog", "pim", "hit", "blk", "toi_sec", "plus_minus",
+    "ppg", "shg", "gwg", "w", "l", "otl", "so", "ga", "shots_against", "saves",
+    "ixg", "fow", "fol", "primary_assists", "secondary_assists",
+    "ev_toi_sec", "pp_toi_sec", "pk_toi_sec",
+)
+
+
+def _freeze_team_slice(row: Dict[str, Any], old_team: str) -> None:
+    """Park the counting stats earned with the club a player is leaving.
+
+    The row itself stays the season total. ``by_team`` holds each previous club
+    so a deadline trade is not credited entirely to the new team.
+    """
+    by = row.setdefault("by_team", {})
+    if not old_team or old_team in by:
+        return
+    prior: Dict[str, int] = {}
+    for sl in by.values():
+        if isinstance(sl, dict):
+            for k, v in sl.items():
+                if isinstance(v, (int, float)) and not isinstance(v, bool):
+                    prior[k] = prior.get(k, 0) + int(v)
+    snap: Dict[str, int] = {}
+    for k in _TEAM_SLICE_KEYS:
+        if k in row or k in prior:
+            snap[k] = int(row.get(k) or 0) - int(prior.get(k) or 0)
+    if any(snap.values()):
+        by[str(old_team)] = snap
 
 
 def _stat_ensure(session: FranchiseSession, p: Any, team_id: str) -> Dict[str, Any]:
@@ -3586,7 +3651,11 @@ def _stat_ensure(session: FranchiseSession, p: Any, team_id: str) -> Dict[str, A
     row = reg[pid]
     row["name"] = _name_str(p)
     row["position"] = _pos_str(p)
-    row["team_id"] = str(team_id)
+    old_team = str(row.get("team_id") or "")
+    new_team = str(team_id)
+    if old_team and new_team and old_team != new_team:
+        _freeze_team_slice(row, old_team)
+    row["team_id"] = new_team
     row["stat_authority"] = "session.player_season_stats"
     return row
 
@@ -4399,6 +4468,14 @@ def _bump_prospect_revision(session: FranchiseSession) -> None:
     session._cached_draft_class_rankings = None
     session._cached_draft_class_hud_payload = None
     session._prospect_profile_by_id_cache = None
+
+
+def _bump_draft_board_revision(session: FranchiseSession) -> None:
+    """Invalidate draft rankings when prospect ratings/stats change (not every HUD tick)."""
+    session._draft_board_revision = int(getattr(session, "_draft_board_revision", 0) or 0) + 1
+    session._cached_draft_class_rankings = None
+    session._cached_draft_class_hud_payload = None
+    session._draft_class_detail_cache = None
 
 
 _NARRATIVE_UNIVERSE_CACHE_VERSION = 2
@@ -7924,22 +8001,23 @@ def _serialize_player_row(
             row["rating_groups"] = _rating_groups_for_player(p)
         try:
             from app.sim_engine.franchise.storyline_conduct import (  # noqa: WPS433
+                format_ovr_modifier_badge,
                 get_base_ovr_display,
                 get_effective_ovr_display,
                 serialize_ovr_modifiers_for_ui,
             )
 
-            # Universal display OVR for every team (user + CPU): effective ratings blend.
-            # Keep sim_ovr separately so callers can still see raw engine ovr().
+            # One number everywhere: the engine overall. Modifiers stay a badge.
             base_ovr = int(get_base_ovr_display(p))
             eff_ovr = int(get_effective_ovr_display(p))
             mods = serialize_ovr_modifiers_for_ui(p)
-            row["sim_ovr"] = row.get("ovr")
+            row["sim_ovr"] = base_ovr
             row["base_ovr"] = base_ovr
             row["effective_ovr"] = eff_ovr
-            row["ovr"] = eff_ovr
-            row["overall"] = eff_ovr
+            row["ovr"] = base_ovr
+            row["overall"] = base_ovr
             row["ovr_modifiers"] = mods
+            row["ovr_badge"] = format_ovr_modifier_badge(p)
             row["overall_drop"] = max(0, base_ovr - eff_ovr)
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
@@ -8012,35 +8090,13 @@ def _serialize_player_row(
             row["jersey_number"] = int(jersey) if str(jersey).isdigit() else jersey
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
-    # Potential (0–100 display) from chapter profile / engine fields — never invent.
-    # Light rows use the stored potential only. Opening chapters for every junior
-    # was part of the roster-browser stall.
+    # Same scout potential the draft card and the rights list show.
     try:
-        pot99 = None
-        if not light:
-            try:
-                from app.sim_engine.entities.chapter_attributes import get_player_chapters  # noqa: WPS433
-
-                chapters = get_player_chapters(p)
-                pot_ch = chapters.get("potential")
-                if pot_ch is not None:
-                    pot99 = int(round(float(pot_ch)))
-            except Exception:
-                pot99 = None
-        if pot99 is None:
-            ratings = getattr(p, "ratings", None) or {}
-            pot_raw = None
-            if isinstance(ratings, dict):
-                pot_raw = ratings.get("dev_potential")
-            if pot_raw is None:
-                pot_raw = getattr(p, "potential", None)
-            if pot_raw is not None:
-                pot_f = float(pot_raw)
-                pot99 = int(round(pot_f * 99.0)) if pot_f <= 1.5 else int(round(pot_f))
-        if pot99 is not None:
-            row["potential"] = pot99
-            row["potential_score"] = pot99
-            row["dev_potential"] = pot99
+        _ovr_i, pot99 = shown_ovr_and_potential(p)
+        if pot99:
+            row["potential"] = int(pot99)
+            row["potential_score"] = int(pot99)
+            row["dev_potential"] = int(pot99)
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
     # Fatigue from health state when present.
@@ -8085,6 +8141,12 @@ def _serialize_player_row(
         except Exception:
             expiry_year = None
         years_remaining = int(csum.get("years_remaining") or 0)
+        try:
+            original_years = int(cnorm.get("years") or years_remaining or 0)
+        except (TypeError, ValueError):
+            original_years = years_remaining
+        if original_years < years_remaining:
+            original_years = years_remaining
         timing = clause_timing_fields(p)
         if timing.get("clause") and timing.get("clause") != "None":
             clause_label = str(timing["clause"])
@@ -8092,7 +8154,8 @@ def _serialize_player_row(
             "salary": round(float(csum.get("nhl_salary_m") or csum.get("aav_m") or row["contract"]["salary"] or 0), 3),
             "cap_hit": round(float(csum.get("cap_hit_m") or csum.get("aav_m") or row["contract"]["cap_hit"] or 0), 3),
             "aav": round(float(csum.get("aav_m") or 0), 3),
-            "term": years_remaining,
+            "term": original_years,
+            "years": original_years,
             "years_remaining": years_remaining,
             "expiry_year": expiry_year,
             "expiry": str(expiry_year) if expiry_year else None,
@@ -8109,6 +8172,9 @@ def _serialize_player_row(
             "performance_bonus_m": float(csum.get("performance_bonus_m") or 0),
             "minor_salary_m": float(csum.get("minor_salary_m") or 0),
             "start_year": cnorm.get("start_year") or cnorm.get("signed_year"),
+            "signed_year": cnorm.get("signed_year"),
+            "source": str(cnorm.get("source") or getattr(p, "contract_source", "") or "") or None,
+            "imported": bool(getattr(p, "real_nhl_contract", False) or str(cnorm.get("source") or "").startswith("real_nhl")),
             "rights_status": str(cnorm.get("rights_status") or getattr(p, "rights_status", "") or "") or None,
         }
         try:
@@ -8184,7 +8250,19 @@ def _serialize_player_row(
         if isinstance(career, dict) and career:
             seasons = career.get("seasons") or career.get("by_season") or career.get("history")
             if isinstance(seasons, list) and seasons:
-                row["career_seasons"] = [dict(s) for s in seasons if isinstance(s, dict)][-16:]
+                career_rows = [dict(s) for s in seasons if isinstance(s, dict)][-16:]
+                if session is not None:
+                    try:
+                        from services.season_carryover import _franchise_first_season
+                        from services.real_nhl_roster_importer import drop_nhl_import_from_franchise_open
+
+                        cur_sy = int(getattr(session, "season_calendar_year", 0) or 0)
+                        franchise_sy = int(_franchise_first_season(session, cur_sy) or cur_sy or 0)
+                        if franchise_sy > 0:
+                            career_rows = drop_nhl_import_from_franchise_open(career_rows, franchise_sy)
+                    except Exception:
+                        _swallowed_log.debug("suppressed exception", exc_info=True)
+                row["career_seasons"] = career_rows
             totals = career.get("totals") or career.get("career") or career.get("nhl")
             if isinstance(totals, dict):
                 row["career_totals"] = dict(totals)
@@ -8276,9 +8354,24 @@ def _serialize_player_row(
                     row["overall_delta"] = row["growth_delta"]
             if "growth_delta" in row:
                 row["season_ovr_delta"] = row["growth_delta"]
+            _pot_moved = getattr(p, "_pot_checkpoint_moved", None)
+            if _pot_moved not in (None, 0, 0.0) and row.get("season_potential_delta") in (None, 0, 0.0):
+                try:
+                    row["season_potential_delta"] = int(_pot_moved)
+                    row["potential_change_season"] = int(_pot_moved)
+                except (TypeError, ValueError):
+                    pass
+            _tx = getattr(p, "transactions", None)
+            if isinstance(_tx, list) and _tx:
+                row["transactions"] = [dict(t) for t in _tx[-30:] if isinstance(t, dict)]
             _rh = getattr(p, "rating_history", None)
             if isinstance(_rh, list) and _rh:
                 row["rating_history"] = [dict(h) for h in _rh[-30:] if isinstance(h, dict)]
+                for _point in reversed(row["rating_history"]):
+                    _why = str(_point.get("reason") or "").strip()
+                    if _why:
+                        row["ovr_change_reason"] = _why
+                        break
             _ph = getattr(p, "potential_history", None)
             if isinstance(_ph, list) and _ph:
                 row["potential_history"] = [dict(h) for h in _ph if isinstance(h, dict)]
@@ -8763,6 +8856,24 @@ def _build_roster_browser(
             )
         except Exception:
             cap_summary = {}
+        nhl_rows = _rows_from_players_list(
+            getattr(t, "roster", None),
+            include_ratings=is_user,
+            session=franchise_session,
+            team=t,
+        )
+        ir_rows = _rows_from_players_list(
+            getattr(t, "injured_reserve", None),
+            include_ratings=is_user,
+            session=franchise_session,
+            team=t,
+        )
+        seen_ids = {str(r.get("player_id") or r.get("id") or "") for r in nhl_rows}
+        for ir_row in ir_rows:
+            ir_id = str(ir_row.get("player_id") or ir_row.get("id") or "")
+            if ir_id and ir_id not in seen_ids:
+                nhl_rows.append(ir_row)
+                seen_ids.add(ir_id)
         orgs.append(
             {
                 "team_id": tid,
@@ -8771,12 +8882,7 @@ def _build_roster_browser(
                     getattr(t, "abbreviation", None) or getattr(t, "abbr", None) or getattr(t, "abbrev", None) or ""
                 ).upper(),
                 "cap_summary": cap_summary,
-                "nhl": _rows_from_players_list(
-                    getattr(t, "roster", None),
-                    include_ratings=is_user,
-                    session=franchise_session,
-                    team=t,
-                ),
+                "nhl": nhl_rows,
                 "ahl": _rows_from_players_list(
                     getattr(t, "ahl_roster", None),
                     include_ratings=is_user,
@@ -8922,6 +9028,32 @@ def _raw_draft_potential99(p: Any, ovr99: float) -> float:
         return float(min(92.0, float(ovr99) + 8.0))
 
 
+def _shown_dedicated_pct(session: Any, key: str, rank: int, stored: float) -> float:
+    """Staff files used to sit on one cap, so every row read 86.
+
+    A file the user is actually running (target, watchlist, or past the staff
+    cap) keeps its number. An untouched staff file is spread by rank and player.
+    """
+    try:
+        stored_f = float(stored or 0)
+    except (TypeError, ValueError):
+        stored_f = 0.0
+    if stored_f <= 0:
+        return 0.0
+    state = getattr(session, "scouting_state", None) or {}
+    prospects = state.get("prospects") if isinstance(state, dict) else {}
+    ov = prospects.get(str(key)) if isinstance(prospects, dict) else None
+    if not isinstance(ov, dict) or not ov.get("auto_assigned"):
+        return stored_f
+    if ov.get("target") or ov.get("watchlist") or stored_f > 86.5:
+        return stored_f
+    if stored_f < 70:
+        return stored_f
+    spread = (abs(_stable_hash(str(key))) % 27) - 8
+    rank_lift = 18 if int(rank) <= 16 else 10 if int(rank) <= 48 else 4 if int(rank) <= 96 else 0
+    return float(max(28, min(84, 46 + rank_lift + spread)))
+
+
 def _board_rank_move_cap(rank: int) -> int:
     """Max displayed per-update board movement for a prospect now at `rank`.
 
@@ -8929,11 +9061,9 @@ def _board_rank_move_cap(rank: int) -> int:
     100+ spots; that is noise, not a scouting event. Tighter at the top of the board.
     """
     r = int(rank or 0)
-    if r <= 32:
-        return 12
     if r <= 96:
-        return 20
-    return 30
+        return 3
+    return 6
 
 
 def _clamp_board_rank_move(delta: int, rank: int) -> int:
@@ -9345,38 +9475,8 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
             anchor = int(getattr(session, "season_calendar_year", 0) or 0)
             boot_rng = getattr(sim, "rng", None) or random.Random(anchor or 42)
             if ensure_development_leagues_for_draft_board(league, boot_rng, season_year=anchor):
-                session._cached_draft_class_rankings = None
-                session._cached_draft_class_hud_payload = None
-                session._draft_class_detail_cache = None
+                _bump_draft_board_revision(session)
                 session._prospect_revision = int(getattr(session, "_prospect_revision", 0) or 0) + 1
-    except Exception:
-        _swallowed_log.debug("suppressed exception", exc_info=True)
-    # One-time repair: older franchises shaped #1 overalls into the low-50s while
-    # "nhl_floor" depth sat higher. Bring pipeline stars up to realistic draft OVRs.
-    try:
-        if not getattr(session, "_draft_pipeline_ovr_repaired", False):
-            from app.sim_engine.league_hierarchy_bootstrap import repair_undervalued_draft_pipeline_stars
-
-            repair_undervalued_draft_pipeline_stars(
-                league,
-                getattr(sim, "rng", None),
-            )
-            setattr(session, "_draft_pipeline_ovr_repaired", True)
-    except Exception:
-        _swallowed_log.debug("suppressed exception", exc_info=True)
-    try:
-        if not getattr(session, "_draft_age_reanchored", False):
-            from app.sim_engine.league_hierarchy_bootstrap import (
-                reanchor_generated_junior_dobs,
-                set_spawn_as_of_year,
-            )
-
-            anchor = int(getattr(session, "season_calendar_year", 0) or 0)
-            if anchor < 2000:
-                anchor = int(session_age_as_of(session)[0])
-            set_spawn_as_of_year(anchor)
-            reanchor_generated_junior_dobs(league, anchor)
-            setattr(session, "_draft_age_reanchored", True)
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
@@ -9422,25 +9522,13 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
         normalize_league_code,
     )
 
-    draft_rng = rng if rng is not None else random.Random(42)
-    try:
-        from app.sim_engine.league_hierarchy_bootstrap import lift_shallow_draft_depth
-
-        lift_shallow_draft_depth(league, draft_rng)
-    except Exception:
-        _swallowed_log.debug("suppressed exception", exc_info=True)
-
     pipeline_stats = collect_goalie_pipeline_stats(league, age_max=20, pos_fn=_pos_str)
-    if pipeline_stats["draft_eligible_dev_goalies"] < MIN_BOARD_GOALIES:
-        backfill_draft_eligible_goalies(
-            league,
-            draft_rng,
-            MIN_BOARD_GOALIES - pipeline_stats["draft_eligible_dev_goalies"],
-        )
-        pipeline_stats = collect_goalie_pipeline_stats(league, age_max=20, pos_fn=_pos_str)
-    eligible_now = count_draft_eligible_players(league)
-    if eligible_now < DRAFT_ELIGIBLE_TARGET:
-        backfill_draft_eligible_skaters(league, draft_rng, DRAFT_ELIGIBLE_TARGET - eligible_now)
+
+    from services.draft_ranking_logic import (
+        cap_reentry_dev_potential_on_player,
+        player_on_draft_board,
+    )
+    from services.season_carryover import _age_on_sept15
 
     prospects: List[Dict[str, Any]] = []
 
@@ -9466,22 +9554,65 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
                     continue
                 ident = getattr(p, "identity", None)
                 age = int(getattr(ident, "age", 99) or 99) if ident else 99
-                # Draft class matches bootstrap shaping cohort (17–20; NCAA up to 24).
-                # Age 16 kids are next-year depth, not this year's board.
-                max_draft_age = 24 if str(code).upper() == "NCAA" else 20
-                if age < 17 or age > max_draft_age:
+                draft_year = int(getattr(session, "season_calendar_year", 0) or 0) + 1
+                try:
+                    sept = _age_on_sept15(p, draft_year)
+                    if sept:
+                        age = int(sept)
+                except Exception:
+                    pass
+                if not player_on_draft_board(p, code, age, draft_year):
                     continue
                 pk = str(getattr(p, "id", "") or "")
                 if not pk:
                     continue
-                ovr99 = round(_player_display_ovr99(p), 1)
+                try:
+                    cap_reentry_dev_potential_on_player(p, draft_year)
+                except Exception:
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
+                ovr99 = round(_player_ovr99(p), 1)
                 pot99 = round(_draft_potential99(p, ovr99), 1)
+                # A player who went undrafted does not return as the best ceiling in the class.
+                try:
+                    first_eligible = getattr(p, "first_draft_eligible_year", None)
+                    prev_board_year = int(getattr(p, "_pot_board_year", 0) or 0)
+                    prev_pot = getattr(p, "_pot_entering_year", None)
+                    if (
+                        isinstance(first_eligible, int)
+                        and first_eligible < draft_year
+                        and prev_board_year
+                        and prev_board_year != draft_year
+                        and prev_pot is not None
+                        and float(pot99) > float(prev_pot) + 2.0
+                    ):
+                        pot99 = round(float(prev_pot) + 2.0, 1)
+                        ratings = getattr(p, "ratings", None)
+                        if isinstance(ratings, dict):
+                            ratings["dev_potential"] = int(round(pot99))
+                        try:
+                            p.potential = pot99 / 99.0 if pot99 > 1.5 else pot99
+                        except Exception:
+                            pass
+                    if prev_board_year != draft_year:
+                        setattr(p, "_pot_entering_year", pot99)
+                        setattr(p, "_pot_board_year", draft_year)
+                except Exception:
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
                 pos = _pos_str(p)
                 h = abs(_stable_hash(pk)) % 997
 
-                # Scout confidence: grows with GP sample; lower early in the year.
-                eu = code.startswith("EU_")
-                confidence = max(35, min(96, 84 - (8 if eu else 0) + (h % 17) - 8))
+                # Public file: league exposure plus a per-player spread. Games add a
+                # little. A full junior season must not pin every row at the same number.
+                code_u = str(code or "").upper()
+                if code_u.startswith("CHL_") or code_u in ("OHL", "WHL", "QMJHL", "NCAA"):
+                    file_base = 54.0
+                elif code_u == "USHL":
+                    file_base = 46.0
+                elif code_u.startswith("EU_J"):
+                    file_base = 38.0
+                else:
+                    file_base = 34.0
+                confidence = int(max(24, min(82, file_base + ((h % 37) - 18) + ((h // 37) % 9) - 4)))
 
                 character_concerns = (
                     bool(getattr(p, "character_concerns", False))
@@ -9606,12 +9737,9 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
                             if val is not None:
                                 row[sk] = val
                         if gp_now > 0:
-                            confidence = max(
-                                confidence,
-                                min(92, 38 + int(gp_now * 1.15) + (h % 9)),
-                            )
+                            confidence = int(max(22, min(90, confidence + min(14, gp_now * 0.16))))
                         else:
-                            confidence = min(confidence, 52)
+                            confidence = min(confidence, 48)
                         row["scouting_confidence"] = int(confidence)
                     except Exception:
                         row["scouting_confidence"] = int(confidence)
@@ -9788,7 +9916,7 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
         _rank = _rank_i + 1
         _brow["rank"] = _rank
         if _rank <= 32:
-            _min_ceiling = 86.0 - (_rank - 1) * (86.0 - 70.0) / 31.0
+            _min_ceiling = 90.0 - (_rank - 1) * (90.0 - 80.0) / 31.0
             if float(_brow.get("potential_score") or 0) < _min_ceiling:
                 _brow["potential_score"] = round(_min_ceiling, 1)
             _true_pot = float(_brow.get("true_potential_score") or _brow.get("potential_score") or 0)
@@ -9954,7 +10082,7 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
         _rank_slot = int(rank or 0)
         _min_display_ceiling = 0.0
         if _rank_slot <= 32:
-            _min_display_ceiling = 86.0 - (_rank_slot - 1) * (86.0 - 70.0) / 31.0
+            _min_display_ceiling = 90.0 - (_rank_slot - 1) * (90.0 - 80.0) / 31.0
         _true_pot = float(row.get("true_potential_score") or row.get("potential_score") or 0)
         _consensus = float(row.get("consensus_potential_score") or 0)
         display_center = max(
@@ -10095,7 +10223,7 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
                 "ceiling_visibility": round(ceiling_visibility, 3),
                 "ceiling_state": ceiling_state,
                 "ceiling_hidden": ceiling_hidden,
-                "scouted_percentage": round(scout_overlay_pct, 1),
+                "scouted_percentage": round(_shown_dedicated_pct(session, key, rank, scout_overlay_pct), 1),
                 "ovr_revealed": ovr_revealed,
                 # Exact ability only when revealed; otherwise omit misleading true_ovr key.
                 "current_ovr_estimate": ovr_est,
@@ -13124,6 +13252,13 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
             blow = abs(hg - ag) >= 3
             world_chemistry.update_after_game(home, hg > ag, blow, r)
             world_chemistry.update_after_game(away, ag > hg, blow, r)
+            try:
+                from app.sim_engine.systems.chemistry import apply_post_game_familiarity  # noqa: WPS433
+
+                apply_post_game_familiarity(home, r)
+                apply_post_game_familiarity(away, r)
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
 
             for p in getattr(home, "roster", None) or []:
                 if getattr(p, "retired", False):
@@ -13180,6 +13315,19 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
                                 tick_conduct_games_missed(pl)
                             except Exception:
                                 _swallowed_log.debug("suppressed exception", exc_info=True)
+                    try:
+                        from app.sim_engine.franchise.conduct_incidents import (  # noqa: WPS433
+                            roll_on_ice_suspensions_for_team_after_game,
+                        )
+
+                        roll_on_ice_suspensions_for_team_after_game(
+                            session,
+                            tm,
+                            rng=r,
+                            game_id=f"{hid}_{aid}_{d}",
+                        )
+                    except Exception:
+                        _swallowed_log.debug("suppressed exception", exc_info=True)
 
             if getattr(session, "injuries_enabled", True):
                 for tm in (home, away):
@@ -13272,6 +13420,19 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
                                 tick_conduct_games_missed(pl)
                             except Exception:
                                 _swallowed_log.debug("suppressed exception", exc_info=True)
+                    try:
+                        from app.sim_engine.franchise.conduct_incidents import (  # noqa: WPS433
+                            roll_on_ice_suspensions_for_team_after_game,
+                        )
+
+                        roll_on_ice_suspensions_for_team_after_game(
+                            session,
+                            tm,
+                            rng=r,
+                            game_id=f"{hid}_{aid}_{d}",
+                        )
+                    except Exception:
+                        _swallowed_log.debug("suppressed exception", exc_info=True)
             if getattr(session, "injuries_enabled", True):
                 for tm in (home, away):
                     ev = world_injuries.maybe_injure_roster_subset(
@@ -14629,6 +14790,30 @@ def _actionable_interrupt_ids(session: FranchiseSession):
     return (tuple(sorted(pops)), tuple(sorted(meetings)), tuple(sorted(press)))
 
 
+def _user_trade_demand_open(session: FranchiseSession) -> bool:
+    """A player on the user's club has an open trade demand.
+
+    This stops every sim, including a full regular-season sim. Other clubs'
+    demands and waiver/meeting windows do not.
+    """
+    utid = str(getattr(session, "user_team_id", "") or "")
+    if not utid:
+        return False
+    for popup in list(getattr(session, "pending_ui_popups", None) or []):
+        if not isinstance(popup, dict):
+            continue
+        if str(popup.get("presentation_type") or "").startswith("trade_demand") and str(popup.get("team_id") or "") == utid:
+            return True
+    book = getattr(session, "trade_demands", None)
+    if isinstance(book, dict):
+        for row in book.values():
+            if not isinstance(row, dict) or str(row.get("status") or "") != "open":
+                continue
+            if str(row.get("team_id") or "") == utid:
+                return True
+    return False
+
+
 def _drop_resolved_waiver_popups(session: FranchiseSession) -> None:
     """Rest-of-season sim closes the 24-hour window. Don't dump notices for players who already cleared."""
     try:
@@ -14927,7 +15112,17 @@ def _snapshot_season_start_ovrs(session: FranchiseSession) -> None:
                     setattr(p, "_in_season_growth_net_01", 0.0)
                     setattr(p, "_nhl_season_plan", None)
                     setattr(p, "_in_season_ovr_delta_accum", 0.0)
-                    _record_rating_history(session, p)
+                    setattr(p, "_season_checkpoint_budget_01", None)
+                    setattr(p, "_nhl_checkpoint_marks", None)
+                    setattr(p, "_nhl_checkpoint_done", [])
+                    setattr(p, "_in_season_budget_carry_01", 0.0)
+                    try:
+                        from app.sim_engine.progression.development import clear_in_season_performance_state
+
+                        clear_in_season_performance_state(p)
+                    except Exception:
+                        _swallowed_log.debug("suppressed exception", exc_info=True)
+                    _record_rating_history(session, p, mark="season_start")
                     try:
                         from app.sim_engine.progression.potential import ensure_potential_floor
 
@@ -14946,8 +15141,27 @@ def _prospect_in_season_development_tick(session: FranchiseSession) -> int:
     return int(res.get("moved", 0)) + int(res.get("potential", 0))
 
 
-def _record_rating_history(session: FranchiseSession, p: Any) -> None:
-    """Append an OVR/POT point (only on change) so the UI can chart in-season movement."""
+def _snapshot_rating_history_mark(session: FranchiseSession, mark: str) -> None:
+    """One history point per active player, even when overall did not change."""
+    league = getattr(getattr(session, "sim", None), "league", None)
+    for tm in list(getattr(league, "teams", None) or []):
+        for pool in (
+            getattr(tm, "roster", None) or [],
+            getattr(tm, "ahl_roster", None) or [],
+            getattr(tm, "echl_roster", None) or [],
+        ):
+            for p in pool:
+                if p is None or getattr(p, "retired", False):
+                    continue
+                _record_rating_history(session, p, mark=mark)
+
+
+def _record_rating_history(session: FranchiseSession, p: Any, *, mark: str = "") -> None:
+    """Append an OVR/POT point so the UI can chart the season.
+
+    A season-start or season-end mark is kept even when the numbers did not move.
+    A player who stays at 98 still gets a curve.
+    """
     try:
         from app.sim_engine.entities.player import display_rating, player_current_ovr_01
 
@@ -14957,61 +15171,141 @@ def _record_rating_history(session: FranchiseSession, p: Any) -> None:
         hist = getattr(p, "rating_history", None)
         if not isinstance(hist, list):
             hist = []
+        season = int(getattr(session, "season_calendar_year", 0) or 0)
         if hist and hist[-1].get("ovr") == ovr and hist[-1].get("pot") == pot:
-            return
-        hist.append({
-            "season": int(getattr(session, "season_calendar_year", 0) or 0),
+            same_mark = (not mark) or (
+                hist[-1].get("mark") == mark and int(hist[-1].get("season") or 0) == season
+            )
+            if same_mark:
+                return
+        point = {
+            "season": season,
             "date": str(getattr(session, "current_date", "") or getattr(session, "calendar_date", "") or ""),
             "day": int(getattr(session, "calendar_days_finished", 0) or 0),
             "ovr": ovr,
             "pot": pot,
-        })
+        }
+        if mark:
+            point["mark"] = mark
+        note = str(getattr(p, "_growth_checkpoint_note", "") or "").strip()
+        if note:
+            point["reason"] = note
+        hist.append(point)
         p.rating_history = hist[-60:]
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
+def _league_games_played(session: FranchiseSession) -> int:
+    """Furthest team games played this season. The standings record is the real counter."""
+    best = 0
+    records = getattr(getattr(session, "standings", None), "records", None) or {}
+    for rec in records.values():
+        try:
+            gp = int(getattr(rec, "gp", 0) or 0)
+        except (TypeError, ValueError):
+            gp = 0
+        if gp > best:
+            best = gp
+    if best:
+        return best
+    sim = getattr(session, "sim", None)
+    league = getattr(sim, "league", None)
+    for tm in list(getattr(league, "teams", None) or []):
+        try:
+            gp = int(float(getattr(tm, "gp", getattr(tm, "games_played", 0)) or 0))
+        except (TypeError, ValueError):
+            gp = 0
+        if gp > best:
+            best = gp
+    return best
+
+
+def _growth_checkpoint_plan(session: FranchiseSession) -> Dict[str, Any]:
+    """Three games-played marks this season when overall and potential move.
+
+    Marks sit in the early, middle, and late regular season and stay put for the save.
+    """
+    sy = int(getattr(session, "season_calendar_year", 0) or 0)
+    stored = getattr(session, "_growth_checkpoints", None)
+    if isinstance(stored, dict) and int(stored.get("season") or 0) == sy and len(stored.get("marks") or []) == 3:
+        return stored
+    # A save that already paid all three calendar checkpoints this season should not pay again.
+    if (
+        isinstance(stored, dict)
+        and int(stored.get("season") or 0) == sy
+        and len(stored.get("fired") or []) >= 3
+        and stored.get("days")
+        and not stored.get("marks")
+    ):
+        stored = {"season": sy, "marks": [18, 41, 64], "fired": [18, 41, 64]}
+        try:
+            session._growth_checkpoints = stored
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+        return stored
+    seed = abs(_stable_hash(f"{getattr(session, 'session_id', '')}|{sy}|growth-gp-marks")) % (2**31 - 1)
+    rng = random.Random(int(seed) or 1)
+    marks = sorted([
+        rng.randint(16, 24),
+        rng.randint(38, 48),
+        rng.randint(60, 72),
+    ])
+    stored = {"season": sy, "marks": marks, "fired": []}
+    try:
+        session._growth_checkpoints = stored
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    return stored
+
+
 def _nhl_in_season_development_tick(session: FranchiseSession) -> int:
-    """Periodic real OVR drift for NHL (and depth) rosters during the regular season."""
-    if str(getattr(session, "phase", "") or "") not in ("regular", "playoffs", ""):
-        # Allow during regular; skip pure offseason.
-        phase = str(getattr(session, "phase", "") or "")
-        if phase in ("offseason", "preseason", "post_cup"):
-            return 0
-    if not bool(getattr(session, "_regular_stats_split_done", False)):
+    """NHL growth at per-player GP checkpoints (20/41/61 ±4) via the 40% in-season pool."""
+    phase = str(getattr(session, "phase", "") or "")
+    if phase in ("offseason", "preseason", "post_cup"):
         return 0
 
-    from app.sim_engine.progression.development import apply_in_season_development_pulse
+    from app.sim_engine.progression.development import (
+        any_nhl_roster_checkpoint_due,
+        apply_nhl_in_season_checkpoint,
+        player_nhl_checkpoints_due,
+    )
 
     sim = getattr(session, "sim", None)
     league = getattr(sim, "league", None)
     if league is None:
         return 0
+    season_year = int(getattr(session, "season_calendar_year", 0) or 0)
+    roster_pool: List[Any] = []
+    for tm in list(getattr(league, "teams", None) or []):
+        roster_pool.extend(list(getattr(tm, "roster", None) or []))
+    if not any_nhl_roster_checkpoint_due(roster_pool, season_year):
+        return 0
+
     rng = getattr(sim, "rng", None) or random.Random()
     moved = 0
+    notables: List[tuple] = []
 
     try:
         from services.franchise_offseason import _dev_stamp_season_production
     except Exception:
         _dev_stamp_season_production = None  # type: ignore
 
-    def _dev_age(pl: Any) -> int:
-        try:
-            return int(getattr(getattr(pl, "identity", None), "age", None) or getattr(pl, "age", 99) or 99)
-        except (TypeError, ValueError):
-            return 99
-
     for tm in list(getattr(league, "teams", None) or []):
-        # AHL players past prospect age (23+) still develop in-season — the prospect tick
-        # stops at 22, so these were frozen until the summer.
-        ahl_vets = [
-            p for p in list(getattr(tm, "ahl_roster", None) or [])
-            if p is not None and 22 < _dev_age(p) <= 28
-        ]
-        for p in list(getattr(tm, "roster", None) or []) + ahl_vets:
+        _gp = float(getattr(tm, "gp", getattr(tm, "games_played", 0)) or 0)
+        _pts = float(getattr(tm, "pts", getattr(tm, "points", 0)) or 0)
+        _pct = (_pts / (_gp * 2.0)) if _gp >= 10 else None
+        for p in list(getattr(tm, "roster", None) or []):
             if p is None or getattr(p, "retired", False):
                 continue
-            # Backfill season_start if save started mid-season.
+            due = player_nhl_checkpoints_due(p, season_year)
+            if not due:
+                continue
+            if _pct is not None:
+                try:
+                    setattr(p, "_season_team_points_pct", _pct)
+                except Exception:
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
             if getattr(p, "season_start_ovr", None) is None:
                 try:
                     from app.sim_engine.franchise.storyline_conduct import get_base_ovr_display
@@ -15029,16 +15323,55 @@ def _nhl_in_season_development_tick(session: FranchiseSession) -> int:
             except Exception:
                 _swallowed_log.debug("suppressed exception", exc_info=True)
             try:
-                d = apply_in_season_development_pulse(p, rng)
-                if abs(float(d or 0)) >= 0.15:
+                ck = min(due)
+                batch = float(
+                    apply_nhl_in_season_checkpoint(
+                        p,
+                        random.Random(rng.random()),
+                        season_year=season_year,
+                        checkpoint_gp=int(ck),
+                    )
+                    or 0.0
+                )
+                if abs(batch) >= 0.3:
                     moved += 1
+                    sign = "+" if batch > 0 else ""
+                    setattr(p, "_growth_checkpoint_note", f"Season form {sign}{batch:.1f}")
                     _record_rating_history(session, p)
+                    if abs(batch) >= 0.8:
+                        notables.append((abs(batch), _name_str(p), batch))
             except Exception:
                 continue
 
     if moved:
         try:
             session._cached_roster_browser_payload = None
+            session._growth_needs_save = True
+            _bump_stats_revision(session)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+        try:
+            notables.sort(key=lambda row: row[0], reverse=True)
+            bits = []
+            for _abs, name, delta in notables[:6]:
+                sign = "+" if delta > 0 else ""
+                bits.append(f"{name} {sign}{delta:.1f}")
+            summary = ", ".join(bits) if bits else f"{moved} players moved"
+            if bits and moved > len(bits):
+                summary = f"{summary} · {moved} players moved"
+            sy = int(getattr(session, "season_calendar_year", 0) or 0)
+            _append_showcase_popup(
+                session,
+                f"growth-checkpoint:{sy}:{','.join(str(d) for d in due)}",
+                {
+                    "kind": "breaking_news",
+                    "source_label": "Ratings",
+                    "theme": "positive",
+                    "headline": "Ratings update",
+                    "summary": summary,
+                    "body": "Overall and potential just moved based on how this season is going.",
+                },
+            )
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
     return moved
@@ -15307,11 +15640,14 @@ def _wjc_enrich_prospect_row(
         # every other club -> drafted_nhl (no draft stock, still a real player).
         is_user = bool(row.get("is_user_prospect")) or str(row.get("prospect_classification") or "") == "drafted_user"
         owner_abbr = str(row.get("owner_team_abbr") or ut_abbr or ("YOU" if is_user else ""))
-        ovr99 = round(float(ovr01) * 99.0, 1)
+        ovr99 = int(round(float(ovr01) * 99.0))
         pot99 = ovr99
         if player is not None:
             try:
-                pot99 = round(float(_draft_potential99(player, ovr99)), 1)
+                ovr_i, pot_i = shown_ovr_and_potential(player)
+                ovr99 = int(ovr_i)
+                pot99 = int(pot_i)
+                ovr01 = ovr99 / 99.0
             except Exception:
                 pot99 = ovr99
         row.update(
@@ -15741,8 +16077,7 @@ def _persist_wjc_stock_to_draft_class(
 
     medals = dict(bundle.get("medals") or {})
 
-    invalidate_session_payload_caches(session, reason="wjc_pre")
-    board_before = build_draft_class_rankings(session, sim)
+    board_before = get_cached_draft_class_rankings(session, sim)
     entries_before = {
         str(e.get("key")): int(e.get("rank") or 0)
         for e in (board_before.get("entries") or [])
@@ -15789,8 +16124,8 @@ def _persist_wjc_stock_to_draft_class(
 
     session.wjc_draft_score_boosts = boosts
 
-    invalidate_session_payload_caches(session, reason="wjc_post")
-    board_after = build_draft_class_rankings(session, sim)
+    _bump_draft_board_revision(session)
+    board_after = get_cached_draft_class_rankings(session, sim)
     entries_after = {
         str(e.get("key")): int(e.get("rank") or 0)
         for e in (board_after.get("entries") or [])
@@ -16496,7 +16831,7 @@ def _collect_wjc_tournament_prospects(
 
     sim = getattr(session, "sim", None)
     try:
-        board = build_draft_class_rankings(session, sim) if sim is not None else {"entries": []}
+        board = get_cached_draft_class_rankings(session, sim) if sim is not None else {"entries": []}
     except Exception:
         board = {"entries": []}
     board_entries = board.get("entries") or []
@@ -18156,8 +18491,16 @@ def _run_franchise_season_end_progression(session: FranchiseSession) -> Dict[str
     try:
         from app.sim_engine.engine import apply_league_ovr_soft_regression_if_needed
 
-        # 74.5 was permanently "on" and clawed back fresh development years.
-        apply_league_ovr_soft_regression_if_needed(teams, rng, avg_trigger=78.0)
+        # No fixed 78. The first call records this save's opening average.
+        # A later climb is spread across ages 24+, and anyone who just aged is skipped.
+        apply_league_ovr_soft_regression_if_needed(teams, rng)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+
+    try:
+        from services.roster_compliance import fill_league_roster_minimums
+
+        fill_league_roster_minimums(league, rng)
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
 
@@ -18655,6 +18998,27 @@ def _drop_player_one_line(session: FranchiseSession, player_id: str) -> bool:
     return False
 
 
+def _stamp_player_rank_from_sheet(session: FranchiseSession, player: Any) -> None:
+    """0-based rank from the sheet after a move. Line 1 stays 0. Defence has its own field."""
+    pid = str(getattr(player, "id", "") or "")
+    sheet = _saved_line_sheet(session)
+    if not pid or not sheet:
+        return
+    for group, field, table in (
+        ("forwards", "_deployed_line_rank", {"f1": 0, "f2": 1, "f3": 2, "f4": 3}),
+        ("defense", "_deployed_pair_rank", {"d1": 0, "d2": 1, "d3": 2}),
+    ):
+        units = [u for u in (sheet.get(group) or []) if isinstance(u, dict)]
+        for idx, unit in enumerate(units):
+            slots = unit.get("slots") or {}
+            if not any(str(val or "") == pid for val in slots.values()):
+                continue
+            line_id = str(unit.get("id") or "").lower()
+            rank = table.get(line_id, idx)
+            setattr(player, field, int(rank))
+            return
+
+
 def _swap_goalie_slots(session: FranchiseSession) -> bool:
     sheet = _saved_line_sheet(session)
     units = [u for u in ((sheet or {}).get("goalies") or []) if isinstance(u, dict)]
@@ -18698,11 +19062,11 @@ def _apply_storyline_choice_action(
         player_name=str(meta.get("player_name") or ""),
     )
     if cid in ("reduce_toi", "reduce"):
-        if _drop_player_one_line(session, str(getattr(target, "id", "") or meta.get("player_id") or "")):
+        moved_id = str(getattr(target, "id", "") or meta.get("player_id") or "")
+        if _drop_player_one_line(session, moved_id):
             out["ice_time_moved"] = 1
-        if target is not None:
-            rank = int(getattr(target, "_deployed_line_rank", 1) or 1)
-            setattr(target, "_deployed_line_rank", min(4, rank + 1))
+            if target is not None:
+                _stamp_player_rank_from_sheet(session, target)
     elif cid == "explore_trade":
         _raise_trade_rumor(target, 12)
         out["trade_rumor_heat"] = 12
@@ -19359,6 +19723,10 @@ def advance_franchise_bulk(
             if auto_resolve_decisions and getattr(session, "pending_decisions", None):
                 _auto_resolve_pending_decisions(session)
 
+            if _user_trade_demand_open(session):
+                stopped = "trade_demand"
+                break
+
             if getattr(session, "pending_decisions", None):
                 stopped = "pending_decisions"
                 break
@@ -19407,10 +19775,13 @@ def advance_franchise_bulk(
                 break
 
             # Week / month sims stop so a waiver claim, meeting, or press availability
-            # is still inside its window. Rest-of-season keeps going; those windows close
-            # on their own and the stale notices are dropped at the end.
+            # is still inside its window. A full-season sim keeps going through those,
+            # and stops only when a player on the user's club demands a trade.
             if interrupt_before is not None and _actionable_interrupt_ids(session) != interrupt_before:
                 stopped = "user_action"
+                break
+            if _user_trade_demand_open(session):
+                stopped = "trade_demand"
                 break
 
             if use_light_bulk and st == "ok":
@@ -25851,6 +26222,14 @@ def get_cached_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict
         session._prospect_profile_by_id_cache = None
         session._prospect_revision = int(getattr(session, "_prospect_revision", 0) or 0) + 1
         setattr(session, "_draft_analytics_stock_v7", True)
+    # Age is a score now. Boards built by the round-1 age wall are stale.
+    if not getattr(session, "_draft_age_score_v8", False):
+        session._cached_draft_class_rankings = None
+        session._cached_draft_class_hud_payload = None
+        session._draft_class_detail_cache = None
+        session._prospect_profile_by_id_cache = None
+        session._prospect_revision = int(getattr(session, "_prospect_revision", 0) or 0) + 1
+        setattr(session, "_draft_age_score_v8", True)
     try:
         if league is not None and not getattr(session, "_draft_pipeline_ovr_repaired", False):
             from app.sim_engine.league_hierarchy_bootstrap import repair_undervalued_draft_pipeline_stars
@@ -25893,7 +26272,7 @@ def get_cached_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
 
-    rev = int(getattr(session, "_prospect_revision", 0) or 0)
+    rev = int(getattr(session, "_draft_board_revision", 0) or 0)
     cur_cursor = int(getattr(session, "calendar_cursor", 0) or 0)
     cached = getattr(session, "_cached_draft_class_rankings", None)
     cached_rev = int(getattr(session, "_cached_draft_class_rankings_rev", -1) or -1)
@@ -25916,7 +26295,7 @@ def get_cached_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict
             lock = threading.Lock()
             _DRAFT_RANKINGS_LOCKS[sid] = lock
     with lock:
-        rev = int(getattr(session, "_prospect_revision", 0) or 0)
+        rev = int(getattr(session, "_draft_board_revision", 0) or 0)
         cur_cursor = int(getattr(session, "calendar_cursor", 0) or 0)
         cached = getattr(session, "_cached_draft_class_rankings", None)
         cached_rev = int(getattr(session, "_cached_draft_class_rankings_rev", -1) or -1)
@@ -25929,8 +26308,9 @@ def get_cached_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict
         payload = build_draft_class_rankings(session, sim)
         if isinstance(payload, dict):
             payload["prospect_revision"] = int(getattr(session, "_prospect_revision", 0) or 0)
+            payload["draft_board_revision"] = int(getattr(session, "_draft_board_revision", 0) or 0)
         session._cached_draft_class_rankings = payload
-        session._cached_draft_class_rankings_rev = int(getattr(session, "_prospect_revision", 0) or 0)
+        session._cached_draft_class_rankings_rev = int(getattr(session, "_draft_board_revision", 0) or 0)
         session._draft_rankings_cache_state = "valid"
         _rebuild_draft_board_entry_index(session, payload)
         return payload
@@ -25960,9 +26340,6 @@ def get_cached_draft_class_hud(
 
 
 def get_cached_roster_browser(session: FranchiseSession, sim: Any, user_team_id: str) -> Dict[str, Any]:
-    cached = getattr(session, "_cached_roster_browser_payload", None)
-    if isinstance(cached, dict) and cached:
-        return cached
     # Hub and roster screens both request this on open. Without a lock they each
     # serialize every club at once and the page waits on both builds.
     sid = str(getattr(session, "session_id", "") or id(session))
@@ -27162,7 +27539,7 @@ def _build_free_agent_row(p: Any, season_year: int, session: Any = None, *, deta
     projected stat lines, previous season and every stock field for the detail panel."""
     pid = str(getattr(p, "id", "") or "")
     age = _player_age_int(p)
-    ovr = round(_player_ovr99(p))
+    ovr = round(_player_display_ovr99(p))
     pos = _pos_str(p)
     # Nobody holds a pool free agent's rights, so he is unrestricted: anyone can
     # sign him with no compensation. (Labelling young FAs "RFA" by age alone
@@ -27182,6 +27559,7 @@ def _build_free_agent_row(p: Any, season_year: int, session: Any = None, *, deta
         "position": pos,
         "overall": ovr,
         "ovr": ovr,
+        "base_ovr": ovr,
         "potential": potential,
         "nationality": str(getattr(ident, "birth_country", "") or ""),
         "status": fa_rights,
@@ -27191,6 +27569,16 @@ def _build_free_agent_row(p: Any, season_year: int, session: Any = None, *, deta
         "availability_to_sign": True,
         "nhl_transfer_eligible": True,
     }
+    try:
+        from app.sim_engine.franchise.storyline_conduct import (  # noqa: WPS433
+            format_ovr_modifier_badge,
+            serialize_ovr_modifiers_for_ui,
+        )
+
+        row["ovr_modifiers"] = serialize_ovr_modifiers_for_ui(p)
+        row["ovr_badge"] = format_ovr_modifier_badge(p)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         from app.sim_engine.generation.player_headshots import merge_headshot_into_row
 

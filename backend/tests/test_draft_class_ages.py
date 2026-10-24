@@ -76,9 +76,9 @@ def test_reanchor_restores_eighteen_year_olds_from_2025_formula():
 def test_pipeline_stars_are_first_year_eligible():
     rng = random.Random(7)
     players = []
-    for i, age in enumerate([18] * 40 + [19] * 40 + [20] * 40):
+    for i in range(80):
         pos = Position.C if i % 8 else Position.G
-        ident = SimpleNamespace(name=f"P{i}", age=age, position=pos)
+        ident = SimpleNamespace(name=f"P{i}", age=18, birth_year=2009, birth_month=7, birth_day=1, position=pos)
         p = SimpleNamespace(
             identity=ident,
             drafted=False,
@@ -91,8 +91,9 @@ def test_pipeline_stars_are_first_year_eligible():
         players.append(p)
     league = SimpleNamespace(
         development_leagues=[{"league_code": "CHL_OHL", "teams": [{"players": players}]}],
+        season_start_year=2026,
     )
-    _shape_draft_class_pipeline(league, rng)
+    _shape_draft_class_pipeline(league, rng, draft_year=2027)
     stars = [
         p
         for p in players
@@ -100,21 +101,20 @@ def test_pipeline_stars_are_first_year_eligible():
         and getattr(p.identity, "position", None) != Position.G
     ]
     assert stars
-    first_year = sum(1 for p in stars if p.identity.age <= 18)
-    assert first_year >= int(len(stars) * 0.7)
+    assert all(getattr(p, "_pipeline_shaped_year", None) == 2027 for p in stars)
+    assert all(p.identity.age == 18 for p in stars)
 
 
-def test_first_round_is_eighteen_year_olds():
-    from services.draft_ranking_logic import enforce_first_round_draft_age
+def test_age_is_a_score_not_a_round_one_wall():
+    from services.draft_ranking_logic import (
+        compute_consensus_potential_evaluation,
+        compute_enhanced_draft_score,
+        enforce_first_round_draft_age,
+    )
 
     board = []
-    for i in range(70):
-        if i < 8:
-            age = 20
-        elif i < 14:
-            age = 19
-        else:
-            age = 18
+    for i in range(40):
+        age = 19 if i < 12 else 18
         board.append({
             "key": f"p{i}",
             "name": f"P{i}",
@@ -122,11 +122,22 @@ def test_first_round_is_eighteen_year_olds():
             "position": "C",
             "_score": 200 - i,
         })
+    order = [r["key"] for r in board]
     enforce_first_round_draft_age(board)
-    top10 = [int(r["age"]) for r in board[:10]]
-    round1 = [int(r["age"]) for r in board[:32]]
-    assert top10 == [18] * 10
-    assert sum(1 for age in round1 if age == 19) == 1
-    assert all(age < 20 for age in round1)
-    assert int(board[31]["age"]) == 19
-    assert all(int(r["age"]) >= 19 for r in board[32:40])
+    assert [r["key"] for r in board] == order
+
+    elite_nineteen = {
+        "age": 19, "true_ovr": 78, "potential_score": 94, "consensus_potential_score": 94,
+        "production_adjusted_score": 1.1, "position": "C",
+    }
+    ordinary_eighteen = {
+        "age": 18, "true_ovr": 70, "potential_score": 74, "consensus_potential_score": 74,
+        "production_adjusted_score": 0.7, "position": "C",
+    }
+    assert compute_enhanced_draft_score(elite_nineteen) > compute_enhanced_draft_score(ordinary_eighteen)
+
+    inflated = compute_consensus_potential_evaluation({
+        "age": 19, "true_ovr": 83, "production_adjusted_score": 1.6, "ppg": 1.6, "position": "C",
+        "key": "over",
+    })
+    assert inflated <= 83 + 8.5

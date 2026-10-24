@@ -20,10 +20,10 @@ QUALITATIVE = [
     ("worst_player", "Worst regular", "Lowest overall among skaters with 20+ games."),
     ("most_improved", "Most improved", "Biggest OVR gain since the season started."),
     ("biggest_decline", "Biggest decline", "Biggest OVR drop since the season started."),
-    ("best_value", "Best bargain", "Points per $1M of cap hit (20+ GP)."),
-    ("worst_contract", "Worst contract", "Most cap dollars per point (20+ GP, $3M+)."),
+    ("best_value", "Best bargain", "Points per $1M of cap hit (20+ GP, no ELCs)."),
+    ("worst_contract", "Worst contract", "Most cap dollars per point (20+ GP, $3M+, no ELCs)."),
     ("best_finisher", "Best finisher", "Goals above expected (G minus ixG)."),
-    ("unluckiest", "Snakebitten", "Expected goals that never went in (ixG minus G)."),
+    ("unluckiest", "Snakebitten", "Forwards: expected goals that never went in (ixG minus G)."),
     ("best_two_way", "Best two-way", "xGF% on ice (40+ GP)."),
     ("best_leader", "Room leader", "Leadership, professionalism and room impact ratings."),
     ("biggest_hothead", "Biggest hothead", "Low composure plus penalty minutes."),
@@ -178,6 +178,12 @@ def _fmt_toi(sec: float) -> str:
 def build_rankings(session: Any, *, team_id: Optional[str] = None) -> Dict[str, Any]:
     key = (int(getattr(session, "season_calendar_year", 0) or 0), int(getattr(session, "_stats_revision", 0) or 0),
            int(getattr(session, "calendar_cursor", 0) or 0), str(team_id or ""))
+    if not getattr(session, "_rankings_elc_v2", False):
+        session._rankings_cache = None
+        try:
+            session._rankings_elc_v2 = True
+        except Exception:
+            pass
     cache = getattr(session, "_rankings_cache", None)
     if isinstance(cache, tuple) and cache[0] == key:
         return cache[1]
@@ -236,9 +242,32 @@ def _build(session: Any, team_id: Optional[str]) -> Dict[str, Any]:
     q["most_improved"] = lambda p, t: improved(p, t, 1)
     q["biggest_decline"] = lambda p, t: improved(p, t, -1)
 
+    def _on_true_elc(p: Any) -> bool:
+        try:
+            from services.contract_economy import has_true_elc_contract
+
+            if has_true_elc_contract(p):
+                return True
+        except Exception:
+            pass
+        contract = getattr(p, "contract", None)
+        ctype = ""
+        entry = False
+        if isinstance(contract, dict):
+            ctype = str(contract.get("type") or contract.get("contract_type") or "")
+            entry = bool(contract.get("is_entry_level") or contract.get("isEntryLevel"))
+        elif contract is not None:
+            ctype = str(getattr(contract, "contract_type", "") or getattr(contract, "type", "") or "")
+            entry = bool(getattr(contract, "is_entry_level", False))
+        if "ELC" in ctype.upper() or entry:
+            return True
+        # Entry-level money that was stored as a standard deal still prices like an ELC.
+        cap = _cap(p)
+        return cap > 0 and cap <= 1.50 and _age(p) <= 25
+
     def value(p: Any, t: str, worst: bool) -> Optional[Tuple[float, str, str]]:
         cap, pts = _cap(p), _i(L(p).get("pts"))
-        if _pos(p) == "G" or gp(p) < 20 or cap <= 0:
+        if _pos(p) == "G" or gp(p) < 20 or cap <= 0 or _on_true_elc(p):
             return None
         if worst:
             if cap < 3.0:
@@ -253,6 +282,8 @@ def _build(session: Any, team_id: Optional[str]) -> Dict[str, Any]:
     def finishing(p: Any, t: str, sign: int) -> Optional[Tuple[float, str, str]]:
         r = L(p)
         if _pos(p) == "G" or gp(p) < 20 or "ixg" not in r:
+            return None
+        if sign < 0 and _pos(p) == "D":
             return None
         d = (_i(r.get("g")) - _f(r.get("ixg"))) * sign
         return (d, f"{sign * d:+.1f} G vs xG", f"{_i(r.get('g'))} goals on {_f(r.get('ixg')):.1f} expected")

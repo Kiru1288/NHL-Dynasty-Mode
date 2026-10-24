@@ -695,6 +695,12 @@ const fmtSv = (v) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(
 const fmtSigned = (v) => (Number(v) > 0 ? `+${v}` : String(v ?? 0));
 const fmtNum = (v, digits = 0) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(digits));
 
+function unitIceLine(unit) {
+  if (!Array.isArray(unit) || unit.length < 7 || !unit.some((v) => Number(v) > 0)) return "";
+  const names = ["L1", "L2", "L3", "L4", "P1", "P2", "P3"];
+  return names.map((name, i) => `${name} ${fmtClock(Number(unit[i]) * 60)}`).join(" · ");
+}
+
 function BoxSkaterTable({ rows, onOpenPlayer }) {
   if (!rows || !rows.length) return <p className="bxs-empty">No skater lines stored.</p>;
   return (
@@ -976,6 +982,7 @@ export function BoxScoreView({ box }) {
         </div>
         <BoxSkaterTable rows={box.skaters?.[side]} />
         <BoxGoalieTable rows={box.goalies?.[side]} />
+        {unitIceLine(sel.unit_toi) ? <p className="bxs-note">Even-strength unit ice: {unitIceLine(sel.unit_toi)}</p> : null}
         <p className="bxs-note">{sel.name}: {sel.hits} hits, {sel.blocks} blocks.</p>
       </section>
     </div>

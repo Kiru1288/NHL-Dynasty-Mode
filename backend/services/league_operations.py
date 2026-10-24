@@ -1780,6 +1780,14 @@ def _build_league_operations_payload_impl(session: FranchiseSession) -> Dict[str
 
     rule_changes = cba.get("potential_changes") or []
 
+    suspension_list: List[Dict[str, Any]] = []
+    try:
+        from app.sim_engine.franchise.conduct_incidents import list_league_suspensions  # noqa: WPS433
+
+        suspension_list = list_league_suspensions(session, team_by_id=session.team_by_id)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+
     return {
         "season": season_label,
         "current_year": sy,
@@ -1814,4 +1822,5 @@ def _build_league_operations_payload_impl(session: FranchiseSession) -> Dict[str
         "league_revenue_b": round(league_revenue / 1000.0, 2),
         "total_superstar_revenue_boost": total_superstar_boost,
         "phase": str(getattr(session, "phase", "") or ""),
+        "suspension_list": suspension_list,
     }

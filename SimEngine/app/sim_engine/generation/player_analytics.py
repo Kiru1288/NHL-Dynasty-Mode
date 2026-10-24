@@ -557,11 +557,11 @@ def normalize_skater_counting_stats(row: Mapping[str, Any]) -> Dict[str, Any]:
         xa = float(a) * 0.70
     elif xa > 0 and a <= 0 and xa > 5.0:
         xa = 0.0
-    # Display/analytics: whole expected goals / assists (no long decimals).
+    # Display/analytics: one decimal so a 6-shot player is not rounded to 0 or 1.
     if ixg > 0:
-        ixg = float(int(round(ixg)))
+        ixg = round(float(ixg), 1)
     if xa > 0:
-        xa = float(int(round(xa)))
+        xa = round(float(xa), 1)
 
     gf_on = safe_float(first_present(row, ["gf_on", "on_ice_gf", "goals_for_on_ice"], 0.0), 0.0)
     ga_on = safe_float(first_present(row, ["ga_on", "on_ice_ga", "goals_against_on_ice"], 0.0), 0.0)
@@ -1082,7 +1082,7 @@ def calculate_skater_rates(row: Mapping[str, Any]) -> Dict[str, Any]:
     average_shot_quality_against = pct(xga, ca, default=0.0)
     shot_quality_differential = average_shot_quality_for - average_shot_quality_against
 
-    finishing = float(int(round(g - ixg))) if ixg > 0 else 0.0
+    finishing = round(float(g) - float(ixg), 1) if (ixg > 0 or g > 0) else 0.0
     finishing_per_60 = per_60(finishing, toi_sec)
     finishing_efficiency = pct(g, ixg, default=0.0) if ixg > 0 else 0.0
 
@@ -1661,7 +1661,7 @@ def calculate_skater_value_metrics(row: Mapping[str, Any]) -> Dict[str, Any]:
     gar = offensive_gar + defensive_gar + penalty_gar + faceoff_gar
     total_impact_gar = gar + possession_gar + playmaking_gar + special_teams_gar
     base_war = gar / GOALS_PER_WIN
-    war = total_impact_gar / GOALS_PER_WIN
+    war = (gar + possession_gar) / GOALS_PER_WIN
     analytics_gp = safe_int(first_present(row, ["analytics_gp", "gp"], 0))
     # Early-season sample: require ice time + possession, not a full 20-game slate.
     # Awards / qualified boards can still require larger samples client-side.
@@ -1745,7 +1745,7 @@ def calculate_skater_value_metrics(row: Mapping[str, Any]) -> Dict[str, Any]:
         "WATR": round_to(war, 1),
         "total_impact": round_to(war, 1),
         "total_impact_gar": round_to(total_impact_gar, 3),
-        "war_formula": "WAR=(offensive_gar+defensive_gar+penalty_gar+faceoff_gar+possession_gar+playmaking_gar+special_teams_gar)/GOALS_PER_WIN",
+        "war_formula": "WAR=(offensive_gar+defensive_gar+penalty_gar+faceoff_gar+possession_gar)/GOALS_PER_WIN",
         "war_valid": war_valid,
         "cost_per_point": round_to(cost_per_point, 3),
         "cost_per_goal": round_to(cost_per_goal, 3),
@@ -3725,6 +3725,19 @@ def attach_relative_team_rates(
         except (TypeError, ValueError):
             return None
 
+    def _off_ice_rel(p_for: Any, p_against: Any, p_pct: Any, t_for: Any, t_against: Any, t_pct: Any) -> Optional[float]:
+        """On-ice rate minus the off-ice rate, when the team row holds raw counts."""
+        if p_pct is None:
+            return None
+        try:
+            off_for = float(t_for) - float(p_for)
+            off_against = float(t_against) - float(p_against)
+        except (TypeError, ValueError):
+            return _rel(p_pct, t_pct)
+        if off_for <= 0 or off_against <= 0:
+            return _rel(p_pct, t_pct)
+        return round(float(p_pct) - (off_for / (off_for + off_against)), 4)
+
     for row in player_rows or []:
         if not isinstance(row, MutableMapping):
             continue
@@ -3732,8 +3745,8 @@ def attach_relative_team_rates(
         team = teams.get(tid)
         if not team:
             continue
-        row["rel_cf_pct"] = _rel(row.get("cf_pct"), team.get("cf_pct"))
-        row["rel_ff_pct"] = _rel(row.get("ff_pct"), team.get("ff_pct"))
+        row["rel_cf_pct"] = _off_ice_rel(row.get("cf"), row.get("ca"), row.get("cf_pct"), team.get("cf"), team.get("ca"), team.get("cf_pct"))
+        row["rel_ff_pct"] = _off_ice_rel(row.get("ff"), row.get("fa"), row.get("ff_pct"), team.get("ff"), team.get("fa"), team.get("ff_pct"))
         row["rel_xgf_pct"] = _rel(row.get("xgf_pct"), team.get("xgf_pct"))
         row["rel_gf_pct"] = _rel(row.get("gf_pct"), team.get("gf_pct"))
         team_gf = safe_float(team.get("gf"), 0.0)

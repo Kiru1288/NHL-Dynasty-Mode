@@ -3,7 +3,8 @@
  * Edit Lines, and Trade Hub.
  *
  * Backend fields (preferred order for display):
- *   effective_ovr → ovr → overall → base_ovr
+ *   base_ovr → ovr → overall
+ * Modifiers are a badge (ovr_badge), not part of the number.
  *
  * Scale: values <= 1.5 are treated as 0–1 fractions and mapped to 0–99.
  */
@@ -36,18 +37,43 @@ export function getUniversalOverall(player) {
   if (!player || typeof player !== "object") return 0;
 
   return firstPositiveOverall(
-    player.effective_ovr,
-    player.effectiveOvr,
+    player.base_ovr,
+    player.baseOvr,
+    player.sim_ovr,
+    player.simOvr,
     player.ovr,
     player.overall,
     player.display_overall,
     player.displayOverall,
-    player.true_overall,
-    player.trueOverall,
-    player.base_ovr,
-    player.baseOvr,
-    player.rating
+    player.rating,
+    player.effective_ovr,
+    player.effectiveOvr
   );
+}
+
+function modifierLabel(mod) {
+  const cause = String(mod?.cause_type || "").toUpperCase();
+  const source = String(mod?.source || "").toLowerCase();
+  if (cause.includes("CONDUCT") || source.includes("conduct")) return "conduct";
+  if (cause.includes("TRADE") || source.includes("rumor")) return "trade";
+  if (cause.includes("LINE") || cause.includes("SCRATCH") || source.includes("lineup")) return "lineup";
+  const reason = String(mod?.reason || "").trim();
+  return reason ? reason.split(":")[0].slice(0, 22) : "story";
+}
+
+/** Badge beside the overall, e.g. "−3 conduct". Empty when nothing is applied. */
+export function getOverallModifierBadge(player) {
+  if (!player || typeof player !== "object") return "";
+  const preset = String(player.ovr_badge || player.ovrBadge || "").trim();
+  if (preset) return preset;
+  const mods = Array.isArray(player.ovr_modifiers) ? player.ovr_modifiers : [];
+  const total = mods.reduce((sum, mod) => sum + (Number(mod?.amount) || 0), 0);
+  if (!total) return "";
+  const primary = mods.reduce((best, mod) => (
+    Math.abs(Number(mod?.amount) || 0) > Math.abs(Number(best?.amount) || 0) ? mod : best
+  ), mods[0]);
+  const mag = total < 0 ? `−${Math.abs(total)}` : `+${total}`;
+  return `${mag} ${modifierLabel(primary)}`.trim();
 }
 
 /**
@@ -82,6 +108,8 @@ export function getOverallTooltip(player) {
   const drop = getOverallDrop(player);
 
   if (current <= 0) return "Overall rating unavailable";
+  const badge = getOverallModifierBadge(player);
+  if (badge) return `Overall ${current} · ${badge}`;
   if (drop > 0 && base > 0) {
     return `Overall ${current} (base ${base}, ↓${drop})`;
   }

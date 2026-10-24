@@ -150,7 +150,7 @@ def _offense_opportunity_weight(p: Any) -> float:
     pm = _rating_avg(p, PLAYMAKING_ATTRS)
     iq = _rating_avg(p, IQ_ATTRS)
     pos = _pos_str(p).upper()
-    pos_mult = 0.86 if pos == "D" else 1.0
+    pos_mult = 0.98 if pos == "D" else 1.0
     usage_mult = _player_role_usage_mult(p)
     base = (0.40 * off + 0.34 * pm + 0.26 * iq) / 99.0
     return max(0.04, (ovr ** 1.22) * (base ** 1.08) * usage_mult * pos_mult)
@@ -2476,8 +2476,8 @@ def _box_stamp_extras(session: Any, gid: str, hid: str, aid: str, lines: Dict[st
         side_sk[tid].append((pid, row))
         toi_min = float(row[toi_i] or 0) / 60.0
         u = rng.random()
-        x = toi_min * 0.045 * (0.3 + 1.4 * u)
-        y = toi_min * 0.055 * (1.7 - 1.4 * u)
+        x = toi_min * 0.028 * (0.35 + 1.15 * u)
+        y = toi_min * 0.034 * (1.35 - 0.9 * u)
         row[tk_i] = int(x + (u * 7.31) % 1.0)
         row[gv_i] = int(y + (u * 3.17) % 1.0)
     takers: Dict[str, List[Tuple[str, List[Any], float]]] = {}
@@ -2522,6 +2522,15 @@ def _box_stamp_extras(session: Any, gid: str, hid: str, aid: str, lines: Dict[st
         for (pid, row, _f), d, w in zip(t, draws, won):
             row[_BOX_IDX["fow"]] = w
             row[_BOX_IDX["fol"]] = d - w
+
+
+def _unit_ice_minutes(raw: Any) -> Optional[List[float]]:
+    """Even-strength unit clock, minutes: L1 L2 L3 L4 P1 P2 P3."""
+    if not isinstance(raw, dict) or not raw:
+        return None
+    keys = ("F0", "F1", "F2", "F3", "D0", "D1", "D2")
+    vals = [round(float(raw.get(k) or 0.0), 2) for k in keys]
+    return vals if any(v > 0 for v in vals) else None
 
 
 def _box_three_stars(lines: Dict[str, List[Any]], gwg: str) -> List[str]:
@@ -2641,6 +2650,10 @@ def store_compact_box_score(session: Any, box: Dict[str, Any], lines: Optional[D
         "lines": lines,
         "gwg": gwg,
         "stars": _box_three_stars(lines, gwg),
+        "ice": [
+            _unit_ice_minutes(box.get("away_unit_toi")),
+            _unit_ice_minutes(box.get("home_unit_toi")),
+        ],
     }
     bucket["games"][gid] = compact
     pidx = bucket["players"]
@@ -2782,6 +2795,7 @@ def expand_box_score(session: Any, compact: Dict[str, Any]) -> Dict[str, Any]:
             ),
             "takeaways": team_tot[side]["tk"],
             "giveaways": team_tot[side]["gv"],
+            "unit_toi": (compact.get("ice") or [None, None])[idx],
         }
 
     nper = len(((compact.get("periods") or [[]])[0]) or [])
@@ -2959,9 +2973,11 @@ def get_player_game_log_payload(session: Any, player_id: str, season: Optional[i
         if not any(int(w.get("year") or 0) == year for w in wjc):
             wjc.append(dict(cur["wjc_stats"]))
     wjc.sort(key=lambda w: int(w.get("year") or 0))
+    season_label = f"{want}-{str(int(want) + 1)[-2:]}" if int(want or 0) > 1900 else ""
     return {
         "player_id": pid,
         "season": want,
+        "season_label": season_label,
         "seasons": seasons,
         "is_goalie": goalie,
         "games": rows,

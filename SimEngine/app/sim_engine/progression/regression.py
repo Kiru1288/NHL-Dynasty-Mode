@@ -184,29 +184,40 @@ def _is_elite_veteran(player: Any) -> bool:
 
 def apply_regression(player: Any, rng: Any) -> None:
     """
-    Small injury/morale-driven regression after peak age. Age-based OVR cliff is handled
-    by career_aging_decline_try in the career lifecycle (logged as AGING DECLINE).
+    A small extra cut only when the year was actually bad off the ice.
+
+    Age alone is the career-lifecycle roll. A quiet veteran does not lose
+    overall here, and the cut stays near one overall point.
     """
     age = _age(player)
     peak = _peak_age(player)
     if age <= peak:
         return
 
-    injury_hist = _injury_history(player)
-    injury_penalty = min(0.022, 0.004 * len(injury_hist)) + 0.008 * _wear_and_tear(player)
-    decline = float(injury_penalty)
-
+    reasons: List[str] = []
     morale = _morale(player)
-    if morale < 0.4:
-        decline += 0.012
-    elif morale < 0.55:
-        decline += 0.006
+    if morale < 0.35:
+        reasons.append("low morale")
+    if getattr(player, "_trade_demand_active", False):
+        reasons.append("trade demand")
+    if getattr(player, "_conduct_incident_id", None):
+        reasons.append("off-ice issue")
+    injury_games = 0
+    log = getattr(player, "_world_injury_last_log", None)
+    if isinstance(log, dict):
+        try:
+            injury_games = int(log.get("games") or log.get("games_missed") or 0)
+        except (TypeError, ValueError):
+            injury_games = 0
+    if injury_games >= 20 or len(_injury_history(player)) >= 3:
+        reasons.append("major injury")
+    if not reasons:
+        return
 
+    decline = min(0.012, 0.007 + 0.002 * (len(reasons) - 1))
     if _is_elite_veteran(player):
         decline *= 0.65
-
     decline *= float(getattr(player, "_narrative_regression_rate_mult", 1.0) or 1.0)
-
     if decline <= 0.0:
         return
 

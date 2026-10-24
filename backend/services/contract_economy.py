@@ -321,6 +321,23 @@ def _all_rostered(team: Any) -> List[Any]:
     return [p for p in (_get(team, "roster", None) or []) if not _get(p, "retired", False)]
 
 
+def _org_contract_players(team: Any) -> List[tuple]:
+    """NHL, AHL and ECHL contracts. The prospect pool is not a contract list."""
+    seen: set = set()
+    out: List[tuple] = []
+    for level, attr in (("NHL", "roster"), ("AHL", "ahl_roster"), ("ECHL", "echl_roster")):
+        for p in list(_get(team, attr, None) or []):
+            if _get(p, "retired", False):
+                continue
+            pid = _player_id(p)
+            if pid and pid in seen:
+                continue
+            if pid:
+                seen.add(pid)
+            out.append((level, p))
+    return out
+
+
 ELC_AAV_TOLERANCE = 0.01
 
 
@@ -1624,6 +1641,34 @@ def hydrate_player_contract(player: Any, season_year: Optional[int] = None) -> N
             _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
+def append_player_transaction(
+    player: Any,
+    *,
+    kind: str,
+    summary: str,
+    season: Any = None,
+) -> None:
+    """Dossier career log: signings, trades, and the other moves that stick."""
+    if player is None or not summary:
+        return
+    log = getattr(player, "transactions", None)
+    if not isinstance(log, list):
+        log = []
+    row = {
+        "type": str(kind or "move"),
+        "summary": str(summary),
+        "description": str(summary),
+        "season": season,
+    }
+    if log and log[-1].get("summary") == row["summary"] and log[-1].get("season") == season:
+        return
+    log.append(row)
+    try:
+        player.transactions = log[-40:]
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+
+
 def apply_contract_to_player(player: Any, contract: Dict[str, Any], season_year: int) -> None:
     payload = dict(contract or {})
     try:
@@ -1676,6 +1721,22 @@ def apply_contract_to_player(player: Any, contract: Dict[str, Any], season_year:
     existing_after = _get(player, "contract", None)
     if isinstance(existing_after, dict):
         existing_after.pop("pending_july1_expiry", None)
+
+    try:
+        source = str(normalized.get("source") or "")
+        imported = source.startswith("real_nhl") or source in ("estimated", "bootstrap")
+        if not imported:
+            aav = float(normalized.get("aav_m") or normalized.get("cap_hit_m") or 0)
+            yrs = int(normalized.get("years") or normalized.get("years_remaining") or 1)
+            ctype = str(normalized.get("type") or normalized.get("contract_type") or "contract")
+            append_player_transaction(
+                player,
+                kind="signing",
+                summary=f"Signed a {yrs}-year {ctype} at ${aav:.2f}M AAV",
+                season=sy or None,
+            )
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 def cap_books_for_session(session: Any) -> Dict[str, Any]:
     """One cap view for the hub, the salary-cap card, re-sign, and free agency.
@@ -2380,7 +2441,7 @@ def compute_bad_contract_score(player: Any, team: Optional[Any] = None) -> float
 def compute_contract_tags(player: Any, team: Optional[Any] = None) -> List[str]:
     tags: List[str] = []
     c = normalize_contract_dict(_get(player, "contract", None) or {})
-    aav = player_cap_hit_millions(player) or c.get("aav_m", 0)
+    aav = player_cap_hit_millions(player) or c.get("aav_m", 0)  # display / other tags; Bargain uses the charge below
     ovr = _player_ovr(player)
     yrs = _contract_years_remaining(player)
     _player_age(player)
@@ -2404,7 +2465,11 @@ def compute_contract_tags(player: Any, team: Optional[Any] = None) -> List[str]:
         tags.append("Bad Deal")
 
     fair = compute_fair_aav(player, team)
-    if 0 < aav < fair * 0.82 and ovr >= 74:
+    # Bargain uses the cap charge, not the stored AAV. An ELC charges $0, so it
+    # is an ELC Value deal and never a Hot-or-Not bargain.
+    is_elc = str(c.get("type") or c.get("contract_type") or "").upper() in ("ELC", "ENTRY_LEVEL", "ENTRYLEVEL")
+    charged = float(player_cap_hit_millions(player) or 0.0)
+    if not is_elc and 0 < charged < fair * 0.82 and ovr >= 74:
         tags.append("Bargain")
     if ovr >= 88 and yrs >= 3:
         tags.append("Core Value")
@@ -3584,6 +3649,16 @@ def serialize_rfa_rights(team: Any) -> List[Dict[str, Any]]:
     out = []
     for r in _ensure_rfa_rights_list(team):
         row = {k: v for k, v in r.items() if k != "player_ref"}
+        player = r.get("player_ref")
+        if player is not None:
+            try:
+                from services.franchise_sim import shown_ovr_and_potential
+
+                ovr_i, pot_i = shown_ovr_and_potential(player)
+                row["overall"] = int(ovr_i)
+                row["potential"] = int(pot_i)
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         out.append(row)
     return out
 
@@ -7159,7 +7234,40 @@ def sign_player_to_team(
         }
     _sign_hit = compute_prorated_cap_hit_m(aav_m, years, bonus_m)
     assign_ahl = bool(offer.get("assign_ahl")) or category in ("two_way", "nhl_two_way", "two-way")
-    if not assign_ahl:
+    _sign_session = offer.get("_session") or offer.get("_franchise_session")
+    nhl_only = bool(offer.get("nhl_only") or offer.get("nhl_roster"))
+    waive_after = False
+    # At or under the bury threshold the whole hit is $0 in the AHL. Waiver-exempt
+    # players and two-way deals go straight down. Anyone else has to clear waivers.
+    # An "NHL roster" offer keeps him up. An everyday NHLer is not sent down on a re-sign.
+    _on_roster = any(p is player for p in list(_get(team, "roster", None) or []))
+    _already_down = bool(
+        _get(player, "is_buried", False)
+        or _get(player, "buried", False)
+        or _get(player, "in_minors", False)
+        or any(p is player for p in list(_get(team, "ahl_roster", None) or []))
+        or any(p is player for p in list(_get(team, "echl_roster", None) or []))
+    )
+    _two_way_deal = category in ("two_way", "nhl_two_way", "two-way") or bool(offer.get("two_way"))
+    if (
+        not nhl_only
+        and float(aav_m) <= float(BURY_RELIEF_CAP_M) + 1e-9
+        and _is_user_team(_sign_session, team)
+        and (_already_down or not _on_roster)
+    ):
+        if _two_way_deal or _already_down or is_waiver_exempt(player, team, league):
+            assign_ahl = True
+        elif _sign_session is not None and not has_nmc(player):
+            waive_after = True
+    # A two-way label on someone already in the NHL lineup does not send him down.
+    if _on_roster and not _already_down and not bool(offer.get("assign_ahl")):
+        assign_ahl = False
+        waive_after = False
+    if assign_ahl or waive_after:
+        check = _validate_sign_cap_ahl(team, _sign_hit, league, season_year)
+        if not check.get("ok"):
+            return {"ok": False, "status": "invalid", "reason": check.get("reason"), "snapshot": check.get("snapshot")}
+    else:
         _in_season_offer = _phase_is_in_season(offer.get("_session") or offer.get("_franchise_session"))
         check = _validate_sign_cap(
             team,
@@ -7169,7 +7277,7 @@ def sign_player_to_team(
             context=str(offer.get("context") or ""),
             in_season=_in_season_offer,
         )
-        if not check.get("ok") and _ctx in ("ufa", "free_agent", "fa", "") and not offer.get("nhl_only"):
+        if not check.get("ok") and _ctx in ("ufa", "free_agent", "fa", "") and not nhl_only:
             # Full roster or tight cap isn't a dead end: sign him and assign him to the AHL,
             # where only the bury residual counts against the cap.
             ahl_check = _validate_sign_cap_ahl(team, _sign_hit, league, season_year)
@@ -7183,11 +7291,7 @@ def sign_player_to_team(
                 "reason": check.get("reason"),
                 "snapshot": check.get("snapshot"),
             }
-    else:
-        check = _validate_sign_cap_ahl(team, _sign_hit, league, season_year)
-        if not check.get("ok"):
-            return {"ok": False, "status": "invalid", "reason": check.get("reason"), "snapshot": check.get("snapshot")}
-    offer = {**offer, "assign_ahl": assign_ahl}
+    offer = {**offer, "assign_ahl": assign_ahl, "waive_after_sign": waive_after}
 
     if offer.get("evaluate_only"):
         evaluation = evaluate_contract_offer(
@@ -7209,7 +7313,15 @@ def sign_player_to_team(
                 "preferred_clause": evaluation.get("preferred_clause"),
                 "clause_note": evaluation.get("clause_note"),
                 "feedback": _offer_feedback_label(evaluation, aav_m, years)
-                + (" · Roster/cap full — he'd report to the AHL" if offer.get("assign_ahl") else ""),
+                + (
+                    " · He'd report to the AHL — at this cap hit the bury relief makes it $0."
+                    if offer.get("assign_ahl")
+                    else (
+                        " · He isn't waiver-exempt, so he has to clear waivers to go to the AHL. If he clears, the hit is $0."
+                        if offer.get("waive_after_sign")
+                        else ""
+                    )
+                ),
                 "assign_ahl": bool(offer.get("assign_ahl")),
                 "agent_mood": evaluation.get("agent_mood"),
                 "counter_cap_hit": (evaluation.get("counter_offer") or {}).get("aav_m"),
@@ -7633,7 +7745,8 @@ def sign_player_to_team(
     # stays on the Contract Table with a blank ask / stale QO path.
     clear_rfa_rights_for_player(league, _player_id(player), prefer_team=team)
 
-    if offer.get("assign_ahl") and not any(p is player for p in list(_get(team, "roster", None) or [])):
+    if offer.get("assign_ahl"):
+        team.roster = [p for p in list(_get(team, "roster", None) or []) if p is not player]
         ahl = list(_get(team, "ahl_roster", None) or [])
         if not any(p is player for p in ahl):
             ahl.append(player)
@@ -7645,7 +7758,9 @@ def sign_player_to_team(
             player.on_ir = False
             player.on_ltir = False
             player.organizational_status = "minors"
-            if isinstance(getattr(player, "contract", None), dict):
+            if isinstance(getattr(player, "contract", None), dict) and (
+                offer.get("two_way") or str(offer.get("contract_category") or "").lower() in ("two_way", "nhl_two_way", "two-way")
+            ):
                 player.contract["two_way"] = True
                 player.contract["is_two_way"] = True
         except Exception:
@@ -7667,6 +7782,15 @@ def sign_player_to_team(
             player.organizational_status = "signed"
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
+        if offer.get("waive_after_sign") and session is not None:
+            try:
+                from services.waivers import place_on_waivers
+
+                offer["_waiver_result"] = place_on_waivers(
+                    session, team, player, reason="sign_bury", manual=True
+                )
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
 
     try:
         player.team_id = str(_get(team, "team_id", "") or _get(team, "id", ""))
@@ -7714,11 +7838,15 @@ def sign_player_to_team(
         )
     else:
         sync_team_cap_fields(team, league)
-    signed_line = (
-        f"{_player_name(player)} signed and was assigned to the AHL."
-        if offer.get("assign_ahl")
-        else f"{_player_name(player)} signed: {years} years at ${aav_m:.2f}M AAV."
-    )
+    _waived = (offer.get("_waiver_result") or {}).get("waiver_entry") or {}
+    _claimed = bool(_waived.get("claimed_by"))
+    _cleared = bool(_waived.get("cleared"))
+    if _claimed:
+        signed_line = f"{_player_name(player)} signed and was claimed off waivers."
+    elif offer.get("assign_ahl") or _cleared:
+        signed_line = f"{_player_name(player)} signed and was assigned to the AHL."
+    else:
+        signed_line = f"{_player_name(player)} signed: {years} years at ${aav_m:.2f}M AAV."
     _notify_contract_result(session, signed_line)
     return {
         "ok": True,
@@ -7730,10 +7858,16 @@ def sign_player_to_team(
         "final_cap_hit": contract.get("cap_hit_m"),
         "expiry_year": contract.get("expiry_year"),
         "contract_type": contract.get("contract_type") or contract.get("type"),
-        "assigned_to_ahl": bool(offer.get("assign_ahl")),
+        "assigned_to_ahl": bool(offer.get("assign_ahl") or _cleared),
+        "waiver_claimed": _claimed,
         "message": (
-            f"{_player_name(player)} signed and assigned to the AHL — call him up when you have the room."
-            if offer.get("assign_ahl") else None
+            f"{_player_name(player)} was claimed off waivers. His contract leaves your books."
+            if _claimed
+            else (
+                f"{_player_name(player)} signed and assigned to the AHL — the bury relief makes the cap hit $0."
+                if offer.get("assign_ahl") or _cleared
+                else None
+            )
         ),
     }
 
@@ -9871,7 +10005,189 @@ def run_cpu_in_season_free_agency(
 
 #: CPU RFAs at or above this OVR stay qualified-but-unsigned for the first days of
 #: free agency, so they can be offer-sheeted (by the user or another club).
-RFA_OFFER_SHEET_WINDOW_MIN_OVR = 75.0
+RFA_OFFER_SHEET_WINDOW_MIN_OVR = 84.0
+
+
+def _worth_clearing_cap(team: Any, player: Any, league: Any = None) -> bool:
+    """Stars, the top of the roster, and young core pieces are worth making room for.
+
+    A rebuilding club only does this for players 26 or under.
+    """
+    ovr = _player_ovr(player)
+    age = _player_age(player)
+    roster = [p for p in list(_get(team, "roster", None) or []) if p is not player]
+    better = sum(1 for p in roster if _player_ovr(p) > ovr + 0.01)
+    core = ovr >= 86 or better < 3 or (age <= 26 and ovr >= 84)
+    if not core:
+        return False
+    window = str(_get(team, "gm_window", "") or getattr(team, "window", "") or "").lower()
+    if window in ("rebuilder", "rebuild", "tank", "retool") and age > 26:
+        return False
+    return True
+
+
+def clear_cap_to_keep(
+    session: Any,
+    team: Any,
+    player: Any,
+    market_aav: float,
+    league: Any,
+    sim: Any,
+    season_year: int,
+) -> Dict[str, Any]:
+    """Make room for one core player. Stops once the club has given up about 60% of his value."""
+    if not _worth_clearing_cap(team, player, league):
+        return {"ok": False, "moves": [], "cleared_m": 0.0, "reason": "not_core"}
+    snap = get_team_cap_snapshot_full(team, league, sim, season_year=season_year)
+    space = float(snap.get("usable_cap_space_m") or 0)
+    shortfall = float(market_aav) - space + 0.5
+    if shortfall <= 0.05:
+        return {"ok": True, "moves": [], "cleared_m": 0.0, "shortfall_m": 0.0}
+    ovr = _player_ovr(player)
+    star_value = max(8.0, (ovr - 75.0) * 2.0)
+    lost = 0.0
+    cleared = 0.0
+    moves: List[str] = []
+    keep_id = _player_id(player)
+    keep_name = _player_name(player)
+    club = str(_get(team, "name", "") or _get(team, "abbreviation", "") or _team_id(team))
+    notes = getattr(session, "notifications", None)
+
+    def _log(text: str) -> None:
+        moves.append(text)
+        if isinstance(notes, list):
+            notes.append(text)
+
+    def _stopped() -> bool:
+        return shortfall <= 0.05 or lost > star_value * 0.60
+
+    roster = [p for p in list(_get(team, "roster", None) or []) if _player_id(p) != keep_id]
+    roster.sort(key=lambda p: (0 if is_waiver_exempt(p, team, league) else 1, player_cap_hit_millions(p)))
+    for other in roster:
+        if _stopped():
+            break
+        if getattr(other, "is_buried", False) or getattr(other, "in_minors", False):
+            continue
+        hit = player_cap_hit_millions(other)
+        if hit <= 0 or hit > float(BURY_RELIEF_CAP_M) + 1e-9:
+            continue
+        exempt = is_waiver_exempt(other, team, league)
+        res = bury_player_contract(team, other, league, skip_waiver_check=exempt)
+        if not res.get("ok"):
+            continue
+        saved = float(res.get("bury_savings_m") or hit)
+        shortfall -= saved
+        cleared += saved
+        _log(f"{club} clears space for {keep_name}: assigned {_player_name(other)} to the AHL (${saved:.2f}M).")
+
+    if not _stopped():
+        try:
+            cands = identify_cap_casualty_candidates(team, league, sim, season_year=season_year, include_protected=False)
+        except Exception:
+            cands = []
+        cands = [
+            c for c in cands
+            if str(c.get("player_id") or "") != keep_id
+            and c.get("tradeable") and not c.get("has_nmc")
+            and float(c.get("overall") or 0) < 86
+        ]
+        cands.sort(key=lambda c: -float(c.get("bad_score") or 0))
+        team_by_id = dict(getattr(session, "team_by_id", None) or _team_by_id_from_league(league))
+        user_tid = str(getattr(session, "user_team_id", "") or "")
+        pick_cost = {1: 12.0, 2: 7.0, 3: 4.0, 4: 2.0, 5: 1.0}
+        for cand in cands[:5]:
+            if _stopped():
+                break
+            hit = float(cand.get("cap_hit_m") or 0)
+            if hit < 1.0:
+                continue
+            cost = sum(pick_cost.get(int(r), 2.0) for r in cap_relief_price(cand))
+            if lost + cost > star_value * 0.60:
+                continue
+            partners = find_cap_casualty_trade_partners(
+                league, team, cand, sim, season_year=season_year, user_team_id=user_tid,
+            )
+            if not partners:
+                continue
+            buyer = team_by_id.get(str(partners[0].get("team_id") or ""))
+            if buyer is None:
+                continue
+            try:
+                package = build_cap_casualty_trade_package(team, buyer, cand, league, sim, season_year=season_year)
+                res = execute_cap_casualty_trade(
+                    league, team, buyer, package, reason="clear_for_core",
+                    sim=sim, season_year=season_year, team_by_id=team_by_id,
+                    user_team_id=user_tid, session=session,
+                )
+            except Exception:
+                _swallowed_log.debug("clear-for-core trade failed", exc_info=True)
+                continue
+            if not res.get("ok"):
+                continue
+            lost += cost
+            shortfall -= hit
+            cleared += hit
+            _log(f"{club} clears space for {keep_name}: moved {cand.get('name')} (${hit:.2f}M) for futures.")
+            break
+
+    if not _stopped():
+        for other in list(_get(team, "roster", None) or []):
+            if _stopped():
+                break
+            if _player_id(other) == keep_id or _player_ovr(other) >= 84:
+                continue
+            if _player_age(other) <= 30 or _contract_years_remaining(other) < 2:
+                continue
+            est = estimate_buyout(other, team=team, league=league, season_year=season_year)
+            savings = float(est.get("cap_savings_m") or 0)
+            if savings < min(shortfall, 1.0):
+                continue
+            cost = savings * 0.35
+            if lost + cost > star_value * 0.60:
+                continue
+            res = execute_buyout(team, other, league, season_year)
+            if not res.get("ok"):
+                continue
+            lost += cost
+            shortfall -= savings
+            cleared += savings
+            _log(f"{club} clears space for {keep_name}: bought out {_player_name(other)} (${savings:.2f}M this year).")
+            break
+
+    return {
+        "ok": shortfall <= 0.05,
+        "moves": moves,
+        "cleared_m": round(cleared, 3),
+        "value_lost": round(lost, 2),
+        "shortfall_m": round(max(0.0, shortfall), 3),
+    }
+
+
+def _rfa_release_or_qualify(
+    team: Any,
+    pid: str,
+    league: Any,
+    season_year: int,
+    *,
+    ovr: float,
+    qo: float,
+    market: float,
+    fa_day: Optional[int],
+    final: bool,
+    reason: str,
+) -> str:
+    """After FA day 6 a deferred RFA gets his qualifying offer instead of a release.
+
+    A genuine non-tender (low overall, and the qualifying offer is more than he is worth) still walks.
+    """
+    settle = bool(final) or (fa_day is not None and int(fa_day) >= 6)
+    non_tender = ovr < 78 and float(qo) > max(float(market), LEAGUE_MINIMUM_AAV_M) * 1.05
+    if settle and reason in ("no_room", "sign_failed", "qo_failed", "no_agreement") and not non_tender:
+        qo_result = qualify_rfa(team, pid, league, season_year)
+        if qo_result.get("ok"):
+            return "qualified"
+    release_rfa_rights(team, pid, league, session=None)
+    return "released"
 
 
 def _rfa_entry_has_live_sheet(entry: Dict[str, Any]) -> bool:
@@ -9920,7 +10236,15 @@ def run_cpu_rfa_decisions(
                 if _rfa_entry_has_live_sheet(entry):
                     continue
                 player = entry.get("player_ref")
-                notable = player is not None and _player_ovr(player) >= RFA_OFFER_SHEET_WINDOW_MIN_OVR
+                ovr_now = _player_ovr(player) if player is not None else 0.0
+                space_now = 99.0
+                try:
+                    space_now = float(get_team_cap_snapshot_full(team, league, sim, season_year=season_year).get("usable_cap_space_m") or 0)
+                except Exception:
+                    # No readable cap book: don't assume a star fits.
+                    space_now = 0.0 if ovr_now >= RFA_OFFER_SHEET_WINDOW_MIN_OVR else 99.0
+                # Only a real offer-sheet target waits. Everyone else is signed or qualified now.
+                notable = player is not None and ovr_now >= RFA_OFFER_SHEET_WINDOW_MIN_OVR and space_now < 3.0
                 if fa_day is None:
                     if notable:
                         entry["qualified"] = True
@@ -9981,14 +10305,34 @@ def run_cpu_rfa_decisions(
 
             overload = bool(ctx["overload"].get(pos)) and ovr < ctx["best_ovr"].get(pos, 0.0) + 2.0
             unaffordable = cap_space < start_aav or slots_left <= 0
+            if unaffordable and _worth_clearing_cap(team, player, league):
+                clear_cap_to_keep(session, team, player, market, league, sim, season_year)
+                snap = get_team_cap_snapshot_full(team, league, sim, season_year=season_year)
+                cap_space = float(snap.get("usable_cap_space_m", 0) or 0)
+                slots_left = int(snap.get("contract_slots_limit", CONTRACT_SLOTS_LIMIT)) - int(
+                    snap.get("contract_slots_used", 0)
+                )
+                retain_ceiling = min(cap_space * 0.9, want * 1.08)
+                start_aav = round(max(qo, min(want, retain_ceiling)), 3)
+                unaffordable = cap_space < start_aav or slots_left <= 0
+
             # Walk away from cheap depth pieces the team has no room/need for; keep
             # anyone with real value if it can be afforded.
             if slots_left <= 0 or (overload and ovr < 78) or (unaffordable and ovr < 80):
-                release_rfa_rights(team, pid, league)
-                walked.append({
-                    "team_id": tid, "player_id": pid, "overall": round(ovr),
-                    "position": pos, "reason": "no_room" if unaffordable else "surplus",
-                })
+                outcome = _rfa_release_or_qualify(
+                    team, pid, league, season_year, ovr=ovr, qo=qo, market=market,
+                    fa_day=fa_day, final=final, reason="no_room" if unaffordable else "surplus",
+                )
+                if outcome == "qualified":
+                    re_signed.append({
+                        "team_id": tid, "player_id": pid, "overall": round(ovr),
+                        "position": pos, "aav_m": qo, "years": 1, "method": "qualifying_offer",
+                    })
+                else:
+                    walked.append({
+                        "team_id": tid, "player_id": pid, "overall": round(ovr),
+                        "position": pos, "reason": "no_room" if unaffordable else "surplus",
+                    })
                 continue
 
             spendable = float(ctx.get("spendable_cap_space_m", cap_space) or cap_space)
@@ -10003,11 +10347,20 @@ def run_cpu_rfa_decisions(
                         "position": pos, "aav_m": qo, "years": 1, "method": "qualifying_offer",
                     })
                 else:
-                    release_rfa_rights(team, pid, league)
-                    walked.append({
-                        "team_id": tid, "player_id": pid, "overall": round(ovr),
-                        "position": pos, "reason": str(qo_result.get("reason") or "qo_failed"),
-                    })
+                    outcome = _rfa_release_or_qualify(
+                        team, pid, league, season_year, ovr=ovr, qo=qo, market=market,
+                        fa_day=fa_day, final=final, reason=str(qo_result.get("reason") or "qo_failed"),
+                    )
+                    if outcome == "qualified":
+                        re_signed.append({
+                            "team_id": tid, "player_id": pid, "overall": round(ovr),
+                            "position": pos, "aav_m": qo, "years": 1, "method": "qualifying_offer",
+                        })
+                    else:
+                        walked.append({
+                            "team_id": tid, "player_id": pid, "overall": round(ovr),
+                            "position": pos, "reason": str(qo_result.get("reason") or "qo_failed"),
+                        })
                 continue
 
             neg_rounds = 5 if ovr >= 88 else (3 if ovr >= 82 else 2)
@@ -10034,11 +10387,20 @@ def run_cpu_rfa_decisions(
                         "method": "negotiated",
                     })
                 else:
-                    release_rfa_rights(team, pid, league)
-                    walked.append({
-                        "team_id": tid, "player_id": pid, "overall": round(ovr),
-                        "position": pos, "reason": str(result.get("reason") or "sign_failed"),
-                    })
+                    outcome = _rfa_release_or_qualify(
+                        team, pid, league, season_year, ovr=ovr, qo=qo, market=market,
+                        fa_day=fa_day, final=final, reason="sign_failed",
+                    )
+                    if outcome == "qualified":
+                        re_signed.append({
+                            "team_id": tid, "player_id": pid, "overall": round(ovr),
+                            "position": pos, "aav_m": qo, "years": 1, "method": "qualifying_offer",
+                        })
+                    else:
+                        walked.append({
+                            "team_id": tid, "player_id": pid, "overall": round(ovr),
+                            "position": pos, "reason": str(result.get("reason") or "sign_failed"),
+                        })
                 continue
 
             # Failed negotiation → salary arbitration for valuable RFAs.
@@ -10070,11 +10432,20 @@ def run_cpu_rfa_decisions(
                     })
                     continue
 
-            release_rfa_rights(team, pid, league)
-            walked.append({
-                "team_id": tid, "player_id": pid, "overall": round(ovr),
-                "position": pos, "reason": "no_agreement",
-            })
+            outcome = _rfa_release_or_qualify(
+                team, pid, league, season_year, ovr=ovr, qo=qo, market=market,
+                fa_day=fa_day, final=final, reason="no_agreement",
+            )
+            if outcome == "qualified":
+                re_signed.append({
+                    "team_id": tid, "player_id": pid, "overall": round(ovr),
+                    "position": pos, "aav_m": qo, "years": 1, "method": "qualifying_offer",
+                })
+            else:
+                walked.append({
+                    "team_id": tid, "player_id": pid, "overall": round(ovr),
+                    "position": pos, "reason": "no_agreement",
+                })
 
     return {
         "re_signed": re_signed,
@@ -10166,6 +10537,16 @@ def run_cpu_own_ufa_resign(session: Any) -> Dict[str, Any]:
 
             overload = bool(ctx["overload"].get(pos)) and ovr < ctx["best_ovr"].get(pos, 0.0) + 2.0
             unaffordable = cap_space < start_aav or slots_left <= 0
+            if unaffordable and _worth_clearing_cap(team, player, league):
+                clear_cap_to_keep(session, team, player, want, league, sim, season_year)
+                snap = get_team_cap_snapshot_full(team, league, sim, season_year=season_year)
+                cap_space = float(snap.get("usable_cap_space_m", 0) or 0)
+                slots_left = int(snap.get("contract_slots_limit", CONTRACT_SLOTS_LIMIT)) - int(
+                    snap.get("contract_slots_used", 0)
+                )
+                retain_ceiling = min(cap_space * retain_frac, want * 1.12)
+                start_aav = round(max(LEAGUE_MINIMUM_AAV_M, min(want, retain_ceiling)), 3)
+                unaffordable = cap_space < start_aav or slots_left <= 0
 
             # Good players reach the open market when the club is full at the position
             # or cannot pay. 88+ still get a real offer instead of a straight release.
@@ -10685,6 +11066,12 @@ def tick_offer_sheets(
             # Day 7+: auto-decline if user has not acted.
             decision = "decline"
         elif is_user_rights and force_finalize:
+            # Roster-check finalize settles CPU sheets. The user's match window
+            # stays his until it actually expires.
+            if day < expires_day:
+                sheet["days_remaining"] = max(0, expires_day - day)
+                still_pending.append(sheet)
+                continue
             decision = "decline"
         else:
             if not force_finalize and days_elapsed < 4:
@@ -12455,10 +12842,23 @@ def build_contract_office(session: Any) -> Dict[str, Any]:
 
     contracts: List[Dict[str, Any]] = []
     if user_team:
-        for p in _all_rostered(user_team):
-            if _get(p, "is_buried", False):
-                continue
+        for level, p in _org_contract_players(user_team):
             row = build_contract_row(p, user_team, season_year, league)
+            row["roster_level"] = level
+            ovr_here = float(row.get("overall") or 0)
+            age_here = int(row.get("age") or 25)
+            ctype = str((row.get("contract") or {}).get("contract_type") or (row.get("contract") or {}).get("type") or "").upper()
+            if level == "ECHL":
+                row["default_contract_type"] = "echl" if ovr_here < 65 else "ahl_echl_two_way"
+            elif level == "AHL":
+                if ctype in ("AHL", "ECHL") or ovr_here < 75:
+                    row["default_contract_type"] = "ahl"
+                elif ovr_here < 82 or age_here <= 24:
+                    row["default_contract_type"] = "nhl_two_way"
+                else:
+                    row["default_contract_type"] = "nhl_one_way"
+            else:
+                row["default_contract_type"] = "nhl_one_way"
             try:
                 from app.sim_engine.franchise.player_agent_engine import agent_public_view
 

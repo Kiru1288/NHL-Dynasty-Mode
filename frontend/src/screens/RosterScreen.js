@@ -13,7 +13,7 @@ import { lookupHumanDossier, playerRoomLine } from "../utils/lockerRoomPulse";
 import { api } from "../services/api";
 import { nationalityCode, ensurePlayerHeadshotFields } from "../utils/playerHeadshots";
 import { nearestFlagApiSize } from "../utils/countryFlags";
-import { getBaseOverall, getOverallDrop, getUniversalOverall } from "../utils/playerOverall";
+import { getBaseOverall, getOverallDrop, getOverallModifierBadge, getUniversalOverall } from "../utils/playerOverall";
 import { getRosterMoves, moveRosterPlayer, getStatsCentral, previewElcOffer, submitElcOffer, getBoxScore, getPlayerGameLog } from "../services/franchiseService";
 import { BoxScoreModal, PlayerPerformanceLog } from "../components/dossier/ProspectVisuals";
 import { resolveWjcDossierBlock } from "./prospectDossierHelpers";
@@ -983,6 +983,8 @@ function normalizeContract(player) {
     pickFirstDefined(contract.minor_salary_m, contract.minorSalaryM)
   );
   const startYear = safeNumOrNull(pickFirstDefined(contract.start_year, contract.startYear));
+  const signedYear = safeNumOrNull(pickFirstDefined(contract.signed_year, contract.signedYear));
+  const imported = Boolean(contract.imported || /real_nhl|spotrac/i.test(String(contract.source || "")));
 
   return {
     capHit,
@@ -1004,6 +1006,8 @@ function normalizeContract(player) {
     performanceBonusM,
     minorSalaryM,
     startYear,
+    signedYear,
+    imported,
   };
 }
 
@@ -1017,8 +1021,8 @@ function normalizeSeasonStats(player) {
   const shots = safeNum(pickFirstDefined(s.sog, s.shots, s.shots_on_goal, s.shotsOnGoal, player?.shots), 0);
   const hits = safeNum(pickFirstDefined(s.hits, s.hit, player?.hits, player?.hit), 0);
   const blocks = safeNum(pickFirstDefined(s.blocks, s.blk, s.blocked_shots, s.blockedShots, player?.blocks, player?.blk), 0);
-  const takeaways = safeNum(pickFirstDefined(s.takeaways, s.tk, player?.takeaways), 0);
-  const giveaways = safeNum(pickFirstDefined(s.giveaways, s.gv, player?.giveaways), 0);
+  const takeaways = safeNum(pickFirstDefined(s.takeaways, s.tk), 0);
+  const giveaways = safeNum(pickFirstDefined(s.giveaways, s.gv), 0);
   const pim = safeNum(pickFirstDefined(s.pim, s.penalty_minutes, s.penaltyMinutes, player?.pim), 0);
     const plusMinusRaw = pickFirstDefined(
       s.plus_minus,
@@ -1713,19 +1717,24 @@ function inferLeague(player, fallback = "NHL") {
 }
 
 function inferTeamName(player, franchiseState) {
-  return safeStr(
-    pickFirstDefined(
-      player?.team_name,
-      player?.teamName,
-      player?.team,
-      player?.team_abbr,
-      player?.teamAbbr,
-      franchiseState?.team?.name,
-      franchiseState?.team?.abbr,
-      franchiseState?.team?.abbreviation
-    ),
-    "—"
-  );
+  const direct = pickFirstDefined(player?.team_name, player?.teamName, player?.club_name, player?.clubName);
+  const onUserTeam = isDossierPlayerOnUserTeam(player, franchiseState);
+  const userName = safeStr(franchiseState?.team?.name, "");
+  if (direct && typeof direct === "string" && (onUserTeam || direct !== userName)) return safeStr(direct, "—");
+  const tid = getPlayerTeamId(player).toLowerCase();
+  const orgs = Array.isArray(franchiseState?.roster_browser?.organizations)
+    ? franchiseState.roster_browser.organizations
+    : EMPTY_ARRAY;
+  const org = orgs.find((row) => safeStr(row?.team_id || row?.id || row?.abbr, "").toLowerCase() === tid);
+  if (org?.name || org?.team_name) return safeStr(org.name || org.team_name, "—");
+  if (isDossierPlayerOnUserTeam(player, franchiseState)) {
+    return safeStr(
+      pickFirstDefined(franchiseState?.team?.name, franchiseState?.team?.abbr, franchiseState?.team?.abbreviation),
+      "—"
+    );
+  }
+  const abbr = pickFirstDefined(player?.team_abbr, player?.teamAbbr);
+  return safeStr(typeof abbr === "string" ? abbr : "", "—");
 }
 
 const COUNTRY_NAME_TO_ISO = {
@@ -2797,7 +2806,12 @@ function buildDecisionBullets(player) {
   }
 
   const waiverExempt = pickFirstDefined(player.waiver_exempt, player.waiverExempt);
-  if (waiverExempt === false) {
+  const waiverOvr = safeNum(pickFirstDefined(player.overall, player.ovr, player.overall_rating), 0);
+  const waiverRole = safeStr(pickFirstDefined(player.role, player.roleLabel, player.explicitRole), "").toLowerCase();
+  const waiverStar =
+    waiverOvr >= 84
+    || /top line|top pair|top 6|top 4|first line|first pair|starter/.test(waiverRole);
+  if (waiverExempt === false && !waiverStar) {
     bullets.push({ tone: "neutral", text: "Not waiver exempt — needs waivers to reach the minors" });
   }
 
@@ -2934,6 +2948,7 @@ function normalizeLivePlayer(player, franchiseState, index) {
     overall: overallModel.displayOverall,
     potential: potentialModel.potentialLabel,
     potentialScore: potentialModel.potentialScore,
+    potential_change_season: pickFirstDefined(source.potential_change_season, source.season_potential_delta),
     potentialConfidence: potentialModel.potentialConfidence,
     potentialBreakdown: potentialModel.potentialBreakdown,
   };
@@ -3497,20 +3512,35 @@ function PlayerFlagBadge({ player, size = "sm" }) {
   return null;
 }
 
+function formatGrowthLabel(growth) {
+  const tenth = Math.round(Number(growth) * 10) / 10;
+  if (!Number.isFinite(tenth) || Math.abs(tenth) < 0.3) return null;
+  if (Math.abs(tenth) >= 1) {
+    const whole = Math.round(tenth);
+    return whole > 0 ? `+${whole}` : String(whole);
+  }
+  return tenth > 0 ? `+${tenth.toFixed(1)}` : tenth.toFixed(1);
+}
+
 function OvrPill({ player, large = false }) {
   const tone = potentialToneClass(safeNum(player?.potentialScore, 0));
-  const growth = inferGrowth(player);
-  const growthRounded = Math.round(growth);
+  const growth = inferGrowth(player) || safeNum(player?.growth, 0);
+  const growthLabel = formatGrowthLabel(growth);
 
   return (
     <span className={`nhlrost-ovr-pill ${tone} ${large ? "is-large" : ""}`}>
       <span className="nhlrost-ovr-pill__value">{displayOverallValue(player)}</span>
-      {growthRounded !== 0 ? (
+      {getOverallModifierBadge(player) ? (
+        <span className="nhlrost-ovr-pill__mod" title={player.ovr_change_reason || getOverallModifierBadge(player)}>
+          {getOverallModifierBadge(player)}
+        </span>
+      ) : null}
+      {growthLabel ? (
         <span
-          className={`nhlrost-ovr-pill__delta ${growthRounded > 0 ? "is-up" : "is-down"}`}
-          title={`Season overall ${growthRounded > 0 ? "+" : ""}${growthRounded}`}
+          className={`nhlrost-ovr-pill__delta ${growth > 0 ? "is-up" : "is-down"}`}
+          title={`Season overall ${growthLabel}`}
         >
-          {growthRounded > 0 ? `+${growthRounded}` : growthRounded}
+          {growthLabel}
         </span>
       ) : null}
     </span>
@@ -3578,8 +3608,14 @@ function PremiumPlayerRow({ player, selected, onSelect, showTeam = false }) {
       <span className="nhlrost-board-row__ovr">
         <OvrPill player={player} />
         {safeNum(player.potentialScore, 0) > 0 ? (
-          <span className="nhlrost-pot-mini" title="Potential">
+          <span className="nhlrost-pot-mini" title="Potential this season">
             POT {round0(player.potentialScore)}
+            {formatGrowthLabel(player.potential_change_season) ? (
+              <em className={`nhlrost-ovr-pill__delta ${safeNum(player.potential_change_season, 0) > 0 ? "is-up" : "is-down"}`}>
+                {" "}
+                {formatGrowthLabel(player.potential_change_season)}
+              </em>
+            ) : null}
           </span>
         ) : null}
       </span>
@@ -3967,13 +4003,20 @@ function isDossierPlayerOnUserTeam(player, franchiseState) {
 }
 
 function resolveDossierDraft(player, franchiseState) {
-  const year = player.draft_year || player.draftYear;
-  const round = player.draft_round || player.draftRound;
-  const overall = pickFirstDefined(player.draft_overall_pick, player.draftOverallPick);
+  const yearRaw = player.draft_year || player.draftYear;
+  const year = yearRaw != null && Number(yearRaw) > 0 ? Number(yearRaw) : null;
+  const roundRaw = player.draft_round || player.draftRound;
+  const round = roundRaw != null && Number(roundRaw) > 0 ? Number(roundRaw) : null;
+  const overallRaw = pickFirstDefined(player.draft_overall_pick, player.draftOverallPick);
+  const overall = overallRaw != null && Number(overallRaw) > 0 ? Number(overallRaw) : null;
   const teamId =
     player.drafted_by_team_id || player.draft_team_id || player.drafted_by_team || player.draftedByTeamId || "";
-  const teamName = player.drafted_by_team_name || player.draftedByTeamName || resolveDraftTeamName(teamId, franchiseState);
-  const hasDraft = Boolean(year || overall != null || teamId || player.drafted);
+  const teamName =
+    player.drafted_by_team_name ||
+    player.draftedByTeamName ||
+    (player.draft_team_abbr ? resolveDraftTeamName(player.draft_team_abbr, franchiseState) : "") ||
+    resolveDraftTeamName(teamId, franchiseState);
+  const hasDraft = Boolean(year || overall || round || teamId || player.drafted);
   const isUndrafted = Boolean(player.undrafted) && !hasDraft;
   const pickLabel =
     overall != null ? (round != null ? `Round ${round} · #${overall} overall` : `#${overall} overall`) : round != null ? `Round ${round}` : "";
@@ -4301,15 +4344,41 @@ function ProductionGameLogSection({ player, franchiseState }) {
     setLoadError("");
     if (!playerId) return undefined;
     getPlayerGameLog(playerId)
-      .then((data) => live && setLog(data))
-      .catch(() => live && setLoadError("Game log unavailable for this save."));
+      .then((data) => {
+        if (!live) return;
+        if (data?.error) {
+          setLoadError("Game log unavailable for this save.");
+          return;
+        }
+        setLog(data);
+      })
+      .catch((err) => {
+        if (!live) return;
+        const status = err?.response?.status;
+        setLoadError(
+          status === 404
+            ? "Game log API missing — restart the backend after updating."
+            : status === 400
+              ? "Session expired — reload the franchise from the hub."
+              : "Game log unavailable for this save."
+        );
+      });
     return () => {
       live = false;
     };
   }, [playerId, revision]);
   if (!playerId) return null;
   return (
-    <DossierCard eyebrow="Performance" title={log?.season ? `Season ${log.season} · game by game` : "Game by game"}>
+    <DossierCard
+      eyebrow="Performance"
+      title={
+        log?.season_label
+          ? `Season ${log.season_label} · game by game`
+          : log?.season
+            ? `Season ${log.season} · game by game`
+            : "Game by game"
+      }
+    >
       {loadError ? <DossierNote>{loadError}</DossierNote> : null}
       {!log && !loadError ? <DossierNote>Loading game log…</DossierNote> : null}
       {log ? <PlayerPerformanceLog log={log} onOpenGame={setOpenGameId} /> : null}
@@ -4552,12 +4621,18 @@ function ContractPanel({ player }) {
                 <DossierTile label="Location" value={rosterLocation ? humanizeDossierLocation(rosterLocation) : "Minors"} />
               ) : null}
               {waiverStatus ? <DossierTile label="Waivers" value={humanizeDossierValue(waiverStatus)} /> : null}
-              {waiverExempt != null ? (
+              {waiverExempt != null && (player.age == null || player.age < 25 || waiverExempt) ? (
                 <DossierTile label="Waiver exempt" value={waiverExempt ? "Yes" : "No"} tone={waiverExempt ? "good" : "warn"} />
               ) : null}
-              {elcEligible != null ? <DossierTile label="ELC eligible" value={elcEligible ? "Yes" : "No"} /> : null}
-              {elcSlideEligible != null ? <DossierTile label="Slide eligible" value={elcSlideEligible ? "Yes" : "No"} /> : null}
-              {slideThreshold != null ? <DossierTile label="Slide GP" value={`< ${slideThreshold}`} /> : null}
+              {(player.age == null || player.age < 25 || contract.isEntryLevel || elcEligible) && elcEligible != null ? (
+                <DossierTile label="ELC eligible" value={elcEligible ? "Yes" : "No"} />
+              ) : null}
+              {(player.age == null || player.age < 25 || contract.isEntryLevel || elcSlideEligible) && elcSlideEligible != null ? (
+                <DossierTile label="Slide eligible" value={elcSlideEligible ? "Yes" : "No"} />
+              ) : null}
+              {slideThreshold != null && (player.age == null || player.age < 25 || contract.isEntryLevel) ? (
+                <DossierTile label="Slide GP" value={`< ${slideThreshold}`} />
+              ) : null}
             </DossierTiles>
           </DossierCard>
         ) : null}
@@ -4660,7 +4735,14 @@ function DevelopmentPanel({ player }) {
           <DossierTile label="OVR now" value={displayOverallValue(player)} />
           {seasonStartOvr !== null ? <DossierTile label="Season start" value={seasonStartOvr} /> : null}
           {ovrChangeSeason !== null ? (
-            <DossierTile label="OVR this season" value={formatSignedNumber(ovrChangeSeason, 0)} tone={deltaTone(ovrChangeSeason)} />
+            <DossierTile
+              label="OVR this season"
+              value={formatSignedNumber(ovrChangeSeason, 0)}
+              tone={deltaTone(ovrChangeSeason)}
+              sub={player.ovr_change_reason || null}
+            />
+          ) : player.ovr_change_reason ? (
+            <DossierTile label="Last overall change" value={player.ovr_change_reason} />
           ) : null}
           {hasGrowth ? (
             <DossierTile label="Growth" value={formatSignedNumber(player.growth)} tone={deltaTone(Number(player.growth))} />
@@ -4854,7 +4936,7 @@ function UsagePanel({ player, onRefresh, canManage = true }) {
       );
       setMoves(Array.isArray(result.available_moves) ? result.available_moves : EMPTY_ARRAY);
       const dest = String(result.moved || "").split("_to_")[1] || "";
-      if (typeof onRefresh === "function") onRefresh({ playerId, dest });
+      if (typeof onRefresh === "function") onRefresh({ playerId, dest, state: result.state });
     } catch (err) {
       setError(err?.message || "Move failed");
     } finally {
@@ -5050,6 +5132,9 @@ function CareerTotalsCard({ totals, isGoalie }) {
 
 function CareerSeasonsTable({ seasons, isGoalie }) {
   if (!Array.isArray(seasons) || !seasons.length) return null;
+  const showWar =
+    !isGoalie &&
+    seasons.some((row) => row?.war != null && row?.war !== "" && !Number.isNaN(Number(row.war)));
 
   return (
     <DossierCard eyebrow="Career" title="Season by season">
@@ -5076,7 +5161,7 @@ function CareerSeasonsTable({ seasons, isGoalie }) {
                   <th scope="col">PTS</th>
                   <th scope="col">+/-</th>
                   <th scope="col">PIM</th>
-                  <th scope="col">WAR</th>
+                  {showWar ? <th scope="col">WAR</th> : null}
                 </>
               )}
             </tr>
@@ -5111,7 +5196,7 @@ function CareerSeasonsTable({ seasons, isGoalie }) {
                         : "—"}
                     </td>
                     <td>{displayStatValue(pickFirstDefined(row?.pim))}</td>
-                    <td>{row?.war != null ? Number(row.war).toFixed(2) : "—"}</td>
+                    {showWar ? <td>{row?.war != null ? Number(row.war).toFixed(2) : "—"}</td> : null}
                   </>
                 )}
               </tr>
@@ -5134,11 +5219,16 @@ function awardSeasonLabel(season) {
  * from the NHL API. Loads from /api/franchise/player/{id}/awards; until that answers it
  * shows whatever career_awards the player row already carries.
  */
-function CareerAwardsCard({ awards, playerId }) {
-  const [data, setData] = useState(null);
-  const [status, setStatus] = useState(playerId ? "loading" : "idle");
+function CareerAwardsCard({ awards, playerId, initialNhlAwards, initialNhlStatus }) {
+  const prefetchedOk = initialNhlStatus === "ok";
+  const [data, setData] = useState(
+    prefetchedOk
+      ? { nhl_awards: Array.isArray(initialNhlAwards) ? initialNhlAwards : [], nhl_status: "ok" }
+      : null
+  );
+  const [status, setStatus] = useState(prefetchedOk ? "ok" : playerId ? "loading" : "idle");
   useEffect(() => {
-    if (!playerId) return undefined;
+    if (!playerId || prefetchedOk) return undefined;
     let alive = true;
     setStatus("loading");
     api
@@ -5148,11 +5238,23 @@ function CareerAwardsCard({ awards, playerId }) {
         setData(d);
         setStatus("ok");
       })
-      .catch(() => alive && setStatus("error"));
+      .catch((err) => {
+        if (!alive) return;
+        setStatus("error");
+        setData({
+          nhl_status: "unavailable",
+          note:
+            err?.response?.status === 404
+              ? "Awards API missing — restart the backend after updating."
+              : err?.response?.status === 400
+                ? "Session expired — reload the franchise from the hub."
+                : "The NHL API didn't answer; real trophies will load next time.",
+        });
+      });
     return () => {
       alive = false;
     };
-  }, [playerId]);
+  }, [playerId, prefetchedOk]);
 
   const fallback = (Array.isArray(awards) ? awards : []).map((a) =>
     typeof a === "object" && a
@@ -5211,8 +5313,10 @@ function CareerAwardsCard({ awards, playerId }) {
               {status === "loading"
                 ? "Asking the NHL…"
                 : status === "error"
-                  ? "Couldn't reach the awards service."
-                  : data?.note || "No NHL trophies on record."}
+                  ? data?.note || "Couldn't reach the awards service."
+                  : data?.nhl_status === "ok" || prefetchedOk
+                    ? "No individual NHL trophies listed for this player (NHL record checked)."
+                    : data?.note || "No NHL trophies on record."}
             </DossierNote>
           )}
         </div>
@@ -5221,22 +5325,37 @@ function CareerAwardsCard({ awards, playerId }) {
   );
 }
 
-function CareerTransactionsCard({ transactions }) {
-  if (!Array.isArray(transactions) || !transactions.length) return null;
+function importedContractNote(player, summary) {
+  const contract = normalizeContract(player);
+  if (!contract.imported || !/^signed a \d+-year /i.test(String(summary || ""))) return "";
+  const money = contract.aav ? formatMoneyMillions(contract.aav) : "";
+  const signed = contract.signedYear ? ` · signed ${contract.signedYear}` : "";
+  return `Contract on file (imported): ${contract.term || contract.yearsRemaining || "—"} yr${money ? ` · ${money}` : ""}${signed}`;
+}
 
+function CareerTransactionsCard({ transactions, player }) {
+  const rows = Array.isArray(transactions) ? transactions : [];
   return (
     <DossierCard eyebrow="Career" title="Transactions">
-      <ul className="pdx-feed">
-        {transactions.map((tx, index) => (
-          <li key={index}>
-            <div className="pdx-feed__head">
-              <strong>{humanizeDossierText(safeStr(pickFirstDefined(tx?.type, tx?.headline, tx?.title), "Transaction"))}</strong>
-              {tx?.date || tx?.season ? <time>{tx.date || tx.season}</time> : null}
-            </div>
-            {tx?.description || tx?.summary ? <p>{humanizeDossierText(tx.description || tx.summary)}</p> : null}
-          </li>
-        ))}
-      </ul>
+      {rows.length ? (
+        <ul className="pdx-feed">
+          {rows.map((tx, index) => {
+            const raw = tx?.description || tx?.summary || "";
+            const importedNote = importedContractNote(player, raw);
+            return (
+            <li key={index}>
+              <div className="pdx-feed__head">
+                <strong>{importedNote ? "Contract on file" : humanizeDossierText(safeStr(pickFirstDefined(tx?.type, tx?.headline, tx?.title), "Transaction"))}</strong>
+                {tx?.date || tx?.season ? <time>{tx.date || tx.season}</time> : null}
+              </div>
+              {importedNote || raw ? <p>{importedNote || humanizeDossierText(raw)}</p> : null}
+            </li>
+            );
+          })}
+        </ul>
+      ) : (
+        <DossierNote>No trades or signings recorded yet. They show up here as they happen.</DossierNote>
+      )}
     </DossierCard>
   );
 }
@@ -5287,8 +5406,13 @@ function CareerPanel({ player, franchiseState }) {
         </DossierCard>
       )}
       <div className="pdx-grid-2">
-        <CareerAwardsCard awards={awards} playerId={player.player_id || player.id} />
-        <CareerTransactionsCard transactions={transactions} />
+        <CareerAwardsCard
+          awards={awards}
+          playerId={player.player_id || player.id}
+          initialNhlAwards={player.nhl_awards_from_api}
+          initialNhlStatus={player.nhl_awards_status}
+        />
+        <CareerTransactionsCard transactions={transactions} player={player} />
       </div>
     </section>
   );
@@ -5577,7 +5701,9 @@ function MediaPanel({ player, storylines, franchiseState }) {
                 {privateKnowledge.map((node, index) => (
                   <li key={node.storyline_id || index}>
                     {humanizeDossierText(node.public_headline || node.headline || "Storyline")}
-                    <span> · public level: {humanizeDossierValue(node.public_level || "unknown").toLowerCase()}</span>
+                    {node.public_level && String(node.public_level).toLowerCase() !== "unknown" ? (
+                      <span> · public level: {humanizeDossierValue(node.public_level).toLowerCase()}</span>
+                    ) : null}
                   </li>
                 ))}
               </ul>
@@ -5657,7 +5783,19 @@ function PlayerCharacterLifePanel({ player, franchiseState, onCallMeeting, canMa
   const rosterRow = (meetings.roster || EMPTY_ARRAY).find((r) => String(r?.player_id || "") === pid) || null;
   const universePlayer =
     universe?.players?.find?.((row) => String(row?.player_id || "") === pid) || rosterRow || null;
-  const nicheBadges = Array.isArray(universePlayer?.niche_abilities) ? universePlayer.niche_abilities : [];
+  const nicheOpposites = {
+    peacemaker: ["agitator", "volatile_competitor"],
+    agitator: ["peacemaker", "quiet_professional"],
+    volatile_competitor: ["peacemaker", "quiet_professional"],
+    quiet_professional: ["agitator", "volatile_competitor"],
+  };
+  const nicheBadges = (Array.isArray(universePlayer?.niche_abilities) ? universePlayer.niche_abilities : []).filter(
+    (badge, index, list) => {
+      const id = String(badge?.id || "");
+      const earlier = new Set(list.slice(0, index).map((row) => String(row?.id || "")));
+      return !(nicheOpposites[id] || []).some((other) => earlier.has(other));
+    }
+  );
   const dossier =
     universe?.human_dossiers?.[pid] ||
     universe?.players?.find?.((row) => String(row?.player_id || "") === pid)?.human_dossier ||
@@ -5919,6 +6057,50 @@ export function PlayerProfileModal({
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
   }, [player?.key, player?.id]);
 
+  const [careerPatch, setCareerPatch] = useState(null);
+  const dossierPlayerId = safeStr(player?.id || player?.player_id, "");
+  useEffect(() => {
+    if (!dossierPlayerId) {
+      setCareerPatch(null);
+      return undefined;
+    }
+    let alive = true;
+    setCareerPatch(null);
+    api
+      .get(`/api/franchise/player/${encodeURIComponent(dossierPlayerId)}/career`, { timeout: 35000 })
+      .then(({ data }) => {
+        if (!alive || !data?.found) return;
+        const seasons = Array.isArray(data.career_seasons) ? data.career_seasons : [];
+        const patch = {};
+        if (seasons.length) patch.career_seasons = seasons;
+        if (data.career_totals && typeof data.career_totals === "object") patch.career_totals = data.career_totals;
+        if (data.draft_year) patch.draft_year = data.draft_year;
+        if (data.draft_round) patch.draft_round = data.draft_round;
+        if (data.draft_overall_pick) patch.draft_overall_pick = data.draft_overall_pick;
+        if (data.drafted_by_team_id) patch.drafted_by_team_id = data.drafted_by_team_id;
+        if (data.draft_team_abbr) patch.draft_team_abbr = data.draft_team_abbr;
+        if (data.drafted) patch.drafted = true;
+        if (Array.isArray(data.nhl_awards)) {
+          patch.nhl_awards_from_api = data.nhl_awards;
+          patch.nhl_awards_status = data.nhl_awards_status || "ok";
+        } else if (data.nhl_awards_status) {
+          patch.nhl_awards_status = data.nhl_awards_status;
+          patch.nhl_awards_from_api = [];
+        }
+        if (Object.keys(patch).length) setCareerPatch(patch);
+      })
+      .catch(() => alive && setCareerPatch(null));
+    return () => {
+      alive = false;
+    };
+  }, [dossierPlayerId]);
+
+  const dossierPlayer = useMemo(() => {
+    if (!player) return player;
+    if (!careerPatch || !Object.keys(careerPatch).length) return player;
+    return { ...player, ...careerPatch };
+  }, [player, careerPatch]);
+
   useEffect(() => {
     const scroller = scrollRef.current;
     const anchor = tabsAnchorRef.current;
@@ -5937,18 +6119,21 @@ export function PlayerProfileModal({
   const decisionBullets = buildDecisionBullets(player)
     .filter((bullet) => !/^trade concern/i.test(bullet.text || ""))
     .map((bullet) => ({ ...bullet, text: humanizeDossierText(bullet.text) }));
-  const teamLabel = player.teamName && player.teamName !== "—" ? player.teamName : "";
+  const teamLabel = inferTeamName(player, franchiseState);
   const leagueLabel = player.league && player.league !== "—" ? humanizeDossierValue(player.league) : "";
   const metaParts = [
     getPositionDisplay(player.position),
     player.age ? `Age ${player.age}` : null,
     hand !== "—" ? hand : null,
-    teamLabel,
+    teamLabel && teamLabel !== "—" ? teamLabel : null,
     leagueLabel && leagueLabel !== teamLabel ? leagueLabel : null,
   ].filter(Boolean);
 
   const ovrValue = displayOverallValue(player);
-  const growth = Math.round(inferGrowth(player));
+  const growthRaw = Number(inferGrowth(player)) || Number(player.growth) || 0;
+  const growthLabel = formatGrowthLabel(growthRaw);
+  const potChangeRaw = Number(player.potential_change_season ?? player.season_potential_delta);
+  const potChangeLabel = Number.isFinite(potChangeRaw) && potChangeRaw !== 0 ? formatGrowthLabel(potChangeRaw) : "";
   const potScore = safeNum(player.potentialScore, 0);
   const potLabel = safeStr(player.potential, "");
   const potTone = potentialToneClass(potScore);
@@ -6051,8 +6236,15 @@ export function PlayerProfileModal({
                 label="OVR"
                 value={ovrValue}
                 tone="is-ovr"
-                sub={growth !== 0 ? `${growth > 0 ? "+" : ""}${growth} this season` : "No change"}
-                subTone={growth > 0 ? "is-up" : growth < 0 ? "is-down" : ""}
+                sub={
+                  [
+                    getOverallModifierBadge(player),
+                    growthLabel ? `${growthLabel} this season` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ") || "No change"
+                }
+                subTone={growthRaw > 0 ? "is-up" : growthRaw < 0 ? "is-down" : ""}
               />
               <DossierRatingBadge
                 label="POT"
@@ -6060,9 +6252,18 @@ export function PlayerProfileModal({
                 tone={`is-pot ${potTone}`}
                 sub={
                   potScore > 0
-                    ? [potLabel, potGap != null && potGap > 0 ? `+${potGap} upside` : null].filter(Boolean).join(" · ")
+                    ? [
+                        potLabel,
+                        potChangeLabel ? `${potChangeLabel} this season` : null,
+                        !potChangeLabel && potGap != null && potGap > 0 && (player.age == null || player.age < 28)
+                          ? `+${potGap} upside`
+                          : null,
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")
                     : null
                 }
+                subTone={potChangeRaw > 0 ? "is-up" : potChangeRaw < 0 ? "is-down" : ""}
               />
             </div>
           </header>
@@ -6074,7 +6275,7 @@ export function PlayerProfileModal({
           <div className="pdx-content" role="tabpanel">
             <DetailPanelRouter
               activeTab={currentTab}
-              player={player}
+              player={dossierPlayer}
               storylines={storylines}
               franchiseState={franchiseState}
               onRefresh={onRefresh}
@@ -6152,6 +6353,7 @@ export function RosterScreen() {
     setPendingMeetingPlayerId,
     hydrateFranchiseNarrative,
     hydrateFranchiseHeavyState,
+    mergeFranchiseState,
   } = gameUI;
 
   useEffect(() => {
@@ -6899,6 +7101,9 @@ export function RosterScreen() {
     (move) => {
       // Roster move / signing: patch the local roster browser now so the player shows up in the
       // right list instantly, then pull the authoritative browser in the background.
+      if (move?.state && typeof mergeFranchiseState === "function") {
+        mergeFranchiseState(move.state);
+      }
       if (move?.playerId && typeof setFranchiseState === "function") {
         setFranchiseState((prev) =>
           prev?.roster_browser
@@ -6916,7 +7121,7 @@ export function RosterScreen() {
         refreshFranchise();
       }
     },
-    [canRefresh, refreshFranchise, setFranchiseState, hydrateFranchiseHeavyState, userTeamId]
+    [canRefresh, refreshFranchise, setFranchiseState, hydrateFranchiseHeavyState, userTeamId, mergeFranchiseState]
   );
 
 

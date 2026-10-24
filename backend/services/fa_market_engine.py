@@ -36,6 +36,20 @@ STAR_FA_CAP_RICH = 2  # clubs with a truly huge war chest may land a second
 ROSTER_FILL_TARGET = 21
 
 
+def _live_entry_ovr(entry: Dict[str, Any]) -> float:
+    """Overall at bid time, from the player, not the number stored on day one."""
+    player = entry.get("player_ref") if isinstance(entry, dict) else None
+    if player is not None:
+        try:
+            return float(_player_ovr(player))
+        except (TypeError, ValueError):
+            pass
+    try:
+        return float(entry.get("overall") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _team_star_fa_count(book: Dict[str, Any], tid: str) -> int:
     n = 0
     for e in (book.get("entries") or {}).values():
@@ -282,6 +296,7 @@ def ensure_fa_market_book(session: Any) -> Dict[str, Any]:
                 player, league, days_on_market=days_live, offer_count=offers_live
             )
             entries[pid]["fair_aav_m"] = round(compute_fair_aav(player, None, league), 3)
+            entries[pid]["overall"] = round(_player_ovr(player))
             entries[pid]["player_ref"] = player
             continue
         ovr = float(_player_ovr(player))
@@ -981,7 +996,7 @@ def _update_player_decision(entry: Dict[str, Any], book: Dict[str, Any], *, day:
     for peer in list(book.get("peer_signings") or [])[-20:]:
         if peer.get("position") != pos:
             continue
-        if abs(int(peer.get("overall") or 0) - int(entry.get("overall") or 0)) > 4:
+        if abs(int(peer.get("overall") or 0) - int(_live_entry_ovr(entry))) > 4:
             continue
         if int(peer.get("day") or 0) >= day - 5:
             peer_hit = peer
@@ -1113,7 +1128,7 @@ def _try_sign_leaning_players(
             entry["reason"] = "Leaning toward your offer"
             continue
 
-        ovr_now = float(entry.get("overall") or 0)
+        ovr_now = _live_entry_ovr(entry)
         if ovr_now >= 82:
             # Leave a shoppable class on the board. CPU clubs can thin it later in the summer.
             quality_left = 0
@@ -1129,7 +1144,7 @@ def _try_sign_leaning_players(
 
         signed = False
         # Late-market stars: try a wider board — first suitor often can't clear clauses/cap.
-        attempt_n = 6 if float(entry.get("overall") or 0) >= 86 else 3
+        attempt_n = 6 if _live_entry_ovr(entry) >= 86 else 3
         for offer in offers[:attempt_n]:
             tid = str(offer.get("team_id"))
             team = team_by_id.get(tid)
@@ -1140,15 +1155,15 @@ def _try_sign_leaning_players(
             # Stars may spend full usable room; reserve is for *other* extensions.
             space = float(ctx.get("cap_space_m", 0) or 0)
             spendable = float(ctx.get("spendable_cap_space_m", space) or 0)
-            if float(entry.get("overall") or 0) >= 86:
+            if _live_entry_ovr(entry) >= 86:
                 spendable = max(spendable, space)
             if spendable < offer_aav * 0.5 and space < offer_aav * 0.5:
                 continue
-            if float(entry.get("overall") or 0) >= STAR_FA_OVR and _team_at_star_cap(book, tid, max(space, spendable)):
+            if _live_entry_ovr(entry) >= STAR_FA_OVR and _team_at_star_cap(book, tid, max(space, spendable)):
                 continue
             years = int(offer.get("years") or 1)
             if entry.get("prefer_short_term"):
-                years = min(years, 2 if float(entry.get("overall") or 0) < 82 else 3)
+                years = min(years, 2 if _live_entry_ovr(entry) < 82 else 3)
             try:
                 setattr(player, "days_on_market", int(entry.get("days_on_market") or 0))
                 setattr(player, "fa_offer_count", int(entry.get("offer_count") or 0))
@@ -1167,7 +1182,7 @@ def _try_sign_leaning_players(
                 years,
                 ctx_sign,
                 context="ufa",
-                max_rounds=6 if float(entry.get("overall") or 0) >= 88 else 3,
+                max_rounds=6 if _live_entry_ovr(entry) >= 88 else 3,
                 session=session,
             )
             if not agreed:
@@ -1186,7 +1201,7 @@ def _try_sign_leaning_players(
                     "force": True,
                     "days_on_market": int(entry.get("days_on_market") or 0),
                     "offer_count": int(entry.get("offer_count") or 0),
-                    "ntc": True if float(entry.get("overall") or 0) >= 86 else False,
+                    "ntc": True if _live_entry_ovr(entry) >= 86 else False,
                     "nmc": False,
                 },
             )
@@ -1247,7 +1262,7 @@ def _try_sign_leaning_players(
                 break
             if entry.get("state") == STATE_SIGNED:
                 continue
-            ovr = float(entry.get("overall") or 0)
+            ovr = _live_entry_ovr(entry)
             if ovr < 88:
                 continue
             days_m = int(entry.get("days_on_market") or 0)

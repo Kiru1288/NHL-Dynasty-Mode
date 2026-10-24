@@ -7,6 +7,7 @@ import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.sim_engine.franchise.player_agent_engine import (
+    agent_crisis_initial_days,
     agent_crisis_initial_seconds,
     agent_destination_shrink_factor,
     agent_leak_probability,
@@ -33,11 +34,38 @@ MAX_OPEN_DEMANDS_PER_TEAM = 1
 #: …and opens at most this many over a rolling season window.
 MAX_DEMANDS_PER_TEAM_WINDOW = 2
 DEMAND_TEAM_WINDOW_DAYS = 200
+CALENDAR_DAYS_PER_SEASON = 400
+DEPTH_DEMAND_MAX_OVR = 78.0
+CPU_DEMAND_STAGE3_STALE_DAYS = 21
+DEMAND_OPEN_BUDGET_PER_DAY = 0.45
+_ORG_POOL_ATTRS = ("roster", "ahl_roster", "echl_roster")
 
 CANADA_ABBRS = frozenset({"TOR", "MTL", "OTT", "VAN", "CGY", "EDM", "WPG"})
 SMALL_MARKET_ABBRS = frozenset(
     {"BUF", "OTT", "CBJ", "CGY", "WPG", "ARI", "UTA", "SEA", "NSH", "MIN", "CAR", "FLA"}
 )
+
+
+def _save_seed(session: Any) -> int:
+    for key in ("save_seed", "franchise_seed", "rng_seed"):
+        raw = getattr(session, key, None)
+        if raw is not None:
+            try:
+                return int(raw) & 0xFFFFFFFF
+            except (TypeError, ValueError):
+                continue
+    fid = str(getattr(session, "franchise_id", "") or getattr(session, "id", "") or "")
+    if fid:
+        import zlib
+
+        return zlib.crc32(fid.encode()) & 0xFFFFFFFF
+    return 0
+
+
+def absolute_calendar_day(session: Any, calendar_idx: int) -> int:
+    """Monotonic day index for cooldowns (survives season calendar_idx resets)."""
+    season = int(getattr(session, "season_calendar_year", 0) or getattr(session, "season", 0) or 0)
+    return season * CALENDAR_DAYS_PER_SEASON + int(calendar_idx)
 
 
 def _calendar_day_meta(session: Any) -> Dict[str, Any]:
@@ -49,28 +77,29 @@ def _calendar_day_meta(session: Any) -> Dict[str, Any]:
 
 
 def get_trade_deadline_context(session: Any) -> Dict[str, Any]:
-    """NHL trade deadline window (Feb 25 – Mar 10) and post-deadline rules."""
+    """Trade-deadline window vs when formal demands may open (includes summer)."""
     phase = str(getattr(session, "phase", "") or getattr(session, "season_phase", "") or "").lower()
     day = _calendar_day_meta(session)
     iso = str(day.get("iso") or day.get("date") or "")
     tags = tuple(day.get("tags") or ())
     in_window = "trade_deadline" in tags
-    past = False
+    in_season = phase in ("", "regular", "regular_season", "in_season")
+    in_playoffs = phase in ("playoffs",)
+    in_summer = phase in ("offseason", "preseason", "post_cup")
+    past_in_season_deadline = False
     deadline_iso = ""
 
-    if phase in ("playoffs", "offseason", "post_cup", "preseason"):
-        past = True
-    elif iso and len(iso) >= 10:
+    if iso and len(iso) >= 10:
         try:
             y, m, d = int(iso[0:4]), int(iso[5:7]), int(iso[8:10])
-            # Season spans two calendar years: Oct–Dec dates face NEXT year's Mar 10
-            # deadline. (Previously ``m >= 4`` flagged Oct–Dec as post-deadline, which
-            # blocked every new demand for the first three months of the season.)
             deadline_year = y + 1 if m >= 7 else y
             deadline_iso = f"{deadline_year}-03-10"
-            if (m == 3 and d > 10) or 4 <= m <= 9:
-                past = True
-            elif m == 2 and d >= 25:
+            if in_season or in_playoffs:
+                if (m == 3 and d > 10) or (in_playoffs and m >= 3):
+                    past_in_season_deadline = True
+                elif 4 <= m <= 9 and in_season:
+                    past_in_season_deadline = True
+            if m == 2 and d >= 25:
                 in_window = True
             elif m == 3 and d <= 10:
                 in_window = True
@@ -78,7 +107,7 @@ def get_trade_deadline_context(session: Any) -> Dict[str, Any]:
             pass
 
     days_to_deadline = None
-    if iso and deadline_iso and not past:
+    if iso and deadline_iso and in_season and not past_in_season_deadline:
         try:
             from datetime import date
 
@@ -88,21 +117,62 @@ def get_trade_deadline_context(session: Any) -> Dict[str, Any]:
         except (TypeError, ValueError):
             days_to_deadline = None
 
+    new_demands_allowed = in_summer or (in_season and not past_in_season_deadline)
+    trades_frozen = past_in_season_deadline or in_playoffs
+
     return {
         "in_window": bool(in_window),
-        "past_deadline": bool(past),
+        "past_deadline": bool(trades_frozen),
+        "past_in_season_deadline": bool(past_in_season_deadline),
         "deadline_iso": deadline_iso or "03-10",
         "days_to_deadline": days_to_deadline,
-        "crisis_timer_ticks": not past,
-        "new_demands_allowed": not past and phase in ("", "regular", "regular_season", "in_season"),
-        "demand_urgency_mult": 1.18 if in_window and not past else 1.0,
+        "crisis_timer_ticks": in_season and not past_in_season_deadline,
+        "new_demands_allowed": bool(new_demands_allowed),
+        "summer_demand_window": bool(in_summer),
+        "demand_urgency_mult": 1.18 if in_window and in_season and not past_in_season_deadline else 1.0,
     }
 
 
-def _close_crises_for_trade_deadline(session: Any) -> int:
-    """After Mar 10 — freeze/close open demands; crisis timer cannot expire post-deadline."""
+def _resume_summer_pending_demands(session: Any, calendar_idx: int, iso_date: str = "") -> int:
     ctx = get_trade_deadline_context(session)
-    if not ctx.get("past_deadline"):
+    if not ctx.get("summer_demand_window"):
+        return 0
+    book = ensure_trade_demands(session)
+    resumed = 0
+    abs_day = absolute_calendar_day(session, calendar_idx)
+    for pid, row in list(book.items()):
+        if not isinstance(row, dict) or str(row.get("status")) != "summer_pending":
+            continue
+        row["status"] = "open"
+        row["summer_resumed"] = True
+        crisis = row.get("crisis")
+        if isinstance(crisis, dict):
+            crisis["timer_frozen"] = False
+            crisis["frozen_reason"] = ""
+            crisis["remaining_days"] = float(crisis.get("remaining_days") or crisis.get("initial_days") or 18)
+            crisis["last_abs_day"] = abs_day
+            row["crisis"] = crisis
+        resumed += 1
+        user_tid = str(getattr(session, "user_team_id", "") or "")
+        if str(row.get("team_id") or "") == user_tid:
+            _push_notification(
+                session,
+                {
+                    "id": f"{row.get('demand_id')}:summer_resume",
+                    "type": "trade_demand_summer_resume",
+                    "headline": f"Summer trade window — {row.get('player_name')} demand active again",
+                    "body": "The offseason trade market is open. His trade request carries over from before the deadline.",
+                    "team_id": user_tid,
+                    "player_id": pid,
+                },
+            )
+    return resumed
+
+
+def _close_crises_for_trade_deadline(session: Any) -> int:
+    """After Mar 10 — park open demands until the summer trade window."""
+    ctx = get_trade_deadline_context(session)
+    if not ctx.get("past_in_season_deadline") or ctx.get("summer_demand_window"):
         return 0
     book = ensure_trade_demands(session)
     closed = 0
@@ -112,18 +182,14 @@ def _close_crises_for_trade_deadline(session: Any) -> int:
             continue
         crisis = row.get("crisis")
         if isinstance(crisis, dict):
-            crisis["remaining_seconds"] = float(crisis.get("remaining_seconds") or 0)
             crisis["timer_frozen"] = True
             crisis["frozen_reason"] = "trade_deadline_passed"
             crisis["last_sync_unix"] = now
             row["crisis"] = crisis
-        row["status"] = "deadline_closed"
+        row["status"] = "summer_pending"
         row["resolved"] = False
         row["deadline_closed"] = True
         row["resolution"] = "trade_deadline"
-        player = _find_player(session, pid)
-        if player is not None:
-            clear_demand_temporary_modifiers(player)
         closed += 1
         user_tid = str(getattr(session, "user_team_id", "") or "")
         if str(row.get("team_id") or "") == user_tid:
@@ -161,8 +227,20 @@ def _push_notification(session: Any, note: Dict[str, Any]) -> None:
 
 REASON_COPY = {
     "role": {
-        "headline": "{name} demands a trade over role and deployment",
-        "body": "{name} feels misused relative to his ability and has formally requested a trade through his agent.",
+        "variants": [
+            {
+                "headline": "{name} demands a trade over {phrase}",
+                "body": "{agent} says {name} is tired of {phrase} and has formally requested a trade{detail}.",
+            },
+            {
+                "headline": "{name} wants out — unhappy with {phrase}",
+                "body": "{name} told {agent} he does not see a path on this club anymore{detail}.",
+            },
+            {
+                "headline": "Trade request: {name}",
+                "body": "Through {agent}, {name} has asked out over {phrase}.",
+            },
+        ],
     },
     "losing": {
         "headline": "{name} wants out — tired of losing",
@@ -246,11 +324,7 @@ CPU_DEMAND_NEWS_MIN_OVR = 78
 
 
 def maybe_open_silly_trade_demand(session: Any, calendar_idx: int, *, iso_date: str = "") -> Optional[Dict[str, Any]]:
-    """Weekly, rare: a player formally demands a trade over something silly.
-
-    Uses the normal demand pipeline (crisis timer, value discount, CPU proposer tags),
-    so the effect is real. User's club is picked a quarter of the time at most.
-    """
+    """Weekly, rare goofy headline — no crisis timer or trade-value cut."""
     if not getattr(session, "goofy_events_enabled", True):
         return None
     import random
@@ -260,20 +334,25 @@ def maybe_open_silly_trade_demand(session: Any, calendar_idx: int, *, iso_date: 
     if league is None:
         return None
     season = int(getattr(session, "season_calendar_year", 0) or 0)
-    rng = random.Random(zlib.crc32(f"goofy_demand|{season}|{int(calendar_idx) // 7}".encode()))
+    seed = zlib.crc32(f"goofy_demand|{_save_seed(session)}|{season}|{int(calendar_idx) // 7}".encode())
+    rng = random.Random(seed)
     if rng.random() >= SILLY_DEMAND_WEEKLY_CHANCE:
         return None
     if not get_trade_deadline_context(session).get("new_demands_allowed"):
         return None
+    abs_day = absolute_calendar_day(session, int(calendar_idx))
     teams = [t for t in list(_get(league, "teams", None) or []) if _get(t, "roster", None)]
     if not teams:
         return None
     user_tid = str(getattr(session, "user_team_id", "") or "")
-    team_open, _recent = _team_demand_load(session, int(calendar_idx))
+    team_open, team_recent = _team_demand_load(session, int(calendar_idx))
     if rng.random() >= 0.25:
         teams = [t for t in teams if _team_key(t) != user_tid] or teams
     team = rng.choice(teams)
-    if team_open.get(_team_key(team), 0) >= MAX_OPEN_DEMANDS_PER_TEAM:
+    tkey = _team_key(team)
+    if team_open.get(tkey, 0) >= MAX_OPEN_DEMANDS_PER_TEAM:
+        return None
+    if team_recent.get(tkey, 0) >= MAX_DEMANDS_PER_TEAM_WINDOW:
         return None
     pool = [
         p for p in list(_get(team, "roster", None) or [])
@@ -283,20 +362,38 @@ def maybe_open_silly_trade_demand(session: Any, calendar_idx: int, *, iso_date: 
     if not pool:
         return None
     player = rng.choice(pool)
-    reason = rng.choice(SILLY_DEMAND_REASONS)
-    try:
-        row = open_trade_demand(
-            session, player, team, reason=reason, calendar_idx=int(calendar_idx),
-            iso_date=iso_date, rng=rng, force_formal=True,
-        )
-    except Exception:
-        _swallowed_log.debug("suppressed exception", exc_info=True)
+    pid = _player_id(player)
+    pst = ensure_player_storyline_state(player)
+    last_closed = int(pst.get("last_trade_demand_closed_day") or 0)
+    if last_closed and 0 <= (abs_day - last_closed) < DEMAND_REOPEN_COOLDOWN_DAYS:
         return None
-    if isinstance(row, dict) and row.get("status") == "open":
-        row["goofy"] = True
-        row["primary_complaint"] = reason.replace("silly_", "").replace("_", " ")
-        return row
-    return None
+    reason = rng.choice(SILLY_DEMAND_REASONS)
+    copy = _pick_demand_copy(session, player, team, reason, [reason], rng)
+    popup_id = f"goofy_demand:{pid}:{calendar_idx}"
+    pending = list(getattr(session, "pending_ui_popups", None) or [])
+    if any(isinstance(p, dict) and p.get("id") == popup_id for p in pending):
+        return None
+    pending.append(
+        {
+            "id": popup_id,
+            "kind": "storyline",
+            "presentation_type": "goofy_trade_demand",
+            "theme": "info",
+            "headline": copy["headline"],
+            "body": copy["body"],
+            "player_id": pid,
+            "player_name": _player_name(player),
+            "team_id": tkey,
+            "actions": [
+                {"id": "laugh_off", "label": "Laugh it off"},
+                {"id": "meeting", "label": "Call a meeting"},
+            ],
+            "goofy": True,
+            "reason_code": reason,
+        }
+    )
+    session.pending_ui_popups = pending[-80:]
+    return {"goofy": True, "player_id": pid, "reason_code": reason, "status": "goofy_popup"}
 
 
 def _get(obj: Any, key: str, default: Any = None) -> Any:
@@ -309,6 +406,40 @@ def _get(obj: Any, key: str, default: Any = None) -> Any:
 
 def _player_id(player: Any) -> str:
     return str(_get(player, "id", "") or _get(player, "player_id", "") or "")
+
+
+def invalidate_trade_demand_player_index(session: Any) -> None:
+    try:
+        session._trade_demand_player_index = None
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+
+
+def _build_trade_demand_player_index(session: Any) -> Dict[str, Any]:
+    cached = getattr(session, "_trade_demand_player_index", None)
+    if isinstance(cached, dict) and cached.get("_version") == getattr(session, "_roster_revision", 0):
+        return cached
+    league = getattr(getattr(session, "sim", None), "league", None)
+    out: Dict[str, Any] = {"_version": getattr(session, "_roster_revision", 0)}
+    if league is None:
+        try:
+            session._trade_demand_player_index = out
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+        return out
+    for team in list(_get(league, "teams", None) or []):
+        for attr in _ORG_POOL_ATTRS:
+            for p in list(_get(team, attr, None) or []):
+                if p is None or _get(p, "retired", False):
+                    continue
+                pid = _player_id(p)
+                if pid:
+                    out[pid] = (p, team)
+    try:
+        session._trade_demand_player_index = out
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    return out
 
 
 def _player_name(player: Any) -> str:
@@ -478,16 +609,48 @@ def _team_market_size(team: Any) -> str:
     return str(_get(market, "market_size", "") or _get(team, "market_size", "") or "").strip().lower()
 
 
-def _destination_lean(player: Any, team: Any, top: str) -> str:
+def _home_attachment_score(player: Any, rng: Any = None) -> float:
+    """0–1 willingness to insist on a Canada / home-market move (not birthplace alone)."""
+    traits = _get(player, "traits", None)
+    family = 0.5
+    loyalty = 0.5
+    if traits is not None:
+        try:
+            family = float(_get(traits, "family_priority", _get(traits, "loyalty", 0.5)) or 0.5)
+            loyalty = float(_get(traits, "loyalty", 0.5) or 0.5)
+        except (TypeError, ValueError):
+            pass
+    if family > 1.5:
+        family /= 100.0
+    if loyalty > 1.5:
+        loyalty /= 100.0
+    attach = 0.35 * family + 0.20 * loyalty
+    bc = _birth_country(player)
+    if bc in ("canada", "can", "ca"):
+        attach += 0.12
+    try:
+        age = int(_get(_get(player, "identity", None), "age", _get(player, "age", 26)) or 26)
+    except (TypeError, ValueError):
+        age = 26
+    if age >= 30:
+        attach += 0.08
+    if rng is not None and hasattr(rng, "uniform"):
+        attach += rng.uniform(-0.06, 0.06)
+    return max(0.0, min(1.0, attach))
+
+
+def _destination_lean(player: Any, team: Any, top: str, rng: Any = None) -> str:
     """Belonging or family grievances can point the wish list at a real market."""
     if player is None or team is None:
         return ""
     home = _team_abbr(team)
-    bc = _birth_country(player)
-    if bc in ("canada", "can", "ca") and home not in CANADA_ABBRS:
-        return "canada"
+    if top in ("belonging", "personal", "broken_promise"):
+        if _home_attachment_score(player, rng) >= 0.62 and _birth_country(player) in ("canada", "can", "ca"):
+            if home not in CANADA_ABBRS:
+                return "canada"
     if top in ("personal", "broken_promise") and _team_market_size(team) == "large":
-        return "small_market"
+        if _home_attachment_score(player, rng) >= 0.55:
+            return "small_market"
     return ""
 
 
@@ -500,14 +663,18 @@ def _preferred_destinations(
     rng: Any,
     list_size: int = 12,
 ) -> List[str]:
-    # The modified no-trade list is where his contract allows a deal. Keep it
-    # on the contract, but do not use it as the list of clubs he wants.
     seed_mntc_destinations(player, league, list_size=list_size, rng=rng)
     teams = list(_get(league, "teams", None) or [])
     home = _team_abbr(team)
     want_canada = reason == "canada"
     want_small = reason == "small_market"
-    candidates: List[str] = []
+    try:
+        from app.sim_engine.trades.trade_rules import _market_size, _team_strength_proxy
+    except Exception:
+        _market_size = None
+        _team_strength_proxy = None
+
+    strengths: List[Tuple[float, str]] = []
     for t in teams:
         ab = _team_abbr(t)
         if not ab or ab == home:
@@ -516,13 +683,62 @@ def _preferred_destinations(
             continue
         if want_small and ab not in SMALL_MARKET_ABBRS:
             continue
-        candidates.append(ab)
-    if not candidates:
-        candidates = [ab for ab in (_team_abbr(t) for t in teams) if ab and ab != home]
-    n = max(1, min(list_size, len(candidates)))
-    if rng is not None and hasattr(rng, "sample") and candidates:
-        return list(rng.sample(candidates, min(n, len(candidates))))
-    return candidates[:n]
+        w = 1.0
+        strength = 0.5
+        market = "medium"
+        if _team_strength_proxy is not None:
+            try:
+                strength = float(_team_strength_proxy(t))
+            except Exception:
+                strength = 0.5
+        if _market_size is not None:
+            try:
+                market = str(_market_size(t) or "medium")
+            except Exception:
+                market = "medium"
+        if reason in ("losing", "organizational"):
+            w += strength * 1.8
+        elif reason == "role":
+            w += 0.6 + strength * 0.9
+        elif reason == "contract":
+            cap = float(_get(t, "cap_space", _get(t, "cap_room", 8.0)) or 8.0)
+            w += max(0.2, min(2.5, cap / 6.0))
+        elif reason in ("personal", "belonging", "canada"):
+            w += 0.8 if market == "large" else 1.1
+            if ab in CANADA_ABBRS and _birth_country(player) in ("canada", "can", "ca"):
+                w += 0.9
+        elif reason in ("management", "trade_exposure"):
+            w += 0.5 + strength * 0.4
+        else:
+            w += 0.35 + strength * 0.5
+        strengths.append((max(0.05, w), ab))
+
+    if not strengths:
+        strengths = [
+            (1.0, ab)
+            for ab in (_team_abbr(t) for t in teams)
+            if ab and ab != home and (not want_canada or ab in CANADA_ABBRS)
+        ]
+    n = max(6, min(list_size, 10, len(strengths)))
+    out: List[str] = []
+    pool = list(strengths)
+    for _ in range(min(n, len(pool))):
+        total = sum(w for w, _ in pool)
+        if total <= 0:
+            break
+        pick = rng.random() * total if rng is not None else total * 0.5
+        acc = 0.0
+        chosen_i = 0
+        for i, (w, ab) in enumerate(pool):
+            acc += w
+            if pick <= acc:
+                chosen_i = i
+                out.append(ab)
+                pool.pop(i)
+                break
+        else:
+            out.append(pool.pop(0)[1])
+    return out
 
 
 def _snapshot_value(player: Any, team: Any, league: Any, *, crisis_stage: int = 1) -> float:
@@ -574,16 +790,8 @@ def _apply_crisis_value_state(
     return mult, after
 
 
-def _reason_from_pressures(
-    pressures: Dict[str, float],
-    *,
-    character: int,
-    player: Any = None,
-    team: Any = None,
-) -> str:
-    if not pressures:
-        return "general"
-    top = max(pressures.items(), key=lambda kv: kv[1])[0]
+def _pressure_to_reason_code(pressure_key: str, *, character: int, player: Any, team: Any, rng: Any) -> str:
+    top = str(pressure_key or "")
     if top == "trade_exposure":
         return "trade_exposure"
     if top in ("role", "performance"):
@@ -599,7 +807,7 @@ def _reason_from_pressures(
     if top == "organizational":
         return "organizational"
     if top in ("belonging", "personal", "broken_promise"):
-        lean = _destination_lean(player, team, top)
+        lean = _destination_lean(player, team, top, rng=rng)
         if lean:
             return lean
         return "belonging" if top == "belonging" else "personal"
@@ -608,77 +816,124 @@ def _reason_from_pressures(
     return "general"
 
 
+def _reason_from_pressures(
+    pressures: Dict[str, float],
+    *,
+    character: int,
+    player: Any = None,
+    team: Any = None,
+    rng: Any = None,
+) -> Tuple[str, List[str]]:
+    if not pressures:
+        return "general", ["general"]
+    ranked = sorted(pressures.items(), key=lambda kv: -float(kv[1] or 0))
+    codes: List[str] = []
+    top_val = float(ranked[0][1] or 0)
+    for key, val in ranked[:3]:
+        if codes and float(val or 0) < top_val * 0.7:
+            break
+        code = _pressure_to_reason_code(key, character=character, player=player, team=team, rng=rng)
+        if code not in codes:
+            codes.append(code)
+    primary = codes[0] if codes else "general"
+    return primary, codes
+
+
 def _start_crisis_timer(
     session: Any,
     player: Any,
     *,
     character: int,
     previous_demands: int,
+    calendar_idx: int,
 ) -> Dict[str, Any]:
     agent = ensure_player_agent(player, session)
     gm_rel = get_agent_gm_relationship(session, str(agent.get("id") or ""))
-    initial = agent_crisis_initial_seconds(
+    initial_days = agent_crisis_initial_days(
         character=character,
         agent=agent,
         gm_rel=gm_rel,
         previous_demands=previous_demands,
     )
+    legacy_initial = int(
+        agent_crisis_initial_seconds(
+            character=character,
+            agent=agent,
+            gm_rel=gm_rel,
+            previous_demands=previous_demands,
+        )
+    )
+    abs_day = absolute_calendar_day(session, calendar_idx)
     now = time.time()
     return {
-        "deadline_seconds": initial,
-        "initial_seconds": initial,
-        "remaining_seconds": initial,
+        "initial_days": initial_days,
+        "remaining_days": float(initial_days),
+        "last_abs_day": abs_day,
+        "deadline_seconds": legacy_initial,
+        "initial_seconds": legacy_initial,
+        "remaining_seconds": legacy_initial,
         "last_sync_unix": now,
         "crisis_stage": 1,
         "started_at_unix": now,
+        "timer_mode": "sim_days",
     }
 
 
-def sync_trade_demand_crises(
-    session: Any,
-    *,
-    elapsed_hint: Optional[float] = None,
-    tick_timers: bool = True,
-) -> None:
-    """Decrement active crisis timers only while the client session is actively ticking."""
-    _close_crises_for_trade_deadline(session)
-    deadline_ctx = get_trade_deadline_context(session)
-    if not deadline_ctx.get("crisis_timer_ticks"):
-        tick_timers = False
+def _hydrate_crisis_timer(crisis: Dict[str, Any]) -> Dict[str, Any]:
+    c = dict(crisis or {})
+    if c.get("timer_mode") != "sim_days" and c.get("remaining_seconds") is not None:
+        try:
+            sec = float(c.get("remaining_seconds") or 0)
+            days = max(1.0, sec / 86400.0)
+            c["remaining_days"] = days
+            c["initial_days"] = int(c.get("initial_days") or max(14, round(days)))
+            c["timer_mode"] = "sim_days"
+        except (TypeError, ValueError):
+            c["remaining_days"] = 18.0
+            c["initial_days"] = 18
+            c["timer_mode"] = "sim_days"
+    if c.get("remaining_days") is None:
+        c["remaining_days"] = float(c.get("initial_days") or 18)
+    if c.get("initial_days") is None:
+        c["initial_days"] = int(round(float(c.get("remaining_days") or 18)))
+    return c
 
-    book = ensure_trade_demands(session)
-    now = time.time()
+
+def _advance_user_crisis_timers(session: Any, calendar_idx: int) -> None:
     user_tid = str(getattr(session, "user_team_id", "") or "")
+    if not user_tid:
+        return
+    abs_day = absolute_calendar_day(session, calendar_idx)
+    book = ensure_trade_demands(session)
+    league = getattr(getattr(session, "sim", None), "league", None)
     for pid, row in list(book.items()):
         if not isinstance(row, dict) or str(row.get("status")) != "open":
             continue
-        # CPU-club demands age in sim days (process_trade_demand_day), not wall-clock.
-        if user_tid and str(row.get("team_id") or "") != user_tid:
+        if str(row.get("team_id") or "") != user_tid:
             continue
-        crisis = row.get("crisis")
-        if not isinstance(crisis, dict):
+        crisis = _hydrate_crisis_timer(row.get("crisis") or {})
+        if crisis.get("timer_frozen"):
+            row["crisis"] = crisis
             continue
-        last = float(crisis.get("last_sync_unix") or now)
-        if tick_timers:
-            elapsed = float(elapsed_hint if elapsed_hint is not None else max(0.0, now - last))
-            remaining = max(0.0, float(crisis.get("remaining_seconds") or 0) - elapsed)
-        else:
-            elapsed = 0.0
-            remaining = max(0.0, float(crisis.get("remaining_seconds") or 0))
-        crisis["remaining_seconds"] = round(remaining, 2)
-        crisis["last_sync_unix"] = now
-        crisis["timer_active"] = bool(tick_timers)
-        initial = int(crisis.get("initial_seconds") or CRISIS_DEADLINE_MAX)
+        last_abs = int(crisis.get("last_abs_day") or abs_day)
+        delta = max(0, abs_day - last_abs)
+        if delta > 0:
+            crisis["remaining_days"] = max(0.0, float(crisis.get("remaining_days") or 0) - float(delta))
+            crisis["last_abs_day"] = abs_day
+        initial_days = max(1, int(crisis.get("initial_days") or 18))
+        legacy_initial = int(crisis.get("initial_seconds") or crisis.get("deadline_seconds") or 360)
+        remaining = float(crisis.get("remaining_days") or 0)
+        ratio = remaining / float(initial_days) if initial_days else 0.0
+        crisis["remaining_seconds"] = max(0.0, legacy_initial * ratio)
         expired = remaining <= 0
-        stage = 4 if expired else crisis_stage_from_remaining(initial, int(round(remaining)))
-        prev_stage = int(crisis.get("crisis_stage") or 1)
+        stage = 4 if expired else crisis_stage_from_remaining(legacy_initial, int(round(crisis["remaining_seconds"])))
+        prev_stage = int(row.get("crisis_stage") or crisis.get("crisis_stage") or 1)
         crisis["crisis_stage"] = stage
         row["crisis_stage"] = stage
-
+        row["crisis"] = crisis
         player = _find_player(session, pid)
-        if player is not None:
-            team = _find_team_for_player(session, pid)
-            league = getattr(getattr(session, "sim", None), "league", None)
+        team = _find_team_for_player(session, pid)
+        if player is not None and stage > prev_stage:
             base_before = float(row.get("value_before") or _snapshot_value(player, team, league, crisis_stage=1))
             _, after = _apply_crisis_value_state(
                 player,
@@ -688,16 +943,58 @@ def sync_trade_demand_crises(
             )
             row["value_after"] = round(after, 1)
             row["value_delta"] = round(after - base_before, 1)
+            _apply_crisis_stage_effects(session, row, player, team, league, stage)
+            row["ntc_waiver_snapshot"] = _build_ntc_waiver_snapshot(session, row, player, team, league)
+        if expired:
+            _finalize_crisis_expiry(session, row)
 
-            if stage > prev_stage:
-                _apply_crisis_stage_effects(session, row, player, team, league, stage)
-                row["ntc_waiver_snapshot"] = _build_ntc_waiver_snapshot(session, row, player, team, league)
 
-        if remaining <= 0 and str(row.get("status")) == "open" and tick_timers and deadline_ctx.get("crisis_timer_ticks"):
-            row["status"] = "crisis_expired"
-            row["resolved"] = False
-            row["crisis_expired"] = True
-            _enqueue_crisis_expired(session, row)
+def _finalize_crisis_expiry(session: Any, row: Dict[str, Any]) -> None:
+    pid = str(row.get("player_id") or "")
+    row["status"] = "crisis_expired"
+    row["resolved"] = False
+    row["crisis_expired"] = True
+    player = _find_player(session, pid)
+    if player is not None:
+        pst = ensure_player_storyline_state(player)
+        pst["last_trade_demand_closed_day"] = absolute_calendar_day(
+            session, int(getattr(session, "calendar_cursor", 0) or 0)
+        )
+        pst["crisis_expired_season"] = int(getattr(session, "season_calendar_year", 0) or 0)
+        try:
+            psych = getattr(player, "psych", None)
+            if psych is not None:
+                m = float(getattr(psych, "morale", 0.5) or 0.5)
+                setattr(psych, "morale", max(0.15, m - 0.08))
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    _enqueue_crisis_expired(session, row)
+    _archive_closed_demand(session, row, resolution="crisis_expired")
+    book = ensure_trade_demands(session)
+    book.pop(pid, None)
+
+
+def sync_trade_demand_crises(
+    session: Any,
+    *,
+    elapsed_hint: Optional[float] = None,
+    tick_timers: bool = True,
+) -> None:
+    """Refresh crisis display state. Timers advance on sim days in process_trade_demand_day."""
+    del elapsed_hint, tick_timers
+    _close_crises_for_trade_deadline(session)
+    book = ensure_trade_demands(session)
+    user_tid = str(getattr(session, "user_team_id", "") or "")
+    for pid, row in list(book.items()):
+        if not isinstance(row, dict) or str(row.get("status")) != "open":
+            continue
+        if user_tid and str(row.get("team_id") or "") != user_tid:
+            continue
+        crisis = _hydrate_crisis_timer(row.get("crisis") or {})
+        remaining_days = float(crisis.get("remaining_days") or 0)
+        crisis["remaining_seconds"] = int(remaining_days * 86400)
+        crisis["timer_active"] = False
+        row["crisis"] = crisis
 
 
 def _clause_label(player: Any) -> str:
@@ -876,27 +1173,98 @@ def _apply_crisis_stage_effects(
 
 
 def _find_player(session: Any, player_id: str) -> Any:
-    league = getattr(getattr(session, "sim", None), "league", None)
-    if league is None:
-        return None
     pid = str(player_id)
-    for team in getattr(league, "teams", None) or []:
-        for p in getattr(team, "roster", None) or []:
-            if _player_id(p) == pid:
-                return p
+    hit = _build_trade_demand_player_index(session).get(pid)
+    if hit and isinstance(hit, tuple):
+        return hit[0]
     return None
 
 
 def _find_team_for_player(session: Any, player_id: str) -> Any:
-    league = getattr(getattr(session, "sim", None), "league", None)
-    if league is None:
-        return None
     pid = str(player_id)
-    for team in getattr(league, "teams", None) or []:
-        for p in getattr(team, "roster", None) or []:
-            if _player_id(p) == pid:
-                return team
+    hit = _build_trade_demand_player_index(session).get(pid)
+    if hit and isinstance(hit, tuple):
+        return hit[1]
     return None
+
+
+def _archive_closed_demand(session: Any, row: Dict[str, Any], *, resolution: str) -> None:
+    if not isinstance(row, dict):
+        return
+    hist = list(getattr(session, "trade_demands_history", None) or [])
+    hist.append(
+        {
+            "player_id": row.get("player_id"),
+            "player_name": row.get("player_name"),
+            "team_id": row.get("team_id"),
+            "season": int(getattr(session, "season_calendar_year", 0) or 0),
+            "reason_code": row.get("reason_code"),
+            "resolution": resolution,
+            "opened_abs_day": row.get("opened_abs_day"),
+            "closed_abs_day": absolute_calendar_day(session, int(getattr(session, "calendar_cursor", 0) or 0)),
+        }
+    )
+    try:
+        session.trade_demands_history = hist[-500:]
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+
+
+def _reason_phrase_for_copy(reason_codes: List[str]) -> str:
+    labels = {
+        "role": "role and deployment",
+        "contract": "his contract",
+        "management": "management",
+        "losing": "losing",
+        "trade_exposure": "trade talk",
+        "development": "development",
+        "belonging": "fitting in",
+        "personal": "personal reasons",
+        "organizational": "the direction of the club",
+    }
+    codes = [c for c in (reason_codes or []) if c and not str(c).startswith("silly_")]
+    if len(codes) >= 2:
+        a = labels.get(codes[0], codes[0].replace("_", " "))
+        b = labels.get(codes[1], codes[1].replace("_", " "))
+        return f"{a} and {b}"
+    if codes:
+        return labels.get(codes[0], codes[0].replace("_", " "))
+    return "the situation"
+
+
+def _pick_demand_copy(
+    session: Any,
+    player: Any,
+    team: Any,
+    reason: str,
+    reason_codes: List[str],
+    rng: Any,
+) -> Dict[str, str]:
+    import zlib
+
+    base = REASON_COPY.get(reason) or REASON_COPY["general"]
+    variants = list(base.get("variants") or []) if isinstance(base, dict) else []
+    if not variants and isinstance(base, dict) and base.get("headline"):
+        variants = [{"headline": base["headline"], "body": base["body"]}]
+    pid = _player_id(player)
+    season = int(getattr(session, "season_calendar_year", 0) or 0)
+    seed = zlib.crc32(f"tdcopy|{_save_seed(session)}|{pid}|{season}|{reason}".encode()) & 0xFFFFFFFF
+    pick = variants[seed % len(variants)] if variants else base
+    name = _player_name(player)
+    agent = ensure_player_agent(player, session)
+    agent_name = str(agent.get("name") or "His agent")
+    phrase = _reason_phrase_for_copy(reason_codes)
+    years = _get(_get(player, "contract", None), "years_remaining", None) or _get(
+        _get(player, "contract", None), "years_left", None
+    )
+    detail = ""
+    if years is not None:
+        detail = f" ({int(years)} years left on his deal)"
+    headline = str(pick.get("headline") or base.get("headline", "")).format(name=name, phrase=phrase, agent=agent_name)
+    body = str(pick.get("body") or base.get("body", "")).format(
+        name=name, phrase=phrase, agent=agent_name, detail=detail
+    )
+    return {"headline": headline, "body": body}
 
 
 def open_trade_demand(
@@ -925,8 +1293,16 @@ def open_trade_demand(
 
     pressures = dict(stability_row.get("pressures") or {})
     character = int(stability_row.get("character") or pst.get("character") or 74)
+    reason_codes: List[str]
     if not reason or reason == "auto":
-        reason = _reason_from_pressures(pressures, character=character, player=player, team=team)
+        reason, reason_codes = _reason_from_pressures(
+            pressures, character=character, player=player, team=team, rng=r
+        )
+    else:
+        reason_codes = [reason]
+
+    ovr = _player_ovr(player)
+    depth_request = ovr < DEPTH_DEMAND_MAX_OVR and not force_formal
 
     disruptor = reason == "locker_room_disruptor" or int(stability_row.get("escalation_level") or 0) >= 4
     escalation = int(stability_row.get("escalation_level") or 3)
@@ -945,11 +1321,18 @@ def open_trade_demand(
         return {"status": "blocked", "escalation_level": escalation, "player_id": pid, "reason": "insufficient_signals"}
 
     previous_demands = int(pst.get("career_trade_demand_count") or 0)
-    crisis = _start_crisis_timer(session, player, character=character, previous_demands=previous_demands)
+    crisis = None
+    if not depth_request:
+        crisis = _start_crisis_timer(
+            session, player, character=character, previous_demands=previous_demands, calendar_idx=int(calendar_idx)
+        )
 
     agent_view = agent_public_view(player, session)
     before = _snapshot_value(player, team, league, crisis_stage=1)
-    _, after = _apply_crisis_value_state(player, crisis_stage=1, base_before=before)
+    if depth_request:
+        after = before * 0.97
+    else:
+        _, after = _apply_crisis_value_state(player, crisis_stage=1, base_before=before)
     if disruptor:
         try:
             setattr(player, "locker_room_disruptor", True)
@@ -957,10 +1340,11 @@ def open_trade_demand(
             _swallowed_log.debug("suppressed exception", exc_info=True)
 
     dests = _preferred_destinations(player, team, league, reason, rng=r, list_size=12)
-    copy = REASON_COPY.get(reason) or REASON_COPY["general"]
+    copy = _pick_demand_copy(session, player, team, reason, reason_codes, r)
     name = _player_name(player)
     demand_id = f"demand:{pid}:{calendar_idx}:{uuid.uuid4().hex[:6]}"
-    complaint = primary_complaint_from_pressures(pressures)
+    complaint = _reason_phrase_for_copy(reason_codes)
+    abs_opened = absolute_calendar_day(session, int(calendar_idx))
 
     pst["career_trade_demand_count"] = previous_demands + 1
     pst["season_trade_demand_count"] = int(pst.get("season_trade_demand_count") or 0) + 1
@@ -976,7 +1360,10 @@ def open_trade_demand(
         "status": "open",
         "formal": True,
         "reason_code": reason,
+        "reason_codes": list(reason_codes),
         "primary_complaint": complaint,
+        "depth_request": depth_request,
+        "opened_abs_day": abs_opened,
         "cause_type": "TRADE_DEMAND",
         "cause_event_id": demand_id,
         "opened_day": int(calendar_idx),
@@ -1025,18 +1412,21 @@ def clear_trade_demand(session: Any, player_id: str, *, resolution: str = "clear
     book = ensure_trade_demands(session)
     pid = str(player_id)
     row = book.get(pid)
-    closed_day = int(getattr(session, "calendar_cursor", 0) or 0)
+    closed_abs = absolute_calendar_day(session, int(getattr(session, "calendar_cursor", 0) or 0))
     if isinstance(row, dict):
         row["status"] = resolution
         row["resolved"] = True
-        row["closed_day"] = closed_day
+        row["closed_day"] = int(getattr(session, "calendar_cursor", 0) or 0)
+        row["closed_abs_day"] = closed_abs
         if resolution == "traded":
             row["crisis"] = None
+        _archive_closed_demand(session, row, resolution=resolution)
+        book.pop(pid, None)
     player = _find_player(session, pid)
     if player is not None:
         clear_demand_temporary_modifiers(player)
         pst = ensure_player_storyline_state(player)
-        pst["last_trade_demand_closed_day"] = closed_day
+        pst["last_trade_demand_closed_day"] = closed_abs
 
 
 def _team_key(team: Any) -> str:
@@ -1047,7 +1437,10 @@ def _team_demand_load(session: Any, calendar_idx: int) -> Tuple[Dict[str, int], 
     """Per-club (open demands now, demands opened in the recent window)."""
     open_by: Dict[str, int] = {}
     recent_by: Dict[str, int] = {}
-    for row in ensure_trade_demands(session).values():
+    abs_day = absolute_calendar_day(session, calendar_idx)
+    rows = list(ensure_trade_demands(session).values())
+    rows.extend(list(getattr(session, "trade_demands_history", None) or [])[-120:])
+    for row in rows:
         if not isinstance(row, dict):
             continue
         tid = str(row.get("team_id") or "")
@@ -1055,7 +1448,10 @@ def _team_demand_load(session: Any, calendar_idx: int) -> Tuple[Dict[str, int], 
             continue
         if str(row.get("status") or "") == "open":
             open_by[tid] = open_by.get(tid, 0) + 1
-        age = int(calendar_idx) - int(row.get("opened_day") or -10**6)
+        opened_abs = row.get("opened_abs_day")
+        if opened_abs is None:
+            opened_abs = absolute_calendar_day(session, int(row.get("opened_day") or 0))
+        age = int(abs_day) - int(opened_abs or 0)
         if 0 <= age < DEMAND_TEAM_WINDOW_DAYS:
             recent_by[tid] = recent_by.get(tid, 0) + 1
     return open_by, recent_by
@@ -1102,6 +1498,17 @@ def _age_cpu_demands(session: Any, calendar_idx: int) -> Dict[str, int]:
             except Exception:
                 _swallowed_log.debug("suppressed exception", exc_info=True)
 
+        if days_open >= CPU_DEMAND_STAGE3_DAYS + CPU_DEMAND_STAGE3_STALE_DAYS:
+            row["status"] = "resolved"
+            row["resolved"] = True
+            row["resolution"] = "stays_reluctantly"
+            pst = ensure_player_storyline_state(player)
+            pst["last_trade_demand_closed_day"] = absolute_calendar_day(session, int(calendar_idx))
+            clear_demand_temporary_modifiers(player)
+            _archive_closed_demand(session, row, resolution="stays_reluctantly")
+            book.pop(pid, None)
+            out["resolved"] += 1
+            continue
         if days_open >= CPU_DEMAND_STAGE3_DAYS:
             stage = 3
         elif days_open >= CPU_DEMAND_STAGE2_DAYS:
@@ -1202,7 +1609,7 @@ def _maybe_offer_trade_opportunity(
 
 
 def process_trade_demand_day(session: Any, calendar_idx: int, day_meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Update stability for all players; open formal demands when warranted — no daily cap."""
+    """Update stability for all players; open formal demands when warranted."""
     import random
 
     rng = getattr(getattr(session, "sim", None), "rng", None) or random.Random(int(calendar_idx) + 17)
@@ -1210,20 +1617,28 @@ def process_trade_demand_day(session: Any, calendar_idx: int, day_meta: Optional
     if league is None:
         return {"opened": 0}
 
+    invalidate_trade_demand_player_index(session)
     assign_league_agents(session)
-    _close_crises_for_trade_deadline(session)
-    sync_trade_demand_crises(session, tick_timers=False)
-    cpu_aging = _age_cpu_demands(session, int(calendar_idx))
-    deadline_ctx = get_trade_deadline_context(session)
-    ensure_trade_demands(session)
-
     iso = ""
     try:
         iso = str((day_meta or {}).get("iso") or (day_meta or {}).get("date") or "")
     except Exception:
         iso = ""
+    _resume_summer_pending_demands(session, int(calendar_idx), iso_date=iso)
+    _close_crises_for_trade_deadline(session)
+    _advance_user_crisis_timers(session, int(calendar_idx))
+    sync_trade_demand_crises(session, tick_timers=False)
+    cpu_aging = _age_cpu_demands(session, int(calendar_idx))
+    deadline_ctx = get_trade_deadline_context(session)
+    ensure_trade_demands(session)
 
     opened: List[Dict[str, Any]] = []
+    abs_day = absolute_calendar_day(session, int(calendar_idx))
+    if getattr(session, "_trade_demand_open_budget", None) is None:
+        budget = 1.0
+    else:
+        budget = float(getattr(session, "_trade_demand_open_budget", 0.0) or 0.0) + DEMAND_OPEN_BUDGET_PER_DAY
+    setattr(session, "_trade_demand_open_budget", budget)
     warnings: List[Dict[str, Any]] = []
     demand_candidates: List[Tuple[float, Any, Any, Dict[str, Any], str]] = []
     import zlib
@@ -1259,7 +1674,7 @@ def process_trade_demand_day(session: Any, calendar_idx: int, day_meta: Optional
                     continue
                 pst = ensure_player_storyline_state(player)
                 last_closed = int(pst.get("last_trade_demand_closed_day") or 0)
-                if last_closed and 0 <= (int(calendar_idx) - last_closed) < DEMAND_REOPEN_COOLDOWN_DAYS:
+                if last_closed and 0 <= (abs_day - last_closed) < DEMAND_REOPEN_COOLDOWN_DAYS:
                     continue
 
                 stability_row = apply_daily_stability_update(session, player, team, int(calendar_idx))
@@ -1288,15 +1703,14 @@ def process_trade_demand_day(session: Any, calendar_idx: int, day_meta: Optional
                     and formal_demand_eligible(stability_row)
                     and deadline_ctx.get("new_demands_allowed")
                 ):
-                    reason = _reason_from_pressures(
+                    reason, _codes = _reason_from_pressures(
                         dict(stability_row.get("pressures") or {}),
                         character=int(stability_row.get("character") or 74),
                         player=player,
                         team=team,
+                        rng=rng,
                     )
-                    tid = str(_get(team, "team_id", "") or _get(team, "id", "") or "")
-                    user_tid = str(getattr(session, "user_team_id", "") or "")
-                    priority = float(score) - (25.0 if tid == user_tid else 0.0)
+                    priority = float(score)
                     demand_candidates.append((priority, player, team, stability_row, reason))
                 elif escalation >= 1 and score < 68:
                     warnings.append({"player_id": pid, "escalation_level": escalation, "score": score})
@@ -1316,6 +1730,8 @@ def process_trade_demand_day(session: Any, calendar_idx: int, day_meta: Optional
     team_open, team_recent = _team_demand_load(session, int(calendar_idx))
     opened_this_pass = 0
     for _prio, player, team, stability_row, reason in demand_candidates:
+        if budget < 1.0:
+            break
         if opened_this_pass >= max(1, int(round(MAX_NEW_FORMAL_DEMANDS_PER_PASS * demand_mult))):
             break
         tkey = _team_key(team)
@@ -1337,6 +1753,8 @@ def process_trade_demand_day(session: Any, calendar_idx: int, day_meta: Optional
         if row.get("status") == "open":
             opened.append(row)
             opened_this_pass += 1
+            budget = max(0.0, budget - 1.0)
+            setattr(session, "_trade_demand_open_budget", budget)
             team_open[tkey] = team_open.get(tkey, 0) + 1
             team_recent[tkey] = team_recent.get(tkey, 0) + 1
 
@@ -1363,8 +1781,11 @@ def build_trade_demand_crisis_payload(session: Any, *, tick_timers: bool = False
         crisis = row.get("crisis")
         if not isinstance(crisis, dict):
             continue
-        remaining = float(crisis.get("remaining_seconds") or 0)
-        initial = int(crisis.get("initial_seconds") or CRISIS_DEADLINE_MAX)
+        crisis = _hydrate_crisis_timer(crisis)
+        remaining_days = float(crisis.get("remaining_days") or 0)
+        initial_days = int(crisis.get("initial_days") or 18)
+        remaining = remaining_days * 86400.0
+        initial = initial_days * 86400
         stage = int(crisis.get("crisis_stage") or 1)
         dests = list(row.get("preferred_destinations") or [])
         return {
@@ -1378,7 +1799,9 @@ def build_trade_demand_crisis_payload(session: Any, *, tick_timers: bool = False
             "escalation_level": row.get("escalation_level"),
             "trade_stability_score": row.get("trade_stability_score"),
             "remaining_seconds": round(remaining, 1),
+            "remaining_days": round(remaining_days, 2),
             "initial_seconds": initial,
+            "initial_days": initial_days,
             "crisis_stage": stage,
             "deadline_seconds": initial,
             "timer_active": bool(crisis.get("timer_active")),
@@ -1518,12 +1941,13 @@ def _maybe_enqueue_stability_warning(
     """Surface L1–L2 angst/apathy to user + league notifications."""
     pid = _player_id(player)
     pst = ensure_player_storyline_state(player)
-    warn_key = f"stability_warn:{pid}:{int(stability_row.get('escalation_level') or 0)}"
+    season = int(getattr(session, "season_calendar_year", 0) or 0)
+    warn_key = f"stability_warn:{pid}:{season}:{int(stability_row.get('escalation_level') or 0)}"
     if warn_key in set(pst.get("stability_warnings_sent") or []):
         return
     sent = list(pst.get("stability_warnings_sent") or [])
     sent.append(warn_key)
-    pst["stability_warnings_sent"] = sent[-12:]
+    pst["stability_warnings_sent"] = sent[-24:]
 
     level = int(stability_row.get("escalation_level") or 0)
     labels = {1: "Growing frustration", 2: "Disconnecting from organization"}
@@ -1630,12 +2054,18 @@ def _maybe_enqueue_stability_concern_hint(
         return
 
     pst = ensure_player_storyline_state(player)
-    warn_key = f"stability_hint:{pid}:{int(calendar_idx // 7)}"
-    if warn_key in set(pst.get("stability_warnings_sent") or []):
+    last_hint = int(pst.get("last_stability_hint_abs_day") or 0)
+    if last_hint and (absolute_calendar_day(session, calendar_idx) - last_hint) < 28:
         return
-    sent = list(pst.get("stability_warnings_sent") or [])
-    sent.append(warn_key)
-    pst["stability_warnings_sent"] = sent[-16:]
+    top = max(pressures.items(), key=lambda kv: kv[1])[0] if pressures else "role"
+    if str(pst.get("last_stability_hint_complaint") or "") == str(top) and last_hint:
+        return
+    pst["last_stability_hint_abs_day"] = absolute_calendar_day(session, calendar_idx)
+    pst["last_stability_hint_complaint"] = str(top)
+    hints = list(pst.get("stability_hints_sent") or [])
+    warn_key = f"stability_hint:{pid}:{int(calendar_idx // 7)}"
+    hints.append(warn_key)
+    pst["stability_hints_sent"] = hints[-20:]
 
     tid = str(_get(team, "team_id", "") or _get(team, "id", "") or "")
     user_tid = str(getattr(session, "user_team_id", "") or "")

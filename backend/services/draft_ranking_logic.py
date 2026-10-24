@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 # Half-width of the displayed current-OVR band when a prospect is completely
 # unscouted. The gauge should read like a tight scouting disagreement (~5 points
 # wide), not a 30-point "we have no idea" range.
-OVR_BAND_MAX_HALF_SPAN = 2.5
+OVR_BAND_MAX_HALF_SPAN = 7.5
 
 
 def _stable_unit(*parts: Any) -> float:
@@ -1400,6 +1400,14 @@ def compute_consensus_potential_evaluation(row: Dict[str, Any]) -> float:
     prod = float(row.get("production_adjusted_score") or 0)
     ppg = float(row.get("ppg") or row.get("points_per_game") or 0)
     age = int(row.get("age") or 18)
+    # A 19-year-old's 1.6 points per game is about an 18-year-old's 1.2.
+    # The ceiling reads the age-relative number, not the raw junior total.
+    if age == 19:
+        prod, ppg = prod * 0.78, ppg * 0.75
+    elif age == 20:
+        prod, ppg = prod * 0.66, ppg * 0.62
+    elif age >= 21:
+        prod, ppg = prod * 0.55, ppg * 0.50
     h = int(row.get("height_cm") or 0)
     code = str(row.get("league_code") or "").upper()
     pos = str(row.get("position") or "").upper()
@@ -1426,13 +1434,13 @@ def compute_consensus_potential_evaluation(row: Dict[str, Any]) -> float:
 
     market = production_ceiling * 0.58 + tools_ceiling * 0.42
 
-    if prod >= 1.35 or ppg >= 1.15:
+    if prod >= 1.20:
         market += 2.5
-    elif ovr >= 86 and (prod >= 1.25 or ppg >= 1.1):
+    elif ovr >= 86 and prod >= 1.05:
         market += 4.0
-    elif ovr >= 82 and prod >= 1.45:
+    elif ovr >= 82 and prod >= 1.25:
         market += 2.5
-    elif prod < 0.32 and ppg < 0.42:
+    elif prod < 0.32:
         market -= 3.5
     if code.startswith("EU_J") and code not in ("EU_J_SHL", "EU_J_LIIGA", "EU_J_DEL"):
         market -= 2.8
@@ -1446,11 +1454,13 @@ def compute_consensus_potential_evaluation(row: Dict[str, Any]) -> float:
         market -= 3.2
     elif skate >= 80:
         market += 1.6
-    # Age affects UPSIDE (ceiling), not readiness. An overager is closer to his
-    # peak, so his projectable ceiling is lower, not higher. (Readiness is handled
-    # separately in ETA; ranking age penalty in compute_enhanced_draft_score.)
-    if age >= 20:
-        market -= 1.8
+    # An overager is closer to his peak, so the projectable ceiling is lower.
+    if age >= 21:
+        market -= 6.0
+    elif age >= 20:
+        market -= 4.0
+    elif age >= 19:
+        market -= 2.5
     elif age <= 17:
         market += 1.2
     if row.get("character_concerns"):
@@ -1462,8 +1472,18 @@ def compute_consensus_potential_evaluation(row: Dict[str, Any]) -> float:
     hsh = _stable_int(1000, key, row.get("draft_year") or "", row.get("franchise_seed") or "")
     market += ((hsh % 17) - 8) * 0.45
 
-    if prod >= 1.45 and age >= 19:
-        market = max(market, ovr + min(14.0, prod * 5.5))
+    # A big junior year raises the ceiling for a first-year eligible, not for
+    # someone who already had a draft and came back older.
+    if age <= 18 and prod >= 1.15:
+        market = max(market, ovr + min(8.0, prod * 3.0))
+
+    late = bool(row.get("is_gem") or str(row.get("public_miss_type") or "") == "late_bloomer")
+    if age >= 21:
+        market = min(market, ovr + (8.0 if late else 4.0))
+    elif age >= 20:
+        market = min(market, ovr + (10.0 if late else 6.0))
+    elif age >= 19:
+        market = min(market, ovr + (12.0 if late else 8.0))
 
     return round(max(50.0, min(97.0, market)), 1)
 
@@ -1483,19 +1503,36 @@ def compute_enhanced_draft_score(row: Dict[str, Any]) -> float:
         role_adj = compute_role_adjusted_production(row)
         raw_prod = float(row.get("production_adjusted_score") or 0)
         weight = _ROLE_PRODUCTION_WEIGHT.get(role, 0.75)
+        age = int(row.get("age") or 18)
         prod_adj = role_adj * 0.74 + raw_prod * 0.26 * weight
+        if age == 19:
+            prod_adj *= 0.92
+        elif age == 20:
+            prod_adj *= 0.84
+        elif age >= 21:
+            prod_adj *= 0.75
         row["prospect_role"] = role
         row["role_adjusted_production"] = role_adj
 
     def_bonus = compute_defensive_projection_bonus(row)
     row["defensive_projection_bonus"] = round(def_bonus, 2)
 
-    score = ovr * 0.48 + pot * 0.36 + prod_adj * 5.5 + def_bonus
+    # Projection outweighs the junior overall. Current ability matters more
+    # once a player is closer to the NHL, which the age multiplier handles.
+    score = ovr * 0.30 + pot * 0.50 + prod_adj * 4.2 + def_bonus
     age = int(row.get("age") or 18)
-    if age <= 18:
-        score += 2.0
-    elif age >= 20:
-        score -= 2.5
+    if age == 19:
+        score *= 0.92
+    elif age == 20:
+        score *= 0.84
+    elif age >= 21:
+        score *= 0.75
+    if role == "goalie" and not (
+        row.get("generational_goalie")
+        or row.get("goalie_rank_reason") == "generational_goalie_exception"
+        or _goalie_is_special(row)
+    ):
+        score *= 0.88
     if row.get("is_gem"):
         score += 1.5
     if row.get("is_transcendent") or row.get("transcendent_talent"):
@@ -2001,6 +2038,41 @@ def cap_public_peak_range_for_rank(
     return out
 
 
+def cap_reentry_dev_potential_on_player(player: Any, draft_year: int) -> None:
+    """Persist the +2 re-entry potential cap on stored dev_potential, not just board rows."""
+    try:
+        first_eligible = getattr(player, "first_draft_eligible_year", None)
+        prev_board_year = int(getattr(player, "_pot_board_year", 0) or 0)
+        prev_pot = getattr(player, "_pot_entering_year", None)
+        dy = int(draft_year)
+        if not (
+            isinstance(first_eligible, int)
+            and first_eligible < dy
+            and prev_board_year
+            and prev_board_year != dy
+            and prev_pot is not None
+        ):
+            return
+        ratings = getattr(player, "ratings", None)
+        if not isinstance(ratings, dict):
+            return
+        try:
+            pot = float(ratings.get("dev_potential") or 0)
+        except (TypeError, ValueError):
+            return
+        cap = float(prev_pot) + 2.0
+        if pot <= cap:
+            return
+        new_pot = int(round(cap))
+        ratings["dev_potential"] = new_pot
+        try:
+            player.potential = new_pot / 99.0 if new_pot > 1.5 else new_pot
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+
+
 def scouting_confidence_for_entry(
     row: Dict[str, Any],
     session: Any,
@@ -2129,35 +2201,7 @@ def enforce_goalie_scatter_final(
     *,
     goalie_class_strength: str = "normal",
 ) -> List[Dict[str, Any]]:
-    """Final, positional guarantee that non-franchise goalies are never Round 1 (top 32) and
-    are spread across later rounds. Runs AFTER every score/potential pass so nothing can
-    re-promote a high-potential goalie back into the first round."""
-    if not board:
-        return board
-    gclass = str(goalie_class_strength or "normal").lower()
-
-    def _movable(r: Dict[str, Any]) -> bool:
-        return _is_goalie_row(r) and not _goalie_is_special(r, gclass)
-
-    movers = [r for r in board if _movable(r)]
-    if not movers:
-        return board
-
-    keep = [r for r in board if not _movable(r)]
-    n = len(board)
-    # Deterministic target index (0-based, >=32) by talent tier + stable jitter.
-    movers.sort(key=lambda r: (_goalie_scatter_rank(r, n) - 1, str(r.get("key") or "")))
-
-    placed = list(keep)
-    for r in movers:
-        idx = max(32, min(len(placed), _goalie_scatter_rank(r, n) - 1))
-        # Nudge past an immediately adjacent goalie so they don't clump at one slot.
-        while idx < len(placed) and _is_goalie_row(placed[idx]):
-            idx += 1
-        placed.insert(min(idx, len(placed)), r)
-        r["goalie_rank_reason"] = "goalie_scattered_non_elite"
-
-    board[:] = placed[:n]
+    """No-op: board order follows enhanced draft score only."""
     return board
 
 
@@ -2384,122 +2428,17 @@ def apply_goalie_class_rank_caps(
     goalie_class_strength: str = "normal",
     preserve_order: bool = False,
 ) -> None:
-    """Bar non-franchise goalies from Round 1 and scatter them across Rounds 2-7.
-
-    Only franchise-potential goalies (``_goalie_is_special``) may rank in the top 32; every
-    other goalie is demoted to a deterministic per-prospect scatter rank (>=33), no matter
-    how strong its raw score is. Franchise goalies rank purely on merit."""
-    if not prospects:
-        return
-
-    gclass = str(goalie_class_strength or "normal").lower()
-    n = len(prospects)
-
-    guard = 0
-    while guard < 128:
-        guard += 1
-        if not preserve_order:
-            prospects.sort(key=lambda r: -_effective_draft_score(r))
-        moved = False
-
-        for i in range(min(64, len(prospects))):
-            row = prospects[i]
-            if not _is_goalie_row(row):
-                continue
-            if _goalie_is_special(row, gclass):
-                continue
-            rank = i + 1
-            target = _goalie_scatter_rank(row, n)
-            if rank < target:
-                _demote_row_to_min_rank(
-                    prospects,
-                    i,
-                    target,
-                    reason="goalie_scattered_non_elite",
-                    penalty_floor=55.0,
-                )
-                row["goalie_rank_reason"] = "goalie_scattered_non_elite"
-                moved = True
-                break
-
-        if not moved:
-            break
-
-    if not preserve_order:
-        prospects.sort(key=lambda r: -_effective_draft_score(r))
+    """No-op: goalie round placement is earned via ``apply_goalie_ranking_adjustments`` score."""
+    return
 
 
 def enforce_first_round_draft_age(board: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Round 1 is 18-year-olds. One 19-year-old may sit outside the top 10.
+    """Kept so older callers still resolve. Age is scored, not used to rebuild the board.
 
-    A 19- or 20-year-old does not stay in the first round because he is better.
-    Overagers lead the later rounds instead.
+    A hard pass used to pull every 19-year-old out of round 1 and stack them at
+    pick 33. The score multiplier in compute_enhanced_draft_score does that job
+    now, so an elite 19-year-old can still land late in the first round.
     """
-    if not board:
-        return board
-    n = len(board)
-    round1 = list(board[:32])
-    rest = list(board[32:])
-
-    def _age(row: Dict[str, Any]) -> int:
-        try:
-            return int(row.get("age") or 18)
-        except (TypeError, ValueError):
-            return 18
-
-    eighteens: List[Dict[str, Any]] = []
-    nineteens: List[Dict[str, Any]] = []
-    over: List[Dict[str, Any]] = []
-    for row in round1:
-        age = _age(row)
-        if age >= 20 or (_is_goalie_row(row) and not _goalie_is_special(row)):
-            row["ranking_reason"] = "overager_later_rounds" if age >= 19 else row.get("ranking_reason")
-            over.append(row)
-        elif age == 19:
-            nineteens.append(row)
-        else:
-            eighteens.append(row)
-
-    kept_19 = nineteens[:1]
-    for row in nineteens[1:]:
-        row["ranking_reason"] = "overager_later_rounds"
-        over.append(row)
-    if kept_19:
-        kept_19[0]["ranking_reason"] = "first_round_nineteen"
-
-    def _pull_eighteens(need: int) -> List[Dict[str, Any]]:
-        nonlocal rest
-        if need <= 0:
-            return []
-        pulled: List[Dict[str, Any]] = []
-        still: List[Dict[str, Any]] = []
-        for row in rest:
-            if len(pulled) < need and _age(row) <= 18 and not (
-                _is_goalie_row(row) and not _goalie_is_special(row)
-            ):
-                pulled.append(row)
-            else:
-                still.append(row)
-        rest = still
-        return pulled
-
-    top10 = eighteens[:10]
-    top10.extend(_pull_eighteens(10 - len(top10)))
-    mid = eighteens[10:]
-    # 22 spots after the top 10. The single 19, if any, is the last of them.
-    room = 22 - (1 if kept_19 else 0)
-    if len(mid) > room:
-        spill = mid[room:]
-        mid = mid[:room]
-        rest = spill + rest
-    elif len(mid) < room:
-        mid.extend(_pull_eighteens(room - len(mid)))
-    if kept_19:
-        mid = mid + kept_19
-
-    for row in over:
-        row["ranking_flag"] = "overager_later_rounds"
-    board[:] = (top10 + mid + over + rest)[:n]
     return board
 
 
@@ -2670,7 +2609,7 @@ def backfill_draft_eligible_goalies(league: Any, rng: Any, needed: int) -> int:
             ovr_lo=0.54,
             ovr_hi=0.66,
             age_lo=17,
-            age_hi=19,
+            age_hi=18,
             used_names=used_names,
             league_players=league_players,
             pool_context="junior",
@@ -2696,12 +2635,51 @@ def backfill_draft_eligible_goalies(league: Any, rng: Any, needed: int) -> int:
     return created
 
 
+_REENTRY_LEAGUES = {
+    "NCAA", "SHL", "LIIGA", "KHL", "NL", "DEL", "EXTRALIGA",
+    "HOCKEYALLSVENSKAN", "MESTIS", "SL", "CZECH", "SWISS",
+}
+
+
+def player_on_draft_board(player: Any, league_code: str, age: int, draft_year: int = 0) -> bool:
+    """Sept-15 age 17–20 on the board; NCAA re-entries up to 21; not passed over.
+
+    An undrafted player stays eligible for his first draft plus two more, then he is a free agent.
+    """
+    if bool(getattr(player, "passed_over_draft", False)):
+        return False
+    if age < 17:
+        return False
+    code = str(league_code or "").upper()
+    reentry = code == "NCAA" or code in _REENTRY_LEAGUES or "EURO" in code or code.startswith("EU_J")
+    if code == "NCAA":
+        if age > 21:
+            return False
+    elif age > 20:
+        return False
+    elif age >= 20 and not reentry:
+        return False
+    year = int(draft_year or 0)
+    if year > 0:
+        first = getattr(player, "first_draft_eligible_year", None)
+        if not isinstance(first, int) or first <= 0:
+            try:
+                setattr(player, "first_draft_eligible_year", year)
+            except Exception:
+                first = year
+            else:
+                first = year
+        if year - int(first) > 2:
+            return False
+    return True
+
+
 def count_draft_eligible_players(league: Any) -> int:
-    """Players who belong on this year's draft board (17-20, NCAA through 24)."""
+    """Players who belong on this year's draft board."""
+    year = int(getattr(league, "season_year", 0) or getattr(league, "current_season", 0) or 0)
     n = 0
     for block in getattr(league, "development_leagues", None) or []:
         code = str(block.get("league_code") or "")
-        max_age = 24 if code.upper() == "NCAA" else 20
         for tm in block.get("teams") or []:
             for p in tm.get("players") or []:
                 if getattr(p, "retired", False) or getattr(p, "drafted", False):
@@ -2715,7 +2693,14 @@ def count_draft_eligible_players(league: Any) -> int:
                     continue
                 ident = getattr(p, "identity", None)
                 age = int(getattr(ident, "age", 99) or 99) if ident else 99
-                if 17 <= age <= max_age and getattr(p, "id", None):
+                try:
+                    from services.season_carryover import _age_on_sept15
+                    sept = _age_on_sept15(p, year) if year else None
+                    if sept:
+                        age = int(sept)
+                except Exception:
+                    pass
+                if player_on_draft_board(p, code, age, year) and getattr(p, "id", None):
                     n += 1
     return n
 
@@ -2758,7 +2743,7 @@ def backfill_draft_eligible_skaters(league: Any, rng: Any, needed: int) -> int:
             ovr_lo=0.56,
             ovr_hi=0.68,
             age_lo=17,
-            age_hi=19,
+            age_hi=18,
             used_names=used_names,
             league_players=league_players,
             pool_context="junior",

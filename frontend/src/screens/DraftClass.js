@@ -434,7 +434,6 @@ function resolvePotentialEstimate(player) {
   if (player?.ceilingHidden) return blank("Ceiling unreported — assign a scout");
 
   const pct = prospectEffectivePct(player);
-  const dedicated = prospectDedicatedPct(player);
   if (pct == null || pct < 15) return blank("Ceiling not scouted");
 
   const range = player?.potentialRange;
@@ -444,10 +443,9 @@ function resolvePotentialEstimate(player) {
   const hi = range?.high != null ? Math.round(Number(range.high)) : NaN;
   const hasRange = Number.isFinite(lo) && Number.isFinite(hi) && hi >= lo;
 
-  // A grade only settles once the file is deep enough, or the band has closed to a
-  // few points. Everything else stays a range so the colour can't oversell a guess.
-  // Exact ceiling requires a dedicated file — public intel alone stays a range.
-  if (hasScore && dedicated != null && (dedicated >= 91 || (dedicated >= 76 && hasRange && hi - lo <= 5))) {
+  // The column is a range unless the band has actually closed. Coverage changes
+  // how wide the range is, not whether a range is shown.
+  if (hasRange && hi - lo <= 1 && hasScore) {
     const v = Math.round(score);
     return { text: String(v), value: v, exact: true, tier: potentialTier(v), detail: "Projected ceiling" };
   }
@@ -2504,7 +2502,7 @@ function ProspectBoardRow({ player, index, selected, expanded, onSelect, onPrefe
           </span>
         ) : null}
       </span>
-      <span className="dc-prospect-row__cell dc-prospect-row__proj">{player.projection || projectionForRank(rank)}</span>
+      <span className="dc-prospect-row__cell dc-prospect-row__proj">{projectionForRank(rank)}</span>
       <ScoutingFileSplit player={player} compact />
       <span className="dc-prospect-row__cell dc-prospect-row__stock" title="Weekly stock">
         <StockTrajectory delta={delta} direction={stock.direction} />

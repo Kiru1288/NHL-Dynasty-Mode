@@ -456,6 +456,27 @@ const LO_STYLES = `
   color: var(--lo-muted);
   border-bottom: 1px solid var(--lo-line);
 }
+.lo-suspensions {
+  margin-bottom: 14px;
+}
+.lo-susp-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+.lo-susp-table th,
+.lo-susp-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--lo-line);
+  text-align: left;
+  vertical-align: top;
+}
+.lo-susp-table th {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--lo-muted);
+}
 /* League docket: one filing line per decision, not three tall cards. */
 .lo-priority-list {
   display: grid;
@@ -2503,6 +2524,42 @@ function OverviewWorkspace({ data, onOpenIssue }) {
           note={data.cap_forecast_note || "Projection sketch — current + next-year model, not full HRR accounting."}
         />
       </div>
+
+      <section className="lo-suspensions" aria-label="League suspension list">
+        <h3 className="lo-priority-title">Suspension list</h3>
+        {asArray(data.suspension_list).length ? (
+          <table className="lo-susp-table">
+            <thead>
+              <tr>
+                <th>Player</th>
+                <th>Team</th>
+                <th>Category</th>
+                <th>Reason</th>
+                <th>Status</th>
+                <th>Games</th>
+              </tr>
+            </thead>
+            <tbody>
+              {asArray(data.suspension_list).map((row) => (
+                <tr key={String(row.incident_id || row.player_id)}>
+                  <td>{String(row.player_name || row.player_id || "—")}</td>
+                  <td>{String(row.team_abbr || row.team_id || "—")}</td>
+                  <td>{String(row.category || "—")}</td>
+                  <td>{String(row.reason || "—")}</td>
+                  <td>{String(row.status || "—")}</td>
+                  <td>
+                    {Number(row.games_remaining) > 0
+                      ? `${Number(row.games_remaining)} left (${Number(row.games_initial) || "—"} total)`
+                      : "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <p className="lo-muted">No active league or team discipline.</p>
+        )}
+      </section>
 
       <div className="lo-priority">
         <h3 className="lo-priority-title">Decisions on the table</h3>

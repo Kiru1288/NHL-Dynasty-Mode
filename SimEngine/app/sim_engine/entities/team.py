@@ -464,9 +464,15 @@ class Team:
         if player in self.prospects:
             return 0.0
 
-        deployed = getattr(player, "_gm_game_line_idx", None)
-        if deployed is None:
-            deployed = getattr(player, "_deployed_line_rank", None)
+        pos = getattr(player, "position", None)
+        pos_u = str(getattr(pos, "value", pos) or "").upper()
+        is_d = pos_u in ("D", "LD", "RD", "DEF", "DEFENSE")
+        deployed = None
+        for key in (("_deployed_pair_rank", "_gm_game_pair_idx") if is_d else ("_deployed_line_rank", "_gm_game_line_idx")):
+            raw = getattr(player, key, None)
+            if raw is not None:
+                deployed = raw
+                break
         if deployed is not None:
             try:
                 line_idx = int(deployed)

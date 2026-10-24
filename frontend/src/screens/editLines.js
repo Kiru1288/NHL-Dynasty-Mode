@@ -187,6 +187,26 @@ function normalizePlayer(player, index) {
     availability,
   });
 }
+function stripUnitSlots(lines, players) {
+  const valid = new Set((players || []).map((player) => String(player.id)));
+  return (Array.isArray(lines) ? lines : []).map((line) => {
+    const slots = { ...(line?.slots || {}) };
+    for (const slot of Object.keys(slots)) {
+      if (slots[slot] && !valid.has(String(slots[slot]))) slots[slot] = "";
+    }
+    return { ...line, slots };
+  });
+}
+function liveNhlPlayers(franchiseState, props) {
+  const organizations = franchiseState?.roster_browser?.organizations || [];
+  const teamId = String(franchiseState?.user_team_id || "");
+  const organization = organizations.find((candidate) => String(candidate?.team_id || "") === teamId);
+  const live = Array.isArray(organization?.nhl) ? organization.nhl : [];
+  if (live.length) return live.map(normalizePlayer);
+  const lean = Array.isArray(franchiseState?.roster) ? franchiseState.roster : [];
+  if (lean.length) return lean.map(normalizePlayer);
+  return getRosterPlayers(props);
+}
 function getRosterPlayers(props) {
   const source = props.players || props.roster || props.team?.players || props.team?.roster || props.currentTeam?.players || props.currentTeam?.roster || props.franchise?.team?.roster || props.universe?.userTeam?.roster || [];
   return Array.isArray(source) ? source.map(normalizePlayer) : [];
@@ -436,7 +456,7 @@ function emptyLines(includeThird = false) {
       id: `f${n}`,
       name: `Line ${n}`,
       slots: { LW: "", C: "", RW: "" },
-      toi_share: [34, 29, 22, 15][n - 1],
+      toi_share: [33, 28, 22, 17][n - 1],
       zone: n <= 2 ? "offensive" : "defensive",
       usage: n <= 2 ? "attack" : "checking",
     })),
@@ -444,10 +464,11 @@ function emptyLines(includeThird = false) {
       id: `d${n}`,
       name: `Pair ${n}`,
       slots: { LD: "", RD: "" },
-      toi_share: [46, 34, 20][n - 1],
+      toi_share: [45, 33, 22][n - 1],
       pair_role: n === 1 ? "shutdown" : n === 2 ? "neutral" : "sheltered",
     })),
     goalies: [{ id: "g1", name: "Goalies", slots: goalieSlots }],
+    coach_adjustments: "light",
   };
 }
 function cloneLines(state) {
@@ -455,6 +476,7 @@ function cloneLines(state) {
     forwards: (state?.forwards || []).map((line) => ({ ...line, slots: { ...(line?.slots || {}) } })),
     defense: (state?.defense || []).map((line) => ({ ...line, slots: { ...(line?.slots || {}) } })),
     goalies: (state?.goalies || []).map((line) => ({ ...line, slots: { ...(line?.slots || {}) } })),
+    coach_adjustments: state?.coach_adjustments || "light",
   };
 }
 function snapshot(lineState, locks) { return { lineState: cloneLines(lineState), locks: { ...(locks || {}) } }; }
@@ -1235,8 +1257,8 @@ function SectionHead({ title, note }) {
   </div>;
 }
 
-const FWD_SHARE_DEFAULT = [34, 29, 22, 15];
-const DEF_SHARE_DEFAULT = [46, 34, 20];
+const FWD_SHARE_DEFAULT = [33, 28, 22, 17];
+const DEF_SHARE_DEFAULT = [45, 33, 22];
 
 function shownShare(line, index, group) {
   const n = Number(line?.toi_share);
@@ -1368,7 +1390,7 @@ function FormationBoard({
   selectedUnit, selectedSlotKey, selectedPlayer, locks, showThird, menuKey, clipboard,
   onSelectUnit, onSlotSelect, onDrop, onDragStart, onRemove, onToggleLock, onSlotKeyDown,
   registerSlotRef,   onWarnings, onMenuToggle, actions, onTogglePool, onToggleInspector, rosterEmpty,
-  onShare, onDeploy,
+  onShare, onDeploy, onCoach,
 }) {
   const options = [[LINEUP_MODES.ALL, "All"], [LINEUP_MODES.FORWARDS, "Forwards"], [LINEUP_MODES.DEFENSE, "Defence"], [LINEUP_MODES.GOALIES, "Goalies"]];
   const showForwards = mode === LINEUP_MODES.ALL || mode === LINEUP_MODES.FORWARDS;
@@ -1392,7 +1414,24 @@ function FormationBoard({
     </div>
     {rosterEmpty ? <div className="lb-empty">Roster unavailable</div> : <div className="fm-scroll">
       {showForwards ? <div className="fm-section">
-        <SectionHead title="Forwards" note="Ice share is the minutes and the scoring weight" />
+        <SectionHead title="Forwards" note="Ice share is the coach's plan. The bench still adjusts during the game." />
+        <div className="lb-deploy" onClick={(event) => event.stopPropagation()}>
+          <div className="lb-deploy-row">
+            <span className="lb-deploy-name">Coach adjustments</span>
+            <span className="lb-deploy-share" role="group" aria-label="Coach adjustments">
+              {["off", "light", "full"].map((modeId) => (
+                <button
+                  key={modeId}
+                  type="button"
+                  className={`lb-share-step is-text${(lineState.coach_adjustments || "light") === modeId ? " is-active" : ""}`}
+                  onClick={() => onCoach?.(modeId)}
+                >
+                  {modeId === "off" ? "Off" : modeId === "full" ? "Full" : "Light"}
+                </button>
+              ))}
+            </span>
+          </div>
+        </div>
         <DeploymentStrip group="forwards" lines={lineState.forwards} onShare={onShare} onDeploy={onDeploy} />
         {lineState.forwards.map((line, index) => <React.Fragment key={line.id}>
           <FormationUnit
@@ -1668,6 +1707,7 @@ export function EvenStrengthLines(props) {
   });
   const [savedSnapshot, setSavedSnapshot] = useState(() => snapshot(lineState, {}));
   const hydratedSession = useRef("");
+  const rosterKeyRef = useRef("");
   const navWarnedAt = useRef(0);
   const staleNotice = useRef("");
   const slotRefs = useRef(new Map());
@@ -1686,19 +1726,28 @@ export function EvenStrengthLines(props) {
 
   const players = useMemo(() => {
     if (ahl) return (Array.isArray(ahlData?.roster) ? ahlData.roster : []).map(normalizePlayer);
-    const lean = Array.isArray(franchiseState?.roster) ? franchiseState.roster : [];
-    if (lean.length) return lean.map(normalizePlayer);
-    const organizations = franchiseState?.roster_browser?.organizations || [];
-    const teamId = String(franchiseState?.user_team_id || "");
-    const organization = organizations.find((candidate) => String(candidate?.team_id || "") === teamId) || organizations[0];
-    const live = Array.isArray(organization?.nhl) ? organization.nhl : [];
-    return live.length ? live.map(normalizePlayer) : getRosterPlayers(props);
+    return liveNhlPlayers(franchiseState, props);
   }, [franchiseState, props, ahl, ahlData]);
   const playerMap = useMemo(() => players.reduce((map, player) => { map[player.id] = player; return map; }, {}), [players]);
   const showThird = useMemo(() => players.filter((player) => isGoalie(player.position)).length >= 3 || Boolean(lineState.goalies?.[0]?.slots?.Third), [players, lineState.goalies]);
 
+  const rosterKey = useMemo(() => players.map((player) => player.id).join("|"), [players]);
   useEffect(() => {
-    if (!players.length || hydratedSession.current === sessionId) return;
+    if (!players.length) return;
+    const first = hydratedSession.current !== sessionId;
+    const rosterChanged = Boolean(rosterKeyRef.current) && rosterKeyRef.current !== rosterKey;
+    if (!first && rosterChanged) {
+      setLineState((current) => {
+        const cleaned = sanitizeLineup(current, players, showThird);
+        if (cleaned.removed > 0) {
+          setToast({ type: "warning", message: `${cleaned.removed} player${cleaned.removed === 1 ? "" : "s"} no longer on the roster left the lines.` });
+        }
+        return cleaned.lineState;
+      });
+      rosterKeyRef.current = rosterKey;
+      return;
+    }
+    if (!first) return;
     const backendRaw = ahl ? ahlData?.lines : franchiseState?.lines?.even_strength?.lines;
     const backend = backendRaw ? sanitizeLineup(backendRaw, players, showThird) : null;
     const cacheRaw = ahl ? null : readSessionLineupCache(LINEUP_KIND, sessionId);
@@ -1711,7 +1760,10 @@ export function EvenStrengthLines(props) {
     const savedBase = hasBackend ? chosen.lineState : emptyLines(showThird);
     const needsDeploySave = hasBackend && [...(backendRaw?.forwards || []), ...(backendRaw?.defense || [])].some((line) => line && line.toi_share == null);
     hydratedSession.current = sessionId;
-    setLineState(chosen.lineState);
+    rosterKeyRef.current = rosterKey;
+    const next = chosen.lineState;
+    next.coach_adjustments = String(backendRaw?.coach_adjustments || cacheRaw?.coach_adjustments || "light");
+    setLineState(next);
     setLocks({});
     setHistory([]);
     setFuture([]);
@@ -1728,7 +1780,7 @@ export function EvenStrengthLines(props) {
       staleNotice.current = sessionId;
       setToast({ type: "warning", message: `${chosen.removed} stale assignments removed.` });
     }
-  }, [players, franchiseState?.lines, sessionId, showThird, ahl, ahlData]);
+  }, [players, rosterKey, franchiseState?.lines, sessionId, showThird, ahl, ahlData]);
   useEffect(() => {
     const nav = pendingPromiseNav;
     if (!nav?.player_id) return;
@@ -1910,6 +1962,10 @@ export function EvenStrengthLines(props) {
       locks,
       "Ice time updated."
     );
+  }, [lineState, locks, commit]);
+  const onCoach = useCallback((modeId) => {
+    const mode = ["off", "light", "full"].includes(modeId) ? modeId : "light";
+    commit({ ...lineState, coach_adjustments: mode }, locks, mode === "off" ? "Coach will follow the shares you set." : mode === "full" ? "Coach can adjust for the score, matchups and a hot line." : "Coach adjusts lightly for the score and fatigue.");
   }, [lineState, locks, commit]);
   const onDeploy = useCallback((group, lineId, patch) => {
     const next = {
@@ -2305,6 +2361,7 @@ export function EvenStrengthLines(props) {
           rosterEmpty={!players.length && !rosterLoading}
           onShare={onShareStep}
           onDeploy={onDeploy}
+          onCoach={onCoach}
         />
         <LineInspector
           open={inspectorOpen}
@@ -2581,25 +2638,30 @@ function SpecialTeamsLines({ kind, ...props }) {
     return () => { active = false; };
   }, [franchiseState?.session_id]);
 
-  const players = useMemo(() => {
-    const lean = Array.isArray(franchiseState?.roster) ? franchiseState.roster : [];
-    if (lean.length) return lean.map(normalizePlayer);
-    const organizations = franchiseState?.roster_browser?.organizations || [];
-    const teamId = String(franchiseState?.user_team_id || "");
-    const organization = organizations.find((candidate) => String(candidate?.team_id || "") === teamId) || organizations[0];
-    const live = Array.isArray(organization?.nhl) ? organization.nhl : [];
-    return live.length ? live.map(normalizePlayer) : getRosterPlayers(props);
-  }, [franchiseState, props]);
+  const players = useMemo(() => liveNhlPlayers(franchiseState, props), [franchiseState, props]);
   const playerMap = useMemo(() => players.reduce((map, player) => { map[player.id] = player; return map; }, {}), [players]);
+  const playersRef = useRef(players);
+  playersRef.current = players;
+  const stRosterKey = useRef("");
 
   useEffect(() => {
     const backend = franchiseState?.lines?.[kind]?.lines;
     if (Array.isArray(backend) && backend.length) {
-      setLines(backend);
+      const pool = playersRef.current;
+      setLines(pool.length ? stripUnitSlots(backend, pool) : backend);
       setUnsaved(false);
       hydratedSession.current = `${sessionId}:${kind}`;
     }
   }, [franchiseState?.lines?.[kind]?.lines, kind, sessionId]);
+
+  const stRosterKeyValue = players.map((player) => player.id).join("|");
+  useEffect(() => {
+    if (!players.length) return;
+    if (stRosterKey.current && stRosterKey.current !== stRosterKeyValue) {
+      setLines((current) => stripUnitSlots(current, players));
+    }
+    stRosterKey.current = stRosterKeyValue;
+  }, [stRosterKeyValue, players]);
 
   useEffect(() => {
     const key = `${sessionId}:${kind}`;

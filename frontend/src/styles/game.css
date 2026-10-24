@@ -30516,6 +30516,7 @@ th,dt,legend,
 .nhlrost-board-sheet__head,.nhlrost-board-row{grid-template-columns:340px 56px 72px 56px 120px 150px 110px!important;justify-content:start!important}
 .nhlrost-ovr-pill.is-franchise .nhlrost-ovr-pill__value{color:var(--ds-text)!important}
 .nhlrost-ovr-pill.is-franchise .nhlrost-ovr-pill__value::after{content:"★";font-size:12px;color:var(--ds-elite);margin-left:3px;vertical-align:super}
+.nhlrost-ovr-pill__mod,.ovr-mod-badge{display:block;margin-top:2px;font-size:11px;font-weight:800;letter-spacing:0;color:#d4a24c;line-height:1.2}
 .nhlrost-filters-primary button,.nhlrost-filters-primary select{font-size:13px!important;white-space:nowrap!important}
 .nhlrost-filters-primary button{flex:0 0 auto!important;width:auto!important;min-width:0!important;padding-left:14px!important;padding-right:14px!important}
 /* Trade Desk: one UI face (no monospace values), calm labels, single primary */
@@ -31853,7 +31854,7 @@ h1:not([class*="replay"] *){font-family:var(--dd-font-display)!important;font-we
 .fa-fa-cap{display:flex;flex-direction:column;align-items:flex-end}
 .fa-fa-cap strong{font-size:clamp(26px,2.2vw,40px);font-weight:900;line-height:1;color:#8ff0b0;font-variant-numeric:tabular-nums}
 .fa-fa-cap span{font-size:12px;font-weight:800;color:var(--ds-label,#9fb3d9);white-space:nowrap}
-.fa-root .fa-fa-sim{display:flex;gap:8px;align-items:center}
+.fa-root .fa-fa-sim{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .fa-root .fa-sim-btn{border-radius:999px!important;border:2px solid rgba(255,255,255,.25)!important;background:rgba(5,12,44,.6)!important;color:#fff!important;font-weight:800!important;box-shadow:none!important;padding:8px 16px!important;font-family:var(--dd-font-ui)!important;font-size:14px!important;text-shadow:none!important}
 .fa-root .fa-sim-btn.is-primary{font-family:var(--dd-font-display)!important;font-weight:400!important;font-size:17px!important;letter-spacing:.04em;color:var(--dd-cream)!important;border-radius:8px!important;border:3px solid!important;
   border-color:var(--dd-gold-hi) var(--dd-gold) var(--dd-gold-lo) var(--dd-gold)!important;background:linear-gradient(180deg,var(--dd-lacquer-hi),var(--dd-lacquer) 55%,var(--dd-lacquer-lo))!important;box-shadow:0 0 0 2px var(--dd-gold-lo),0 3px 0 var(--dd-outline)!important;text-shadow:0 2px 0 var(--dd-lacquer-lo)!important}
@@ -31871,7 +31872,7 @@ h1:not([class*="replay"] *){font-family:var(--dd-font-display)!important;font-we
 .fa-root .fa-fa-sort{border-radius:999px!important;border:2px solid rgba(255,255,255,.18)!important;background:rgba(5,12,44,.6)!important;padding:7px 12px!important;font-weight:800!important}
 
 /* List + desk: list is the browser, desk is the action */
-.fa-root .fa-fa-layout{display:grid!important;grid-template-columns:minmax(0,1fr) minmax(360px,1.05fr)!important;gap:16px!important;min-height:0}
+.fa-root .fa-fa-layout{display:grid!important;grid-template-columns:minmax(0,1.35fr) minmax(380px,0.9fr)!important;gap:16px!important;min-height:0}
 .fa-root .fa-fa-list,.fa-root .fa-fa-desk{border-radius:14px!important;margin:6px}
 .fa-root .fa-fa-list{border:3px solid var(--dd-outline)!important;background:var(--dd-box-fill)!important;box-shadow:0 0 0 3px var(--dd-box-rim),0 0 0 6px var(--dd-outline)!important}
 .fa-root .fa-fa-desk{border:3px solid var(--dd-outline)!important;box-shadow:0 0 0 3px var(--dd-gold),0 0 0 6px var(--dd-outline)!important;background:linear-gradient(180deg,rgba(26,52,120,.9),rgba(12,28,72,.92))!important;display:flex!important;flex-direction:column;gap:12px;padding:14px!important}
@@ -31894,7 +31895,8 @@ h1:not([class*="replay"] *){font-family:var(--dd-font-display)!important;font-we
 @media (max-width:1280px){
   .fa-root .fa-fa-bar{grid-template-columns:1fr auto}
   .fa-root .fa-fa-sim{grid-column:1/-1;justify-content:flex-end}
-  .fa-root .fa-fa-layout{grid-template-columns:minmax(0,1fr) minmax(320px,1fr)!important}
+  .fa-root .fa-fa-layout{grid-template-columns:minmax(0,1.2fr) minmax(340px,0.85fr)!important}
+  .fa-root.fa-root--market .fa-stage{grid-template-columns:minmax(0,1fr) minmax(260px,300px)!important}
 }
 @media (max-width:980px){
   .fa-root .fa-fa-layout{grid-template-columns:1fr!important}
@@ -31905,9 +31907,12 @@ h1:not([class*="replay"] *){font-family:var(--dd-font-display)!important;font-we
 .fa-root .fa-fa-tools .fa-fa-sort{order:2;margin-left:auto}
 .fa-root .fa-fa-tools .fa-fa-filters{order:3;flex:1 0 100%;flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px}
 .fa-root .fa-fa-chip{flex:0 0 auto;white-space:nowrap}
+.fa-root .fa-fa-row{gap:8px 16px!important}
 .fa-root .fa-fa-row .player-headshot{--size:36px}
-.fa-root .fa-fa-logos{gap:2px!important}
-.fa-root .fa-fa-logos .team-logo-badge{width:18px!important;height:18px!important}
+.fa-root .fa-fa-rating{gap:12px!important}
+.fa-root .fa-fa-logos{gap:6px!important;margin:0 6px}
+.fa-root .fa-fa-logos .team-logo-badge{width:20px!important;height:20px!important}
+.fa-root .fa-fa-ask{min-width:4.6rem;padding-left:8px}
 @media (max-height:820px){
   .fa-root .fa-fa-bar{padding:8px 14px!important}
   .fa-root .fa-fa-phase h2{font-size:22px}
@@ -32135,9 +32140,19 @@ h1:not([class*="replay"] *){font-family:var(--dd-font-display)!important;font-we
 /* Free agency: the market list and the player desk get the height (they were squeezed
    to ~140px by the signings feed at 768px tall); cream identity band for the selected
    player, open sections, the offer controls as the orange decision area. */
-.fa-root.fa-root--market .fa-stage{grid-template-rows:minmax(0,1fr) auto!important}
-.fa-root.fa-root--market .fa-panel{max-height:118px!important;min-height:0!important}
-.fa-root.fa-root--market .fa-panel .fa-rail{max-height:84px!important}
+/* The signings column is a full-height side rail. A 118px cap stacked
+   Day / Wire / Social and the latest signing into one short card. */
+.fa-root.fa-root--market .fa-stage{grid-template-columns:minmax(0,1fr) minmax(300px,340px)!important;grid-template-rows:minmax(0,1fr)!important;align-items:stretch!important}
+.fa-root.fa-root--market .fa-panel{max-height:none!important;height:100%!important;min-height:0!important;align-self:stretch!important;overflow:hidden!important;display:flex!important;flex-direction:column!important;padding:0!important}
+.fa-root.fa-root--market .fa-panel > h2:empty{display:none!important}
+.fa-root.fa-root--market .fa-panel .fa-rail{max-height:none!important;flex:1 1 auto!important;min-height:0!important;display:flex!important;flex-direction:column!important;overflow:hidden!important}
+.fa-root .fa-rail-shell{display:flex!important;flex-direction:column!important;min-height:0!important;height:100%!important}
+.fa-root .fa-rail-tabs{display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr))!important;flex:0 0 auto}
+.fa-root .fa-rail-tabs button{letter-spacing:0!important;text-transform:none!important;font-size:13px!important;font-weight:800!important;padding:12px 6px!important;white-space:nowrap}
+.fa-root .fa-rail-scroll{flex:1 1 auto!important;min-height:0!important;overflow-y:auto!important;display:flex!important;flex-direction:column!important;gap:10px!important;padding:12px!important}
+.fa-root .fa-day-row,.fa-root .fa-wire-item,.fa-root .fa-social-post{padding:10px 12px!important}
+.fa-root .fa-day-main strong{white-space:normal!important}
+.fa-root .fa-fa-desk > .fa-empty{flex:1 1 auto;display:grid;place-items:center;text-align:center;margin:0;padding:40px 28px;font-size:16px;font-weight:800;line-height:1.45;max-width:28ch;align-self:center}
 .fa-root .fa-fa-bar{border:0!important;box-shadow:none!important;border-radius:0!important;background:var(--cs-region)!important}
 .fa-root .fa-fa-identity *{text-transform:none!important}
 .fa-root .fa-fa-tools{gap:6px!important}
@@ -32371,7 +32386,10 @@ h1:not([class*="replay"] *){font-family:var(--dd-font-display)!important;font-we
 .nd2-gauge.tone-instant > strong,.nd2-gauge.tone-good > strong{color:var(--cs-lime)}
 
 /* Free agency uses the same desk (nd2--fa): the right column is the market. */
-.nd2--fa .nd2-hero{grid-template-columns:0 56px minmax(0,1fr) auto}
+.nd2--fa .nd2-hero{grid-template-columns:0 56px minmax(0,1fr) auto;gap:16px;padding:16px 18px}
+.nd2--fa .nd2-offer,.nd2--fa .nd2-talk{padding:16px 18px;gap:14px}
+.nd2--fa .nd2-body{gap:0}
+.fa-root .fa-fa-desk .nd2{min-height:100%}
 .nd2--fa .nd2-who h3 [class*="rights-badge"]{font-size:11px;vertical-align:middle}
 .nd2-market{display:grid;gap:6px}
 .nd2-market__label{display:block;font-size:12px;font-weight:800;color:var(--cs-soft)}
@@ -32486,6 +32504,8 @@ h1:not([class*="replay"] *){font-family:var(--dd-font-display)!important;font-we
 .lb-share-step{width:24px;height:24px;border:1px solid rgba(255,255,255,.2);border-radius:4px;background:rgba(255,255,255,.06);color:#fff;font-size:15px;font-weight:900;line-height:1;cursor:pointer;padding:0}
 .lb-share-step:hover:not(:disabled){background:#2ee6d6;color:#062036}
 .lb-share-step:disabled{opacity:.3;cursor:default}
+.lb-share-step.is-text{width:auto;min-width:24px;padding:0 8px;font-size:11px;font-weight:700;letter-spacing:.02em}
+.lb-share-step.is-active{background:#2ee6d6;color:#062036}
 .lb-deploy-share > span{text-align:center}
 
 /* Storylines player file: how he feels and his life in the room. Lime = good, coral = bad. */

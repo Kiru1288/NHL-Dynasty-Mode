@@ -1,5 +1,7 @@
 # backend/app/sim_engine/entities/prospect.py
 """
+TEST / SIMULATION ONLY — live franchise mode uses Player + development_leagues.
+
 Prospect Entity System (Pre-Draft Player Asset)
 
 Core idea:

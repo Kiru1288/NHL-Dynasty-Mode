@@ -524,6 +524,11 @@ export function settleArbitration(payload) {
   return postContractAction("arbitration-settle", payload);
 }
 
+export async function simFreeAgencyToSeasonStart() {
+  const { data } = await api.post("/api/franchise/free-agency/sim-to-season");
+  return data;
+}
+
 export async function advanceFreeAgencyDay(days = 1) {
   const { data } = await api.post("/api/franchise/free-agency/advance-day", {
     days: Math.max(1, Number(days) || 1),

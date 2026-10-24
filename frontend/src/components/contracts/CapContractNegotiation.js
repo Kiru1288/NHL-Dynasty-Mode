@@ -135,6 +135,7 @@ export default function CapContractNegotiation({
   const [offerNmc, setOfferNmc] = useState(false);
   const [offerBonus, setOfferBonus] = useState("0");
   const [offerType, setOfferType] = useState("");
+  const [nhlRoster, setNhlRoster] = useState(false);
   const [response, setResponse] = useState(null);
   const [localError, setLocalError] = useState("");
   const [previewPending, setPreviewPending] = useState(false);
@@ -151,6 +152,7 @@ export default function CapContractNegotiation({
     setOfferNmc(false);
     setOfferBonus("0");
     setOfferType("");
+    setNhlRoster(false);
     setResponse(null);
     setPreviewOfferKey("");
     setResponseSource(null);
@@ -186,8 +188,9 @@ export default function CapContractNegotiation({
     [capSnapshot, nextYearProjection, row, offerCapHitNum],
   );
 
-  const contractCategory = offerType || (legalTypes[0] ? legalTypes[0].id : "");
-  const offerKey = `${offerAavNum.toFixed(3)}|${offerYearsNum}|${offerNtcMode}|${offerNmc ? 1 : 0}|${offerBonusNum.toFixed(3)}|${contractCategory}`;
+  const preferredType = legalTypes.find((t) => t.id === row?.default_contract_type);
+  const contractCategory = offerType || (preferredType ? preferredType.id : legalTypes[0] ? legalTypes[0].id : "");
+  const offerKey = `${offerAavNum.toFixed(3)}|${offerYearsNum}|${offerNtcMode}|${offerNmc ? 1 : 0}|${offerBonusNum.toFixed(3)}|${contractCategory}|${nhlRoster ? 1 : 0}`;
   const evalSnap = readEvaluation(response);
   const negoStatus = normalizeNegoStatus(response);
   const isSubmitTurn = responseSource === "submit" && negoStatus && negoStatus !== "evaluated";
@@ -284,8 +287,10 @@ export default function CapContractNegotiation({
             contract_type: String(contractCategory).startsWith("nhl") ? undefined : contractCategory,
           }
         : {}),
+      nhl_roster: nhlRoster,
+      nhl_only: nhlRoster,
     }),
-    [row, offerAavNum, offerYearsNum, offerNtcMode, offerNmc, offerBonusNum, contractCategory],
+    [row, offerAavNum, offerYearsNum, offerNtcMode, offerNmc, offerBonusNum, contractCategory, nhlRoster],
   );
 
   const runPreview = useCallback(async () => {
@@ -669,6 +674,23 @@ export default function CapContractNegotiation({
                   </button>
                 ))}
               </div>
+            </div>
+          ) : null}
+
+          {offerAavNum <= 1.15 ? (
+            <div className="nd2-field nd2-field--row">
+              <span>NHL roster</span>
+              <label className="nd2-note">
+                <input
+                  type="checkbox"
+                  checked={nhlRoster}
+                  disabled={busy}
+                  onChange={(e) => setNhlRoster(e.target.checked)}
+                />
+                {" "}Keep him on the NHL roster. Leave this off and a deal at $1.15M or less reports to the AHL
+                {offerAavNum > 0 ? " (waiver-exempt and two-way deals go straight down; anyone else has to clear waivers)" : ""}.
+                The bury relief makes the cap hit $0.
+              </label>
             </div>
           ) : null}
 

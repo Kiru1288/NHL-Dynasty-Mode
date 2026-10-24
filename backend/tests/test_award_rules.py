@@ -38,6 +38,24 @@ def test_calder_drafted_years_ago_with_no_nhl_games_is_a_rookie():
     assert A.calder_eligibility(row, history=hist)["eligible"] is True
 
 
+def test_calder_real_import_without_career_rows_uses_rating_year_gp():
+    from types import SimpleNamespace as NS
+
+    from services.season_carryover import calder_history
+
+    veteran = NS(
+        id="NHL_97",
+        real_nhl_import=True,
+        career_stats={"seasons": []},
+        real_nhl_import_stats={"gp": 82, "gamesPlayed": 82},
+        identity=NS(draft_year=2015, birth_year=1997, birth_month=1, birth_day=13),
+    )
+    session = NS(sim=NS(league=NS(teams=[NS(roster=[veteran])])), season_calendar_year=2025, season_history=[])
+    row = calder_history(session, 2025)["NHL_97"]
+    assert row["is_rookie"] is False
+    assert row["max_prior_season_gp"] == 82
+
+
 def test_calder_nhl_games_rule_and_age():
     assert A.calder_eligibility(_row(), history={"max_prior_season_gp": 30, "prior_seasons_6plus_gp": 1, "age_sept15": 21})["eligible"] is False
     assert A.calder_eligibility(_row(), history={"max_prior_season_gp": 12, "prior_seasons_6plus_gp": 2, "age_sept15": 21})["eligible"] is False

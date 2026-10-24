@@ -186,8 +186,11 @@ def _contract_type_token(player: Any) -> str:
 
 
 def _minors_deal_cap_exempt(player: Any) -> bool:
-    """AHL/ECHL/PTO deals, and league-minimum two-ways sitting in the minors, do not
-    hit the NHL cap. A minimum deal on the 23-man roster still counts.
+    """AHL/ECHL/PTO deals, and buried two-ways, do not hit the NHL cap.
+
+    Entry-level deals and anything at or under league minimum are exempt in
+    player_full_cap_hit_millions, including when they are on the 23-man roster.
+    The stored AAV stays on the contract so a true ELC is still $0.95.
     """
     token = _contract_type_token(player)
     if token in ("AHL", "ECHL", "AHL_ECHL", "PTO", "ATO", "TRYOUT", "AHL_ONLY", "ECHL_ONLY", "MINORS", "MINOR"):
@@ -270,16 +273,26 @@ def player_full_cap_hit_millions(player: Any) -> float:
                     aav = v
                     break
     if aav > 0 and cap > aav + 1.0 and cap > aav * 1.25:
-        return aav
-    if cap > 0:
-        return cap
-    if aav > 0:
-        return aav
-    for key in ("salary_m",):
-        v = normalize_money_to_millions(_get(player, key, 0))
-        if v > 0:
-            return v
-    return 0.0
+        hit = aav
+    elif cap > 0:
+        hit = cap
+    elif aav > 0:
+        hit = aav
+    else:
+        hit = 0.0
+        for key in ("salary_m",):
+            v = normalize_money_to_millions(_get(player, key, 0))
+            if v > 0:
+                hit = v
+                break
+    # ELCs and league-minimum deals (the schedule tops out at $1.0M) do not
+    # count against the cap. Stored cap_hit_m is left alone.
+    token = _contract_type_token(player)
+    if token in ("ELC", "ENTRY_LEVEL", "ENTRYLEVEL"):
+        return 0.0
+    if 0 < hit <= 1.05:
+        return 0.0
+    return hit
 
 
 def buried_cap_hit_millions(

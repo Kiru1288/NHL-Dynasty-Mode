@@ -695,7 +695,22 @@ def run_year_end_progression_once(session: FranchiseSession) -> Dict[str, Any]:
             f"{prog['retired_removed']} player(s) left active NHL rosters (retirement)."
         )
     setattr(session, "_year_end_progression_done", True)
+    try:
+        from services.franchise_sim import _snapshot_rating_history_mark
+
+        _snapshot_rating_history_mark(session, "season_end")
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return prog
+
+
+def _legacy_stage(session: FranchiseSession, stage: str) -> None:
+    """Write one Legacy Hall slice. A failure here must not stop the season."""
+    try:
+        from services.legacy_hall import archive_legacy_stage
+        archive_legacy_stage(session, stage)
+    except Exception:
+        _swallowed_log.debug("legacy stage %s failed", stage, exc_info=True)
 
 
 def _transition_to_playoff_ready(session: FranchiseSession) -> Dict[str, Any]:
@@ -712,8 +727,17 @@ def _transition_to_playoff_ready(session: FranchiseSession) -> Dict[str, Any]:
 
     # Year-end aging/development now runs after the Cup (run_year_end_progression_once),
     # not here: ratings used to jump right before the playoffs, and the offseason
-    # Development Report then had nothing left to show.
+    # Development Report then had nothing left to show. The three in-season
+    # checkpoints still have to land before the bracket, or an 82-game year
+    # shows no overall change.
+    try:
+        from services.franchise_sim import _nhl_in_season_development_tick
+
+        _nhl_in_season_development_tick(session)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     session.regular_season_complete = True
+    _legacy_stage(session, "regular")
     session.phase = "playoff_ready"
     session.season_phase = "playoff_ready"
     session.next_important_event = "enter_playoffs"
@@ -1069,6 +1093,7 @@ def complete_playoffs(session: FranchiseSession) -> Dict[str, Any]:
     session.notifications.append(f"Playoffs complete. Stanley Cup: {ch_disp}")
     session.timeline.append(f"POSTSEASON: Champion {ch_disp}")
     _playoff_lifecycle_log(session, "stanley_cup_winner", champion=session.champion_id)
+    _legacy_stage(session, "cup")
 
     payload_po = dict(getattr(session, "playoff_payload", None) or {})
     if playoff_result is not None:
@@ -1594,8 +1619,17 @@ def continue_offseason(
     if current == "draft_combine" and not getattr(session, "draft_combine_done", False):
         raise ValueError("Complete the Draft Combine before continuing offseason")
 
+    if current == "awards":
+        _legacy_stage(session, "awards")
+
+    if current == "retirements":
+        _legacy_stage(session, "retirements")
+
     if current == "draft" and not session.draft_completed:
         raise ValueError("Complete the Entry Draft before continuing offseason")
+
+    if current == "draft" and session.draft_completed:
+        _legacy_stage(session, "draft")
 
     if current == "re_sign":
         # Exclusive window is optional negotiating time — opening FA ends it.
@@ -1943,6 +1977,7 @@ def _enrich_awards_headshots(session: FranchiseSession, payload: Any) -> None:
 def _enter_awards_stage(session: FranchiseSession) -> Dict[str, Any]:
     _ensure_franchise_awards_computed(session)
     _enrich_awards_headshots(session, session.awards_payload or {})
+    _legacy_stage(session, "awards")
     return {"awards": slim_awards_payload_for_client(session.awards_payload or {})}
 
 
@@ -2484,10 +2519,11 @@ def _dev_snapshot_player(
     team_id: str = "",
     league_id: str = "",
 ) -> Dict[str, Any]:
-    from services.franchise_sim import _player_ovr99
+    from services.franchise_sim import shown_ovr_and_potential
 
+    ovr_i, pot_i = shown_ovr_and_potential(player)
     return {
-        "overall": round(_player_ovr99(player), 2),
+        "overall": int(ovr_i),
         "attributes": _dev_extract_attributes(player),
         "team_id": str(team_id or getattr(player, "team_id", "") or ""),
         "league_id": str(
@@ -2498,7 +2534,7 @@ def _dev_snapshot_player(
         ),
         "age": _dev_player_age(player),
         "position": _dev_player_position(player),
-        "potential": _dev_player_potential_display(player),
+        "potential": int(pot_i),
         "contract_status": _dev_contract_status(player),
         "signed": _dev_is_signed(player),
         "readiness_score": _dev_readiness_score_raw(player),
@@ -2508,21 +2544,11 @@ def _dev_snapshot_player(
 
 def _dev_player_potential_display(player: Any) -> float:
     try:
-        from app.sim_engine.entities.player import display_rating, normalize_rating
+        from services.franchise_sim import shown_ovr_and_potential
 
-        pot = getattr(player, "potential", None)
-        if pot is not None:
-            return float(display_rating(normalize_rating(pot)))
-        ratings = getattr(player, "ratings", None) or {}
-        if ratings.get("dev_potential") is not None:
-            return float(display_rating(normalize_rating(ratings["dev_potential"])))
+        return float(shown_ovr_and_potential(player)[1])
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
-    try:
-        from services.franchise_sim import _player_ovr99
-
-        return float(int(round(_player_ovr99(player) + 4.0)))
-    except Exception:
         return 0.0
 
 
@@ -2766,37 +2792,284 @@ def _dev_collect_org_entries(session: FranchiseSession) -> List[Dict[str, Any]]:
     return entries
 
 
-def _dev_season_stats(session: FranchiseSession, player: Any) -> Dict[str, Any]:
-    pid = _dev_player_id(player)
-    row = dict((getattr(session, "player_season_stats", None) or {}).get(pid) or {})
-    gp = int(row.get("gp", 0) or getattr(player, "gp", 0) or 0)
+def _dev_is_nhl_league(league: str) -> bool:
+    code = str(league or "").upper()
+    return (not code) or ("NHL" in code and "AHL" not in code)
+
+
+def _dev_age_ppg_factor(age: int) -> float:
+    """Junior conversion age weight. 17 → 1.25, 20 → 0.85, then a little less for overagers."""
+    try:
+        age_i = int(age)
+    except (TypeError, ValueError):
+        age_i = 20
+    if age_i <= 17:
+        return 1.25
+    if age_i >= 20:
+        return max(0.70, 0.85 - 0.05 * (age_i - 20))
+    return 1.25 + (age_i - 17) * (0.85 - 1.25) / 3.0
+
+
+def _dev_nhl_eq_save_pct(save_pct: float, league: str) -> float:
+    """Map a league save percentage onto the NHL scale. AHL .915 is not NHL .915."""
+    try:
+        sv = float(save_pct)
+    except (TypeError, ValueError):
+        return 0.900
+    if sv > 1.5:
+        sv = sv / 100.0
+    if _dev_is_nhl_league(league):
+        return max(0.850, min(0.960, sv))
+    code = str(league or "").upper()
+    baselines = (
+        ("AHL", 0.910),
+        ("ECHL", 0.908),
+        ("NCAA", 0.915),
+        ("USHL", 0.915),
+        ("OHL", 0.912),
+        ("WHL", 0.912),
+        ("QMJHL", 0.912),
+        ("CHL", 0.912),
+        ("KHL", 0.910),
+        ("SHL", 0.910),
+        ("LIIGA", 0.910),
+    )
+    base = 0.912
+    for key, val in baselines:
+        if key in code:
+            base = val
+            break
+    return max(0.850, min(0.960, 0.900 + (sv - base)))
+
+
+def _dev_nhl_eq_factor(league: str) -> float:
+    """Points in this league, as a fraction of an NHL point, before any growth score."""
+    code = str(league or "").upper().replace(" ", "")
+    if not code or code in ("NHL", "NATIONAL"):
+        return 1.0
+    table = (
+        ("AHL", 0.47),
+        ("ECHL", 0.35),
+        ("NCAA", 0.40),
+        ("USHL", 0.28),
+        ("OHL", 0.30),
+        ("WHL", 0.30),
+        ("QMJHL", 0.30),
+        ("CHL", 0.30),
+        ("KHL", 0.60),
+        ("SHL", 0.55),
+        ("LIIGA", 0.50),
+        ("HOCKEYALLSVENSKAN", 0.42),
+        ("EXTRALIGA", 0.45),
+        ("MESTIS", 0.38),
+        ("DEL", 0.48),
+        ("NL", 0.48),
+    )
+    for key, fac in table:
+        if key in code:
+            return fac
+    if "COLLEGE" in code:
+        return 0.40
+    return 0.40
+
+
+def _dev_slot_avg_toi(league: str, defense: bool) -> float:
+    """Typical even-strength minutes in this league. Usage is toi / this, so a fourth line sits under 1."""
+    code = str(league or "").upper()
+    if "AHL" in code:
+        return 19.0 if defense else 17.0
+    if not code or "NHL" in code:
+        return 19.5 if defense else 15.5
+    return 18.0 if defense else 16.0
+
+
+def _dev_toi_quality_for_league(avg_min: float, league: str, *, goalie: bool, defense: bool) -> float:
+    """NHL keeps the old minute scale. An 18-minute AHL or junior night rates as a top role."""
+    if goalie:
+        return max(0.2, min(1.0, (avg_min - 48.0) / 18.0))
+    code = str(league or "").upper()
+    nhl = (not code) or ("NHL" in code and "AHL" not in code)
+    if nhl:
+        if defense:
+            return max(0.18, min(1.0, (avg_min - 11.0) / 14.0))
+        return max(0.18, min(1.0, (avg_min - 9.0) / 12.0))
+    if defense:
+        return max(0.20, min(1.0, (avg_min - 12.0) / 10.0))
+    return max(0.20, min(1.0, (avg_min - 8.0) / 10.0))
+
+
+def _dev_parse_counting_line(row: Dict[str, Any], league: str, source: str) -> Optional[Dict[str, Any]]:
+    try:
+        gp = int(row.get("gp") or row.get("games_played") or 0)
+    except (TypeError, ValueError):
+        gp = 0
     if gp <= 0:
-        gp = int(getattr(player, "games_played", 0) or 0)
-    goals = int(row.get("g", row.get("goals", 0)) or 0)
-    assists = int(row.get("a", row.get("assists", 0)) or 0)
-    points = int(row.get("pts", goals + assists) or 0)
+        return None
+    try:
+        goals = int(row.get("g", row.get("goals", 0)) or 0)
+    except (TypeError, ValueError):
+        goals = 0
+    try:
+        assists = int(row.get("a", row.get("assists", 0)) or 0)
+    except (TypeError, ValueError):
+        assists = 0
+    try:
+        points = int(row.get("pts", row.get("points", goals + assists)) or (goals + assists))
+    except (TypeError, ValueError):
+        points = goals + assists
+    try:
+        toi = int(row.get("toi_sec") or 0)
+    except (TypeError, ValueError):
+        toi = 0
+    try:
+        pp_toi = int(row.get("pp_toi_sec") or row.get("pp_toi") or 0)
+    except (TypeError, ValueError):
+        pp_toi = 0
+    return {
+        "league": str(league or "NHL"),
+        "source": source,
+        "gp": gp,
+        "goals": goals,
+        "assists": assists,
+        "points": points,
+        "toi_sec": toi,
+        "pp_toi_sec": pp_toi,
+        "save_pct": row.get("sv_pct", row.get("save_pct")),
+        "gaa": row.get("gaa", row.get("goals_against_avg")),
+        "starts": int(row.get("starts", row.get("gs", 0)) or 0),
+    }
+
+
+def _dev_collect_season_lines(session: FranchiseSession, player: Any) -> List[Dict[str, Any]]:
+    """NHL ledger, AHL ledger, and junior/NCAA/Europe line. Each keeps its own league tag."""
+    lines: List[Dict[str, Any]] = []
+    pid = _dev_player_id(player)
+    nhl_row = dict((getattr(session, "player_season_stats", None) or {}).get(pid) or {})
+    nhl_league = str(nhl_row.get("league") or "NHL")
+    parsed = _dev_parse_counting_line(nhl_row, nhl_league, "nhl")
+    if parsed is not None:
+        lines.append(parsed)
+
+    ahl_line = None
+    try:
+        from services.ahl_league import get_player_ahl_season_line
+
+        ahl_line = get_player_ahl_season_line(session, pid)
+    except Exception:
+        ahl_line = None
+    if isinstance(ahl_line, dict):
+        parsed = _dev_parse_counting_line(ahl_line, "AHL", "ahl")
+        if parsed is not None:
+            lines.append(parsed)
+
+    prospect = getattr(player, "_prospect_season_stats", None)
+    if isinstance(prospect, dict):
+        pleague = str(
+            prospect.get("league")
+            or getattr(player, "current_league_id", "")
+            or getattr(player, "development_path", "")
+            or ""
+        )
+        parsed = _dev_parse_counting_line(prospect, pleague or "JUNIOR", "prospect")
+        if parsed is not None:
+            # The AHL sim copies its line onto the prospect stat object. Count it once.
+            duplicate = False
+            if "AHL" in str(parsed["league"]).upper():
+                duplicate = any(str(existing["league"]).upper() == "AHL" for existing in lines)
+            if not duplicate:
+                lines.append(parsed)
+    return lines
+
+
+def _dev_season_stats(session: FranchiseSession, player: Any) -> Dict[str, Any]:
+    """One season line for growth: every league he played, points already on an NHL scale."""
+    lines = _dev_collect_season_lines(session, player)
+    defense = _dev_is_defense(player)
+    if not lines:
+        return {
+            "gp": 0,
+            "goals": 0,
+            "assists": 0,
+            "points": 0,
+            "league": str(getattr(player, "current_league_id", "") or ""),
+            "lines": [],
+            "nhl_eq_points": 0.0,
+            "nhl_eq_ppg": 0.0,
+            "usage_factor": 1.0,
+            "pp_share": 0.0,
+        }
+    gp = sum(int(line["gp"]) for line in lines)
+    goals = sum(int(line["goals"]) for line in lines)
+    assists = sum(int(line["assists"]) for line in lines)
+    points = sum(int(line["points"]) for line in lines)
+    toi = sum(int(line["toi_sec"]) for line in lines)
+    pp_toi = sum(int(line["pp_toi_sec"]) for line in lines)
+    primary = max(lines, key=lambda line: int(line["gp"]))
+    league = str(primary["league"] or "")
+    goalie = _dev_is_goalie(player)
+    age_factor = 1.0 if goalie else _dev_age_ppg_factor(_dev_player_age(player))
+    nhl_eq_points = 0.0
+    for line in lines:
+        fac = _dev_nhl_eq_factor(str(line["league"]))
+        # A 17-year-old point is worth more than the same point from a 20-year-old overager.
+        if not goalie and not _dev_is_nhl_league(str(line["league"])):
+            fac *= age_factor
+        nhl_eq_points += float(line["points"]) * fac
+    nhl_eq_ppg = nhl_eq_points / float(gp) if gp else 0.0
+    avg_min = (toi / float(gp) / 60.0) if toi > 0 and gp else 0.0
+    if avg_min > 0:
+        usage = avg_min / _dev_slot_avg_toi(league, defense)
+        usage = max(0.42, min(1.15, usage))
+    else:
+        usage = 1.0
+    pp_share = (pp_toi / float(toi)) if toi > 0 and pp_toi > 0 else 0.0
+    pp_share = max(0.0, min(1.0, pp_share))
+    if pp_share > 0:
+        usage = max(0.42, min(1.25, usage * (1.0 + 0.18 * pp_share)))
     out: Dict[str, Any] = {
         "gp": gp,
         "goals": goals,
         "assists": assists,
         "points": points,
-        "league": str(row.get("league", "") or getattr(player, "current_league_id", "") or ""),
+        "league": league,
+        "lines": [
+            {"league": line["league"], "gp": line["gp"], "points": line["points"], "source": line["source"]}
+            for line in lines
+        ],
+        "ppg": round(points / float(gp), 2) if gp else 0.0,
+        "nhl_eq_points": round(nhl_eq_points, 2),
+        "nhl_eq_ppg": round(nhl_eq_ppg, 3),
+        "usage_factor": round(usage, 3),
+        "pp_share": round(pp_share, 3),
+        # NHL games are already on the NHL scale. The age weight is for the junior conversion.
+        "age_ppg_factor": 1.0 if goalie or _dev_is_nhl_league(league) else round(age_factor, 3),
     }
-    if gp > 0:
-        out["ppg"] = round(points / gp, 2)
-    toi = row.get("toi_sec")
     if toi:
         out["toi_sec"] = int(toi)
+        out["avg_toi_min"] = round(avg_min, 2)
     if _dev_is_goalie(player):
-        starts = int(row.get("starts", row.get("gs", 0)) or 0)
-        sv = row.get("sv_pct", row.get("save_pct"))
-        gaa = row.get("gaa", row.get("goals_against_avg"))
+        starts = sum(int(line.get("starts") or 0) for line in lines)
+        sv = primary.get("save_pct")
+        gaa = primary.get("gaa")
         if starts:
             out["starts"] = starts
         if sv is not None:
-            out["save_pct"] = round(float(sv), 3) if float(sv) <= 1.5 else round(float(sv), 1)
+            try:
+                raw_sv = float(sv)
+                if raw_sv > 1.5:
+                    raw_sv = raw_sv / 100.0
+                eq_sv = _dev_nhl_eq_save_pct(raw_sv, league)
+                out["raw_save_pct"] = round(raw_sv, 3)
+                out["save_pct"] = round(eq_sv, 3)
+                # .915 in the AHL or the CHL is an ordinary season, not an NHL .915.
+                out["goalie_modest"] = (not _dev_is_nhl_league(league)) and eq_sv < 0.912
+            except (TypeError, ValueError):
+                pass
         if gaa is not None:
-            out["gaa"] = round(float(gaa), 2)
+            try:
+                out["gaa"] = round(float(gaa), 2)
+            except (TypeError, ValueError):
+                pass
         if gp:
             out["workload"] = starts or gp
     return out
@@ -3241,7 +3514,8 @@ def _run_user_org_depth_progression(session: FranchiseSession, season_id: int) -
     rng = session.sim.rng
     for entry in entries:
         pool = str(entry.get("pool") or "")
-        if pool in ("nhl", "unsigned"):
+        # Unsigned rights still grow. NHL roster players are on the roster pass.
+        if pool == "nhl":
             continue
         player = entry["player"]
         try:
@@ -3258,11 +3532,41 @@ def _run_user_org_depth_progression(session: FranchiseSession, season_id: int) -
             _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
+def _dev_reset_season_production(player: Any) -> None:
+    """No games anywhere this year: neutral, not last year's NHL call-up."""
+    for key, value in (
+        ("games_played", 0),
+        ("gp", 0),
+        ("production_score", 0.5),
+        ("recent_performance_score", 0.5),
+        ("points_signal", 0.5),
+        ("production", 0.5),
+        ("toi_quality", 0.5),
+        ("_toi_quality", 0.5),
+        ("_dev_season_points", 0),
+        ("_dev_expected_season_points", 0.0),
+        ("_dev_season_points_surplus", 0.0),
+        ("_dev_usage_factor", 1.0),
+        ("_dev_pp_share", 0.0),
+        ("_dev_nhl_eq_ppg", 0.0),
+        ("_dev_growth_league", ""),
+        ("_dev_age_ppg_factor", 1.0),
+        ("_dev_goalie_modest", False),
+        ("_dev_scales_from_stamp", False),
+        ("_dev_breakout_momentum", 0.0),
+    ):
+        try:
+            setattr(player, key, value)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+
+
 def _dev_stamp_season_production(session: FranchiseSession, player: Any) -> None:
-    """Feed real season production into growth modifiers (PPG / workload)."""
+    """Feed this year's merged season line into growth. Always writes, including a reset."""
     stats = _dev_season_stats(session, player)
     gp = int(stats.get("gp", 0) or 0)
     if gp <= 0:
+        _dev_reset_season_production(player)
         return
     try:
         # Season production stamp — replace, never accumulate across years.
@@ -3270,18 +3574,35 @@ def _dev_stamp_season_production(session: FranchiseSession, player: Any) -> None
         setattr(player, "gp", int(gp))
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
+    league = str(stats.get("league") or "")
+    try:
+        setattr(player, "_dev_growth_league", league)
+        setattr(player, "_dev_usage_factor", float(stats.get("usage_factor") or 1.0))
+        setattr(player, "_dev_pp_share", float(stats.get("pp_share") or 0.0))
+        setattr(player, "_dev_nhl_eq_ppg", float(stats.get("nhl_eq_ppg") or 0.0))
+        setattr(player, "_dev_age_ppg_factor", float(stats.get("age_ppg_factor") or 1.0))
+        setattr(player, "_dev_goalie_modest", bool(stats.get("goalie_modest")))
+        setattr(player, "_dev_scales_from_stamp", True)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     toi_sec = int(stats.get("toi_sec") or stats.get("toi_total_sec") or 0)
     if toi_sec > 0:
         avg_min = toi_sec / float(gp) / 60.0
-        if _dev_is_goalie(player):
-            toi_q = max(0.2, min(1.0, (avg_min - 48.0) / 18.0))
-        elif _dev_is_defense(player):
-            toi_q = max(0.18, min(1.0, (avg_min - 11.0) / 14.0))
-        else:
-            toi_q = max(0.18, min(1.0, (avg_min - 9.0) / 12.0))
+        toi_q = _dev_toi_quality_for_league(
+            avg_min,
+            league,
+            goalie=_dev_is_goalie(player),
+            defense=_dev_is_defense(player),
+        )
         try:
             setattr(player, "toi_quality", round(toi_q, 3))
             setattr(player, "_toi_quality", round(toi_q, 3))
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    else:
+        try:
+            setattr(player, "toi_quality", 0.5)
+            setattr(player, "_toi_quality", 0.5)
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
     if _dev_is_goalie(player):
@@ -3291,9 +3612,9 @@ def _dev_stamp_season_production(session: FranchiseSession, player: Any) -> None
         # .900 → ~0.55, .920 → ~0.78, .930 → ~0.90
         score = 0.35 + max(0.0, (sv - 0.880) * 8.5) if sv > 0 else 0.5
     else:
-        pts = float(stats.get("points", 0) or 0)
-        ppg = pts / float(gp)
-        # 0.40 PPG ~ depth, 0.70 solid, 0.95+ star season
+        # Score the NHL-equivalent rate, not raw junior points. Checkpoints use the same points.
+        ppg = float(stats.get("nhl_eq_ppg") or 0.0)
+        eq_pts = float(stats.get("nhl_eq_points") or 0.0)
         score = 0.32 + ppg * 0.55
         if ppg >= 0.85:
             score = max(score, 0.82)
@@ -3311,8 +3632,8 @@ def _dev_stamp_season_production(session: FranchiseSession, player: Any) -> None
             )
 
             exp_pts = expected_season_points_for_player(player, gp)
-            surplus = season_points_surplus_vs_expectation(player, int(pts), gp)
-            setattr(player, "_dev_season_points", int(pts))
+            surplus = season_points_surplus_vs_expectation(player, int(round(eq_pts)), gp)
+            setattr(player, "_dev_season_points", int(round(eq_pts)))
             setattr(player, "_dev_expected_season_points", round(exp_pts, 2))
             setattr(player, "_dev_season_points_surplus", round(surplus, 2))
             gp_scale = max(0.45, min(1.0, float(gp) / 82.0))
@@ -5719,6 +6040,15 @@ def _prepare_resign_payload(session: FranchiseSession, *, force: bool = False) -
     )
 
     existing = getattr(session, "resign_payload", None)
+    sy_now = int(getattr(session, "season_calendar_year", 2025) or 2025)
+    if getattr(session, "_cpu_rfa_resign_pass", None) != sy_now:
+        session._cpu_rfa_resign_pass = sy_now
+        try:
+            from services.contract_economy import run_cpu_rfa_decisions
+
+            session.cpu_rfa_resign_decisions = run_cpu_rfa_decisions(session)
+        except Exception:
+            _swallowed_log.debug("cpu rfa re-sign pass failed", exc_info=True)
     if not force and isinstance(existing, dict) and existing.get("version") == STAGE_PAYLOAD_VERSION["re_sign"]:
         # The cached desk can predate the contract-year burn / new cap year (or a
         # reload), so its cap card showed last year's space until the first Sim
@@ -5914,7 +6244,8 @@ def _prepare_resign_payload(session: FranchiseSession, *, force: bool = False) -
             "enabled": ovr < 82 or age <= 24,
             "blocked_reason": None if (ovr < 82 or age <= 24) else "Player expects one-way security",
         })
-        if ovr < 72 or str(row.get("league") or "").upper() in ("AHL", "ECHL"):
+        level = str(row.get("roster_level") or row.get("league") or "").upper()
+        if ovr < 72 or level in ("AHL", "ECHL"):
             types.append({"id": "ahl", "label": "AHL contract", "enabled": True})
             types.append({"id": "ahl_echl_two_way", "label": "AHL/ECHL two-way", "enabled": True})
         if ovr < 65:
@@ -6988,6 +7319,16 @@ def _revalidate_roster_cleanup(session: FranchiseSession, payload: Dict[str, Any
         except Exception as exc:
             cap_error = str(exc) or "unknown error"
 
+    if user_team is not None:
+        try:
+            from services.roster_compliance import fill_team_roster_minimum
+
+            rng = getattr(session.sim, "rng", None)
+            if rng is not None:
+                fill_team_roster_minimum(user_team, rng)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+
     evaluation = evaluate_roster_compliance(
         user_team,
         league=league,
@@ -7343,11 +7684,13 @@ def _roll_development_league_draft_class(session: FranchiseSession, season_year:
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
 
-    # Rebuild NHL-scale star tiers from junior-raw injects (same as franchise start).
     try:
-        from app.sim_engine.league_hierarchy_bootstrap import _shape_draft_class_pipeline
+        from app.sim_engine.league_hierarchy_bootstrap import prepare_draft_class_for_season
 
-        _shape_draft_class_pipeline(league, rng)
+        prepare_draft_class_for_season(league, rng, season_year=int(season_year))
+        from services.franchise_sim import _bump_draft_board_revision
+
+        _bump_draft_board_revision(session)
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
 
@@ -7483,14 +7826,15 @@ def _ensure_undrafted_draft_depth(session: FranchiseSession, season_year: int) -
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
-        from app.sim_engine.league_hierarchy_bootstrap import _shape_draft_class_pipeline
+        from app.sim_engine.league_hierarchy_bootstrap import prepare_draft_class_for_season
 
-        _shape_draft_class_pipeline(league, rng)
+        prepare_draft_class_for_season(league, rng, season_year=int(season_year))
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
-        from services.franchise_sim import _bump_prospect_revision, invalidate_session_payload_caches
+        from services.franchise_sim import _bump_draft_board_revision, _bump_prospect_revision, invalidate_session_payload_caches
 
+        _bump_draft_board_revision(session)
         _bump_prospect_revision(session)
         invalidate_session_payload_caches(session, reason="season_reset")
     except Exception:
@@ -7568,7 +7912,10 @@ def _retune_inflated_underage_prospects(session: FranchiseSession) -> Dict[str, 
 
     if fixed:
         try:
-            _shape_draft_class_pipeline(league, rng)
+            from app.sim_engine.league_hierarchy_bootstrap import prepare_draft_class_for_season
+
+            anchor = int(getattr(session, "season_calendar_year", 0) or 0)
+            prepare_draft_class_for_season(league, rng, season_year=anchor)
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
         try:
@@ -7671,6 +8018,65 @@ def _drop_stories_before_season(session: FranchiseSession, season_year: int) -> 
     ]
 
 
+def sim_free_agency_to_season_start(session: FranchiseSession) -> Dict[str, Any]:
+    """Finish the free-agency market and open the next regular season.
+
+    CPU clubs get the rest of the signing window, short rosters are filled,
+    the next schedule is built, and the calendar lands on opening day.
+    """
+    from services.franchise_sim import invalidate_session_payload_caches
+
+    phase = str(getattr(session, "phase", "") or "")
+    stage = str(getattr(session, "offseason_stage", "") or "")
+    if phase != "offseason" or stage not in ("free_agency", "next_season_reveal"):
+        raise ValueError("Sim to season start is available from free agency.")
+
+    if stage == "free_agency":
+        day = int(getattr(session, "fa_market_day", 0) or 0)
+        if day < 21:
+            advance_free_agency_day(session, days=max(1, min(45, 21 - day)))
+        try:
+            from services.roster_compliance import fill_league_roster_minimums
+
+            sim = getattr(session, "sim", None)
+            league = getattr(sim, "league", None)
+            rng = getattr(sim, "rng", None)
+            if league is not None and rng is not None:
+                fill_league_roster_minimums(league, rng)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+        if not bool(getattr(session, "next_season_generated", False)):
+            generate_next_season(session)
+
+    if str(getattr(session, "offseason_stage", "") or "") == "next_season_reveal":
+        continue_offseason(session, from_stage="next_season_reveal")
+
+    if str(getattr(session, "phase", "") or "") == "preseason":
+        advance_season_phase(session, "regular")
+
+    first = 0
+    for day_row in list(getattr(session, "nhl_calendar", None) or []):
+        if isinstance(day_row, dict) and str(day_row.get("segment") or "") == "regular":
+            first = int(day_row.get("index") or 0)
+            break
+    session.calendar_cursor = int(first)
+    session.phase = "regular"
+    session.season_phase = "regular"
+    session.offseason_stage = None
+    session.next_important_event = ""
+    try:
+        session.free_agency_open = False
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    invalidate_session_payload_caches(session, "season_start")
+    return {
+        "ok": True,
+        "status": "regular",
+        "season_phase": "regular",
+        "calendar_cursor": int(first),
+    }
+
+
 def generate_next_season(session: FranchiseSession) -> Dict[str, Any]:
     """Build new schedule/calendar — only increments year when data exists."""
     from services.contract_economy import release_unresigned_free_agents, run_cap_compliance_before_season
@@ -7699,6 +8105,9 @@ def generate_next_season(session: FranchiseSession) -> Dict[str, Any]:
 
         session.offer_sheet_resolutions = resolve_offer_sheets(session)
         run_cpu_rfa_decisions(session, final=True)
+        from services.contract_economy import run_prospect_promotion_pass
+
+        run_prospect_promotion_pass(session)
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
     _refresh_cap_books(session)

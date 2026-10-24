@@ -1015,16 +1015,16 @@ def _revealed_ability_payload(player: Any) -> Dict[str, Any]:
     if player is None:
         return out
     try:
-        from services.franchise_sim import _draft_potential99, _player_display_ovr99
+        from services.franchise_sim import shown_ovr_and_potential
 
-        ovr = round(float(_player_display_ovr99(player)), 1)
-        if ovr <= 0:
+        ovr_i, pot_i = shown_ovr_and_potential(player)
+        if ovr_i <= 0:
             return out
         out.update(
             {
-                "overall": int(round(ovr)),
-                "drafted_overall": ovr,
-                "drafted_potential": round(float(_draft_potential99(player, ovr)), 1),
+                "overall": int(ovr_i),
+                "drafted_overall": int(ovr_i),
+                "drafted_potential": int(pot_i),
                 "ability_revealed": True,
             }
         )

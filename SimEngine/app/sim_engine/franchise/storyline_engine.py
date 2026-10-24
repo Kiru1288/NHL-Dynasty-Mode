@@ -2449,30 +2449,113 @@ def _emit_cause_storyline(session: Any, sl: Dict[str, Any]) -> None:
         _enqueue_decision(session, sl)
 
 
-def _line_rank_from_slot(group: str, line_id: str, slot: str) -> int:
+def _line_rank_from_slot(group: str, line_id: str, slot: str, index: Optional[int] = None) -> int:
+    lid = str(line_id or "").lower()
     if group == "forwards":
-        return int(_LINEUP_FORWARD_RANK.get(str(line_id), 4))
+        if lid in _LINEUP_FORWARD_RANK:
+            return int(_LINEUP_FORWARD_RANK[lid])
+        if index is not None:
+            return min(4, int(index) + 1)
+        return 4
     if group == "defense":
-        return int(_LINEUP_DEFENSE_RANK.get(str(line_id), 3))
+        if lid in _LINEUP_DEFENSE_RANK:
+            return int(_LINEUP_DEFENSE_RANK[lid])
+        if index is not None:
+            return min(3, int(index) + 1)
+        return 3
     if group == "goalies":
-        return int(_LINEUP_GOALIE_SLOT_RANK.get(str(slot), 3))
+        table = {str(k).lower(): v for k, v in _LINEUP_GOALIE_SLOT_RANK.items()}
+        return int(table.get(str(slot or "").lower(), 3))
     return 5
 
 
 def _parse_lineup_role_ranks(lines: Any) -> Dict[str, int]:
     """Map player_id -> lineup rank (1 = top line / starter)."""
-    out: Dict[str, int] = {}
+    return {pid: rank for pid, (rank, _group) in _parse_lineup_role_detail(lines).items()}
+
+
+def _parse_lineup_role_detail(lines: Any) -> Dict[str, Tuple[int, str]]:
+    """Map player_id -> (1-based rank, group)."""
+    out: Dict[str, Tuple[int, str]] = {}
     if not isinstance(lines, dict):
         return out
     for group in ("forwards", "defense", "goalies"):
-        for line in lines.get(group) or []:
+        for index, line in enumerate(lines.get(group) or []):
             if not isinstance(line, dict):
                 continue
             line_id = str(line.get("id") or "")
             for slot, pid in (line.get("slots") or {}).items():
                 spid = str(pid or "")
                 if spid:
-                    out[spid] = _line_rank_from_slot(group, line_id, str(slot))
+                    out[spid] = (_line_rank_from_slot(group, line_id, str(slot), index), group)
+    return out
+
+
+def _player_games_played(player: Any) -> int:
+    ss = getattr(player, "season_stats", None) or {}
+    row: Any = ss if isinstance(ss, dict) else {}
+    if isinstance(ss, dict) and "gp" not in ss and "games" not in ss:
+        nested = [v for v in ss.values() if isinstance(v, dict)]
+        if nested:
+            try:
+                row = max(nested, key=lambda item: int(item.get("season", 0) or 0))
+            except (TypeError, ValueError):
+                row = nested[-1]
+    try:
+        return int((row or {}).get("gp") or (row or {}).get("games") or getattr(player, "gp", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _stamp_sheet_ranks(session: Any, detail: Dict[str, Tuple[int, str]]) -> None:
+    """Write the saved sheet onto the player as a 0-based rank. Defence uses its own field."""
+    for pid, (rank, group) in detail.items():
+        player = _player_from_roster(session, pid)
+        if player is None or group == "goalies":
+            continue
+        zero = max(0, int(rank) - 1)
+        field = "_deployed_pair_rank" if group == "defense" else "_deployed_line_rank"
+        try:
+            setattr(player, field, zero)
+            key = f"{group}:{zero}"
+            if getattr(player, "_line_sheet_key", None) != key:
+                setattr(player, "_line_sheet_gp_at_assign", _player_games_played(player))
+                setattr(player, "_line_sheet_key", key)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+
+
+def _previous_ranks_from_last_game(session: Any, team_id: str) -> Dict[str, int]:
+    """1-based rank from the last game played. Roster order is not a line."""
+    out: Dict[str, int] = {}
+    team = (getattr(session, "team_by_id", None) or {}).get(team_id)
+    for player in getattr(team, "roster", None) or []:
+        if getattr(player, "retired", False):
+            continue
+        pid = str(getattr(player, "id", "") or "")
+        if not pid:
+            continue
+        pos = str(
+            getattr(getattr(getattr(player, "identity", None), "position", None), "value", None)
+            or getattr(player, "position", "")
+            or ""
+        ).upper()
+        if pos == "G":
+            raw = None
+        elif pos in ("D", "LD", "RD"):
+            raw = getattr(player, "_gm_game_pair_idx", None)
+            if raw is None:
+                raw = getattr(player, "_deployed_pair_rank", None)
+        else:
+            raw = getattr(player, "_gm_game_line_idx", None)
+            if raw is None:
+                raw = getattr(player, "_deployed_line_rank", None)
+        if raw is None:
+            continue
+        try:
+            out[pid] = int(raw) + 1
+        except (TypeError, ValueError):
+            continue
     return out
 
 
@@ -2632,34 +2715,15 @@ def record_lineup_save_decisions(
     if not isinstance(new_lines, dict):
         return []
 
+    new_detail = _parse_lineup_role_detail(new_lines)
+    new_ranks = {pid: rank for pid, (rank, _group) in new_detail.items()}
     prev_ranks = _parse_lineup_role_ranks(previous_lines) if previous_lines else {}
-    new_ranks = _parse_lineup_role_ranks(new_lines)
-    # First save: establish a baseline from roster depth so scratches/demotions can fire.
+    # No saved sheet yet: the last game is the old line. Read it before the new
+    # sheet overwrites the stored rank. Roster order is not a line, and with no
+    # game played there is nothing to call a drop.
     if not prev_ranks:
-        user_team = (getattr(session, "team_by_id", None) or {}).get(utid)
-        roster = [p for p in (getattr(user_team, "roster", None) or []) if not getattr(p, "retired", False)]
-        fw = []
-        defs = []
-        gl = []
-        for p in roster:
-            pos = str(getattr(getattr(getattr(p, "identity", None), "position", None), "value", None) or getattr(p, "position", "") or "").upper()
-            pid = str(getattr(p, "id", "") or "")
-            if not pid:
-                continue
-            if pos == "G":
-                gl.append(pid)
-            elif pos in ("D", "LD", "RD"):
-                defs.append(pid)
-            else:
-                fw.append(pid)
-        for i, pid in enumerate(fw[:12]):
-            prev_ranks[pid] = (i // 3) + 1
-        for i, pid in enumerate(defs[:6]):
-            prev_ranks[pid] = (i // 2) + 1
-        for i, pid in enumerate(gl[:3]):
-            prev_ranks[pid] = i + 1
-        if not prev_ranks:
-            return []
+        prev_ranks = _previous_ranks_from_last_game(session, utid)
+    _stamp_sheet_ranks(session, new_detail)
 
     cur_day, iso = _lineup_calendar_meta(session)
     generated: List[Dict[str, Any]] = []
@@ -2698,7 +2762,6 @@ def record_lineup_save_decisions(
             if new_rank is not None:
                 try:
                     setattr(pl, "_recently_scratched", False)
-                    setattr(pl, "_deployed_line_rank", int(new_rank) - 1)
                 except Exception:
                     _swallowed_log.debug("suppressed exception", exc_info=True)
 
@@ -6304,7 +6367,19 @@ def _u_social_handle(name: str, player_id: str) -> str:
 
 
 def _u_trait_100(player: Any, *names: str, default: float = 50.0) -> float:
-    """Read PersonalityTraits (0-1) or PsychologyState fields onto a 0-100 axis."""
+    """Read the chapter profile first, then PersonalityTraits, on one 0-100 axis."""
+    profile = getattr(player, "attribute_profile", None)
+    hidden = profile.get("hidden") if isinstance(profile, dict) else None
+    chapters = profile.get("chapters") if isinstance(profile, dict) else None
+    for name in names:
+        for book in (hidden, chapters):
+            if not isinstance(book, dict) or name not in book:
+                continue
+            try:
+                number = float(book[name])
+            except (TypeError, ValueError):
+                continue
+            return number * 100.0 if number <= 1.5 else number
     traits = getattr(player, "traits", None)
     psych = getattr(player, "psych", None)
     for name in names:
@@ -6330,7 +6405,25 @@ def _u_personality(player: Any, player_id: str) -> Dict[str, float]:
     introversion = _u_trait_100(player, "introversion", default=50.0)
     loyalty = _u_trait_100(player, "loyalty", default=55.0)
     work_ethic = _u_trait_100(player, "work_ethic", "patience", default=55.0)
-    character = _u_clip(_u_character(player))
+    chapters = {}
+    profile = getattr(player, "attribute_profile", None)
+    if isinstance(profile, dict) and isinstance(profile.get("chapters"), dict):
+        chapters = profile["chapters"]
+    try:
+        chapter_character = float(chapters["character"]) if "character" in chapters else None
+    except (TypeError, ValueError):
+        chapter_character = None
+    character = _u_clip(chapter_character if chapter_character is not None else _u_character(player))
+    hidden = profile.get("hidden") if isinstance(profile, dict) else {}
+    hidden = hidden if isinstance(hidden, dict) else {}
+    # High emotional stability is low volatility. The chapter sheet has no
+    # volatility field of its own, so the two stay one number.
+    if "volatility" in hidden:
+        volatility = _u_trait_100(player, "volatility", default=50.0)
+    elif "emotional_stability" in hidden:
+        volatility = 100.0 - _u_trait_100(player, "emotional_stability", default=50.0)
+    else:
+        volatility = _u_trait_100(player, "volatility", default=50.0)
     return {
         "character": character,
         "professionalism": _u_clip(work_ethic),
@@ -6338,9 +6431,9 @@ def _u_personality(player: Any, player_id: str) -> Dict[str, float]:
         "accountability": _u_clip(_u_trait_100(player, "work_ethic", "coachability", default=55.0)),
         "loyalty": _u_clip(loyalty),
         "ego": _u_clip(_u_trait_100(player, "ego", default=50.0)),
-        "volatility": _u_clip(_u_trait_100(player, "volatility", default=50.0)),
+        "volatility": _u_clip(float(volatility)),
         "competitiveness": _u_clip(_u_trait_100(player, "competitiveness", default=55.0)),
-        "resilience": _u_clip(_u_trait_100(player, "mental_toughness", "patience", default=55.0)),
+        "resilience": _u_clip(_u_trait_100(player, "resilience", "mental_toughness", default=55.0)),
         "leadership": _u_clip(_u_trait_100(player, "leadership", default=50.0)),
         "sociability": _u_clip(100.0 - introversion),
         "media_savvy": _u_clip(_u_trait_100(player, "media_comfort", default=50.0)),
@@ -6377,8 +6470,17 @@ def _u_pick_niches(player: Any, personality: Dict[str, float], age: int, positio
         candidates.append((personality["ego"] + (100.0 - personality["character"]), "self_first"))
     candidates.sort(key=lambda item: (-item[0], item[1]))
     chosen: List[Dict[str, Any]] = []
+    opposites = {
+        "peacemaker": {"agitator", "volatile_competitor"},
+        "agitator": {"peacemaker", "quiet_professional"},
+        "volatile_competitor": {"peacemaker", "quiet_professional"},
+        "quiet_professional": {"agitator", "volatile_competitor"},
+    }
     for score, ability_id in candidates:
         if ability_id in {row["id"] for row in chosen}:
+            continue
+        held = {row["id"] for row in chosen}
+        if opposites.get(ability_id, set()) & held:
             continue
         if score < 74.0 and len(chosen) >= 2:
             continue
@@ -8990,7 +9092,11 @@ def build_human_dossier_payload(
     include_private: bool = True,
 ) -> Dict[str, Any]:
     """Readable GM/scouting language — not raw 0-100 dumps."""
-    personality = dict(entity.get("personality") or {})
+    if player is not None:
+        personality = _u_personality(player, str(entity.get("player_id") or ""))
+        entity["personality"] = personality
+    else:
+        personality = dict(entity.get("personality") or {})
     state = dict(entity.get("state") or {})
     life = dict(entity.get("life") or {}) if include_private else {}
     pressure = dict(entity.get("human_pressure") or {})
@@ -9025,7 +9131,7 @@ def build_human_dossier_payload(
             trait_row("professionalism", "Professionalism"),
             trait_row("leadership", "Leadership"),
             trait_row("loyalty", "Loyalty"),
-            trait_row("volatility", "Volatility", invert=True),
+            trait_row("volatility", "Volatility"),
             trait_row("family_orientation", "Family Priority"),
             trait_row("resilience", "Mental Resilience"),
             trait_row("sociability", "Social Fit"),

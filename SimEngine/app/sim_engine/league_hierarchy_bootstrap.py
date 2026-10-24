@@ -101,10 +101,12 @@ _SPAWN_AS_OF_YEAR = 0
 # CHL / USHL / Euro junior rosters are mostly 16–18. Uniform 17–20 (and a
 # hardcoded 2025 birth year) made the NHL draft board look like an overager
 # combine. Weights are NHL-entry-draft shaped: first-year kids dominate.
-_CHL_AGE_TABLE = ((16, 17, 18, 19, 20), (12, 28, 36, 16, 8))
-_USHL_AGE_TABLE = ((16, 17, 18, 19), (14, 34, 38, 14))
-_NCAA_AGE_TABLE = ((18, 19, 20, 21, 22, 23, 24), (12, 18, 18, 16, 14, 12, 10))
-_EU_J_AGE_TABLE = ((16, 17, 18, 19, 20), (10, 30, 38, 14, 8))
+# Draft-eligible slice (18 / 19 / 20+) is about 80 / 15 / 5. Younger ages stay
+# in the pool so next year's class already exists.
+_CHL_AGE_TABLE = ((16, 17, 18, 19, 20), (12, 28, 48, 9, 3))
+_USHL_AGE_TABLE = ((16, 17, 18, 19), (14, 34, 44, 8))
+_NCAA_AGE_TABLE = ((18, 19, 20, 21), (46, 30, 16, 8))
+_EU_J_AGE_TABLE = ((16, 17, 18, 19, 20), (10, 30, 48, 9, 3))
 
 
 def set_spawn_as_of_year(year: Optional[int]) -> None:
@@ -174,6 +176,92 @@ def _ident_age(player: Any) -> int:
         return int(getattr(ident, "age", 99) or 99) if ident is not None else 99
     except Exception:
         return 99
+
+
+def _upcoming_draft_year(league: Any) -> int:
+    y = int(
+        getattr(league, "season_start_year", 0)
+        or getattr(league, "season_year", 0)
+        or getattr(league, "current_season", 0)
+        or 0
+    )
+    if y >= 2000:
+        return y + 1
+    return int(spawn_as_of_year()) + 1
+
+
+def _player_sept15_age(player: Any, draft_year: int) -> int:
+    try:
+        from services.season_carryover import _age_on_sept15
+
+        sept = _age_on_sept15(player, int(draft_year))
+        if sept is not None:
+            return int(sept)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    return _ident_age(player)
+
+
+def _is_first_year_draft_eligible(player: Any, draft_year: int) -> bool:
+    return _player_sept15_age(player, int(draft_year)) == 18
+
+
+def _pipeline_already_shaped(player: Any) -> bool:
+    return getattr(player, "_pipeline_shaped_year", None) is not None
+
+
+def _stamp_pipeline_shaped(player: Any, draft_year: int) -> None:
+    try:
+        setattr(player, "_pipeline_shaped_year", int(draft_year))
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+
+
+def _mark_overage_juniors_off_open_board(league: Any, rng: random.Random, season_year: int) -> int:
+    """At bootstrap, most 19+ juniors already belong to an NHL org (or are passed over)."""
+    teams = list(getattr(league, "teams", None) or [])
+    if not teams:
+        return 0
+    marked = 0
+    for block in getattr(league, "development_leagues", None) or []:
+        code = str(block.get("league_code") or "").upper()
+        for tm in block.get("teams") or []:
+            for p in tm.get("players") or []:
+                if getattr(p, "real_nhl_import", False):
+                    continue
+                if bool(getattr(p, "drafted", False)):
+                    continue
+                if str(
+                    getattr(p, "nhl_rights_team_id", None)
+                    or getattr(p, "rights_team_id", None)
+                    or getattr(p, "drafted_by", None)
+                    or ""
+                ).strip():
+                    continue
+                age = _ident_age(p)
+                if age < 19:
+                    continue
+                rights_p = 0.78
+                if code == "NCAA":
+                    rights_p = 0.62 if age == 19 else 0.86
+                elif code.startswith("CHL_") or code in ("OHL", "WHL", "QMJHL"):
+                    rights_p = 0.84 if age >= 20 else 0.72
+                if rng.random() < rights_p:
+                    org = rng.choice(teams)
+                    tid = str(getattr(org, "team_id", "") or "")
+                    try:
+                        p.nhl_rights_team_id = tid
+                        p.rights_team_id = tid
+                        p.drafted = True
+                    except Exception:
+                        _swallowed_log.debug("suppressed exception", exc_info=True)
+                else:
+                    try:
+                        setattr(p, "passed_over_draft", True)
+                    except Exception:
+                        _swallowed_log.debug("suppressed exception", exc_info=True)
+                marked += 1
+    return marked
 
 
 def reanchor_generated_junior_dobs(league: Any, as_of_year: int) -> int:
@@ -498,7 +586,7 @@ def ensure_development_leagues_for_draft_board(
     _add_league("CHL_WHL", "WHL", 12, 7, 3, 16, 20, 0.32, 0.52)
     _add_league("CHL_QMJHL", "QMJHL", 12, 7, 3, 16, 20, 0.32, 0.52)
     _add_league("USHL", "USHL", 12, 6, 3, 16, 19, 0.30, 0.48)
-    _add_league("NCAA", "NCAA", 13, 7, 3, 18, 24, 0.34, 0.55)
+    _add_league("NCAA", "NCAA", 13, 7, 3, 18, 21, 0.34, 0.55)
     for code in (
         "EU_J_SHL",
         "EU_J_LIIGA",
@@ -519,7 +607,8 @@ def ensure_development_leagues_for_draft_board(
 
     league.development_leagues = dev
     league.players = league_players
-    _shape_draft_class_pipeline(league, rng)
+    _mark_overage_juniors_off_open_board(league, rng, year)
+    _shape_draft_class_pipeline(league, rng, draft_year=year + 1)
 
     all_new: List[Any] = []
     for block in dev:
@@ -882,7 +971,7 @@ def bootstrap_full_league_hierarchy(
     _add_league("CHL_WHL", "WHL", 12, 7, 3, 16, 20, 0.32, 0.52)
     _add_league("CHL_QMJHL", "QMJHL", 12, 7, 3, 16, 20, 0.32, 0.52)
     _add_league("USHL", "USHL", 12, 6, 3, 16, 19, 0.30, 0.48)
-    _add_league("NCAA", "NCAA", 13, 7, 3, 18, 24, 0.34, 0.55)
+    _add_league("NCAA", "NCAA", 13, 7, 3, 18, 21, 0.34, 0.55)
 
     # European junior blocks span far more clubs (112 teams) than the CHL (61).
     # In reality the CHL is the dominant NHL-draft feeder, so each European club
@@ -908,7 +997,8 @@ def bootstrap_full_league_hierarchy(
     league.players = league_players
 
     if not fast_depth:
-        _shape_draft_class_pipeline(league, rng)
+        _mark_overage_juniors_off_open_board(league, rng, year)
+        _shape_draft_class_pipeline(league, rng, draft_year=year + 1)
 
     all_new: List[Any] = []
     for team in teams:
@@ -945,12 +1035,12 @@ def bootstrap_full_league_hierarchy(
 # Star-power tiers: (label, weight, franchise/elite/top slot counts, top target ovr)
 # Current ability is NHL-scale. Top picks should look like near-NHL talents a GM
 # would promote within 1–3 years (~78–86 current), not mid-60s juniors.
+# Years stay in the same band. A class can be a little deeper than the last one.
+# A "weak" roll used to strip the top of the draft after the real first class.
 _CLASS_STRENGTH_TIERS = [
-    ("weak", 0.20, 1, 3, 6, (0.78, 0.83)),
-    ("average", 0.40, 1, 4, 8, (0.80, 0.86)),
-    ("strong", 0.24, 2, 5, 9, (0.82, 0.87)),
-    ("elite", 0.12, 2, 6, 10, (0.83, 0.88)),
-    ("generational", 0.04, 3, 6, 12, (0.84, 0.89)),
+    ("average", 0.55, 3, 6, 12, (0.82, 0.87)),
+    ("strong", 0.35, 3, 7, 13, (0.83, 0.88)),
+    ("elite", 0.10, 4, 8, 14, (0.84, 0.89)),
 ]
 
 # Minimum current OVR (0–1) for shaped pipeline stars — used to repair older saves
@@ -964,10 +1054,9 @@ _PIPELINE_OVR_REPAIR = {
 
 # Depth quality is independent of star power — a class can be top-heavy or deep.
 _DEPTH_QUALITY_TIERS = [
-    ("weak", 0.18, {"round1_tail": 28, "nhl_floor": 12, "round2": 24, "round3_4": 36, "round5_7": 48, "upside_pct": 0.16}),
-    ("average", 0.42, {"round1_tail": 38, "nhl_floor": 20, "round2": 36, "round3_4": 56, "round5_7": 72, "upside_pct": 0.24}),
-    ("strong", 0.28, {"round1_tail": 48, "nhl_floor": 28, "round2": 44, "round3_4": 68, "round5_7": 88, "upside_pct": 0.30}),
-    ("elite", 0.12, {"round1_tail": 55, "nhl_floor": 36, "round2": 52, "round3_4": 80, "round5_7": 100, "upside_pct": 0.36}),
+    ("average", 0.58, {"round1_tail": 40, "nhl_floor": 22, "round2": 36, "round3_4": 56, "round5_7": 72, "upside_pct": 0.24}),
+    ("strong", 0.32, {"round1_tail": 48, "nhl_floor": 28, "round2": 44, "round3_4": 68, "round5_7": 88, "upside_pct": 0.30}),
+    ("elite", 0.10, {"round1_tail": 55, "nhl_floor": 36, "round2": 52, "round3_4": 80, "round5_7": 100, "upside_pct": 0.36}),
 ]
 
 _TRANSCENDENT_BACKSTORY_KEYS = (
@@ -1044,6 +1133,12 @@ def _apply_shaped_player(
     except Exception:
         return
     p.ratings["dev_potential"] = rng_inst.randint(int(pot_lo), int(pot_hi))
+    try:
+        from app.sim_engine.progression.development import assign_prospect_realization
+
+        assign_prospect_realization(p, force=True)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     setattr(p, "pipeline_tier", tier)
     setattr(p, "pipeline_bust", False)
     if tier in ("franchise", "transcendent", "hidden_upside"):
@@ -1155,32 +1250,24 @@ def _assign_residual_dev_potential(
 
     pot = int(max(ovr99 + 2, min(99, pot + depth_shift)))
     ratings["dev_potential"] = pot
+    try:
+        from app.sim_engine.progression.development import assign_prospect_realization
+
+        assign_prospect_realization(player, force=True)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
-def _split_first_year_overage(players: List[Any], rng: random.Random) -> Tuple[List[Any], List[Any]]:
-    fy = [p for p in players if _ident_age(p) <= 18]
-    og = [p for p in players if _ident_age(p) >= 19]
-    rng.shuffle(fy)
-    rng.shuffle(og)
-    return fy, og
+def _pop_shaping_pool(pool: List[Any]) -> Optional[Any]:
+    return pool.pop(0) if pool else None
 
 
-def _take_age_biased(
-    fy: List[Any],
-    og: List[Any],
+def _shape_draft_class_pipeline(
+    league: Any,
     rng: random.Random,
-    first_year_p: float,
-) -> Optional[Any]:
-    if fy and (not og or rng.random() < float(first_year_p)):
-        return fy.pop(0)
-    if og:
-        return og.pop(0)
-    if fy:
-        return fy.pop(0)
-    return None
-
-
-def _shape_draft_class_pipeline(league: Any, rng: random.Random) -> None:
+    *,
+    draft_year: Optional[int] = None,
+) -> None:
     """
     Post-spawn pass: builds a full draft-class talent pool with star power AND depth.
 
@@ -1188,7 +1275,13 @@ def _shape_draft_class_pipeline(league: Any, rng: random.Random) -> None:
     how many NHL-calibre ceilings exist in rounds 2–7. Residual dev_potential is
     assigned to every remaining draft-age player so the class is never a flat cliff
     after pick ~15.
+
+    Each prospect is shaped exactly once (``_pipeline_shaped_year``) when they enter
+    their first draft year (Sept 15 age = 18). Returning players and 17-year-olds are
+    never touched here — in-season growth is preserved.
     """
+    dy = int(draft_year or _upcoming_draft_year(league))
+
     draft_age: List[Any] = []
     code_by_id: dict = {}
     for block in getattr(league, "development_leagues", None) or []:
@@ -1202,12 +1295,19 @@ def _shape_draft_class_pipeline(league: Any, rng: random.Random) -> None:
                     p, "rights_team_id", None
                 ) or getattr(p, "drafted_by", None):
                     continue
-                ident = getattr(p, "identity", None)
-                age = int(getattr(ident, "age", 99) or 99) if ident else 99
-                if 17 <= age <= 20:
-                    draft_age.append(p)
-                    code_by_id[id(p)] = code
-    if len(draft_age) < 20:
+                if bool(getattr(p, "passed_over_draft", False)):
+                    continue
+                if _pipeline_already_shaped(p):
+                    continue
+                if not _is_first_year_draft_eligible(p, dy):
+                    continue
+                draft_age.append(p)
+                code_by_id[id(p)] = code
+    if len(draft_age) < 12:
+        try:
+            setattr(league, "_pipeline_shaped_for_draft_year", dy)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         return
 
     roll = rng.random()
@@ -1247,11 +1347,10 @@ def _shape_draft_class_pipeline(league: Any, rng: random.Random) -> None:
         g_boost = _g_boost_map[force_g]
     else:
         for label, weight, boost in (
-            ("weak", 0.25, -1.5),
-            ("normal", 0.55, 0.0),
-            ("strong", 0.15, 1.2),
-            ("elite", 0.045, 2.5),
-            ("generational", 0.005, 4.5),
+            ("normal", 0.62, 0.0),
+            ("strong", 0.28, 1.0),
+            ("elite", 0.08, 2.0),
+            ("weak", 0.02, -0.6),
         ):
             g_acc += weight
             if g_roll <= g_acc:
@@ -1266,14 +1365,14 @@ def _shape_draft_class_pipeline(league: Any, rng: random.Random) -> None:
 
     skaters = [p for p in draft_age if getattr(getattr(p, "identity", None), "position", None) != Position.G]
     goalies = [p for p in draft_age if getattr(getattr(p, "identity", None), "position", None) == Position.G]
-    fy_sk, og_sk = _split_first_year_overage(skaters, rng)
-    fy_g, og_g = _split_first_year_overage(goalies, rng)
+    rng.shuffle(skaters)
+    rng.shuffle(goalies)
 
     def _next_skater(p: float = 0.92) -> Optional[Any]:
-        return _take_age_biased(fy_sk, og_sk, rng, p)
+        return _pop_shaping_pool(skaters)
 
     def _next_goalie(p: float = 0.90) -> Optional[Any]:
-        return _take_age_biased(fy_g, og_g, rng, p)
+        return _pop_shaping_pool(goalies)
 
     generational_goalie = _next_goalie(0.95) if (goalies and rng.random() < 0.05) else None
     if getattr(league, "goalie_class_strength", "") in ("elite", "generational") and generational_goalie is None:
@@ -1298,7 +1397,7 @@ def _shape_draft_class_pipeline(league: Any, rng: random.Random) -> None:
         sp = _next_skater(0.94)
         if sp is None:
             break
-        chosen.append((sp, "franchise", top_range[0], top_range[1], 92, 98))
+        chosen.append((sp, "franchise", top_range[0], top_range[1], 93, 98))
     if generational_goalie is not None:
         chosen.append((generational_goalie, "franchise", top_range[0], top_range[1], 90, 98))
         setattr(generational_goalie, "generational_goalie", True)
@@ -1327,19 +1426,19 @@ def _shape_draft_class_pipeline(league: Any, rng: random.Random) -> None:
         sp = _next_skater(0.92)
         if sp is None:
             break
-        chosen.append((sp, "elite", top_range[0] - 0.04, top_range[1] - 0.04, 88, 94))
+        chosen.append((sp, "elite", top_range[0] - 0.04, top_range[1] - 0.04, 89, 95))
     for _ in range(n_top):
         sp = _next_skater(0.90)
         if sp is None:
             break
-        chosen.append((sp, "top", top_range[0] - 0.07, top_range[1] - 0.07, 85, 91))
+        chosen.append((sp, "top", top_range[0] - 0.07, top_range[1] - 0.07, 86, 92))
 
     n_round1_tail = int(depth_slots.get("round1_tail", 38))
     for _ in range(n_round1_tail):
         sp = _next_skater(0.86)
         if sp is None:
             break
-        chosen.append((sp, "round1_tail", top_range[0] - 0.10, top_range[0] - 0.04, 82, 88))
+        chosen.append((sp, "round1_tail", top_range[0] - 0.10, top_range[0] - 0.04, 84, 91))
 
     n_nhl_floor = int(depth_slots.get("nhl_floor", 16))
     for _ in range(n_nhl_floor):
@@ -1403,15 +1502,22 @@ def _shape_draft_class_pipeline(league: Any, rng: random.Random) -> None:
             code_by_id=code_by_id,
             rng_inst=rng,
         )
+        _stamp_pipeline_shaped(p, dy)
 
     upside_pct = float(depth_slots.get("upside_pct", 0.08))
     for p in draft_age:
         if id(p) in shaped_ids:
             continue
         _assign_residual_dev_potential(p, rng, depth_label=depth_label, upside_pct=upside_pct)
+        _stamp_pipeline_shaped(p, dy)
 
     try:
         _sprinkle_draft_oddballs(league, draft_age)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+
+    try:
+        setattr(league, "_pipeline_shaped_for_draft_year", dy)
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
 
@@ -1540,14 +1646,30 @@ _LATER_ROUND_LIFT_SKIP = frozenset({
 })
 
 
-def lift_shallow_draft_depth(league: Any, rng: Optional[random.Random] = None) -> int:
-    """Raise later-round and residual draft-age players who were left at ~40-55 overall.
+def lift_shallow_draft_depth(
+    league: Any,
+    rng: Optional[random.Random] = None,
+    *,
+    draft_year: Optional[int] = None,
+) -> int:
+    """Raise later-round first-year eligibles left at ~40-55 overall.
 
-    Stars and the top of round 1 are left alone. Runs once per league.
+    Stars and the top of round 1 are left alone. Runs once per upcoming draft year.
     """
-    if league is None or bool(getattr(league, "_later_round_quality_v2", False)):
+    if league is None:
         return 0
-    rng_inst = rng if rng is not None else random.Random(42)
+    dy = int(draft_year or _upcoming_draft_year(league))
+    lifted_years = getattr(league, "_later_round_lift_years", None)
+    if not isinstance(lifted_years, set):
+        lifted_years = set()
+        try:
+            setattr(league, "_later_round_lift_years", lifted_years)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    if dy in lifted_years:
+        return 0
+    anchor = int(getattr(league, "season_start_year", 0) or getattr(league, "season_year", 0) or dy - 1)
+    rng_inst = rng if rng is not None else random.Random(anchor * 7919 + dy)
     lifted = 0
     for block in getattr(league, "development_leagues", None) or []:
         code = str(block.get("league_code") or "JUNIOR")
@@ -1555,6 +1677,8 @@ def lift_shallow_draft_depth(league: Any, rng: Optional[random.Random] = None) -
         for tm in block.get("teams") or []:
             for p in tm.get("players") or []:
                 if getattr(p, "retired", False) or getattr(p, "drafted", False):
+                    continue
+                if not _is_first_year_draft_eligible(p, dy):
                     continue
                 ident = getattr(p, "identity", None)
                 age = int(getattr(ident, "age", 99) or 99) if ident else 99
@@ -1593,10 +1717,89 @@ def lift_shallow_draft_depth(league: Any, rng: Optional[random.Random] = None) -
                 )
                 lifted += 1
     try:
-        setattr(league, "_later_round_quality_v2", True)
+        lifted_years.add(dy)
+        setattr(league, "_later_round_lift_years", lifted_years)
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
     return lifted
+
+
+def prepare_draft_class_for_season(
+    league: Any,
+    rng: random.Random,
+    *,
+    season_year: int,
+    pos_fn: Any = None,
+) -> Dict[str, Any]:
+    """One offseason mutation pass: shape new first-years, lift depth, backfill pool size.
+
+    The live draft board builder must stay read-only — call this before rankings.
+    """
+    season_year = int(season_year)
+    draft_year = season_year + 1
+    out: Dict[str, Any] = {"season_year": season_year, "draft_year": draft_year}
+    if league is None:
+        out["ok"] = False
+        return out
+    if int(getattr(league, "_draft_class_prepared_year", 0) or 0) == draft_year:
+        out["ok"] = True
+        out["skipped"] = True
+        return out
+
+    set_spawn_as_of_year(season_year)
+    try:
+        setattr(league, "season_start_year", season_year)
+        setattr(league, "season_year", season_year)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+
+    if not getattr(league, "_draft_pipeline_ovr_repaired", False):
+        repair_undervalued_draft_pipeline_stars(league, rng)
+        try:
+            setattr(league, "_draft_pipeline_ovr_repaired", True)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+
+    if not getattr(league, "_junior_dobs_reanchored", False):
+        reanchor_generated_junior_dobs(league, season_year)
+
+    _shape_draft_class_pipeline(league, rng, draft_year=draft_year)
+    out["lifted"] = lift_shallow_draft_depth(league, rng, draft_year=draft_year)
+
+    from services.draft_ranking_logic import (
+        DRAFT_ELIGIBLE_TARGET,
+        MIN_BOARD_GOALIES,
+        backfill_draft_eligible_goalies,
+        backfill_draft_eligible_skaters,
+        collect_goalie_pipeline_stats,
+        count_draft_eligible_players,
+    )
+
+    if pos_fn is None:
+        def pos_fn(p: Any) -> str:
+            ident = getattr(p, "identity", None)
+            raw = getattr(ident, "position", None) if ident else getattr(p, "position", "C")
+            return str(getattr(raw, "value", raw) or "C").upper()
+
+    pipeline_stats = collect_goalie_pipeline_stats(league, age_max=20, pos_fn=pos_fn)
+    if pipeline_stats.get("draft_eligible_dev_goalies", 0) < MIN_BOARD_GOALIES:
+        out["goalies_backfilled"] = backfill_draft_eligible_goalies(
+            league,
+            rng,
+            MIN_BOARD_GOALIES - int(pipeline_stats.get("draft_eligible_dev_goalies", 0)),
+        )
+    eligible = count_draft_eligible_players(league)
+    if eligible < DRAFT_ELIGIBLE_TARGET:
+        out["skaters_backfilled"] = backfill_draft_eligible_skaters(
+            league, rng, DRAFT_ELIGIBLE_TARGET - eligible
+        )
+
+    try:
+        setattr(league, "_draft_class_prepared_year", draft_year)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    out["ok"] = True
+    return out
 
 
 def repair_undervalued_draft_pipeline_stars(league: Any, rng: Optional[random.Random] = None) -> int:
@@ -1819,6 +2022,88 @@ def maybe_spawn_overseas_star(league: Any, rng: random.Random, season_year: int)
     return p
 
 
+def _euro_display_ovr(player: Any) -> float:
+    fn = getattr(player, "ovr", None)
+    try:
+        v = float(fn() if callable(fn) else fn or 0)
+    except Exception:
+        return 0.0
+    return v * 99.0 if v <= 1.5 else v
+
+
+def _decorate_euro_depth_free_agent(player: Any, rng: random.Random) -> None:
+    """60–75 overall depth with a mostly modest ceiling and a fake European year."""
+    ovr = int(round(_euro_display_ovr(player)))
+    roll = rng.random()
+    if roll < 0.02:
+        pot = rng.randint(90, 96)
+    elif roll < 0.08:
+        pot = rng.randint(82, 89)
+    elif roll < 0.22:
+        pot = rng.randint(76, 82)
+    else:
+        pot = rng.randint(max(55, ovr - 4), max(ovr, ovr + rng.randint(0, 6)))
+    pot = max(pot, ovr)
+    pot = min(99, pot)
+    ratings = getattr(player, "ratings", None)
+    if isinstance(ratings, dict):
+        ratings["dev_potential"] = pot
+    try:
+        player.potential = pot
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    # Most sit at the league minimum. Some are priced under it as pure cap savers.
+    if rng.random() < 0.22:
+        aav = round(rng.uniform(0.70, 0.84), 2)
+    else:
+        aav = 0.85
+    contract = {
+        "type": "STANDARD",
+        "contract_type": "STANDARD",
+        "years": 1,
+        "years_remaining": 1,
+        "aav_m": aav,
+        "cap_hit_m": aav,
+        "salary_m": aav,
+        "rights_status": "UFA",
+        "source": "european_depth",
+    }
+    try:
+        player.contract = contract
+        player.aav_m = aav
+        player.cap_hit_m = aav
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    league_name = rng.choice(["KHL", "SHL", "Liiga", "NL", "DEL", "Czech Extraliga"])
+    gp = rng.randint(36, 58)
+    goals = max(0, int((ovr - 52) * rng.uniform(0.12, 0.42)))
+    if str(getattr(getattr(player, "identity", None), "position", "") or "").upper() == "G":
+        goals = rng.randint(14, 32)
+    assists = int(goals * rng.uniform(0.6, 1.6)) if goals else rng.randint(4, 18)
+    try:
+        player.games_played = gp
+        player.goals = goals
+        player.assists = assists
+        player.season_stats = {
+            "gp": gp,
+            "g": goals,
+            "a": assists,
+            "pts": goals + assists,
+            "league": league_name,
+        }
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    _set_assignment(
+        player,
+        level="ufa",
+        overseas=True,
+        overseas_league=league_name,
+        euro_gp=gp,
+        euro_g=goals,
+        euro_a=assists,
+    )
+
+
 def ensure_overseas_fa_pool(
     league: Any,
     rng: random.Random,
@@ -1826,16 +2111,17 @@ def ensure_overseas_fa_pool(
     min_count: int = 120,
     min_goalies: int = 12,
 ) -> int:
-    """Top up the overseas / Euro free-agent runway so the Wire is never empty.
+    """Top up the overseas free-agent runway.
 
-    Real-NHL franchises and long saves can drain this pool; the FA Wire should
-    still list overseas talent alongside unsigned summer UFAs. Always keeps a
-    replacement-level goalie lane so clubs can sign a netminder in July / camp.
+    The wire used to fall off from NHL regulars to the mid-50s. This keeps a
+    few hundred Europeans in the 60–75 band, with varied potential and some
+    deals priced under the league minimum.
     """
     if league is None:
         return 0
     pool = list(getattr(league, "overseas_free_agents", None) or [])
-    need = max(0, int(min_count) - len(pool))
+    in_band = sum(1 for p in pool if 60.0 <= _euro_display_ovr(p) <= 76.0)
+    need = max(0, 280 - in_band, int(min_count) - len(pool))
     g_have = sum(
         1
         for p in pool
@@ -1845,6 +2131,12 @@ def ensure_overseas_fa_pool(
     need_g = max(0, int(min_goalies) - g_have)
     if need <= 0 and need_g <= 0:
         league.overseas_free_agents = pool
+        try:
+            from services.roster_compliance import fill_league_roster_minimums
+
+            fill_league_roster_minimums(league, rng)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         return 0
 
     used_names: set = set()
@@ -1859,28 +2151,29 @@ def ensure_overseas_fa_pool(
     for i in range(total_spawn):
         force_g = i < need_g
         pos = Position.G if force_g else rng.choice([Position.C, Position.LW, Position.RW, Position.D, Position.G])
-        lo, hi = (0.40, 0.62) if pos != Position.G else (0.48, 0.70)
+        lo, hi = (0.606, 0.758) if pos != Position.G else (0.596, 0.740)
         p = _spawn_player(
             rng,
             pos=pos,
             ovr_lo=lo,
             ovr_hi=hi,
             age_lo=23,
-            age_hi=32,
+            age_hi=33,
             used_names=used_names,
             league_players=league_players,
             pool_context="overseas",
         )
         p.context.current_team_id = "OVERSEAS"
-        _set_assignment(
-            p,
-            level="ufa",
-            overseas=True,
-            overseas_league=rng.choice(["KHL", "SHL", "Liiga", "NL", "DEL", "Czech Extraliga"]),
-        )
+        _decorate_euro_depth_free_agent(p, rng)
         pool.append(p)
         added += 1
     league.overseas_free_agents = pool
+    try:
+        from services.roster_compliance import fill_league_roster_minimums
+
+        fill_league_roster_minimums(league, rng)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     return added
 
 

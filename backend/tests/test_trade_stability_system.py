@@ -193,9 +193,10 @@ class TradeStabilityTests(unittest.TestCase):
             rng=random.Random(3),
             force_formal=True,
         )
+        from services.trade_demand_engine import _advance_user_crisis_timers
+
         book = ensure_trade_demands(session)
-        book["star2"]["crisis"]["last_sync_unix"] = time.time() - 5
-        sync_trade_demand_crises(session)
+        _advance_user_crisis_timers(session, 13)
         remaining = float(book["star2"]["crisis"]["remaining_seconds"])
         initial = float(row["crisis"]["initial_seconds"])
         self.assertLess(remaining, initial)
@@ -298,7 +299,7 @@ class TradeStabilityTests(unittest.TestCase):
         self.assertFalse(ctx.get("crisis_timer_ticks"))
 
         sync_trade_demand_crises(session, tick_timers=True)
-        self.assertEqual(book["deadline_star"]["status"], "deadline_closed")
+        self.assertEqual(book["deadline_star"]["status"], "summer_pending")
         self.assertFalse(book["deadline_star"].get("crisis_expired"))
 
     def test_new_demands_blocked_after_trade_deadline(self):

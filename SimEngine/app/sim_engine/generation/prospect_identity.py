@@ -347,14 +347,19 @@ def refresh_player_identity(
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
 
-    chem = getattr(player, "chemistry_profile", None)
-    if isinstance(chem, dict):
-        chem["playstyle"] = playstyle
-    elif chem is None:
-        try:
-            setattr(player, "chemistry_profile", {"playstyle": playstyle})
-        except Exception:
-            _swallowed_log.debug("suppressed exception", exc_info=True)
+    try:
+        from app.sim_engine.systems.chemistry import sync_chemistry_playstyle_from_player  # noqa: WPS433
+
+        sync_chemistry_playstyle_from_player(player)
+    except Exception:
+        chem = getattr(player, "chemistry_profile", None)
+        if isinstance(chem, dict):
+            chem["playstyle"] = str(playstyle or "").lower()
+        elif chem is None:
+            try:
+                setattr(player, "chemistry_profile", {"playstyle": str(playstyle or "").lower()})
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
 
     _sync_body_snapshot(player)
     return {

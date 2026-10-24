@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import random
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 import logging as _logging_swallow
 _swallowed_log = _logging_swallow.getLogger(__name__)
 
@@ -75,7 +75,28 @@ INCIDENT_FAMILIES = (
     "harassment",
     "team_conduct",
     "public_disorder",
+    "on_ice",
 )
+
+OFF_ICE_FAMILY_LABELS: Dict[str, str] = {
+    "driving": "Driving-related incident",
+    "violence": "Violence or assault allegation",
+    "gambling": "Gambling / integrity matter",
+    "financial": "Financial misconduct",
+    "substance": "Substance-related matter",
+    "harassment": "Harassment or misconduct allegation",
+    "team_conduct": "Team conduct violation",
+    "public_disorder": "Public conduct matter",
+}
+
+ON_ICE_SUSPENSION_REASONS: List[Tuple[str, str, Tuple[int, int], float]] = [
+    # reason_id, public label, (min_games, max_games), roll weight
+    ("illegal_check_to_head", "Illegal check to the head", (2, 5), 0.28),
+    ("boarding", "Boarding", (1, 4), 0.30),
+    ("cross_checking", "Cross-checking", (1, 3), 0.26),
+    ("slew_footing", "Slew-footing", (2, 5), 0.14),
+    ("abuse_of_official", "Physical abuse of an official", (10, 20), 0.02),
+]
 
 REGISTRY_KEY = "conduct_incidents"
 PLAYER_INCIDENT_KEY = "_conduct_incident_id"
@@ -294,6 +315,9 @@ def create_conduct_incident(
     severity: str = "moderate",
     storyline_id: str = "",
     cause_event_id: str = "",
+    cause_type: str = "",
+    category: str = "off_ice",
+    reason: str = "",
     player_fame: float = 0.5,
     rng: Optional[random.Random] = None,
     auto_league_suspend_major: bool = True,
@@ -304,6 +328,8 @@ def create_conduct_incident(
     if sev not in ("minor", "moderate", "major"):
         sev = "moderate"
     family = infer_incident_family(storyline_text, legal_severity=sev)
+    if str(cause_type or "").strip():
+        storyline_text = f"{storyline_text} [{cause_type}]".strip()
     pid = _safe_str(getattr(player, "id", None) or getattr(player, "player_id", None))
     incident_id = f"conduct:{uuid.uuid4().hex[:12]}"
 
@@ -359,6 +385,9 @@ def create_conduct_incident(
         "team_id": _safe_str(team_id),
         "storyline_id": _safe_str(storyline_id) or incident_id,
         "cause_event_id": _safe_str(cause_event_id),
+        "cause_type": _safe_str(cause_type),
+        "category": _safe_str(category or "off_ice"),
+        "reason": _safe_str(reason),
         "incident_family": family,
         "severity": sev,
         "status": status,
@@ -815,6 +844,253 @@ def advance_investigation(
     return dict(inc)
 
 
+def _incident_category_label(incident: Dict[str, Any]) -> str:
+    cat = _safe_str(incident.get("category") or "off_ice").lower()
+    if cat == "on_ice":
+        return "On-ice"
+    league = _safe_str(incident.get("league_status") or "")
+    team = _safe_str(incident.get("team_status") or "")
+    if league != "suspended" and team in ("administrative_leave", "team_suspended"):
+        return "Team discipline"
+    return "Off-ice"
+
+
+def _incident_public_reason(incident: Dict[str, Any]) -> str:
+    if _safe_str(incident.get("category")).lower() == "on_ice":
+        return _safe_str(incident.get("reason")) or "On-ice infraction"
+    info = _safe_str(incident.get("information_status") or "")
+    status = _safe_str(incident.get("status") or "")
+    if status in ("under_investigation", "reported", "charged") or info in (
+        "unconfirmed",
+        "reported",
+        "confirmed_investigation",
+    ):
+        return "Matter under league review"
+    explicit = _safe_str(incident.get("reason"))
+    if explicit:
+        return explicit
+    fam = _safe_str(incident.get("incident_family"))
+    return OFF_ICE_FAMILY_LABELS.get(fam, "Off-ice conduct matter")
+
+
+def _incident_list_status(incident: Dict[str, Any]) -> str:
+    gr = int(incident.get("games_remaining") or 0)
+    league = _safe_str(incident.get("league_status") or "")
+    status = _safe_str(incident.get("status") or "")
+    if gr > 0 and (league == "suspended" or status == "league_suspended"):
+        return "Suspended"
+    if status in ("under_investigation", "reported") or league == "investigating":
+        return "Under investigation"
+    if status in ("administrative_leave",) or _safe_str(incident.get("team_status")) == "administrative_leave":
+        return "Leave"
+    if status in ("cleared", "resolved"):
+        return "Cleared"
+    if gr > 0:
+        return "Suspended"
+    return status.replace("_", " ").title() or "Active"
+
+
+def create_on_ice_discipline_incident(
+    host: Any,
+    *,
+    player: Any,
+    team_id: str,
+    reason_id: str,
+    reason_label: str,
+    games: int,
+    game_id: str = "",
+    rng: Optional[random.Random] = None,
+) -> Dict[str, Any]:
+    """Supplemental discipline from Player Safety — immediate league suspension."""
+    r = _rng(rng)
+    games_i = max(1, int(games))
+    pid = _safe_str(getattr(player, "id", None) or getattr(player, "player_id", None))
+    incident_id = f"conduct:{uuid.uuid4().hex[:12]}"
+    incident: Dict[str, Any] = {
+        "incident_id": incident_id,
+        "player_id": pid,
+        "team_id": _safe_str(team_id),
+        "storyline_id": incident_id,
+        "cause_event_id": _safe_str(game_id),
+        "cause_type": "ON_ICE_DISCIPLINE",
+        "category": "on_ice",
+        "reason": _safe_str(reason_label),
+        "reason_id": _safe_str(reason_id),
+        "incident_family": "on_ice",
+        "severity": "major" if games_i >= 8 else "moderate",
+        "status": "league_suspended",
+        "information_status": "official_ruling",
+        "legal_status": "none",
+        "league_status": "suspended",
+        "team_status": "none",
+        "evidence_confidence": 0.95,
+        "games_remaining": games_i,
+        "games_initial": games_i,
+        "eligible_to_play": False,
+        "team_can_override": False,
+        "resolution": "",
+        "history_entries": [],
+        "storyline_text": f"League discipline: {reason_label}",
+        "player_fame": 0.5,
+        "dress_backlash_risk": 0.0,
+        "ongoing_backlash": False,
+        "support_program": False,
+        "statement_tone": "",
+        "repeat_count": _prior_incident_count(host, pid),
+        "created_at": "",
+        "updated_at": "",
+    }
+    recompute_eligibility(incident)
+    _append_history(incident, f"Department of Player Safety: {reason_label} — {games_i}-game suspension.")
+    reg = _get_registry(host)
+    reg[incident_id] = incident
+    try:
+        setattr(host, REGISTRY_KEY, reg)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    _sync_player_flags(player, incident)
+    return dict(incident)
+
+
+def _player_hits_per_game(player: Any, host: Any) -> float:
+    pid = _safe_str(getattr(player, "id", None) or getattr(player, "player_id", None))
+    if not pid:
+        return 0.0
+    pss = getattr(host, "player_season_stats", None) or {}
+    row = pss.get(pid) if isinstance(pss, dict) else None
+    if not isinstance(row, dict):
+        return 0.0
+    try:
+        gp = int(row.get("gp") or 0)
+        hits = int(row.get("hit") or row.get("hits") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    if gp <= 0:
+        return 0.0
+    return float(hits) / float(gp)
+
+
+def _player_composure_factor(player: Any) -> float:
+    ratings = getattr(player, "ratings", None)
+    comp = None
+    if isinstance(ratings, dict):
+        comp = ratings.get("per_emotional_stability")
+    try:
+        c = float(comp) if comp is not None else 70.0
+    except (TypeError, ValueError):
+        c = 70.0
+    return max(0.35, (100.0 - c) / 100.0)
+
+
+def maybe_roll_on_ice_suspension_after_game(
+    host: Any,
+    team: Any,
+    player: Any,
+    *,
+    rng: Optional[random.Random] = None,
+    game_id: str = "",
+) -> Optional[Dict[str, Any]]:
+    """Post-game Player Safety roll — physical players with low composure."""
+    if player is None or host is None:
+        return None
+    if getattr(player, "retired", False):
+        return None
+    pos = str(getattr(player, "position", "") or getattr(getattr(player, "identity", None), "position", "") or "")
+    if str(getattr(pos, "value", pos) or "").upper() == "G":
+        return None
+    if getattr(player, PLAYER_INCIDENT_KEY, None):
+        return None
+    try:
+        if int(getattr(player, "_world_conduct_games_remaining", 0) or 0) > 0:
+            return None
+    except (TypeError, ValueError):
+        pass
+    r = _rng(rng)
+    hpg = _player_hits_per_game(player, host)
+    comp_f = _player_composure_factor(player)
+    # ~0.05% base per game at 2 H/G and average composure; scales up with hits and volatility.
+    chance = min(0.0045, 0.00022 * max(0.5, hpg) * comp_f * (1.0 + 0.35 * hpg))
+    if r.random() > chance:
+        return None
+    weights = [float(w) for *_, w in ON_ICE_SUSPENSION_REASONS]
+    pick = r.choices(ON_ICE_SUSPENSION_REASONS, weights=weights, k=1)[0]
+    reason_id, label, (lo, hi), _ = pick
+    games = int(r.randint(int(lo), int(hi)))
+    tid = _safe_str(getattr(team, "team_id", None) or getattr(team, "id", None) or "")
+    return create_on_ice_discipline_incident(
+        host,
+        player=player,
+        team_id=tid,
+        reason_id=reason_id,
+        reason_label=label,
+        games=games,
+        game_id=game_id,
+        rng=r,
+    )
+
+
+def roll_on_ice_suspensions_for_team_after_game(
+    host: Any,
+    team: Any,
+    *,
+    rng: Optional[random.Random] = None,
+    game_id: str = "",
+) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    r = _rng(rng)
+    for pl in list(getattr(team, "roster", None) or []):
+        inc = maybe_roll_on_ice_suspension_after_game(host, team, pl, rng=r, game_id=game_id)
+        if isinstance(inc, dict):
+            out.append(inc)
+    return out
+
+
+def list_league_suspensions(host: Any, *, team_by_id: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """Active discipline rows for league ops / suspension list UI."""
+    reg = _get_registry(host)
+    rows: List[Dict[str, Any]] = []
+    for inc in reg.values():
+        if not isinstance(inc, dict):
+            continue
+        gr = int(inc.get("games_remaining") or 0)
+        eligible = bool(inc.get("eligible_to_play", True))
+        status = _safe_str(inc.get("status") or "")
+        if gr <= 0 and eligible and status in ("cleared", "resolved"):
+            continue
+        if gr <= 0 and status in ("cleared", "resolved"):
+            continue
+        pid = _safe_str(inc.get("player_id"))
+        tid = _safe_str(inc.get("team_id"))
+        team_abbr = tid
+        player_name = pid
+        if team_by_id and tid in team_by_id:
+            tm = team_by_id[tid]
+            team_abbr = _safe_str(getattr(tm, "abbreviation", None) or getattr(tm, "abbr", None) or tid)
+            for pl in list(getattr(tm, "roster", None) or []):
+                if _safe_str(getattr(pl, "id", None)) == pid:
+                    ident = getattr(pl, "identity", None)
+                    player_name = _safe_str(getattr(ident, "name", None) or getattr(pl, "name", None) or pid)
+                    break
+        rows.append(
+            {
+                "incident_id": inc.get("incident_id"),
+                "player_id": pid,
+                "player_name": player_name,
+                "team_id": tid,
+                "team_abbr": team_abbr,
+                "category": _incident_category_label(inc),
+                "reason": _incident_public_reason(inc),
+                "games_initial": int(inc.get("games_initial") or gr or 0),
+                "games_remaining": gr,
+                "status": _incident_list_status(inc),
+                "league_status": inc.get("league_status"),
+                "information_status": inc.get("information_status"),
+            }
+        )
+    rows.sort(key=lambda r: (-int(r.get("games_remaining") or 0), str(r.get("player_name") or "")))
+    return rows
+
+
 def legal_gm_choice_options() -> List[Dict[str, Any]]:
     return [
         {"id": "suspend_internally", "label": "Suspend player internally", "effect_summary": "Ineligible; slows media escalation."},
@@ -829,19 +1105,27 @@ def legal_gm_choice_options() -> List[Dict[str, Any]]:
 
 
 def serialize_incident_for_ui(incident: Dict[str, Any]) -> Dict[str, Any]:
+    gr = int(incident.get("games_remaining") or 0)
+    gi = int(incident.get("games_initial") or gr or 0)
     return {
         "incident_id": incident.get("incident_id"),
         "player_id": incident.get("player_id"),
         "team_id": incident.get("team_id"),
+        "category": _incident_category_label(incident),
+        "reason": _incident_public_reason(incident),
+        "reason_id": incident.get("reason_id"),
+        "cause_type": incident.get("cause_type"),
         "incident_family": incident.get("incident_family"),
         "severity": incident.get("severity"),
-        "status": incident.get("status"),
+        "status": _incident_list_status(incident),
+        "raw_status": incident.get("status"),
         "information_status": incident.get("information_status"),
         "legal_status": incident.get("legal_status"),
         "league_status": incident.get("league_status"),
         "team_status": incident.get("team_status"),
         "evidence_confidence": incident.get("evidence_confidence"),
-        "games_remaining": incident.get("games_remaining"),
+        "games_remaining": gr,
+        "games_initial": gi,
         "eligible_to_play": incident.get("eligible_to_play"),
         "team_can_override": incident.get("team_can_override"),
         "resolution": incident.get("resolution"),

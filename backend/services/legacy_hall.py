@@ -325,17 +325,74 @@ def _record_event(lg: Dict[str, Any], ev_type: str, season: Optional[int], key: 
 
 
 # --------------------------------------------------------------------------- season finalization
+_LEGACY_STAGES = ("regular", "cup", "awards", "draft", "retirements", "rollover")
+
+
+def _legacy_row(lg: Dict[str, Any], sy: int) -> Dict[str, Any]:
+    key = str(sy)
+    row = lg["seasons"].get(key)
+    if not isinstance(row, dict):
+        row = {
+            "season": sy, "label": _season_label(sy), "complete": False, "source": "simulated",
+            "stages": {}, "coverage": {},
+        }
+        lg["seasons"][key] = row
+    row.setdefault("stages", {})
+    row.setdefault("coverage", {})
+    return row
+
+
+def archive_legacy_stage(session: Any, stage: str, season_year: Optional[int] = None) -> Dict[str, Any]:
+    """Add one slice to this season's Legacy row. Writing the same stage twice is a no-op.
+
+    ``complete`` is set only by the rollover stage. Earlier stages still show in the Hall.
+    """
+    import logging
+    lg = ensure_legacy(session)
+    sy = int(season_year if season_year is not None else getattr(session, "season_calendar_year", 0) or 0)
+    row = _legacy_row(lg, sy)
+    if row.get("complete"):
+        return row
+    if stage != "rollover" and (row.get("stages") or {}).get(stage):
+        return row
+    try:
+        if stage == "regular":
+            _stage_regular(session, lg, row, sy)
+        elif stage == "cup":
+            _stage_cup(session, lg, row, sy)
+        elif stage == "awards":
+            _stage_awards(session, lg, row, sy)
+        elif stage == "draft":
+            _stage_draft(session, lg, row, sy)
+        elif stage == "retirements":
+            _stage_retirements(session, lg, row, sy)
+        elif stage == "rollover":
+            _stage_rollover(session, lg, row, sy)
+        else:
+            return row
+        if stage == "rollover":
+            row["complete"] = True
+            row["finalized_at"] = _now_iso()
+        else:
+            row["stages"][stage] = True
+        lg.pop("_cache", None)
+    except Exception:
+        logging.getLogger(__name__).warning("legacy stage %s failed for %s", stage, sy, exc_info=True)
+    return row
+
+
 def archive_legacy_season(session: Any, season_year: int) -> Dict[str, Any]:
-    """Season boundary aggregation. Called from season_carryover.archive_completed_season,
-    before standings / ledgers / game log are cleared. Idempotent per season year."""
+    """Fill any stage that has not run, then mark the season complete. Idempotent once complete."""
     lg = ensure_legacy(session)
     sy = int(season_year)
-    key = str(sy)
-    if (lg["seasons"].get(key) or {}).get("complete"):
-        return lg["seasons"][key]
-    row: Dict[str, Any] = {"season": sy, "label": _season_label(sy), "complete": False, "source": "simulated",
-                           "finalized_at": _now_iso()}
-    # 1. standings (+ identity worn that season)
+    if (lg["seasons"].get(str(sy)) or {}).get("complete"):
+        return lg["seasons"][str(sy)]
+    for stage in _LEGACY_STAGES:
+        archive_legacy_stage(session, stage, sy)
+    return lg["seasons"].get(str(sy)) or _legacy_row(lg, sy)
+
+
+def _stage_regular(session: Any, lg: Dict[str, Any], row: Dict[str, Any], sy: int) -> None:
     recs = getattr(getattr(session, "standings", None), "records", None) or {}
     standings: Dict[str, Dict[str, Any]] = {}
     for tid, rr in (recs.items() if isinstance(recs, dict) else []):
@@ -348,7 +405,18 @@ def archive_legacy_season(session: Any, season_year: int) -> Dict[str, Any]:
     for rank, tid in enumerate(sorted(standings, key=lambda t: (-standings[t]["pts"], -(standings[t]["gf"] - standings[t]["ga"]), t)), 1):
         standings[tid]["league_rank"] = rank
     row["standings"] = standings
-    # 2. playoffs
+    row["coverage"]["standings"] = bool(standings)
+    n_lines = _archive_player_lines(session, lg, sy, scope="regular")
+    row["coverage"]["player_lines"] = n_lines > 0
+    _archive_h2h(session, lg, [], None, sy, which="games")
+    _import_career_lines(session, lg)
+    _season_milestones(session, lg, sy)
+    if lg["coverage"].get("first_tracked_season") is None:
+        lg["coverage"]["first_tracked_season"] = sy
+
+
+def _stage_cup(session: Any, lg: Dict[str, Any], row: Dict[str, Any], sy: int) -> None:
+    key = str(sy)
     series = _playoff_series(session)
     champ = str(getattr(session, "champion_id", None) or getattr(session, "stanley_cup_winner", None) or "") or None
     row["champion_id"] = champ
@@ -364,46 +432,67 @@ def archive_legacy_season(session: Any, season_year: int) -> Dict[str, Any]:
     row["playoff_series"] = series
     playoff_teams = sorted({t for s in series for t in (str(s.get("team_high_id") or ""), str(s.get("team_low_id") or "")) if t})
     row["playoff_teams"] = playoff_teams
+    standings = row.get("standings") or {}
     for tid in standings:
         standings[tid]["made_playoffs"] = (tid in playoff_teams) if playoff_teams else None
         standings[tid]["playoff_round_reached"] = _round_reached(series, tid) if series else None
-    row["coverage"] = {"standings": bool(standings), "playoffs": bool(series), "player_lines": False}
-    # 3. awards
-    row["awards"] = _awards(session)
-    # 4. players: season lines + career store
-    n_lines = _archive_player_lines(session, lg, sy)
-    row["coverage"]["player_lines"] = n_lines > 0
-    # 5. draft class
+    row["coverage"]["playoffs"] = bool(series)
+    n_po = _archive_player_lines(session, lg, sy, scope="playoffs")
+    row["coverage"]["playoff_lines"] = n_po > 0
+    _credit_championships(lg, sy, champ)
+    _archive_h2h(session, lg, series, champ, sy, which="series")
+    _season_milestones(session, lg, sy)
+    if champ:
+        _record_event(lg, "championship", sy, (sy, champ), team_ids=[champ], payload={"finalist_id": finalist})
+        first = not any((s.get("champion_id") == champ) for k, s in lg["seasons"].items() if k != key and (s.get("complete") or (s.get("stages") or {}).get("cup")))
+        if first:
+            _record_event(lg, "first_championship_in_save", sy, (champ,), team_ids=[champ])
+    for tid in playoff_teams:
+        if not any(tid in (s.get("playoff_teams") or []) for k, s in lg["seasons"].items() if k != key and (s.get("complete") or (s.get("stages") or {}).get("cup"))):
+            _record_event(lg, "first_playoffs_in_save", sy, (tid,), team_ids=[tid])
+
+
+def _stage_awards(session: Any, lg: Dict[str, Any], row: Dict[str, Any], sy: int) -> None:
+    awards = _awards(session)
+    row["awards"] = awards
+    row["coverage"]["awards"] = bool(awards)
+    for a in awards:
+        pr = lg["players"].get(a.get("player_id") or "")
+        if pr is not None and not any(x.get("season") == sy and x.get("award") == a["award"] and x.get("place") in (None, 1, "1") for x in pr["awards"]):
+            pr["awards"].append({"season": sy, "award": a["award"], "place": 1})
+        for fin in a.get("finalists") or []:
+            if not isinstance(fin, dict):
+                continue
+            fpid = str(fin.get("player_id") or "")
+            place = fin.get("place") or fin.get("rank")
+            fpr = lg["players"].get(fpid)
+            if fpr is None or not place:
+                continue
+            if not any(x.get("season") == sy and x.get("award") == a["award"] and x.get("place") == place for x in fpr["awards"]):
+                fpr["awards"].append({"season": sy, "award": a["award"], "place": place})
+    _archive_award_placings(session, lg, sy)
+
+
+def _stage_draft(session: Any, lg: Dict[str, Any], row: Dict[str, Any], sy: int) -> None:
     row["draft"] = _draft_class(session, sy)
+    row["coverage"]["draft"] = bool(row["draft"])
     for pick in row["draft"]:
         pr = lg["players"].get(pick.get("player_id") or "")
         if isinstance(pr, dict) and not pr.get("draft"):
             pr["draft"] = {k: pick.get(k) for k in ("season", "draft_year", "round", "overall", "team_id")}
-    # 6. trades (copy compact, keep original valuation)
-    _archive_trades(session, lg)
-    # 7. retirements
+
+
+def _stage_retirements(session: Any, lg: Dict[str, Any], row: Dict[str, Any], sy: int) -> None:
     _archive_retirements(session, lg, sy)
-    # 8. head-to-head / rivalry inputs
-    _archive_h2h(session, lg, series, champ, sy)
-    # 9. captaincy reconcile + CPU appointments
+    row["coverage"]["retirements"] = True
+
+
+def _stage_rollover(session: Any, lg: Dict[str, Any], row: Dict[str, Any], sy: int) -> None:
+    _import_career_lines(session, lg)
+    _archive_trades(session, lg)
     reconcile_captaincy(session, season=sy, appoint_cpu=True)
-    # 10. events: championship, firsts, milestones, records
-    if champ:
-        _record_event(lg, "championship", sy, (sy, champ), team_ids=[champ], payload={"finalist_id": finalist})
-        first = not any((s.get("champion_id") == champ) for k, s in lg["seasons"].items() if k != key and s.get("complete"))
-        if first:
-            _record_event(lg, "first_championship_in_save", sy, (champ,), team_ids=[champ])
-    for tid in playoff_teams:
-        if not any(tid in (s.get("playoff_teams") or []) for k, s in lg["seasons"].items() if k != key and s.get("complete")):
-            _record_event(lg, "first_playoffs_in_save", sy, (tid,), team_ids=[tid])
-    _season_milestones(session, lg, sy)
-    if lg["coverage"].get("first_tracked_season") is None:
-        lg["coverage"]["first_tracked_season"] = sy
-    row["complete"] = True
-    lg["seasons"][key] = row
-    lg.pop("_cache", None)
-    _storyline_hooks(session, lg, sy, champ)
-    return row
+    _storyline_hooks(session, lg, sy, row.get("champion_id"))
+
 
 
 def _playoff_series(session: Any) -> List[Dict[str, Any]]:
@@ -442,86 +531,222 @@ def _awards(session: Any) -> List[Dict[str, Any]]:
         name = a.get("award_name") or a.get("name") or a.get("award_id") or a.get("id")
         if not name:
             continue
+        finalists = []
+        for fin in list(a.get("finalists") or a.get("runners_up") or a.get("nominees") or []):
+            if isinstance(fin, dict) and (fin.get("player_id") or fin.get("winner_id")):
+                finalists.append({
+                    "player_id": str(fin.get("player_id") or fin.get("winner_id")),
+                    "player_name": fin.get("player_name") or fin.get("name"),
+                    "place": fin.get("place") or fin.get("finish") or fin.get("rank"),
+                    "team_id": fin.get("team_id"),
+                })
         out.append({"award": str(name), "award_id": a.get("award_id") or a.get("id"), "player_id": str(pid) if pid else None,
-                    "player_name": a.get("winner_name") or a.get("player_name"), "team_id": a.get("team_id")})
+                    "player_name": a.get("winner_name") or a.get("player_name"), "team_id": a.get("team_id"),
+                    "finalists": finalists})
     return out
 
 
-_SKATER_KEYS = ("gp", "g", "a", "pts", "plus_minus", "pim", "sog", "toi_sec", "ppg", "shg", "gwg")
+_SKATER_KEYS = ("gp", "g", "a", "pts", "plus_minus", "pim", "sog", "toi_sec", "ppg", "shg", "gwg", "hit", "blk", "ixg", "fow", "fol")
 _GOALIE_KEYS = ("gp", "w", "l", "otl", "so", "ga", "shots_against", "saves", "toi_sec")
+_FLOAT_KEYS = ("sv_pct", "gsax", "gaa")
 
 
-def _archive_player_lines(session: Any, lg: Dict[str, Any], sy: int) -> int:
-    pss = getattr(session, "player_season_stats", None) or {}
+def _blank_player(pid: str) -> Dict[str, Any]:
+    return {"player_id": pid, "seasons": [], "teams": [], "championships": [],
+            "awards": [], "draft": None, "retired_season": None}
+
+
+def _stat_line(r: Dict[str, Any], sy: int, team_id: str, scope: str, *, split: bool = False, aggregate: bool = False) -> Dict[str, Any]:
+    pos = str(r.get("position") or "").upper()
+    goalie = pos.startswith("G")
+    line: Dict[str, Any] = {"season": sy, "team_id": str(team_id or ""), "source": "simulated", "scope": scope}
+    if split:
+        line["split"] = True
+    if aggregate:
+        line["aggregate"] = True
+    for k in (_GOALIE_KEYS if goalie else _SKATER_KEYS):
+        if k == "shots_against":
+            if "shots_against" in r or "goalie_shots_against" in r:
+                line[k] = _i(r.get("shots_against") or r.get("goalie_shots_against"))
+        elif k == "ga":
+            if "ga" in r or "goalie_ga" in r:
+                line[k] = _i(r.get("ga") or r.get("goalie_ga"))
+        elif k == "pts":
+            line[k] = _i(r.get("pts")) or _i(r.get("g")) + _i(r.get("a"))
+        elif k == "plus_minus":
+            if "plus_minus" in r or "pm" in r:
+                line[k] = _i(r.get("plus_minus") or r.get("pm"))
+        elif k == "hit":
+            if "hit" in r or "hits" in r:
+                line[k] = _i(r.get("hit") if "hit" in r else r.get("hits"))
+        elif k == "blk":
+            if "blk" in r or "blocks" in r:
+                line[k] = _i(r.get("blk") if "blk" in r else r.get("blocks"))
+        elif k in r:
+            line[k] = _i(r.get(k))
+    for k in _FLOAT_KEYS:
+        if r.get(k) not in (None, ""):
+            try:
+                line[k] = round(float(r.get(k)), 3)
+            except (TypeError, ValueError):
+                pass
+    return line
+
+
+def _team_stat_slices(r: Dict[str, Any]) -> Optional[List[Tuple[str, Dict[str, Any]]]]:
+    """Per-team counting stats when a player changed clubs. None if he stayed put."""
+    by = r.get("by_team") if isinstance(r.get("by_team"), dict) else {}
+    if not by:
+        return None
+    prior: Dict[str, int] = {}
+    slices: List[Tuple[str, Dict[str, Any]]] = []
+    for tid, sl in by.items():
+        if not isinstance(sl, dict):
+            continue
+        slices.append((str(tid), sl))
+        for k, v in sl.items():
+            prior[k] = prior.get(k, 0) + _i(v)
+    cur = str(r.get("team_id") or "")
+    rem: Dict[str, Any] = {}
+    keys = set(_SKATER_KEYS) | set(_GOALIE_KEYS)
+    for k in keys:
+        if k in r or k in prior:
+            rem[k] = _i(r.get(k)) - int(prior.get(k) or 0)
+    if cur and _i(rem.get("gp")) > 0:
+        slices.append((cur, {**r, **rem, "position": r.get("position")}))
+    return slices or None
+
+
+def _archive_player_lines(session: Any, lg: Dict[str, Any], sy: int, scope: str = "regular") -> int:
+    if scope == "playoffs":
+        pss = getattr(session, "playoff_player_stats", None) or {}
+    else:
+        pss = getattr(session, "player_season_stats", None) or {}
     n = 0
     for pid, r in pss.items():
         if not isinstance(r, dict) or _i(r.get("gp")) <= 0:
             continue
-        pid = str(pid)
+        pid = str(r.get("player_id") or pid)
         pos = str(r.get("position") or "").upper()
-        goalie = pos.startswith("G")
-        line: Dict[str, Any] = {"season": sy, "team_id": str(r.get("team_id") or ""), "source": "simulated", "scope": "regular"}
-        for k in (_GOALIE_KEYS if goalie else _SKATER_KEYS):
-            if k == "shots_against":
-                line[k] = _i(r.get("shots_against") or r.get("goalie_shots_against"))
-            elif k == "ga":
-                line[k] = _i(r.get("ga") or r.get("goalie_ga"))
-            elif k == "pts":
-                line[k] = _i(r.get("pts")) or _i(r.get("g")) + _i(r.get("a"))
-            elif k == "plus_minus":
-                line[k] = _i(r.get("plus_minus") or r.get("pm"))
-            elif k in r:
-                line[k] = _i(r.get(k))
-        if line.get("team_id"):
-            t = lg["franchises"].get(line["team_id"]) or {}
-            line["identity_version"] = int(t.get("current_version") or 1)
-        pr = lg["players"].setdefault(pid, {"player_id": pid, "seasons": [], "teams": [], "championships": [],
-                                            "awards": [], "draft": None, "retired_season": None})
+        slices = _team_stat_slices(r) if scope == "regular" else None
+        lines: List[Dict[str, Any]] = []
+        if slices and len(slices) > 1:
+            for tid, sl in slices:
+                src = sl if "position" in sl else {**r, **sl}
+                lines.append(_stat_line(src, sy, tid, scope, split=True))
+            lines.append(_stat_line(r, sy, "", scope, aggregate=True))
+        else:
+            lines.append(_stat_line(r, sy, str(r.get("team_id") or ""), scope))
+        pr = lg["players"].setdefault(pid, _blank_player(pid))
         pr["name"] = r.get("name") or pr.get("name")
         pr["position"] = pos or pr.get("position")
-        pr["seasons"] = [s for s in pr["seasons"] if not (s.get("season") == sy and s.get("source") == "simulated")]
-        pr["seasons"].append(line)
-        if line["team_id"] and line["team_id"] not in pr["teams"]:
-            pr["teams"].append(line["team_id"])
-        n += 1
-    champ = str(getattr(session, "champion_id", None) or "")
-    if champ:
-        for pid, r in pss.items():
-            if isinstance(r, dict) and str(r.get("team_id") or "") == champ and _i(r.get("gp")) > 0:
-                pr = lg["players"].get(str(pid))
-                if pr is not None and sy not in pr["championships"]:
-                    pr["championships"].append(sy)
-    for a in _awards(session):
-        pr = lg["players"].get(a.get("player_id") or "")
-        if pr is not None and not any(x.get("season") == sy and x.get("award") == a["award"] for x in pr["awards"]):
-            pr["awards"].append({"season": sy, "award": a["award"]})
-    # Imported (real-NHL) lines, once per player, kept separate from simulated seasons.
-    if not lg.get("_imports_done"):
-        _import_career_lines(session, lg)
-        lg["_imports_done"] = True
+        pr["seasons"] = [s for s in pr["seasons"] if not (
+            s.get("season") == sy and s.get("source") == "simulated" and (s.get("scope") or "regular") == scope
+        )]
+        for line in lines:
+            if line.get("team_id"):
+                t = lg["franchises"].get(line["team_id"]) or {}
+                line["identity_version"] = int(t.get("current_version") or 1)
+            pr["seasons"].append(line)
+            if line["team_id"] and line["team_id"] not in pr["teams"]:
+                pr["teams"].append(line["team_id"])
+            n += 1
     return n
 
 
+def _credit_championships(lg: Dict[str, Any], sy: int, champ: Optional[str]) -> None:
+    """Cup credit for anyone who played for the champion, regular season or playoffs."""
+    if not champ:
+        return
+    for pr in lg["players"].values():
+        played = any(
+            s.get("season") == sy and str(s.get("team_id") or "") == champ and _i(s.get("gp")) > 0 and not s.get("aggregate")
+            for s in (pr.get("seasons") or [])
+        )
+        if played and sy not in (pr.get("championships") or []):
+            pr.setdefault("championships", []).append(sy)
+
+
 def _import_career_lines(session: Any, lg: Dict[str, Any]) -> None:
+    """Merge real-NHL seasons the Hall does not have yet. Safe to call again after a landing-page fetch.
+
+    Franchise opening season and later stay out: those belong to the sim.
+    """
     try:
         from services.franchise_sim import _iter_league_players_for_aging
         players = _iter_league_players_for_aging(getattr(session.sim, "league", None))
     except Exception:
         players = []
+    try:
+        from services.season_carryover import _franchise_first_season
+        cutoff = int(_franchise_first_season(session, int(getattr(session, "season_calendar_year", 0) or 0)) or 0)
+    except Exception:
+        cutoff = 0
+    try:
+        from services.real_nhl_roster_importer import drop_nhl_import_from_franchise_open, _season_start_year_from_label
+    except Exception:
+        drop_nhl_import_from_franchise_open = None
+        _season_start_year_from_label = None
     for p in players:
         cs = getattr(p, "career_stats", None)
         rows = [s for s in (cs.get("seasons") if isinstance(cs, dict) else []) or [] if isinstance(s, dict) and s.get("source") != "sim"]
+        if drop_nhl_import_from_franchise_open is not None and cutoff > 0:
+            rows = drop_nhl_import_from_franchise_open(rows, cutoff)
+        elif cutoff > 0 and _season_start_year_from_label is not None:
+            rows = [s for s in rows if _season_start_year_from_label(s.get("season")) < cutoff]
         if not rows:
             continue
         pid = _pid(p)
-        pr = lg["players"].setdefault(pid, {"player_id": pid, "seasons": [], "teams": [], "championships": [],
-                                            "awards": [], "draft": None, "retired_season": None})
+        pr = lg["players"].setdefault(pid, _blank_player(pid))
         pr.setdefault("name", _pname(p))
         pr.setdefault("position", _ppos(p))
-        pr["imported_seasons"] = [{"season": str(s.get("season")), "team": s.get("team") or s.get("team_abbrev"),
-                                   "league": s.get("league"), "gp": s.get("gp"), "g": s.get("g"), "a": s.get("a"),
-                                   "pts": s.get("pts"), "w": s.get("wins"), "so": s.get("shutouts"), "source": "import"}
-                                  for s in rows[-30:]]
+        have = {
+            (str(s.get("season")), str(s.get("team") or ""), str(s.get("league") or ""))
+            for s in (pr.get("imported_seasons") or [])
+        }
+        added = []
+        for s in rows[-30:]:
+            key = (str(s.get("season")), str(s.get("team") or s.get("team_abbrev") or ""), str(s.get("league") or ""))
+            if key in have:
+                continue
+            have.add(key)
+            added.append({"season": str(s.get("season")), "team": s.get("team") or s.get("team_abbrev"),
+                          "league": s.get("league"), "gp": s.get("gp"), "g": s.get("g"), "a": s.get("a"),
+                          "pts": s.get("pts"), "plus_minus": s.get("plus_minus"), "pim": s.get("pim"),
+                          "w": s.get("wins") or s.get("w"), "so": s.get("shutouts") or s.get("so"),
+                          "sv_pct": s.get("sv_pct"), "source": "import"})
+        if added:
+            pr.setdefault("imported_seasons", []).extend(added)
+
+
+def _archive_award_placings(session: Any, lg: Dict[str, Any], sy: int) -> None:
+    """Finalists and other placings live on player_award_history, not only the winner list."""
+    label = _season_label(sy)
+    try:
+        from services.franchise_sim import _iter_league_players_for_aging
+        players = _iter_league_players_for_aging(getattr(session.sim, "league", None))
+    except Exception:
+        return
+    for p in players:
+        hist = getattr(p, "player_award_history", None)
+        if not isinstance(hist, dict):
+            continue
+        for f in hist.get("finishes") or []:
+            if not isinstance(f, dict):
+                continue
+            season = str(f.get("season") or "")
+            if season not in (str(sy), label):
+                continue
+            place = f.get("finish") or f.get("place")
+            award = f.get("award_name") or f.get("award_id")
+            if not award or place in (None, ""):
+                continue
+            pid = _pid(p)
+            pr = lg["players"].setdefault(pid, _blank_player(pid))
+            pr.setdefault("name", _pname(p))
+            if any(x.get("season") == sy and x.get("award") == award and x.get("place") == place for x in pr.get("awards") or []):
+                continue
+            pr.setdefault("awards", []).append({"season": sy, "award": str(award), "place": place})
 
 
 def _draft_class(session: Any, sy: int) -> List[Dict[str, Any]]:
@@ -575,8 +800,15 @@ def _archive_trades(session: Any, lg: Dict[str, Any]) -> None:
                   "from_team_id": str(pk.get("source_team_id") or pk.get("from_team_id") or ""),
                   "to_team_id": str(pk.get("acquiring_team_id") or pk.get("to_team_id") or ""), "label": pk.get("display_name")}
                  for pk in list(t.get("moved_picks") or [])[:12] if isinstance(pk, dict)]
+        iso = str(t.get("calendar_iso") or "")
+        month = int(iso[5:7]) if len(iso) >= 7 and iso[5:7].isdigit() else 0
+        phase = str(t.get("phase") or t.get("season_phase") or "").lower()
+        season = _i(t.get("season_year")) or None
+        # A July trade is still stamped with the season that just ended. It belongs to the next year.
+        if season and month in (7, 8) and phase not in ("regular", "playoffs", "preseason"):
+            season += 1
         lg["trades"][tid] = {
-            "trade_id": tid, "season": _i(t.get("season_year")) or None, "iso": t.get("calendar_iso"),
+            "trade_id": tid, "season": season, "iso": t.get("calendar_iso"),
             "teams": [str(x) for x in (t.get("participating_teams") or [])], "players": moved, "picks": picks,
             "headline": t.get("headline"), "user_involved": bool(t.get("user_involved")),
             # what the trade engine thought at the time; never recomputed
@@ -605,23 +837,26 @@ def _archive_retirements(session: Any, lg: Dict[str, Any], sy: int) -> None:
         _evaluate_hof(lg, pid, sy)
 
 
-def _archive_h2h(session: Any, lg: Dict[str, Any], series: List[Dict[str, Any]], champ: Optional[str], sy: int) -> None:
-    for g in list(getattr(session, "game_results", None) or []):
-        if str(g.get("stat_scope") or "regular_season") != "regular_season":
-            continue
-        h, a = str(g.get("home_id") or ""), str(g.get("away_id") or "")
-        if not h or not a:
-            continue
-        hs, as_ = _i(g.get("home_score", g.get("home_goals"))), _i(g.get("away_score", g.get("away_goals")))
-        rec = lg["h2h"].setdefault(_pair(h, a), {"gp": 0, "wins": {}, "one_goal": 0, "series": 0, "series_wins": {},
-                                                  "seven_game": 0, "finals": 0, "seasons": []})
-        rec["gp"] += 1
-        win = h if hs > as_ else a
-        rec["wins"][win] = rec["wins"].get(win, 0) + 1
-        if abs(hs - as_) == 1:
-            rec["one_goal"] += 1
-        if sy not in rec["seasons"]:
-            rec["seasons"].append(sy)
+def _archive_h2h(session: Any, lg: Dict[str, Any], series: List[Dict[str, Any]], champ: Optional[str], sy: int, which: str = "both") -> None:
+    if which in ("both", "games"):
+        for g in list(getattr(session, "game_results", None) or []):
+            if str(g.get("stat_scope") or "regular_season") != "regular_season":
+                continue
+            h, a = str(g.get("home_id") or ""), str(g.get("away_id") or "")
+            if not h or not a:
+                continue
+            hs, as_ = _i(g.get("home_score", g.get("home_goals"))), _i(g.get("away_score", g.get("away_goals")))
+            rec = lg["h2h"].setdefault(_pair(h, a), {"gp": 0, "wins": {}, "one_goal": 0, "series": 0, "series_wins": {},
+                                                      "seven_game": 0, "finals": 0, "seasons": []})
+            rec["gp"] += 1
+            win = h if hs > as_ else a
+            rec["wins"][win] = rec["wins"].get(win, 0) + 1
+            if abs(hs - as_) == 1:
+                rec["one_goal"] += 1
+            if sy not in rec["seasons"]:
+                rec["seasons"].append(sy)
+    if which not in ("both", "series"):
+        return
     last_round = max((s["round_index"] for s in series), default=0)
     for s in series:
         rec = lg["h2h"].setdefault(_pair(s["team_high_id"], s["team_low_id"]), {"gp": 0, "wins": {}, "one_goal": 0, "series": 0,
@@ -648,21 +883,30 @@ def _player_index(session: Any) -> Dict[str, Any]:
         return {}
 
 
+def _counting_lines(pr: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Season totals. Team splits are kept for franchise pages and are not added again here."""
+    return [s for s in pr.get("seasons") or [] if s.get("source") == "simulated" and not s.get("split")]
+
+
 def _season_milestones(session: Any, lg: Dict[str, Any], sy: int) -> None:
-    """Only players who played this season are checked, against fixed thresholds."""
+    """Players who played this season, against career totals that include the pre-save baseline."""
     for pid, pr in lg["players"].items():
-        lines = [s for s in pr.get("seasons") or [] if s.get("source") == "simulated"]
-        if not lines or lines[-1].get("season") != sy:
+        lines = _counting_lines(pr)
+        this = [s for s in lines if s.get("season") == sy]
+        if not this:
             continue
-        tot = _career_totals(lines)
-        prev = _career_totals(lines[:-1])
+        imported = list(pr.get("imported_seasons") or [])
+        prior = [s for s in lines if s.get("season") != sy]
+        tot = _career_totals(prior + this, imported)
+        prev = _career_totals(prior, imported)
         goalie = str(pr.get("position") or "").startswith("G")
+        scope = "includes pre-save career" if imported else "in-save career"
         for stat, marks in (_GOALIE_MILESTONES if goalie else _CAREER_MILESTONES):
             for m in marks:
                 if prev.get(stat, 0) < m <= tot.get(stat, 0):
                     _record_event(lg, "career_milestone", sy, (pid, stat, m), player_ids=[pid],
-                                  team_ids=[lines[-1].get("team_id")],
-                                  payload={"stat": stat, "threshold": m, "name": pr.get("name"), "scope": "in-save career"})
+                                  team_ids=[this[-1].get("team_id")],
+                                  payload={"stat": stat, "threshold": m, "name": pr.get("name"), "scope": scope})
     # franchise single-season points record: one pass for prior bests, one for this season.
     if sum(1 for s in lg["seasons"].values() if s.get("complete")) < 1:
         return  # needs at least one earlier tracked season to be a "record"
@@ -671,10 +915,14 @@ def _season_milestones(session: Any, lg: Dict[str, Any], sy: int) -> None:
     for pid, pr, s in _all_lines(lg):
         if str(pr.get("position") or "").startswith("G"):
             continue
+        if s.get("aggregate"):
+            continue
+        t = s.get("team_id") or ""
+        if not t:
+            continue
         if s.get("season") == sy:
             current.append((pid, pr, s))
         else:
-            t = s.get("team_id") or ""
             best_prior[t] = max(best_prior.get(t, 0), _i(s.get("pts")))
     top: Dict[str, Tuple[str, Dict[str, Any], Dict[str, Any]]] = {}
     for pid, pr, s in current:
@@ -801,25 +1049,66 @@ def _backfill_from_session_history(session: Any, lg: Dict[str, Any]) -> None:
 
 
 # --------------------------------------------------------------------------- careers & records
-def _career_totals(lines: List[Dict[str, Any]]) -> Dict[str, int]:
+def _career_totals(lines: List[Dict[str, Any]], imported: Optional[List[Dict[str, Any]]] = None) -> Dict[str, int]:
     out: Dict[str, int] = {}
+    keys = ("gp", "g", "a", "pts", "plus_minus", "pim", "sog", "w", "l", "otl", "so", "ga", "shots_against", "hit", "blk", "ixg")
     for s in lines:
-        for k in ("gp", "g", "a", "pts", "plus_minus", "pim", "sog", "w", "l", "otl", "so", "ga", "shots_against"):
+        for k in keys:
             if k in s:
                 out[k] = out.get(k, 0) + _i(s.get(k))
+    for s in imported or []:
+        if not isinstance(s, dict):
+            continue
+        for k in keys:
+            if k == "w":
+                raw = s.get("w") if s.get("w") not in (None, "") else s.get("wins")
+            elif k == "so":
+                raw = s.get("so") if s.get("so") not in (None, "") else s.get("shutouts")
+            else:
+                raw = s.get(k)
+            if raw not in (None, ""):
+                out[k] = out.get(k, 0) + _i(raw)
     return out
 
 
-def player_dossier(session: Any, pid: str) -> Dict[str, Any]:
+def player_dossier(session: Any, pid: str, scope: str = "all") -> Dict[str, Any]:
     lg = ensure_legacy(session)
+    _import_career_lines(session, lg)
     pr = lg["players"].get(str(pid))
     live = _player_index(session).get(str(pid))
     if pr is None and live is None:
         return {"found": False, "player_id": pid}
-    pr = pr or {"player_id": pid, "seasons": [], "teams": [], "championships": [], "awards": []}
+    pr = pr or _blank_player(str(pid))
     sim_lines = [s for s in pr.get("seasons") or [] if s.get("source") == "simulated"]
+    scope = scope if scope in ("all", "regular", "playoffs", "combined") else "all"
+
+    def _keep(s: Dict[str, Any]) -> bool:
+        sc = s.get("scope") or "regular"
+        if scope == "regular":
+            return sc == "regular" and not s.get("split")
+        if scope == "playoffs":
+            return sc == "playoffs" and not s.get("split")
+        if scope == "combined":
+            return not s.get("split")
+        return True
+
+    shown = [s for s in sim_lines if _keep(s)]
+    counted = [s for s in sim_lines if not s.get("split") and (scope == "all" or _keep(s) or (scope == "combined"))]
+    if scope == "regular":
+        counted = [s for s in sim_lines if (s.get("scope") or "regular") == "regular" and not s.get("split")]
+    elif scope == "playoffs":
+        counted = [s for s in sim_lines if s.get("scope") == "playoffs" and not s.get("split")]
+    else:
+        counted = [s for s in sim_lines if not s.get("split")]
+    imported = list(pr.get("imported_seasons") or [])
     by_team: Dict[str, Dict[str, int]] = {}
     for s in sim_lines:
+        if s.get("aggregate") or not s.get("team_id"):
+            continue
+        if scope == "regular" and (s.get("scope") or "regular") != "regular":
+            continue
+        if scope == "playoffs" and s.get("scope") != "playoffs":
+            continue
         t = by_team.setdefault(s.get("team_id") or "", {"seasons": 0})
         t["seasons"] += 1
         for k, v in _career_totals([s]).items():
@@ -828,18 +1117,22 @@ def player_dossier(session: Any, pid: str) -> Dict[str, Any]:
     trades = [t for t in lg["trades"].values() if any(str(m.get("player_id")) == str(pid) for m in t.get("players") or [])]
     events = sorted([e for e in lg["events"].values() if str(pid) in e.get("player_ids", [])], key=lambda e: (e.get("season") or 0))
     team_names = {tid: _team_name_at(session, lg, tid) for tid in by_team if tid}
+    has_playoffs = any(s.get("scope") == "playoffs" for s in sim_lines)
+    career = _career_totals(counted, imported if scope in ("all", "combined") else None)
     return {
         "found": True, "player_id": str(pid), "name": pr.get("name") or (_pname(live) if live else pid),
         "position": pr.get("position") or (_ppos(live) if live else None), "active": live is not None and not pr.get("retired_season"),
         "retired_season": pr.get("retired_season"), "retirement": pr.get("retirement"),
         "draft": pr.get("draft"), "teams": [{"team_id": t, "name": team_names.get(t, t), **v} for t, v in by_team.items() if t],
-        "seasons": sim_lines, "imported_seasons": pr.get("imported_seasons") or [],
-        "career_in_save": _career_totals(sim_lines), "championships": pr.get("championships") or [],
+        "seasons": shown, "imported_seasons": imported,
+        "career_in_save": career, "includes_pre_save_career": bool(imported) and scope in ("all", "combined"),
+        "championships": pr.get("championships") or [],
         "awards": pr.get("awards") or [], "captaincy": caps, "trades": trades, "events": events,
-        "hall_of_fame": lg["hof"].get(str(pid)),
-        "coverage": {"regular_season": True, "playoffs": False,
-                     "note": "Career totals count seasons this save simulated. Imported pre-save lines are listed separately. "
-                             "Playoff player stats are not recorded by the sim."},
+        "hall_of_fame": lg["hof"].get(str(pid)), "scope": scope,
+        "coverage": {"regular_season": True, "playoffs": has_playoffs,
+                     "note": "Career totals add the pre-save NHL line to seasons this save has played. "
+                             "A traded player has one line per team plus a season total. "
+                             "Playoff lines are stored separately."},
     }
 
 
@@ -856,22 +1149,44 @@ def _all_lines(lg: Dict[str, Any], team_id: Optional[str] = None) -> Iterable[Tu
 def leaders(session: Any, *, stat: str = "pts", scope: str = "career", team_id: Optional[str] = None,
             position: Optional[str] = None, limit: int = 25, offset: int = 0) -> Dict[str, Any]:
     lg = ensure_legacy(session)
-    stat = stat if stat in ("gp", "g", "a", "pts", "plus_minus", "pim", "sog", "w", "so") else "pts"
+    stat = stat if stat in ("gp", "g", "a", "pts", "plus_minus", "pim", "sog", "w", "so", "hit", "blk") else "pts"
+    scope = scope if scope in ("career", "season", "regular", "playoffs", "combined") else "career"
     cache = lg.setdefault("_cache", {})
     ck = f"leaders|{stat}|{scope}|{team_id}|{position}"
     rows = cache.get(ck)
     if rows is None:
         rows = []
-        if scope == "season":
+
+        def _keep(s: Dict[str, Any]) -> bool:
+            sc = s.get("scope") or "regular"
+            if scope in ("season", "regular") and sc != "regular":
+                return False
+            if scope == "playoffs" and sc != "playoffs":
+                return False
+            if scope == "career":
+                if team_id:
+                    return not s.get("aggregate")
+                return not s.get("split")
+            if team_id:
+                return not s.get("aggregate")
+            return not s.get("split")
+
+        listing = scope in ("season", "regular", "playoffs")
+        if listing:
             for pid, pr, s in _all_lines(lg, team_id):
+                if not _keep(s):
+                    continue
                 if position and not str(pr.get("position") or "").startswith(position):
                     continue
                 if stat in s:
                     rows.append({"player_id": pid, "name": pr.get("name"), "position": pr.get("position"), "season": s["season"],
-                                 "team_id": s.get("team_id"), "value": _i(s.get(stat)), "gp": _i(s.get("gp"))})
+                                 "team_id": s.get("team_id"), "scope": s.get("scope") or "regular",
+                                 "value": _i(s.get(stat)), "gp": _i(s.get("gp"))})
         else:
             agg: Dict[str, Dict[str, Any]] = {}
             for pid, pr, s in _all_lines(lg, team_id):
+                if not _keep(s):
+                    continue
                 if position and not str(pr.get("position") or "").startswith(position):
                     continue
                 if stat not in s:
@@ -881,6 +1196,18 @@ def leaders(session: Any, *, stat: str = "pts", scope: str = "career", team_id: 
                 a["value"] += _i(s.get(stat))
                 a["gp"] += _i(s.get("gp"))
                 a["seasons"] += 1
+            if scope == "career" and not team_id:
+                for pid, pr in lg["players"].items():
+                    if position and not str(pr.get("position") or "").startswith(position):
+                        continue
+                    extra = _career_totals([], pr.get("imported_seasons") or [])
+                    if not extra.get(stat):
+                        continue
+                    a = agg.setdefault(pid, {"player_id": pid, "name": pr.get("name"), "position": pr.get("position"), "value": 0, "gp": 0,
+                                             "seasons": 0, "retired_season": pr.get("retired_season")})
+                    a["value"] += _i(extra.get(stat))
+                    a["gp"] += _i(extra.get("gp"))
+                    a["includes_pre_save"] = True
             rows = list(agg.values())
         rows.sort(key=lambda r: (-r["value"], r.get("gp", 0), str(r.get("name"))))
         cache[ck] = rows
@@ -892,14 +1219,14 @@ def _coverage_note(lg: Dict[str, Any]) -> str:
     first = lg["coverage"].get("first_tracked_season")
     if first is None:
         return "No completed seasons yet. Records start when the first season is finalized."
-    return f"In-save records since {_season_label(int(first))}. Earlier history is not tracked."
+    return f"Records since {_season_label(int(first))}, including seasons still in the offseason. Career leaders include a player's pre-save NHL totals once those seasons have been fetched."
 
 
 # --------------------------------------------------------------------------- franchise summary
 def franchise_summary(session: Any, tid: str) -> Dict[str, Any]:
     lg = ensure_legacy(session)
     tid = str(tid)
-    seasons = sorted([s for s in lg["seasons"].values() if s.get("complete") and tid in (s.get("standings") or {})], key=lambda s: s["season"])
+    seasons = sorted([s for s in lg["seasons"].values() if (s.get("complete") or s.get("stages") or s.get("standings")) and tid in (s.get("standings") or {})], key=lambda s: s["season"])
     rows = []
     for s in seasons:
         st = s["standings"][tid]
@@ -1508,7 +1835,7 @@ def season_view(session: Any, season: int) -> Dict[str, Any]:
 
 def league_overview(session: Any) -> Dict[str, Any]:
     lg = ensure_legacy(session)
-    seasons = sorted((s for s in lg["seasons"].values() if s.get("complete")), key=lambda s: s["season"])
+    seasons = sorted((s for s in lg["seasons"].values() if s.get("complete") or (s.get("stages") or {}).get("cup") or s.get("champion_id")), key=lambda s: s["season"])
     champs: Dict[str, List[int]] = {}
     for s in seasons:
         if s.get("champion_id"):

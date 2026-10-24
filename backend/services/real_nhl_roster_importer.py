@@ -862,6 +862,159 @@ def fetch_landings_by_id(
     return out
 
 
+def nhl_player_id_from_obj(player: Any) -> Optional[int]:
+    for key in ("nhl_player_id", "nhl_id"):
+        v = getattr(player, key, None) or getattr(getattr(player, "identity", None), key, None)
+        try:
+            if v:
+                return int(v)
+        except (TypeError, ValueError):
+            continue
+    pid = str(getattr(player, "id", "") or "")
+    if pid.upper().startswith("NHL_") and pid[4:].isdigit():
+        return int(pid[4:])
+    return None
+
+
+def player_missing_nhl_career_seasons(player: Any) -> bool:
+    if not bool(getattr(player, "real_nhl_import", False)):
+        return False
+    cs = getattr(player, "career_stats", None)
+    if not isinstance(cs, dict):
+        return True
+    seasons = cs.get("seasons") or []
+    return not any(isinstance(s, dict) for s in seasons)
+
+
+def _player_needs_draft_from_landing(player: Any) -> bool:
+    if not bool(getattr(player, "real_nhl_import", False)):
+        return False
+    ident = getattr(player, "identity", None)
+    dy = getattr(player, "draft_year", None)
+    if dy is None and ident is not None:
+        dy = getattr(ident, "draft_year", None)
+    try:
+        return int(dy or 0) <= 0
+    except (TypeError, ValueError):
+        return True
+
+
+def ensure_player_nhl_landing_data(player: Any, *, fetch: bool = True, league: Any = None) -> bool:
+    """Fetch NHL landing once; attach career seasons, draft record, and trophy cache."""
+    if player is None:
+        return False
+    nid = nhl_player_id_from_obj(player)
+    if nid is None:
+        return False
+    need_career = player_missing_nhl_career_seasons(player)
+    need_awards = not bool(getattr(player, "nhl_awards_fetched", False))
+    need_draft = _player_needs_draft_from_landing(player)
+    if not need_career and not need_awards and not need_draft:
+        return True
+    if not fetch:
+        return False
+    landing = _PLAYER_LANDING_CACHE.get(nid) or _fetch_player_landing(nid)
+    if not isinstance(landing, dict):
+        return False
+    _PLAYER_LANDING_CACHE[nid] = landing
+    franchise_sy = franchise_start_year_from_league(league)
+    if need_career or bool(getattr(player, "real_nhl_import", False)):
+        _attach_career_stats(
+            player,
+            landing=landing,
+            is_goalie=_player_is_goalie_obj(player),
+            franchise_first_start_year=franchise_sy,
+        )
+    if need_draft or need_career:
+        teams = list(getattr(league, "teams", None) or []) if league is not None else []
+        try:
+            _apply_draft_and_body(player, roster_row={}, landing=landing, teams=teams)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    if need_awards or bool(getattr(player, "real_nhl_import", False)):
+        try:
+            player.nhl_awards = drop_nhl_awards_from_franchise_open(
+                parse_landing_awards(landing), franchise_sy
+            )
+            player.nhl_awards_fetched = True
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    return True
+
+
+def bootstrap_real_nhl_player_landings(league: Any, *, max_workers: int = 24) -> Dict[str, int]:
+    """Background pass: attach NHL career seasons for fast-import rosters (disk cache after first run)."""
+    try:
+        from services.franchise_sim import _iter_league_players_for_aging
+    except Exception:
+        return {"attached": 0, "fetched": 0}
+
+    by_id: Dict[int, Any] = {}
+    for p in _iter_league_players_for_aging(league):
+        if not player_missing_nhl_career_seasons(p):
+            continue
+        nid = nhl_player_id_from_obj(p)
+        if nid:
+            by_id[nid] = p
+    if not by_id:
+        return {"attached": 0, "fetched": 0}
+    landings = fetch_landings_by_id(list(by_id.keys()), max_workers=max_workers)
+    franchise_sy = franchise_start_year_from_league(league)
+    attached = 0
+    for nid, p in by_id.items():
+        landing = landings.get(nid)
+        if not isinstance(landing, dict):
+            continue
+        _attach_career_stats(
+            p,
+            landing=landing,
+            is_goalie=_player_is_goalie_obj(p),
+            franchise_first_start_year=franchise_sy,
+        )
+        try:
+            _apply_draft_and_body(p, roster_row={}, landing=landing, teams=list(getattr(league, "teams", None) or []))
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+        if not getattr(p, "nhl_awards_fetched", False):
+            try:
+                p.nhl_awards = drop_nhl_awards_from_franchise_open(
+                    parse_landing_awards(landing), franchise_sy
+                )
+                p.nhl_awards_fetched = True
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+        attached += 1
+    return {"attached": attached, "fetched": len(landings)}
+
+
+def schedule_real_nhl_landing_career_bootstrap(session: Any) -> None:
+    """After a fast real-NHL start, hydrate career seasons off the request thread."""
+    import threading
+
+    league = getattr(getattr(session, "sim", None), "league", None)
+    meta = getattr(league, "real_nhl_import_meta", None) or {}
+    if not meta.get("fast_import") or league is None:
+        return
+    if getattr(session, "_real_nhl_landing_bootstrap_scheduled", False):
+        return
+    try:
+        session._real_nhl_landing_bootstrap_scheduled = True
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+
+    def _run() -> None:
+        try:
+            bootstrap_real_nhl_player_landings(league)
+            try:
+                session._cached_roster_browser_payload = None
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+        except Exception:
+            _swallowed_log.debug("real NHL landing bootstrap failed", exc_info=True)
+
+    threading.Thread(target=_run, name="real-nhl-landing-bootstrap", daemon=True).start()
+
+
 def _team_id_for_abbr(teams: List[Any], abbr: str) -> Optional[str]:
     want = str(abbr or "").upper()
     if not want:
@@ -913,7 +1066,10 @@ def _apply_draft_and_body(
     if w_lb:
         setattr(player, "weight_lb", int(round(w_lb)))
 
-    draft = (landing or {}).get("draftDetails") if isinstance(landing, dict) else None
+    if not isinstance(landing, dict):
+        return
+
+    draft = landing.get("draftDetails")
     if not isinstance(draft, dict) or not draft.get("year"):
         setattr(player, "undrafted", True)
         setattr(player, "drafted", False)
@@ -1016,7 +1172,130 @@ def _season_int_to_label(season_int: Any) -> str:
     return s
 
 
-def _attach_career_stats(player: Any, *, landing: Optional[Dict[str, Any]], is_goalie: bool) -> None:
+def franchise_season_label_from_start_year(start_year: int) -> str:
+    sy = int(start_year or 0)
+    if sy <= 0:
+        return ""
+    return f"{sy}-{str(sy + 1)[-2:]}"
+
+
+def _season_start_year_from_label(label: Any) -> int:
+    s = str(label or "").strip()
+    if len(s) >= 4 and s[:4].isdigit():
+        return int(s[:4])
+    return 0
+
+
+def franchise_start_year_from_league(league: Any) -> int:
+    if league is None:
+        return 0
+    meta = getattr(league, "real_nhl_import_meta", None) or {}
+    for src in (
+        meta.get("season_year"),
+        getattr(league, "season_year", None),
+        getattr(league, "season_calendar_year", None),
+        getattr(league, "current_season", None),
+    ):
+        try:
+            sy = int(src or 0)
+        except (TypeError, ValueError):
+            sy = 0
+        if sy > 0:
+            return sy
+    return 0
+
+
+def drop_nhl_import_from_franchise_open(
+    seasons: List[Dict[str, Any]],
+    franchise_first_start_year: int,
+) -> List[Dict[str, Any]]:
+    """Remove real-NHL rows for the franchise opening season and later (sim owns those)."""
+    cutoff = int(franchise_first_start_year or 0)
+    if cutoff <= 0:
+        return [dict(s) for s in seasons if isinstance(s, dict)]
+    out: List[Dict[str, Any]] = []
+    for s in seasons:
+        if not isinstance(s, dict):
+            continue
+        if _season_start_year_from_label(s.get("season")) >= cutoff:
+            continue
+        out.append(dict(s))
+    return out
+
+
+def drop_nhl_awards_from_franchise_open(
+    awards: List[Dict[str, Any]],
+    franchise_first_start_year: int,
+) -> List[Dict[str, Any]]:
+    cutoff = int(franchise_first_start_year or 0)
+    if cutoff <= 0:
+        return [dict(a) for a in awards if isinstance(a, dict)]
+    out: List[Dict[str, Any]] = []
+    for a in awards:
+        if not isinstance(a, dict):
+            continue
+        if _season_start_year_from_label(a.get("season")) >= cutoff:
+            continue
+        out.append(dict(a))
+    return out
+
+
+def nhl_stats_api_row_to_career_line(
+    row: Dict[str, Any],
+    season_label: str,
+    *,
+    is_goalie: bool,
+    team: str = "—",
+) -> Optional[Dict[str, Any]]:
+    """Boxcar row from NHL stats API (summary) → dossier career season shape."""
+    try:
+        gp = int(row.get("gamesPlayed") or row.get("gp") or 0)
+    except (TypeError, ValueError):
+        gp = 0
+    if gp <= 0 or not season_label:
+        return None
+    team_name = str(row.get("teamAbbrevs") or row.get("teamAbbrev") or team or "—")
+    out: Dict[str, Any] = {
+        "season": season_label,
+        "team": team_name,
+        "team_abbrev": team_name if team_name != "—" else None,
+        "league": "NHL",
+        "gp": gp,
+        "source": "nhl_stats_api",
+    }
+    if is_goalie:
+        out.update(
+            {
+                "wins": int(row.get("wins") or 0),
+                "losses": int(row.get("losses") or 0),
+                "otl": int(row.get("otLosses") or row.get("otl") or 0),
+                "sv_pct": row.get("savePct") or row.get("savePctg"),
+                "gaa": row.get("goalsAgainstAverage") or row.get("gaa"),
+                "shutouts": int(row.get("shutouts") or 0),
+            }
+        )
+    else:
+        g = int(row.get("goals") or row.get("g") or 0)
+        a = int(row.get("assists") or row.get("a") or 0)
+        out.update(
+            {
+                "g": g,
+                "a": a,
+                "pts": int(row.get("points") or row.get("pts") or 0) or (g + a),
+                "plus_minus": int(row.get("plusMinus") or row.get("plus_minus") or 0),
+                "pim": int(row.get("penaltyMinutes") or row.get("pim") or 0),
+            }
+        )
+    return out
+
+
+def _attach_career_stats(
+    player: Any,
+    *,
+    landing: Optional[Dict[str, Any]],
+    is_goalie: bool,
+    franchise_first_start_year: int = 0,
+) -> None:
     """Attach player.career_stats = {"seasons": [...]} from the NHL landing
     endpoint's seasonTotals (falls back to yearByYear naming used by older
     payload shapes). Only prior NHL regular-season rows are kept; the current
@@ -1068,15 +1347,21 @@ def _attach_career_stats(player: Any, *, landing: Optional[Dict[str, Any]], is_g
         gp = _int(entry, "gamesPlayed", "gp")
         if gp <= 0:
             continue
+        season_label = _season_int_to_label(entry.get("season"))
+        if int(franchise_first_start_year or 0) > 0 and _season_start_year_from_label(season_label) >= int(
+            franchise_first_start_year
+        ):
+            continue
         team_name = _localized_field(entry.get("teamName")) or _localized_field(entry.get("teamCommonName"))
         team_abbrev = _localized_field(entry.get("teamAbbrevs") or entry.get("teamAbbrev"))
         row: Dict[str, Any] = {
-            "season": _season_int_to_label(entry.get("season")),
+            "season": season_label,
             "season_key": entry.get("season"),
             "team": team_name or team_abbrev or "—",
             "team_abbrev": team_abbrev or None,
             "league": league or "NHL",
             "gp": gp,
+            "source": "nhl_api",
         }
         if is_goalie:
             row.update(
@@ -1664,10 +1949,17 @@ def _build_player_from_roster_row(
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
     if landing:
-        _attach_career_stats(player, landing=landing, is_goalie=is_goalie)
+        _attach_career_stats(
+            player,
+            landing=landing,
+            is_goalie=is_goalie,
+            franchise_first_start_year=int(season_year),
+        )
         try:
             # Real trophies from the NHL API, kept apart from awards won inside the save.
-            player.nhl_awards = parse_landing_awards(landing)
+            player.nhl_awards = drop_nhl_awards_from_franchise_open(
+                parse_landing_awards(landing), int(season_year)
+            )
             player.nhl_awards_fetched = True
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
@@ -1706,12 +1998,11 @@ def _build_player_from_roster_row(
     try:
         if stats:
             setattr(player, "real_nhl_import_stats", dict(stats))
-            # Keep season_stats empty (or year-keyed only after sim sync).
-            if not isinstance(getattr(player, "season_stats", None), dict):
-                setattr(player, "season_stats", {})
-            elif "gp" in (getattr(player, "season_stats", None) or {}):
-                # Clear accidental flat prior-year seed.
-                setattr(player, "season_stats", {})
+        # Keep season_stats empty (or year-keyed only after sim sync).
+        if not isinstance(getattr(player, "season_stats", None), dict):
+            setattr(player, "season_stats", {})
+        elif "gp" in (getattr(player, "season_stats", None) or {}):
+            setattr(player, "season_stats", {})
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
 

@@ -148,6 +148,21 @@ class DraftRightsEngineTests(unittest.TestCase):
         self.assertTrue(ok2)
         self.assertEqual(reason2, "rights_expiration_risk")
 
+        elite = types.SimpleNamespace(
+            signed_status="unsigned",
+            entry_level_contract_eligible=True,
+            rights_expiry_year=2030,
+            rights_status="exclusive_rights",
+            nhl_readiness=48,
+            overall=80,
+            age=18,
+            development_path="Junior",
+            position="C",
+        )
+        ok3, reason3 = should_cpu_auto_sign_elc(elite, team, season_year=2026, league=None)
+        self.assertTrue(ok3)
+        self.assertEqual(reason3, "prospect_readiness")
+
     def test_reserve_list_ids_only(self):
         from services.contract_economy import add_to_reserve_list
 
