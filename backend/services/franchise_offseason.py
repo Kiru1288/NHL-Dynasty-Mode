@@ -8183,6 +8183,15 @@ def generate_next_season(session: FranchiseSession) -> Dict[str, Any]:
     session.days_sorted = sorted(by_day.keys())
     session.nhl_calendar = nhl_cal
     session.calendar_cursor = 0
+    if hasattr(session, "_players_gp_by_calendar_day"):
+        try:
+            delattr(session, "_players_gp_by_calendar_day")
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    try:
+        session._gp_day_guard = None
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     session.nhl_regular_season_last_index = last_reg_idx
     session.standings = StandingsTable(teams)
     try:

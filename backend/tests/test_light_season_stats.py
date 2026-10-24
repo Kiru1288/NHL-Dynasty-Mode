@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import random
 import sys
+
+import pytest
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -601,3 +603,13 @@ def test_awards_p0_fixture_winner_diff_table(capsys):
         print(f"{award_id} | {old_w} | {new_w} | {changed}")
     captured = capsys.readouterr()
     assert "norris" in captured.out
+
+
+def test_bulk_event_shot_share_parity_placeholder():
+    """P4-3: 400-game bulk vs event shot-share parity harness (run locally)."""
+    pytest.skip("Manual parity harness")
+
+
+def test_gp_day_guard_season_two_placeholder():
+    """P4-3: season-2 day-0 gp increments for prior season day-0 skaters."""
+    pytest.skip("Manual two-season GP guard harness")

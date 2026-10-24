@@ -718,11 +718,23 @@ def _simulate_one_game(
     if isinstance(live, dict):
         day = int(live.get("playoff_day") or 0)
 
-    home = (getattr(session, "team_by_id", None) or {}).get(home_id)
-    away = (getattr(session, "team_by_id", None) or {}).get(away_id)
+    team_by_id = getattr(session, "team_by_id", None) or {}
+    home = team_by_id.get(home_id)
+    away = team_by_id.get(away_id)
     sim = getattr(session, "sim", None)
     ot_periods = 0
     box: Optional[Dict[str, Any]] = None
+    if sim is not None and (home is None or away is None):
+        for tm in list(getattr(getattr(sim, "league", None), "teams", None) or []):
+            tid = str(getattr(tm, "team_id", None) or getattr(tm, "id", "") or "")
+            if tid and tid not in team_by_id:
+                team_by_id[tid] = tm
+        try:
+            session.team_by_id = team_by_id
+        except Exception:
+            pass
+        home = team_by_id.get(home_id)
+        away = team_by_id.get(away_id)
     if sim is not None and home is not None and away is not None:
         import random as _random
         import zlib as _zlib
@@ -738,14 +750,14 @@ def _simulate_one_game(
         ) & 0xFFFFFFFF
         rng = _random.Random(seed)
         smap = dict(getattr(session, "strength_map", None) or {})
-        po_day = max(1, int(day) if int(day) > 0 else 8000 + int(game_no))
+        po_day = int(day)
         user_tid = str(getattr(session, "user_team_id", "") or "")
         _attach_franchise_saved_lineups(
             session, home, away, home_id=home_id, away_id=away_id, user_tid=user_tid
         )
         h_scale = max(0.93, min(1.07, float(sim._roster_injury_depth_penalty(home))))
         a_scale = max(0.93, min(1.07, float(sim._roster_injury_depth_penalty(away))))
-        hg, ag, ot = sim._simulate_game(
+        score_res = sim._simulate_game(
             rng,
             home,
             away,
@@ -758,9 +770,17 @@ def _simulate_one_game(
             home_b2b=False,
             away_b2b=False,
             light_mode=True,
+            return_meta=True,
         )
-        hs, as_ = int(hg), int(ag)
-        ot_periods = int(getattr(sim, "_last_ot_periods", 0) or 0) or (1 if bool(ot) else 0)
+        from app.sim_engine.engine import ScoreResult
+
+        if not isinstance(score_res, ScoreResult):
+            score_res = getattr(sim, "_last_score_result", None)
+        if not isinstance(score_res, ScoreResult):
+            raise RuntimeError(f"Playoff score sim failed for {home_id} vs {away_id}")
+        hs, as_ = int(score_res.home), int(score_res.away)
+        ot = bool(score_res.overtime)
+        ot_periods = int(score_res.ot_periods) if ot else 0
         box = _accumulate_franchise_game_stats(
             session,
             home=home,
@@ -773,11 +793,17 @@ def _simulate_one_game(
             calendar_day=po_day,
             rng=rng,
             is_playoff=True,
+            ot_periods=ot_periods,
+            ot_sec=int(score_res.ot_sec) if ot else 0,
+            strength_mu=score_res.mu,
+            en_home=int(score_res.en_home),
+            en_away=int(score_res.en_away),
         )
         _clear_franchise_saved_lineups(home, away)
     else:
-        hs, as_, ot, ot_periods = _legacy_playoff_score(
-            session, row, game_no, home_id, away_id, hi, lo, home_high
+        raise RuntimeError(
+            f"Cannot simulate playoff game {home_id} vs {away_id}: "
+            f"sim={sim is not None} home={home is not None} away={away is not None}"
         )
 
     winner_id = home_id if int(hs) > int(as_) else away_id

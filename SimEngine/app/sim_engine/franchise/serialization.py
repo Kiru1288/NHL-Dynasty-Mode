@@ -2205,7 +2205,7 @@ def _user_team_record_from_game_results(session: FranchiseSession) -> Dict[str, 
     Matches NHL-style counting: OTL is not a regulation loss; OT loss earns 1 point.
     """
     uid = str(session.user_team_id or "")
-    out: Dict[str, Any] = {"gp": 0, "w": 0, "l": 0, "otl": 0, "pts": 0}
+    out: Dict[str, Any] = {"gp": 0, "w": 0, "l": 0, "otl": 0, "t": 0, "pts": 0}
     if not uid:
         return out
     for g in getattr(session, "game_results", None) or []:
@@ -2261,7 +2261,7 @@ def get_franchise_game_detail(session: FranchiseSession, game_id: str) -> Option
 BOX_LINE_KEYS = (
     "gp", "g", "a", "plus_minus", "pim", "sog", "hit", "blk", "toi_sec",
     "ppg", "ppa", "shg", "sha", "pp_toi_sec", "pk_toi_sec", "cf", "ca", "ixg",
-    "saves", "shots_against", "ga", "w", "l", "otl", "so",
+    "saves", "shots_against", "ga", "w", "l", "otl", "t", "so",
     # Stamped at store time (not tracked by either game sim): faceoff wins/losses, takeaways, giveaways.
     "fow", "fol", "tk", "gv",
 )
@@ -2963,7 +2963,7 @@ def get_player_game_log_payload(session: Any, player_id: str, season: Optional[i
         "gp", "g", "a", "pts", "sog", "pim", "hit", "blk", "toi_sec", "ev_toi_sec", "pp_toi_sec", "pk_toi_sec",
         "ppg", "ppa", "shg", "sha", "plus_minus", "cf", "ca", "ff", "fa", "xgf", "xga", "ixg", "xa",
         "gf_on", "ga_on", "primary_assists", "secondary_assists", "missed_shots",
-        "saves", "shots_against", "ga", "w", "l", "otl", "so", "goalie_xga",
+        "saves", "shots_against", "ga", "w", "l", "otl", "t", "so", "goalie_xga",
     )
     ledger_out = {k: ledger_row.get(k) for k in ledger_keep if k in ledger_row}
     wjc = [dict(w) for w in list(((getattr(session, "wjc_player_history", None) or {}).get(pid)) or []) if isinstance(w, dict)]

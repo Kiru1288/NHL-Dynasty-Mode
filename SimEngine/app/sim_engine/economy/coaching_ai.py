@@ -859,26 +859,63 @@ def _ot_after_tie(rng: Any, hg: int, ag: int) -> Tuple[int, int, bool]:
 
 def apply_goalie_pull(rng: Any, hg: int, ag: int, overtime: bool, home: Any, away: Any) -> Tuple[int, int, bool]:
     """Late-game pull: shift regulation finals by the trailing coach's pull timing."""
+    nh, na, ot, _, _, _ = apply_goalie_pull_v2(rng, hg, ag, overtime, home, away)
+    return nh, na, ot
+
+
+def apply_goalie_pull_v2(
+    rng: Any, hg: int, ag: int, overtime: bool, home: Any, away: Any
+) -> Tuple[int, int, bool, int, int, bool]:
+    """Regulation pull model: may tie the game (OT), add EN goals, or leave score unchanged."""
+    en_home = 0
+    en_away = 0
+    pulled_tie = False
     if overtime or hg == ag:
-        return hg, ag, overtime
-    trail = away if hg > ag else home
+        return hg, ag, overtime, en_home, en_away, pulled_tie
+    margin = abs(hg - ag)
+    leader_home = hg > ag
+    trail = away if leader_home else home
     pull = str((getattr(trail, "_tactics", None) or {}).get("goalie_pull", "normal"))
     tie_d, en_d = _PULL_DELTA.get(pull, (0.0, 0.0))
-    if tie_d == 0.0 and en_d == 0.0:
-        return hg, ag, overtime
-    margin = abs(hg - ag)
+    tie_p = 0.10 + tie_d
+    en_p = 0.20 + en_d
+    if pull == "aggressive":
+        tie_p += 0.05
+        en_p += 0.08
+    elif pull == "conservative":
+        tie_p -= 0.03
+        en_p -= 0.06
+    tie_p = max(0.02, min(0.35, tie_p))
+    en_p = max(0.05, min(0.45, en_p))
     r = rng.random()
     if margin == 1:
-        if r < tie_d:
-            return _ot_after_tie(rng, hg, ag)  # extra attacker ties it
-        if en_d > 0 and r < tie_d + en_d:
-            return (hg + 1, ag, False) if hg > ag else (hg, ag + 1, False)  # empty-netter
+        if r < tie_p:
+            nh, na, ot = _ot_after_tie(rng, hg, ag)
+            pulled_tie = True
+            return nh, na, ot, en_home, en_away, pulled_tie
+        if r < tie_p + en_p:
+            if leader_home:
+                hg += 1
+                en_home += 1
+            else:
+                ag += 1
+                en_away += 1
     elif margin == 2:
-        if en_d < 0 and r < -en_d:
-            return (hg - 1, ag, False) if hg > ag else (hg, ag - 1, False)
-        if en_d > 0 and r < en_d * 0.5:
-            return (hg + 1, ag, False) if hg > ag else (hg, ag + 1, False)
-    return hg, ag, overtime
+        if r < 0.07:
+            if leader_home:
+                ag += 1
+            else:
+                hg += 1
+            pulled_tie = True
+            return hg, ag, True, en_home, en_away, pulled_tie
+        if r < 0.07 + en_p:
+            if leader_home:
+                hg += 1
+                en_home += 1
+            else:
+                ag += 1
+                en_away += 1
+    return hg, ag, overtime, en_home, en_away, pulled_tie
 
 
 def b2b_goalie_choice(team: Any, starter_ovr: float, backup_ovr: float) -> str:
