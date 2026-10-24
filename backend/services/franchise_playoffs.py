@@ -727,45 +727,54 @@ def _simulate_one_game(
         import random as _random
         import zlib as _zlib
 
-        from services.franchise_sim import _accumulate_franchise_game_stats  # noqa: WPS433
+        from services.franchise_sim import (  # noqa: WPS433
+            _accumulate_franchise_game_stats,
+            _attach_franchise_saved_lineups,
+            _clear_franchise_saved_lineups,
+        )
 
         seed = _zlib.crc32(
             f"{getattr(session, 'session_id', '')}|po|{row.get('series_id')}|{game_no}".encode()
         ) & 0xFFFFFFFF
         rng = _random.Random(seed)
         smap = dict(getattr(session, "strength_map", None) or {})
+        po_day = max(1, int(day) if int(day) > 0 else 8000 + int(game_no))
+        user_tid = str(getattr(session, "user_team_id", "") or "")
+        _attach_franchise_saved_lineups(
+            session, home, away, home_id=home_id, away_id=away_id, user_tid=user_tid
+        )
+        h_scale = max(0.93, min(1.07, float(sim._roster_injury_depth_penalty(home))))
+        a_scale = max(0.93, min(1.07, float(sim._roster_injury_depth_penalty(away))))
         hg, ag, ot = sim._simulate_game(
             rng,
             home,
             away,
             smap,
-            home_strength_scale=1.0,
-            away_strength_scale=1.0,
+            home_strength_scale=h_scale,
+            away_strength_scale=a_scale,
             noise_scale=1.0,
             is_playoff=True,
-            calendar_day=max(1, int(day) or 9000 + int(game_no)),
+            calendar_day=po_day,
+            home_b2b=False,
+            away_b2b=False,
             light_mode=True,
         )
         hs, as_ = int(hg), int(ag)
-        if ot:
-            r_ot = rng.random()
-            ot_periods = 3 if r_ot > 0.95 else (2 if r_ot > 0.78 else 1)
-        try:
-            box = _accumulate_franchise_game_stats(
-                session,
-                home=home,
-                away=away,
-                hid=home_id,
-                aid=away_id,
-                hg=hs,
-                ag=as_,
-                ot=bool(ot),
-                calendar_day=max(1, int(day) or 9000 + int(game_no)),
-                rng=rng,
-                is_playoff=True,
-            )
-        except Exception:
-            _swallowed_log.debug("suppressed exception", exc_info=True)
+        ot_periods = 1 if bool(ot) else 0
+        box = _accumulate_franchise_game_stats(
+            session,
+            home=home,
+            away=away,
+            hid=home_id,
+            aid=away_id,
+            hg=hs,
+            ag=as_,
+            ot=bool(ot),
+            calendar_day=po_day,
+            rng=rng,
+            is_playoff=True,
+        )
+        _clear_franchise_saved_lineups(home, away)
     else:
         hs, as_, ot, ot_periods = _legacy_playoff_score(
             session, row, game_no, home_id, away_id, hi, lo, home_high

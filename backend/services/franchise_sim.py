@@ -13332,14 +13332,20 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
     _attach_franchise_saved_lineups(
         session, home, away, home_id=hid, away_id=aid, user_tid=user_tid
     )
+    stat_hg, stat_ag = int(hg), int(ag)
+    if _fast_shootout and stat_hg != stat_ag:
+        if stat_hg > stat_ag:
+            stat_hg -= 1
+        else:
+            stat_ag -= 1
     box = _accumulate_franchise_game_stats(
         session,
         home=home,
         away=away,
         hid=hid,
         aid=aid,
-        hg=int(hg),
-        ag=int(ag),
+        hg=stat_hg,
+        ag=stat_ag,
         ot=bool(ot),
         calendar_day=d,
         rng=r,

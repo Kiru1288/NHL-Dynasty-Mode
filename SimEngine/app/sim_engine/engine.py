@@ -11881,7 +11881,7 @@ class SimEngine:
         """Open a per-game memo scope; returns True when this caller owns it."""
         if getattr(self, "_gm_game_scope", None) is not None:
             return False
-        self._gm_game_scope = {"credited": {}, "rating_avg": {}, "team_offense": {}}
+        self._gm_game_scope = {"credited": {}, "rating_avg": {}, "team_offense": {}, "gp_today": set()}
         self._gm_light_xg_sog_cache = {}
         return True
 
@@ -12429,12 +12429,12 @@ class SimEngine:
         pt = self._gm_player_type_str(p)
         pos = self._gm_pos_str(p).upper()
         acc = wrist if pos != "D" else 0.55 * wrist + 0.45 * slap
-        fin = (0.34 * acc + 0.16 * power + 0.12 * aware + 0.08 * comp) / 99.0 + 0.30 * ovr_n
+        fin = (0.34 * acc + 0.16 * power + 0.12 * aware + 0.08 * comp) / 99.0
         if "sniper" in pt or "finisher" in pt:
             fin *= 1.06
         elif "playmaker" in pt:
             fin *= 0.97
-        val = max(0.72, min(1.25, 0.80 + 0.38 * fin + max(0.0, ovr_n - 0.84) * 0.42))
+        val = max(0.88, min(1.15, 0.86 + 0.32 * fin))
         if isinstance(cache, dict):
             cache["finishing_adj"] = val
         return val
@@ -13298,6 +13298,16 @@ class SimEngine:
         row = self._gm_ledger_ensure(ledger, p, team_id)
         if not row:
             return
+        if int(kwargs.get("gp", 0) or 0) > 0 and pid:
+            scope = getattr(self, "_gm_game_scope", None)
+            if isinstance(scope, dict):
+                seen = scope.setdefault("gp_today", set())
+                if pid in seen:
+                    kwargs = {k: v for k, v in kwargs.items() if k != "gp"}
+                    if not kwargs:
+                        return
+                else:
+                    seen.add(pid)
         pos_u = str(row.get("position") or "").upper()
         for k, v in kwargs.items():
             if not v:
@@ -16370,6 +16380,8 @@ class SimEngine:
         opp_ppo: int = 3,
         sh_pk1: Optional[Sequence[Any]] = None,
         sh_pk2: Optional[Sequence[Any]] = None,
+        sh_opp_pp1: Optional[Sequence[Any]] = None,
+        sh_opp_pp2: Optional[Sequence[Any]] = None,
     ) -> Tuple[int, int, float]:
         """
         One shot event chooses the shift first and the shooter second.
@@ -16413,8 +16425,6 @@ class SimEngine:
             defaults = _DEFAULT_DEF_SHARE if defense else _DEFAULT_FWD_SHARE
             return float(defaults[min(max(0, key), len(defaults) - 1)])
 
-        opp_vals = [float(self._gm_ovr_norm(p)) for p in (def_skaters or skaters)]
-        opp_mean = (sum(opp_vals) / len(opp_vals)) if opp_vals else 0.78
         live_atk: Optional[Tuple[List[float], List[float]]] = None
         live_def: Optional[Tuple[List[float], List[float]]] = None
 
@@ -16465,12 +16475,9 @@ class SimEngine:
                     if id(p) in seen:
                         continue
                     share = _share([p], defense, j)
-                    elite = 1.0 + max(0.0, self._gm_ovr_norm(p) - 0.85) * 1.4
-                    # Dropped linemates stay the most likely fill.
-                    if j == key:
-                        elite *= 2.2
+                    fill = 2.2 if j == key else 1.0
                     pool.append(p)
-                    weights.append(max(0.02, share * elite))
+                    weights.append(max(0.02, share * fill))
                     seen.add(id(p))
             while need > 0 and pool:
                 pick = rng.choices(pool, weights=weights, k=1)[0]
@@ -16531,11 +16538,18 @@ class SimEngine:
         def _shooter(five: List[Any]) -> Any:
             weights = []
             for p in five:
-                comp = self._gm_attempt_offense_99(p) / 99.0
-                pos = 0.67 if self._gm_is_defense(p) else 1.0
-                ovr = self._gm_ovr_0_100(p)
-                star = 1.0 + 0.04 * max(0.0, ovr - 92.0)
-                weights.append(max(0.015, (comp ** 4.0) * pos * star))
+                vol = min(1.55, max(0.08, self._gm_shot_volume_weight(p) ** 0.72))
+                shoot = self._gm_rating_avg(p, OFFENSE_KEYS) / 99.0
+                w = (0.42 * vol + 0.38 * shoot + 0.20 * self._gm_offensive_skill_composite(p)) ** 2.0
+                if self._gm_is_certified_sniper(p):
+                    w *= 1.21
+                elif self._gm_is_certified_playmaker(p):
+                    w *= 0.72
+                elif self._gm_is_assist_leaning_forward(p):
+                    w *= 0.74
+                if self._gm_pos_str(p).upper() == "D":
+                    w *= 0.68
+                weights.append(max(0.02, w))
             return rng.choices(five, weights=weights, k=1)[0]
 
         def _assist_w(p: Any) -> float:
@@ -16558,7 +16572,10 @@ class SimEngine:
         def _one(force_sog: bool = False, pp: bool = False, sh: bool = False) -> Dict[str, Any]:
             if sh and (sh1_u or sh2_u):
                 atk = list(sh1_u if (sh1_u and (not sh2_u or rng.random() < 0.70)) else (sh2_u or []))
-                dfd = list(pp1_u[:3] if pp1_u else []) or list(pp2_u[:3] if pp2_u else [])
+                dfd = list(sh_opp_pp1 or []) or list(sh_opp_pp2 or [])
+                if len(dfd) < 3:
+                    dfd = dfd + [p for p in (def_skaters or []) if p not in dfd][: max(0, 5 - len(dfd))]
+                dfd = dfd[:5]
                 pp = False
             elif pp and (pp1_u or pp2_u):
                 atk = list(pp1_u if (pp1_u and (not pp2_u or rng.random() < 0.80)) else pp2_u)
@@ -16596,7 +16613,7 @@ class SimEngine:
                 "sh": bool(sh),
             }
 
-        pp_n = max(0, min(attempts - 1, int(round(float(max(1, int(opp_ppo))) * 1.75))))
+        pp_n = max(0, min(attempts - 1, int(round(float(max(0, int(opp_ppo))) * 3.15))))
         sh_n = max(0, int(round(attempts * 0.017)))
         ev_n = max(0, attempts - pp_n - sh_n)
         times = sorted(rng.uniform(0.0, 3600.0) for _ in range(ev_n))
@@ -16635,8 +16652,11 @@ class SimEngine:
                 shooter = e["shooter"]
                 if e["sog"] and shooter is not None:
                     _bump([shooter], sog=1.0, ixg=xg)
-                if not e.get("sh"):
-                    continue
+                    mates = [p for p in atk if p is not shooter]
+                    if mates and xg > 0:
+                        primary = rng.choices(mates, weights=[_assist_w(p) for p in mates], k=1)[0]
+                        _bump([primary], xa=xg * 0.58)
+                continue
             _bump(atk, cf=1.0)
             _bump(dfd, ca=1.0)
             if e["blocked"]:
@@ -16663,6 +16683,10 @@ class SimEngine:
                 shooter = e["shooter"]
                 if shooter is not None:
                     _bump([shooter], sog=1.0, ixg=xg)
+                    mates = [p for p in atk if p is not shooter]
+                    if mates and xg > 0:
+                        primary = rng.choices(mates, weights=[_assist_w(p) for p in mates], k=1)[0]
+                        _bump([primary], xa=xg * 0.58)
                 _bump(atk, xgf=xg)
                 _bump(dfd, xga=xg)
 
@@ -16715,11 +16739,11 @@ class SimEngine:
                 _bump(dfd, plus_minus=-1.0)
             mates = [p for p in atk if p is not shooter]
             roll = rng.random()
-            n_ast = 0 if roll < 0.05 else (2 if roll < 0.95 else 1)
+            n_ast = 0 if roll < 0.05 else (2 if roll < 0.78 else 1)
             shot_xg = float(e.get("xg") or 0.0)
             if n_ast and mates:
                 primary = rng.choices(mates, weights=[_assist_w(p) for p in mates], k=1)[0]
-                ast_tag: Dict[str, float] = {"a": 1.0, "primary_assists": 1.0, "xa": shot_xg * 0.58}
+                ast_tag: Dict[str, float] = {"a": 1.0, "primary_assists": 1.0}
                 if is_pp:
                     ast_tag["ppa"] = 1.0
                 elif is_sh:
@@ -16735,7 +16759,7 @@ class SimEngine:
                         pool = [p for p in skaters if p is not shooter and p is not primary]
                     if pool:
                         second = rng.choices(pool, weights=[_assist_w(p) for p in pool], k=1)[0]
-                        ast2: Dict[str, float] = {"a": 1.0, "secondary_assists": 1.0, "xa": shot_xg * 0.42}
+                        ast2: Dict[str, float] = {"a": 1.0, "secondary_assists": 1.0}
                         if is_pp:
                             ast2["ppa"] = 1.0
                         elif is_sh:
@@ -16806,6 +16830,7 @@ class SimEngine:
         calendar_day: int = 0,
         home_b2b: bool = False,
         away_b2b: bool = False,
+        strength_mu: Optional[Tuple[float, float]] = None,
     ) -> Dict[str, Any]:
         """
         Fast bulk path: allocates G/A/SOG plus talent-driven CF/CA/xGF/xGA so
@@ -16897,7 +16922,7 @@ class SimEngine:
 
         # Attempts × on-goal rate × xG per SOG tracks the strength model's λ.
         # The actual score stays the Poisson/gauss draw; this only sets the shot environment.
-        _mu = getattr(self, "_last_strength_mu", None)
+        _mu = strength_mu if strength_mu is not None else getattr(self, "_last_strength_mu", None)
         if isinstance(_mu, tuple) and len(_mu) == 2:
             def _cf_from_lambda(mu: float) -> int:
                 noise = rng.uniform(0.94, 1.06)
@@ -16912,8 +16937,8 @@ class SimEngine:
                 poss_a = float(self._team_offense_skill(away)) - 0.55 * float(self._team_defense_suppression(home))
                 total_att = max(1, int(home_cf_n) + int(away_cf_n))
                 lam_share = float(home_cf_n) / float(total_att)
-                poss_share = max(0.40, min(0.60, 0.50 + 0.70 * (poss_h - poss_a)))
-                share = max(0.42, min(0.58, 0.60 * lam_share + 0.40 * poss_share))
+                poss_share = max(0.30, min(0.70, 0.50 + 0.85 * (poss_h - poss_a)))
+                share = max(0.28, min(0.72, 0.55 * lam_share + 0.45 * poss_share))
                 home_cf_n = max(40, int(round(total_att * share)))
                 away_cf_n = max(40, total_att - home_cf_n)
             except Exception:
@@ -16979,8 +17004,13 @@ class SimEngine:
                 ledger, p, aid, toi_sec=toi, ev_toi_sec=ev_toi, pp_toi_sec=pp_toi, pk_toi_sec=pk_toi,
             )
 
-        home_ppo_est = max(1, min(7, int(round(rng.gauss(3.0, 1.0)))))
-        away_ppo_est = max(1, min(7, int(round(rng.gauss(3.0, 1.0)))))
+        def _penalties_drawn(_tm: Any) -> int:
+            return max(0, min(8, int(round(rng.gauss(3.0, 1.05)))))
+
+        home_pen = _penalties_drawn(home)
+        away_pen = _penalties_drawn(away)
+        home_ppo_est = max(0, away_pen)
+        away_ppo_est = max(0, home_pen)
 
         # Who actually figured in each even-strength goal (scorer + assists), so
         # plus-minus starts from the players on the ice for that goal.
@@ -17300,28 +17330,40 @@ class SimEngine:
         pre_home_gas = _snapshot_g_a_sog(home_sk)
         pre_away_gas = _snapshot_g_a_sog(away_sk)
 
-        home_sog_n, home_ppg, _home_xg = self._gm_light_shift_attribute(
-            rng, home_sk, away_sk, hid, aid, hg, home, away, home_cf_n, ledger,
-            defending_is_home=False,
-            atk_segments=home_ice.get("segments"),
-            def_segments=away_ice.get("segments"),
-            pp1=home_units.get("pp1"), pp2=home_units.get("pp2"),
-            pk1=away_units.get("pk1"), pk2=away_units.get("pk2"),
-            target_xg=(float(_mu[0]) if isinstance(_mu, tuple) and len(_mu) == 2 else None),
-            opp_ppo=away_ppo_est,
-            sh_pk1=home_units.get("pk1"), sh_pk2=home_units.get("pk2"),
-        )
-        away_sog_n, away_ppg, _away_xg = self._gm_light_shift_attribute(
-            rng, away_sk, home_sk, aid, hid, ag, away, home, away_cf_n, ledger,
-            defending_is_home=True,
-            atk_segments=away_ice.get("segments"),
-            def_segments=home_ice.get("segments"),
-            pp1=away_units.get("pp1"), pp2=away_units.get("pp2"),
-            pk1=home_units.get("pk1"), pk2=home_units.get("pk2"),
-            target_xg=(float(_mu[1]) if isinstance(_mu, tuple) and len(_mu) == 2 else None),
-            opp_ppo=home_ppo_est,
-            sh_pk1=away_units.get("pk1"), sh_pk2=away_units.get("pk2"),
-        )
+        shift_done = False
+        home_sog_n = home_ppg = away_sog_n = away_ppg = 0
+        _home_xg = _away_xg = 0.0
+        try:
+            home_sog_n, home_ppg, _home_xg = self._gm_light_shift_attribute(
+                rng, home_sk, away_sk, hid, aid, hg, home, away, home_cf_n, ledger,
+                defending_is_home=False,
+                atk_segments=home_ice.get("segments"),
+                def_segments=away_ice.get("segments"),
+                pp1=home_units.get("pp1"), pp2=home_units.get("pp2"),
+                pk1=away_units.get("pk1"), pk2=away_units.get("pk2"),
+                target_xg=(float(_mu[0]) if isinstance(_mu, tuple) and len(_mu) == 2 else None),
+                opp_ppo=away_ppo_est,
+                sh_pk1=home_units.get("pk1"), sh_pk2=home_units.get("pk2"),
+                sh_opp_pp1=away_units.get("pp1"), sh_opp_pp2=away_units.get("pp2"),
+            )
+            away_sog_n, away_ppg, _away_xg = self._gm_light_shift_attribute(
+                rng, away_sk, home_sk, aid, hid, ag, away, home, away_cf_n, ledger,
+                defending_is_home=True,
+                atk_segments=away_ice.get("segments"),
+                def_segments=home_ice.get("segments"),
+                pp1=away_units.get("pp1"), pp2=away_units.get("pp2"),
+                pk1=home_units.get("pk1"), pk2=home_units.get("pk2"),
+                target_xg=(float(_mu[1]) if isinstance(_mu, tuple) and len(_mu) == 2 else None),
+                opp_ppo=home_ppo_est,
+                sh_pk1=away_units.get("pk1"), sh_pk2=away_units.get("pk2"),
+                sh_opp_pp1=home_units.get("pp1"), sh_opp_pp2=home_units.get("pp2"),
+            )
+            shift_done = True
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Bulk shift attribute failed for %s vs %s — refusing legacy allocator", hid, aid
+            )
+            raise
         _light_team_xg[hid] = float(_home_xg)
         _light_team_xg[aid] = float(_away_xg)
         home_off_w, away_off_w = {}, {}
@@ -17329,7 +17371,6 @@ class SimEngine:
             self._gm_ledger_add(ledger, _p, hid, analytics_gp=1, xgf_pct_gp=1)
         for _p in away_sk:
             self._gm_ledger_add(ledger, _p, aid, analytics_gp=1, xgf_pct_gp=1)
-        shift_done = True
         self._gm_update_cpu_unit_lean_after_game(home, home_sk, ledger, pre_home_gas)
         self._gm_update_cpu_unit_lean_after_game(away, away_sk, ledger, pre_away_gas)
         self._gm_refresh_toi_drift_for_team(home, ledger, home_dressed)
@@ -17613,8 +17654,8 @@ class SimEngine:
             away_sog_n = _allocate_team_sog(away_sk, aid, ag, away_off_w, pre_away_gas, away_cf_n)
 
         # Peripherals — without these, bulk seasons show nearly empty hit/block columns.
-        home_hits = int(max(8, round(rng.gauss(18.0, 3.5))))
-        away_hits = int(max(8, round(rng.gauss(18.0, 3.5))))
+        home_hits = int(max(10, round(rng.gauss(22.5, 4.0))))
+        away_hits = int(max(10, round(rng.gauss(22.5, 4.0))))
         def _non_sog(cf: int, sog: int) -> Tuple[int, int]:
             gap = max(0, int(cf) - int(sog))
             misses = int(round(gap * 0.42))
@@ -17796,15 +17837,8 @@ class SimEngine:
 
         # Special-teams counting for light boxes (CPU–CPU). Without this, Stats Central
         # PP%/PK% only reflect the handful of full-event games vs the user club.
-        def _light_ppo(ppg: int) -> int:
-            # Chances come from the opponent's discipline, not from how many PP
-            # goals were scored — so PP% reflects actual PP quality instead of
-            # every club converging on 21%.
-            draw = int(round(rng.gauss(3.0, 1.0)))
-            return max(ppg, max(1, min(7, draw)))
-
-        home_ppo = _light_ppo(home_ppg)
-        away_ppo = _light_ppo(away_ppg)
+        home_ppo = max(int(home_ppo_est), int(home_ppg))
+        away_ppo = max(int(away_ppo_est), int(away_ppg))
 
         # Penalty minutes: each opponent PP chance is one infraction by this club,
         # plus the odd coincidental minor / fighting major that grants no PP.
@@ -17823,8 +17857,8 @@ class SimEngine:
                 total += mins
             return total
 
-        home_pim = _light_pim(list(home_sk), hid, away_ppo)
-        away_pim = _light_pim(list(away_sk), aid, home_ppo)
+        home_pim = _light_pim(list(home_sk), hid, home_pen)
+        away_pim = _light_pim(list(away_sk), aid, away_pen)
 
         for p in home_dressed:
             self._gm_ledger_add(ledger, p, hid, gp=1)
@@ -17925,6 +17959,9 @@ class SimEngine:
 
         if light_mode:
             setattr(self, "_pending_event_game", None)
+            _mu_pair = getattr(self, "_last_strength_mu", None)
+            if not (isinstance(_mu_pair, tuple) and len(_mu_pair) == 2):
+                _mu_pair = None
             result = self._accumulate_light_strength_game_stats(
                 rng,
                 home,
@@ -17940,6 +17977,7 @@ class SimEngine:
                 calendar_day=int(calendar_day),
                 home_b2b=bool(home_b2b),
                 away_b2b=bool(away_b2b),
+                strength_mu=_mu_pair,
             )
             if not build_game_payload:
                 return {
@@ -18566,6 +18604,7 @@ class SimEngine:
         *,
         home_b2b: bool = False,
         away_b2b: bool = False,
+        is_playoff: bool = False,
     ) -> Tuple[int, int, bool]:
         """Fast franchise/bulk score path — strength + variance (not event loop)."""
         hid = str(getattr(home, "team_id", getattr(home, "id", "H")))
@@ -18630,14 +18669,19 @@ class SimEngine:
             home_p = 0.52 + float(diff) * _GM_STRENGTH_TIEBREAK_SKILL_K
             home_p += float(getattr(self, "_franchise_home_win_prob_delta", 0) or 0)
             home_p = max(0.28, min(0.72, home_p))
-            # Slightly fewer pure regulation ties than raw discrete gauss (OTL bloat).
-            if rng.random() < 0.38:
+            overtime = True
+            if bool(is_playoff):
+                while home_goals == away_goals:
+                    if rng.random() < home_p:
+                        home_goals += 1
+                    else:
+                        away_goals += 1
+            elif rng.random() < 0.38:
                 if rng.random() < home_p:
                     home_goals += 1
                 else:
                     away_goals += 1
             else:
-                overtime = True
                 if rng.random() < home_p:
                     home_goals += 1
                 else:
@@ -18694,6 +18738,7 @@ class SimEngine:
                 noise_scale=noise_scale,
                 home_b2b=bool(home_b2b),
                 away_b2b=bool(away_b2b),
+                is_playoff=bool(is_playoff),
             )
             prof = self._scoring_profile()
             prof["chance_s"] = float(prof.get("chance_s") or 0.0) + (time.perf_counter() - t0)
