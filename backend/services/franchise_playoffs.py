@@ -623,27 +623,51 @@ def _live_game_p_high(session: FranchiseSession, hi: str, lo: str) -> float:
     return max(0.22, min(0.88, 0.5 + diff * 1.15))
 
 
-def _simulate_one_game(
+def _playoff_stars_from_box(box: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not isinstance(box, dict):
+        return []
+    stars: List[Dict[str, Any]] = []
+    for side_key, tid_key in (("home_skaters", "home_id"), ("away_skaters", "away_id")):
+        tid = str(box.get(tid_key) or "")
+        lines = box.get(side_key) or box.get("skaters", {}).get(tid) if isinstance(box.get("skaters"), dict) else None
+        if not isinstance(lines, list):
+            lines = list((box.get("player_lines") or {}).values()) if side_key == "home_skaters" else []
+        if not lines and isinstance(box.get("compact_skaters"), dict):
+            lines = list(box["compact_skaters"].get(tid) or [])
+        game_pts: List[Tuple[int, Dict[str, Any]]] = []
+        for row in list(lines or []):
+            if not isinstance(row, dict):
+                continue
+            pts = int(row.get("g", row.get("goals", 0)) or 0) + int(row.get("a", row.get("assists", 0)) or 0)
+            if pts > 0:
+                game_pts.append((pts, row))
+        for _, row in sorted(game_pts, key=lambda t: -t[0])[:2]:
+            stars.append(
+                {
+                    "player_id": str(row.get("player_id") or row.get("id") or ""),
+                    "name": row.get("name"),
+                    "team_id": tid,
+                    "points": int(row.get("g", 0) or 0) + int(row.get("a", 0) or 0),
+                }
+            )
+    return stars
+
+
+def _legacy_playoff_score(
     session: FranchiseSession,
     row: Dict[str, Any],
-) -> Dict[str, Any]:
-    if _series_complete(row) or row.get("status") == "pending":
-        raise ValueError("Series is not active")
-    hi = str(row.get("team_high_id") or "")
-    lo = str(row.get("team_low_id") or "")
-    if not hi or not lo:
-        raise ValueError("Series teams not set")
-
-    game_no = len(row.get("game_log") or []) + 1
-    home_high = _home_is_high(game_no)
-    home_id = hi if home_high else lo
-    away_id = lo if home_high else hi
-
+    game_no: int,
+    home_id: str,
+    away_id: str,
+    hi: str,
+    lo: str,
+    home_high: bool,
+) -> Tuple[int, int, bool, int]:
+    """Score-only fallback when rosters / SimEngine are unavailable (unit tests)."""
     p_high = _live_game_p_high(session, hi, lo)
     p_home = p_high if home_high else (1.0 - p_high)
     p_home = p_home + 0.035 if home_high else p_home - 0.035
     p_home = max(0.16, min(0.90, p_home))
-
     roll = _rng_float(
         session.session_id,
         row.get("series_id"),
@@ -653,7 +677,6 @@ def _simulate_one_game(
         int(row.get("wins_low") or 0),
     )
     home_wins = roll < p_home
-    # Score generation
     base = 2 + int(_rng_float(session.session_id, row.get("series_id"), game_no, "s") * 3)
     margin = 1 + int(_rng_float(session.session_id, row.get("series_id"), game_no, "m") * 3)
     if home_wins:
@@ -671,17 +694,88 @@ def _simulate_one_game(
     if ot:
         r_ot = _rng_float(session.session_id, row.get("series_id"), game_no, "otp")
         ot_periods = 3 if r_ot > 0.95 else (2 if r_ot > 0.78 else 1)
+    return int(hs), int(as_), bool(ot), int(ot_periods)
 
-    winner_id = home_id if home_wins else away_id
-    if winner_id == hi:
-        row["wins_high"] = int(row.get("wins_high") or 0) + 1
-    else:
-        row["wins_low"] = int(row.get("wins_low") or 0) + 1
+
+def _simulate_one_game(
+    session: FranchiseSession,
+    row: Dict[str, Any],
+) -> Dict[str, Any]:
+    if _series_complete(row) or row.get("status") == "pending":
+        raise ValueError("Series is not active")
+    hi = str(row.get("team_high_id") or "")
+    lo = str(row.get("team_low_id") or "")
+    if not hi or not lo:
+        raise ValueError("Series teams not set")
+
+    game_no = len(row.get("game_log") or []) + 1
+    home_high = _home_is_high(game_no)
+    home_id = hi if home_high else lo
+    away_id = lo if home_high else hi
 
     day = 0
     live = getattr(session, "playoff_live", None)
     if isinstance(live, dict):
         day = int(live.get("playoff_day") or 0)
+
+    home = (getattr(session, "team_by_id", None) or {}).get(home_id)
+    away = (getattr(session, "team_by_id", None) or {}).get(away_id)
+    sim = getattr(session, "sim", None)
+    ot_periods = 0
+    box: Optional[Dict[str, Any]] = None
+    if sim is not None and home is not None and away is not None:
+        import random as _random
+        import zlib as _zlib
+
+        from services.franchise_sim import _accumulate_franchise_game_stats  # noqa: WPS433
+
+        seed = _zlib.crc32(
+            f"{getattr(session, 'session_id', '')}|po|{row.get('series_id')}|{game_no}".encode()
+        ) & 0xFFFFFFFF
+        rng = _random.Random(seed)
+        smap = dict(getattr(session, "strength_map", None) or {})
+        hg, ag, ot = sim._simulate_game(
+            rng,
+            home,
+            away,
+            smap,
+            home_strength_scale=1.0,
+            away_strength_scale=1.0,
+            noise_scale=1.0,
+            is_playoff=True,
+            calendar_day=max(1, int(day) or 9000 + int(game_no)),
+            light_mode=True,
+        )
+        hs, as_ = int(hg), int(ag)
+        if ot:
+            r_ot = rng.random()
+            ot_periods = 3 if r_ot > 0.95 else (2 if r_ot > 0.78 else 1)
+        try:
+            box = _accumulate_franchise_game_stats(
+                session,
+                home=home,
+                away=away,
+                hid=home_id,
+                aid=away_id,
+                hg=hs,
+                ag=as_,
+                ot=bool(ot),
+                calendar_day=max(1, int(day) or 9000 + int(game_no)),
+                rng=rng,
+                is_playoff=True,
+            )
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    else:
+        hs, as_, ot, ot_periods = _legacy_playoff_score(
+            session, row, game_no, home_id, away_id, hi, lo, home_high
+        )
+
+    winner_id = home_id if int(hs) > int(as_) else away_id
+    if winner_id == hi:
+        row["wins_high"] = int(row.get("wins_high") or 0) + 1
+    else:
+        row["wins_low"] = int(row.get("wins_low") or 0) + 1
 
     entry = {
         "game": game_no,
@@ -696,12 +790,13 @@ def _simulate_one_game(
         "playoff_day": day,
     }
     try:
-        goalie_lines: List[Dict[str, Any]] = []
-        stars = _accumulate_playoff_player_stats(session, home_id, away_id, int(hs), int(as_), bool(ot), f"{row.get('series_id')}|{game_no}", goalie_lines)
+        stars = _playoff_stars_from_box(box)
         if stars:
             entry["stars"] = stars
-        if goalie_lines:
-            entry["goalies"] = goalie_lines
+        if isinstance(box, dict):
+            gl = box.get("goalies") or box.get("goalie_lines")
+            if gl:
+                entry["goalies"] = gl
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
     if ot_periods >= 3 and getattr(session, "goofy_events_enabled", True):
@@ -722,7 +817,9 @@ def _simulate_one_game(
         row["loser_id"] = _loser_id(row)
     if isinstance(live, dict):
         try:
-            p_winner = p_home if winner_id == home_id else (1.0 - p_home)
+            p_high = _live_game_p_high(session, hi, lo)
+            p_home_est = p_high if home_high else (1.0 - p_high)
+            p_winner = p_home_est if winner_id == home_id else (1.0 - p_home_est)
             _detect_playoff_events(live, row, entry, p_winner)
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
@@ -804,118 +901,6 @@ def _detect_playoff_events(
         push("upset_series")
     if uid and loser == uid:
         push("user_eliminated")
-
-
-def _accumulate_playoff_player_stats(
-    session: FranchiseSession, home_id: str, away_id: str, hs: int, as_: int, ot: bool, seed: str,
-    goalie_out: Optional[List[Dict[str, Any]]] = None,
-) -> List[Dict[str, Any]]:
-    """Per-player playoff lines for a score-only playoff game (feeds Conn Smythe, career, feeds).
-
-    Goals/assists go to dressed skaters weighted by role ice time and rating; the
-    starting goalie gets the decision and shots against. Stored on
-    ``session.playoff_player_stats`` with ``stat_scope='playoffs'``."""
-    import random as _random
-    import zlib as _zlib
-
-    from services.lineup_integrity import is_available, player_key, player_name, player_ovr, position_bucket, position_code
-
-    ledger = getattr(session, "playoff_player_stats", None)
-    if not isinstance(ledger, dict) or int(getattr(session, "_playoff_stats_season", 0) or 0) != int(getattr(session, "season_calendar_year", 0) or 0):
-        ledger = {}
-        session._playoff_stats_season = int(getattr(session, "season_calendar_year", 0) or 0)
-    session.playoff_player_stats = ledger
-    rng = _random.Random(_zlib.crc32(f"{getattr(session, 'session_id', '')}|po|{seed}".encode()) & 0xFFFFFFFF)
-    stars: List[Dict[str, Any]] = []
-    for tid, gf, ga in ((home_id, hs, as_), (away_id, as_, hs)):
-        team = (getattr(session, "team_by_id", None) or {}).get(str(tid))
-        if team is None:
-            continue
-        pool = [p for p in (getattr(team, "roster", None) or []) if is_available(p)]
-        fw = sorted([p for p in pool if position_bucket(p) == "F"], key=player_ovr, reverse=True)[:12]
-        dm = sorted([p for p in pool if position_bucket(p) == "D"], key=player_ovr, reverse=True)[:6]
-        gk = sorted([p for p in pool if position_bucket(p) == "G"], key=player_ovr, reverse=True)[:1]
-        toi = {}
-        for i, p in enumerate(fw):
-            toi[player_key(p)] = (19.5, 16.5, 13.5, 10.0)[min(3, i // 3)]
-        for i, p in enumerate(dm):
-            toi[player_key(p)] = (24.5, 20.5, 16.5)[min(2, i // 2)]
-        skaters = fw + dm
-        weights = [(p, toi[player_key(p)] * (player_ovr(p) / 75.0) ** 3 * (1.0 if position_bucket(p) == "F" else 0.45)) for p in skaters]
-
-        def _row(p: Any) -> Dict[str, Any]:
-            pid = player_key(p)
-            r = ledger.get(pid)
-            if r is None:
-                r = {"player_id": pid, "name": player_name(p), "team_id": str(tid), "position": position_code(p), "stat_scope": "playoffs",
-                     "gp": 0, "g": 0, "a": 0, "pts": 0, "sog": 0, "plus_minus": 0, "pim": 0, "toi_sec": 0,
-                     "w": 0, "l": 0, "otl": 0, "ga": 0, "saves": 0, "shots_against": 0, "so": 0}
-                ledger[pid] = r
-            return r
-
-        def _pick(items: List[Any]) -> Any:
-            tot = sum(w for _, w in items)
-            if tot <= 0:
-                return None
-            x = rng.random() * tot
-            for it, w in items:
-                x -= w
-                if x <= 0:
-                    return it
-            return items[-1][0]
-
-        game_pts: Dict[str, int] = {}
-        for p in skaters:
-            r = _row(p)
-            r["gp"] += 1
-            r["toi_sec"] += int(toi[player_key(p)] * 60)
-        shots = max(gf + 14, int(rng.gauss(30, 4)))
-        for _ in range(shots):
-            sh = _pick(weights)
-            if sh is not None:
-                _row(sh)["sog"] += 1
-        for _ in range(gf):
-            sc = _pick(weights)
-            if sc is None:
-                continue
-            _row(sc)["g"] += 1
-            game_pts[player_key(sc)] = game_pts.get(player_key(sc), 0) + 1
-            mates = [(p, w) for p, w in weights if p is not sc]
-            for _a in range(2 if rng.random() < 0.7 else 1):
-                ast = _pick(mates)
-                if ast is None:
-                    break
-                _row(ast)["a"] += 1
-                game_pts[player_key(ast)] = game_pts.get(player_key(ast), 0) + 1
-                mates = [(p, w) for p, w in mates if p is not ast]
-        for p in skaters:
-            r = _row(p)
-            r["pts"] = r["g"] + r["a"]
-        if gk:
-            g = _row(gk[0])
-            opp_shots = max(ga + 14, int(rng.gauss(30, 4)))
-            g["gp"] += 1
-            g["toi_sec"] += 3600 + (600 if ot else 0)
-            g["shots_against"] += opp_shots
-            g["ga"] += ga
-            g["saves"] += max(0, opp_shots - ga)
-            if goalie_out is not None:
-                # Per-game line for the hub's series card (series goalie stats).
-                goalie_out.append({"player_id": player_key(gk[0]), "name": g.get("name"), "team_id": str(tid),
-                                   "shots": int(opp_shots), "saves": int(max(0, opp_shots - ga)), "ga": int(ga)})
-            if gf > ga:
-                g["w"] += 1
-                if ga == 0:
-                    g["so"] += 1
-            elif ot:
-                g["otl"] += 1
-            else:
-                g["l"] += 1
-        best = sorted(game_pts.items(), key=lambda kv: -kv[1])[:2]
-        for pid, pts in best:
-            r = ledger.get(pid) or {}
-            stars.append({"player_id": pid, "name": r.get("name"), "team_id": str(tid), "points": pts})
-    return stars
 
 
 def _sort_winners_by_standings(session: FranchiseSession, team_ids: List[str]) -> List[str]:

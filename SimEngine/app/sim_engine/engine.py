@@ -11882,11 +11882,13 @@ class SimEngine:
         if getattr(self, "_gm_game_scope", None) is not None:
             return False
         self._gm_game_scope = {"credited": {}, "rating_avg": {}, "team_offense": {}}
+        self._gm_light_xg_sog_cache = {}
         return True
 
     def _gm_end_game_scope(self, owned: bool) -> None:
         if owned:
             self._gm_game_scope = None
+            self._gm_light_xg_sog_cache = {}
 
     def _gm_player_type_str(self, p: Any) -> str:
         pt = getattr(p, "player_type", None) or getattr(p, "archetype", None) or ""
@@ -12357,6 +12359,12 @@ class SimEngine:
         system and what the opponent's system concedes, the chance type's on-goal
         rate, and the two teams' attack/suppression. No goals in, so xG stays honest.
         """
+        cache = getattr(self, "_gm_light_xg_sog_cache", None)
+        if isinstance(cache, dict):
+            key = (id(p), id(atk_team), id(def_team))
+            hit = cache.get(key)
+            if hit is not None:
+                return float(hit)
         from app.sim_engine.gameplay.game_analytics_ledger import (
             CHANCE_TYPE_RAW_XG, XG_RECORD_CALIBRATION, UNBLOCKED_ON_GOAL_BASE,
             _CHANCE_EV_WEIGHTS, _CHANCE_PP_WEIGHTS, _CHANCE_SH_WEIGHTS, chance_on_goal_mult,
@@ -12387,7 +12395,10 @@ class SimEngine:
         atk_off = self._team_offense_skill(atk_team)
         def_sup = self._team_defense_suppression(def_team)
         team_k = max(0.88, min(1.14, 0.99 + (atk_off - 0.55) * 0.30)) * max(0.86, min(1.06, 1.0 - (def_sup - 0.07) * 0.90))
-        return float(xg_sum / og_sum * team_k * self._LIGHT_XG_STRUCTURE)
+        val = float(xg_sum / og_sum * team_k * self._LIGHT_XG_STRUCTURE)
+        if isinstance(cache, dict):
+            cache[(id(p), id(atk_team), id(def_team))] = val
+        return val
 
     def _gm_screen_weight(self, p: Any) -> float:
         """How well this player screens a goalie without touching the puck."""
@@ -13284,13 +13295,6 @@ class SimEngine:
         if not self._gm_player_on_credited_team(p, team_id):
             return
         pid = _id_str(p, "id")
-        # NHL regular season: once a player has 82 GP, refuse further counting
-        # credits. Mid-season trades plus uneven schedule pacing previously
-        # pushed a few players to 83–85 by stacking both clubs' remaining games.
-        if pid:
-            existing = ledger.get(pid) or ledger.get(str(pid))
-            if isinstance(existing, dict) and int(existing.get("gp", 0) or 0) >= 82:
-                return
         row = self._gm_ledger_ensure(ledger, p, team_id)
         if not row:
             return
@@ -13306,8 +13310,6 @@ class SimEngine:
             row["pts"] = int(row.get("g", 0)) + int(row.get("a", 0))
         elif "pts" in row:
             row["pts"] = 0
-        if int(row.get("gp", 0) or 0) > 82:
-            row["gp"] = 82
         if _stats_pipeline_debug() and ("g" in kwargs or "a" in kwargs):
             nm = row.get("name") or getattr(getattr(p, "identity", None), "name", None) or getattr(p, "name", "?")
             print(f"[STAT LEDGER ADD] {nm} {team_id} {kwargs} {dict(row)}")
@@ -13334,9 +13336,11 @@ class SimEngine:
         ppg = pts / float(gp)
         ovr = float(self._gm_ovr_0_100(p))
         is_d = self._gm_is_defense(p)
-        exp = max(0.05, min(1.4, 0.10 + 0.042 * (ovr - 68.0)))
+        usage = max(0.35, min(2.4, float(self._gm_role_usage_mult(p))))
         if is_d:
-            exp *= 0.45
+            exp = max(0.05, min(0.55, 0.08 + 0.032 * (ovr - 68.0) * usage))
+        else:
+            exp = max(0.05, min(1.35, (0.10 + 0.042 * (ovr - 68.0)) * (0.55 + 0.45 * min(1.0, usage / 1.65))))
         conf = min(1.0, gp / 25.0)
         adj = (ppg - exp) * (26.0 if is_d else 16.0) * conf
         return max(-4.0, min(5.0, adj))
@@ -16363,6 +16367,9 @@ class SimEngine:
         pk1: Optional[Sequence[Any]] = None,
         pk2: Optional[Sequence[Any]] = None,
         target_xg: Optional[float] = None,
+        opp_ppo: int = 3,
+        sh_pk1: Optional[Sequence[Any]] = None,
+        sh_pk2: Optional[Sequence[Any]] = None,
     ) -> Tuple[int, int, float]:
         """
         One shot event chooses the shift first and the shooter second.
@@ -16493,7 +16500,8 @@ class SimEngine:
                     "blk": 0.0, "gf_on": 0.0, "ga_on": 0.0, "plus_minus": 0.0, "ppg": 0.0,
                     "primary_assists": 0.0, "secondary_assists": 0.0,
                     "on_ice_shots_for": 0.0, "on_ice_shots_against": 0.0,
-                    "ixg": 0.0, "xgf": 0.0, "xga": 0.0, "ppa": 0.0,
+                    "ixg": 0.0, "xgf": 0.0, "xga": 0.0, "ppa": 0.0, "xa": 0.0,
+                    "shg": 0.0, "sha": 0.0,
                 }
                 buckets[pid] = slot
                 by_id[pid] = p
@@ -16525,14 +16533,16 @@ class SimEngine:
             for p in five:
                 comp = self._gm_attempt_offense_99(p) / 99.0
                 pos = 0.67 if self._gm_is_defense(p) else 1.0
-                shot_exp = 5.0 if self._gm_ovr_0_100(p) >= 95.0 else 4.0
-                weights.append(max(0.015, (comp ** shot_exp) * pos))
+                ovr = self._gm_ovr_0_100(p)
+                star = 1.0 + 0.04 * max(0.0, ovr - 92.0)
+                weights.append(max(0.015, (comp ** 4.0) * pos * star))
             return rng.choices(five, weights=weights, k=1)[0]
 
         def _assist_w(p: Any) -> float:
             comp = self._gm_playmaking_99(p) / 99.0
-            pass_exp = 4.0 if self._gm_ovr_0_100(p) >= 95.0 else 3.0
-            w = max(0.02, comp ** pass_exp)
+            ovr = self._gm_ovr_0_100(p)
+            star = 1.0 + 0.04 * max(0.0, ovr - 92.0)
+            w = max(0.02, (comp ** 3.0) * star)
             if self._gm_is_defense(p):
                 w *= 0.46 / 0.83
             return w
@@ -16542,23 +16552,29 @@ class SimEngine:
         pp2_u = [p for p in list(pp2 or []) if p is not None][:5]
         pk1_u = [p for p in list(pk1 or []) if p is not None][:5]
         pk2_u = [p for p in list(pk2 or []) if p is not None][:5]
+        sh1_u = [p for p in list(sh_pk1 or []) if p is not None][:5]
+        sh2_u = [p for p in list(sh_pk2 or []) if p is not None][:5]
 
-        def _one(force_sog: bool = False, pp: bool = False) -> Dict[str, Any]:
-            if pp and (pp1_u or pp2_u):
+        def _one(force_sog: bool = False, pp: bool = False, sh: bool = False) -> Dict[str, Any]:
+            if sh and (sh1_u or sh2_u):
+                atk = list(sh1_u if (sh1_u and (not sh2_u or rng.random() < 0.70)) else (sh2_u or []))
+                dfd = list(pp1_u[:3] if pp1_u else []) or list(pp2_u[:3] if pp2_u else [])
+                pp = False
+            elif pp and (pp1_u or pp2_u):
                 atk = list(pp1_u if (pp1_u and (not pp2_u or rng.random() < 0.80)) else pp2_u)
                 dfd = list(pk1_u if (pk1_u and (not pk2_u or rng.random() < 0.70)) else (pk2_u or []))
-                if len(dfd) < 3:
-                    dfd, _df_key = _five_from(opp_fwd, opp_d, 0, defending_is_home, False, live_def)
             else:
                 atk, atk_key = _five_from(atk_fwd, atk_d, None, False, True, live_atk)
                 dfd, _df_key = _five_from(opp_fwd, opp_d, atk_key, defending_is_home, False, live_def)
                 pp = False
+                sh = False
             if not atk:
                 atk = list(skaters[:5])
                 pp = False
+                sh = False
             shooter = _shooter(atk) if atk else None
-            sog = True if force_sog else rng.random() < (0.58 if pp else 0.51)
-            blocked = (not sog) and (not pp) and rng.random() < 0.58
+            sog = True if force_sog else rng.random() < (0.58 if pp else (0.48 if sh else 0.51))
+            blocked = (not sog) and (not pp) and (not sh) and rng.random() < 0.58
             xg = 0.0
             if sog and shooter is not None:
                 try:
@@ -16567,6 +16583,8 @@ class SimEngine:
                     xg = 0.08
                 if pp:
                     xg *= 1.22
+                elif sh:
+                    xg *= 1.18
             return {
                 "atk": atk,
                 "dfd": dfd,
@@ -16575,10 +16593,12 @@ class SimEngine:
                 "blocked": blocked,
                 "xg": xg,
                 "pp": bool(pp),
+                "sh": bool(sh),
             }
 
-        pp_n = int(round(attempts * 0.18))
-        ev_n = max(0, attempts - pp_n)
+        pp_n = max(0, min(attempts - 1, int(round(float(max(1, int(opp_ppo))) * 1.75))))
+        sh_n = max(0, int(round(attempts * 0.017)))
+        ev_n = max(0, attempts - pp_n - sh_n)
         times = sorted(rng.uniform(0.0, 3600.0) for _ in range(ev_n))
         for t in times:
             seg = min(5, int(t // 600.0))
@@ -16587,6 +16607,8 @@ class SimEngine:
             events.append(_one(False, False))
         for _ in range(pp_n):
             events.append(_one(False, True))
+        for _ in range(sh_n):
+            events.append(_one(False, False, True))
         sog_events = [e for e in events if e["sog"]]
         while len(sog_events) < goals:
             extra = _one(True, rng.random() < 0.22)
@@ -16609,12 +16631,12 @@ class SimEngine:
             dfd = list(e["dfd"])
             xg = float(e["xg"])
             team_xg += xg
-            if e.get("pp"):
-                # Power-play shots are not even-strength possession.
+            if e.get("pp") or e.get("sh"):
                 shooter = e["shooter"]
                 if e["sog"] and shooter is not None:
                     _bump([shooter], sog=1.0, ixg=xg)
-                continue
+                if not e.get("sh"):
+                    continue
             _bump(atk, cf=1.0)
             _bump(dfd, ca=1.0)
             if e["blocked"]:
@@ -16661,7 +16683,13 @@ class SimEngine:
                     except Exception:
                         luck = 1.0
                     fire = float(getattr(shooter, "_goofy_fire_mult", 1.0) or 1.0)
-                weights.append(max(0.01, float(e["xg"]) * luck * fire))
+                    try:
+                        fin = float(self._gm_finishing_adjustment(shooter))
+                    except Exception:
+                        fin = 1.0
+                else:
+                    fin = 1.0
+                weights.append(max(0.01, float(e["xg"]) * luck * fire * fin))
             choice = rng.choices(order, weights=weights, k=1)[0]
             picked.append(choice)
             order.remove(choice)
@@ -16672,24 +16700,33 @@ class SimEngine:
             atk = list(e["atk"])
             dfd = list(e["dfd"])
             is_pp = bool(e.get("pp"))
+            is_sh = bool(e.get("sh"))
+            gkw: Dict[str, float] = {"g": 1.0}
+            if is_pp:
+                gkw["ppg"] = 1.0
+            elif is_sh:
+                gkw["shg"] = 1.0
             if shooter is not None:
-                _bump([shooter], g=1.0, **({"ppg": 1.0} if is_pp else {}))
+                _bump([shooter], **gkw)
             if not is_pp:
                 _bump(atk, gf_on=1.0)
                 _bump(dfd, ga_on=1.0)
                 _bump(atk, plus_minus=1.0)
                 _bump(dfd, plus_minus=-1.0)
             mates = [p for p in atk if p is not shooter]
-            # 2% unassisted, 12% one assist, 86% two assists → about 1.84 assists per goal.
-            # Was 4% / 22% / 74% (1.70). Primary is on every assisted goal; the
-            # extra two-assist share is the secondary bump.
             roll = rng.random()
-            n_ast = 0 if roll < 0.02 else (2 if roll < 0.88 else 1)
+            n_ast = 0 if roll < 0.05 else (2 if roll < 0.95 else 1)
+            shot_xg = float(e.get("xg") or 0.0)
             if n_ast and mates:
                 primary = rng.choices(mates, weights=[_assist_w(p) for p in mates], k=1)[0]
-                _bump([primary], a=1.0, primary_assists=1.0, **({"ppa": 1.0} if is_pp else {}))
+                ast_tag: Dict[str, float] = {"a": 1.0, "primary_assists": 1.0, "xa": shot_xg * 0.58}
+                if is_pp:
+                    ast_tag["ppa"] = 1.0
+                elif is_sh:
+                    ast_tag["sha"] = 1.0
+                _bump([primary], **ast_tag)
                 if n_ast == 2:
-                    if (not is_pp) and rng.random() < 0.18:
+                    if (not is_pp) and (not is_sh) and rng.random() < 0.18:
                         elsewhere = [p for p in skaters if p is not shooter and p is not primary and not self._gm_is_defense(p)]
                     else:
                         elsewhere = []
@@ -16698,7 +16735,12 @@ class SimEngine:
                         pool = [p for p in skaters if p is not shooter and p is not primary]
                     if pool:
                         second = rng.choices(pool, weights=[_assist_w(p) for p in pool], k=1)[0]
-                        _bump([second], a=1.0, secondary_assists=1.0, **({"ppa": 1.0} if is_pp else {}))
+                        ast2: Dict[str, float] = {"a": 1.0, "secondary_assists": 1.0, "xa": shot_xg * 0.42}
+                        if is_pp:
+                            ast2["ppa"] = 1.0
+                        elif is_sh:
+                            ast2["sha"] = 1.0
+                        _bump([second], **ast2)
 
         sog_n = 0
         ppg = 0
@@ -16711,7 +16753,8 @@ class SimEngine:
             kw: Dict[str, Any] = {}
             for key in (
                 "g", "a", "sog", "cf", "ca", "ff", "fa", "blk", "gf_on", "ga_on",
-                "ppg", "ppa", "primary_assists", "secondary_assists", "on_ice_shots_for", "on_ice_shots_against",
+                "ppg", "ppa", "shg", "sha", "primary_assists", "secondary_assists",
+                "on_ice_shots_for", "on_ice_shots_against",
             ):
                 val = int(round(slot[key]))
                 if val:
@@ -16724,9 +16767,8 @@ class SimEngine:
                 kw["xgf"] = round(float(slot["xgf"]), 4)
             if slot["xga"] > 0:
                 kw["xga"] = round(float(slot["xga"]), 4)
-            if int(slot["a"]):
-                ovr_n = max(0.40, float(self._gm_ovr_norm(p)))
-                kw["xa"] = round(float(slot["a"]) * (0.55 + 0.20 * ovr_n), 4)
+            if slot["xa"] > 0:
+                kw["xa"] = round(float(slot["xa"]), 4)
             side = tid if id(p) in atk_ids else def_tid
             self._gm_ledger_add(ledger, p, side, **kw)
 
@@ -16927,15 +16969,18 @@ class SimEngine:
             toi = int(home_toi.get(pid, 0) or 0)
             ev_toi, pp_toi, pk_toi = self._gm_estimate_special_teams_toi_splits(toi, p, home_units)
             self._gm_ledger_add(
-                ledger, p, hid, gp=1, toi_sec=toi, ev_toi_sec=ev_toi, pp_toi_sec=pp_toi, pk_toi_sec=pk_toi,
+                ledger, p, hid, toi_sec=toi, ev_toi_sec=ev_toi, pp_toi_sec=pp_toi, pk_toi_sec=pk_toi,
             )
         for p in away_dressed:
             pid = _id_str(p, "id")
             toi = int(away_toi.get(pid, 0) or 0)
             ev_toi, pp_toi, pk_toi = self._gm_estimate_special_teams_toi_splits(toi, p, away_units)
             self._gm_ledger_add(
-                ledger, p, aid, gp=1, toi_sec=toi, ev_toi_sec=ev_toi, pp_toi_sec=pp_toi, pk_toi_sec=pk_toi,
+                ledger, p, aid, toi_sec=toi, ev_toi_sec=ev_toi, pp_toi_sec=pp_toi, pk_toi_sec=pk_toi,
             )
+
+        home_ppo_est = max(1, min(7, int(round(rng.gauss(3.0, 1.0)))))
+        away_ppo_est = max(1, min(7, int(round(rng.gauss(3.0, 1.0)))))
 
         # Who actually figured in each even-strength goal (scorer + assists), so
         # plus-minus starts from the players on the ice for that goal.
@@ -17263,6 +17308,8 @@ class SimEngine:
             pp1=home_units.get("pp1"), pp2=home_units.get("pp2"),
             pk1=away_units.get("pk1"), pk2=away_units.get("pk2"),
             target_xg=(float(_mu[0]) if isinstance(_mu, tuple) and len(_mu) == 2 else None),
+            opp_ppo=away_ppo_est,
+            sh_pk1=home_units.get("pk1"), sh_pk2=home_units.get("pk2"),
         )
         away_sog_n, away_ppg, _away_xg = self._gm_light_shift_attribute(
             rng, away_sk, home_sk, aid, hid, ag, away, home, away_cf_n, ledger,
@@ -17272,6 +17319,8 @@ class SimEngine:
             pp1=away_units.get("pp1"), pp2=away_units.get("pp2"),
             pk1=home_units.get("pk1"), pk2=home_units.get("pk2"),
             target_xg=(float(_mu[1]) if isinstance(_mu, tuple) and len(_mu) == 2 else None),
+            opp_ppo=home_ppo_est,
+            sh_pk1=away_units.get("pk1"), sh_pk2=away_units.get("pk2"),
         )
         _light_team_xg[hid] = float(_home_xg)
         _light_team_xg[aid] = float(_away_xg)
@@ -17776,6 +17825,15 @@ class SimEngine:
 
         home_pim = _light_pim(list(home_sk), hid, away_ppo)
         away_pim = _light_pim(list(away_sk), aid, home_ppo)
+
+        for p in home_dressed:
+            self._gm_ledger_add(ledger, p, hid, gp=1)
+        for p in away_dressed:
+            self._gm_ledger_add(ledger, p, aid, gp=1)
+        for g in list(home_gl or []):
+            self._gm_ledger_add(ledger, g, hid, gp=1)
+        for g in list(away_gl or []):
+            self._gm_ledger_add(ledger, g, aid, gp=1)
 
         return {
             "home_pim": int(home_pim),
@@ -18444,13 +18502,8 @@ class SimEngine:
         for pid, row in source.items():
             if pid not in target:
                 target[pid] = dict(row)
-                if int(target[pid].get("gp", 0) or 0) > 82:
-                    target[pid]["gp"] = 82
                 continue
             dst = target[pid]
-            # Already at the NHL regular-season GP ceiling — skip further credits.
-            if int(dst.get("gp", 0) or 0) >= 82:
-                continue
             for k, v in row.items():
                 if k in _GM_FLOAT_LEDGER_KEYS:
                     dst[k] = round(float(dst.get(k, 0) or 0) + float(v or 0), 4)
@@ -18458,8 +18511,6 @@ class SimEngine:
                     dst[k] = int(dst.get(k, 0) or 0) + int(v or 0)
                 elif k not in dst or dst[k] in (None, "", 0, 0.0):
                     dst[k] = v
-            if int(dst.get("gp", 0) or 0) > 82:
-                dst["gp"] = 82
             if str(dst.get("position") or "").upper() != "G":
                 dst["pts"] = int(dst.get("g", 0) or 0) + int(dst.get("a", 0) or 0)
     def _board_game_rules(self) -> Dict[str, Any]:

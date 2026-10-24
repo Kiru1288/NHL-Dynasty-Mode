@@ -964,6 +964,9 @@ def _simulate_skater_games(
         boom_bust=_is_boom_bust(prospect),
         concerns=_has_character_concerns(prospect),
     )
+    if _player_age(prospect) >= 20:
+        profile = get_league_scoring_profile(league)
+        pts = max(0, int(round(pts * _safe_float(profile.get("overager_bonus"), 1.06) * rng.uniform(0.99, 1.03))))
     _add_points(stats, pts, _season_goal_share(prospect, style), rng)
 
     # Spread the block's points over its games so recent-form / weekly heat stay realistic.
@@ -2230,8 +2233,20 @@ def calculate_prospect_ppg_scale(
     # Deployment: first-line minutes vs. fourth-line minutes matter as much as talent.
     # Pro leagues talent-compress (pool floors), so deployment is what separates a top-line AHL
     # scorer from a fourth-liner; give it a wider spread there.
-    usage_sigma = 0.31 if key in ("AHL", "ECHL") else 0.26
-    usage = math.exp(srng.gauss(0.0, usage_sigma) + 0.06 * _clamp(z, -2.0, 3.0) - 0.5 * usage_sigma ** 2 * 0.5)
+    line_role = str(getattr(prospect, "line_role", "") or "").lower()
+    if line_role in ("top", "top_line", "first", "1"):
+        usage = 1.22
+    elif line_role in ("second", "middle", "2", "2nd"):
+        usage = 1.05
+    elif line_role in ("third", "3", "3rd"):
+        usage = 0.88
+    elif line_role in ("fourth", "bottom", "4", "4th"):
+        usage = 0.72
+    else:
+        usage_sigma = 0.14 if key in ("AHL", "ECHL") else 0.12
+        usage = math.exp(
+            srng.gauss(0.0, usage_sigma) + 0.06 * _clamp(z, -2.0, 3.0) - 0.5 * usage_sigma ** 2 * 0.5
+        )
     base *= _clamp(usage, 0.55, 1.75)
 
     if defense:
@@ -2252,9 +2267,9 @@ def calculate_prospect_ppg_scale(
             style_mult *= 0.98
         base *= style_mult
 
-    if age >= 20:
-        base *= _safe_float(profile.get("overager_bonus"), 1.06) * srng.uniform(1.00, 1.05)
-    elif age == 19:
+    # Overager scoring bump is applied in-game only (_simulate_skater_games), not here,
+    # so draft ceilings and development stamps are not inflated by age-20+ PPG.
+    if age == 19:
         base *= srng.uniform(0.96, 1.04)
     elif age <= 17:
         base *= srng.uniform(0.92, 0.98)

@@ -2225,6 +2225,7 @@ def start_franchise(
     # New franchise: junior leagues were just built for this season, so the old-save
     # draft-class repair in the prospect sync must not run (it cost ~17 s per start).
     session._draft_class_roll_year = int(season_y or 0) or None
+    session._stats_ledger_epoch = STATS_LEDGER_EPOCH
     try:
         from services.franchise_store import live_code_revision  # noqa: WPS433
 
@@ -3670,201 +3671,25 @@ def _stat_add(session: FranchiseSession, p: Any, team_id: str, **kwargs: int) ->
     row["pts"] = int(row.get("g", 0)) + int(row.get("a", 0))
 
 
-def _pick_assist(rng: random.Random, skaters: List[Any], scorer: Any) -> Optional[Any]:
-    pool = [s for s in skaters if s is not scorer]
-    if not pool:
-        return None
-    w = [max(0.001, _offense_opportunity_weight(s) ** 1.35) for s in pool]
-    return rng.choices(pool, weights=w, k=1)[0]
+# Stats ledger epoch: 2+ skips legacy on-ice repair / destructive backfills on new saves.
+STATS_LEDGER_EPOCH = 2
 
 
-def _scoring_chunk(
-    session: FranchiseSession,
-    rng: random.Random,
-    skaters: List[Any],
-    tid: str,
-    goals: int,
-) -> List[str]:
-    if not skaters or goals <= 0:
-        return []
-    w = [max(0.001, _offense_opportunity_weight(s) ** 1.45) for s in skaters]
-    scorers = rng.choices(skaters, weights=w, k=int(goals))
-    high: List[str] = []
-    for scorer, ng in Counter(scorers).items():
-        _stat_add(session, scorer, tid, g=int(ng))
-        for _ in range(int(ng)):
-            if rng.random() < 0.78:
-                ap = _pick_assist(rng, skaters, scorer)
-                if ap:
-                    _stat_add(session, ap, tid, a=1)
-                    if rng.random() < 0.46:
-                        ap2 = _pick_assist(rng, [x for x in skaters if x is not scorer and x is not ap], scorer)
-                        if ap2:
-                            _stat_add(session, ap2, tid, a=1)
-        nm = _name_str(scorer)
-        high.append(f"{nm} ├ù{ng}" if ng > 1 else nm)
-    return high
+def _stats_ledger_epoch(session: FranchiseSession) -> int:
+    try:
+        return int(getattr(session, "_stats_ledger_epoch", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
-def _goalie_game(
-    session: FranchiseSession,
-    rng: random.Random,
-    goalies: List[Any],
-    tid: str,
-    ga: int,
-    won: bool,
-    otl_loss: bool,
-) -> Optional[Dict[str, Any]]:
-    if not goalies:
-        return None
-    w = [_ovr_weight(g) for g in goalies]
-    g0 = rng.choices(goalies, weights=w, k=1)[0]
-    if won:
-        _stat_add(session, g0, tid, gp=1, ga=int(ga), w=1)
-    elif otl_loss:
-        _stat_add(session, g0, tid, gp=1, ga=int(ga), otl=1)
-    else:
-        _stat_add(session, g0, tid, gp=1, ga=int(ga), l=1)
-    shots_against = max(int(ga) * 3 + rng.randint(18, 34), int(ga) + 12)
-    return {
-        "player_id": str(getattr(g0, "id", "") or ""),
-        "name": _name_str(g0),
-        "ga": int(ga),
-        "saves": int(shots_against - int(ga)),
-        "shots_against": int(shots_against),
-    }
-
-
-def _skater_box_rows(
-    session: FranchiseSession,
-    rng: random.Random,
-    team: Any,
-    tid: str,
-    team_shots: int,
-) -> Dict[str, Dict[str, Any]]:
-    """Per-skater game row shells (g/a filled by play-by-play)."""
-    rows: Dict[str, Dict[str, Any]] = {}
-    sk = _skaters(team)
-    if not sk:
-        return rows
-    shot_weights = [max(0.001, _offense_opportunity_weight(p) ** 1.35) for p in sk]
-    shot_owners = rng.choices(sk, weights=shot_weights, k=max(0, int(team_shots)))
-    shot_counts = Counter(shot_owners)
-
-    for p in sk:
-        pid = str(getattr(p, "id", "") or "")
-        if not pid:
-            continue
-        sog = int(shot_counts.get(p, 0))
-        pos = _pos_str(p).upper()
-        usage = _player_role_usage_mult(p)
-        if pos == "D":
-            toi_min = int(rng.randint(16, 24) * usage)
-        else:
-            toi_min = int(rng.randint(10, 18) * usage)
-        toi_min = max(7, min(28, toi_min))
-        toi = int(toi_min * 60 + rng.randint(0, 55))
-        ev_toi, pp_toi, pk_toi = _split_game_toi_sec(p, toi, rng)
-        pim = int(rng.choices([0, 2, 4, 6], weights=[0.56, 0.28, 0.12, 0.04], k=1)[0])
-        if pos == "D":
-            hit = int(rng.choices([0, 1, 2, 3, 4], weights=[0.17, 0.28, 0.30, 0.18, 0.07], k=1)[0] * max(0.7, min(1.5, usage)))
-            blk = int(rng.choices([0, 1, 2, 3, 4], weights=[0.10, 0.26, 0.33, 0.21, 0.10], k=1)[0] * max(0.8, min(1.5, usage)))
-        else:
-            hit = int(rng.choices([0, 1, 2, 3], weights=[0.29, 0.37, 0.24, 0.10], k=1)[0] * max(0.7, min(1.4, usage)))
-            blk = int(rng.choices([0, 1, 2], weights=[0.64, 0.29, 0.07], k=1)[0] * max(0.7, min(1.3, usage)))
-        _stat_add(
-            session,
-            p,
-            tid,
-            gp=1,
-            sog=sog,
-            pim=pim,
-            hit=hit,
-            blk=blk,
-            toi_sec=toi,
-            ev_toi_sec=ev_toi,
-            pp_toi_sec=pp_toi,
-            pk_toi_sec=pk_toi,
-        )
-        rows[pid] = {
-            "player_id": pid,
-            "name": _name_str(p),
-            "position": _pos_str(p),
-            "g": 0,
-            "a": 0,
-            "sog": sog,
-            "pim": pim,
-            "hit": hit,
-            "blk": blk,
-            "toi_sec": toi,
-            "ev_toi_sec": ev_toi,
-            "pp_toi_sec": pp_toi,
-            "pk_toi_sec": pk_toi,
-        }
-    return rows
-
-
-def _goals_play_by_play(
-    session: FranchiseSession,
-    rng: random.Random,
-    skaters: List[Any],
-    tid: str,
-    goals: int,
-    rows_by_pid: Dict[str, Dict[str, Any]],
-) -> Tuple[List[str], List[Dict[str, Any]]]:
-    """Register goals + assists on season stats; return summary strings and scoring events."""
-    events: List[Dict[str, Any]] = []
-    high: List[str] = []
-    if not skaters or goals <= 0:
-        return high, events
-    w = [max(0.001, _offense_opportunity_weight(s) ** 1.5) for s in skaters]
-    for _ in range(int(goals)):
-        scorer = rng.choices(skaters, weights=w, k=1)[0]
-        spid = str(getattr(scorer, "id", "") or "")
-        _stat_add(session, scorer, tid, g=1)
-        if spid in rows_by_pid:
-            rows_by_pid[spid]["g"] = int(rows_by_pid[spid].get("g", 0)) + 1
-        assist_names: List[str] = []
-        if rng.random() < 0.78:
-            ap = _pick_assist(rng, skaters, scorer)
-            if ap:
-                _stat_add(session, ap, tid, a=1)
-                apid = str(getattr(ap, "id", "") or "")
-                if apid in rows_by_pid:
-                    rows_by_pid[apid]["a"] = int(rows_by_pid[apid].get("a", 0)) + 1
-                assist_names.append(_name_str(ap))
-                if rng.random() < 0.46:
-                    pool2 = [x for x in skaters if x is not scorer and x is not ap]
-                    if pool2:
-                        ap2 = _pick_assist(rng, pool2, scorer)
-                        if ap2:
-                            _stat_add(session, ap2, tid, a=1)
-                            ap2id = str(getattr(ap2, "id", "") or "")
-                            if ap2id in rows_by_pid:
-                                rows_by_pid[ap2id]["a"] = int(rows_by_pid[ap2id].get("a", 0)) + 1
-                            assist_names.append(_name_str(ap2))
-        per = int(rng.choices([1, 2, 3], weights=[0.34, 0.42, 0.24])[0])
-        mm = int(rng.randint(0, 19))
-        ss = int(rng.choice([0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55]))
-        rv = rng.random()
-        strength = "EV"
-        if rv < 0.23:
-            strength = "PP"
-        elif rv < 0.29:
-            strength = "SH"
-        events.append(
-            {
-                "for_team_id": str(tid),
-                "period": per,
-                "clock": f"{mm}:{ss:02d}",
-                "scorer": _name_str(scorer),
-                "scorer_id": spid,
-                "assists": assist_names,
-                "strength": strength,
-            }
-        )
-        high.append(_name_str(scorer))
-    return high, events
+def _ensure_playoff_player_stats(session: FranchiseSession) -> Dict[str, Dict[str, Any]]:
+    season = int(getattr(session, "season_calendar_year", 0) or 0)
+    ledger = getattr(session, "playoff_player_stats", None)
+    if not isinstance(ledger, dict) or int(getattr(session, "_playoff_stats_season", 0) or 0) != season:
+        ledger = {}
+        session.playoff_player_stats = ledger
+        session._playoff_stats_season = season
+    return ledger
 
 
 def _franchise_stat_scope(session: FranchiseSession, *, is_playoff: bool = False) -> str:
@@ -4013,6 +3838,13 @@ def _accumulate_franchise_game_stats(
     if _accepts_light_mode(sim.accumulate_unified_game_stats):
         stat_kw["light_mode"] = light_stats
 
+    if bool(is_playoff):
+        stat_ledger = _ensure_playoff_player_stats(session)
+        stat_authority = "session.playoff_player_stats"
+    else:
+        stat_ledger = session.player_season_stats
+        stat_authority = "session.player_season_stats"
+
     box = sim.accumulate_unified_game_stats(
         rng,
         home,
@@ -4022,7 +3854,7 @@ def _accumulate_franchise_game_stats(
         int(hg),
         int(ag),
         bool(ot),
-        session.player_season_stats,
+        stat_ledger,
         **stat_kw,
     )
 
@@ -4098,7 +3930,7 @@ def _accumulate_franchise_game_stats(
             "calendar_iso": str(calendar_iso or box.get("calendar_iso") or box.get("iso") or ""),
             "season_calendar_year": int(getattr(session, "season_calendar_year", 0) or 0),
             "stat_scope": stat_scope,
-            "stat_authority": "session.player_season_stats",
+            "stat_authority": stat_authority,
             "status": "final",
             "completed": True,
             "is_final": True,
@@ -4110,14 +3942,15 @@ def _accumulate_franchise_game_stats(
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
     if not light_stats:
-        for row in list((getattr(session, "player_season_stats", None) or {}).values()):
+        for row in list(stat_ledger.values()):
             if isinstance(row, dict):
                 _stamp_ledger_scope(row, stat_scope)
-                row["stat_authority"] = "session.player_season_stats"
+                row["stat_authority"] = stat_authority
 
     _box_lines = box.pop("player_lines", None)
-    session.game_results.append(box)
-    processed.add(gid)
+    if not bool(is_playoff):
+        session.game_results.append(box)
+        processed.add(gid)
     try:
         from app.sim_engine.franchise.serialization import store_compact_box_score  # noqa: WPS433
         from app.sim_engine.franchise.storyline_stat_bridge import update_box_score_records  # noqa: WPS433
@@ -5024,20 +4857,26 @@ def _backfill_player_analytics_from_game_boxes(session: FranchiseSession) -> boo
             _swallowed_log.debug("suppressed exception", exc_info=True)
         return False
 
-    sample = [
+    if _stats_ledger_epoch(session) >= STATS_LEDGER_EPOCH:
+        try:
+            setattr(session, "_analytics_backfill_v2", True)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+        return False
+
+    reg_rows = [
         r
         for r in stats.values()
-        if isinstance(r, dict)
-        and str(r.get("stat_scope") or "regular_season") == "regular_season"
-        and int(r.get("gp", 0) or 0) >= 10
-    ][:40]
+        if isinstance(r, dict) and str(r.get("stat_scope") or "regular_season") == "regular_season"
+    ]
+    sample = [r for r in reg_rows if int(r.get("gp", 0) or 0) >= 10][:40]
     existing_cf = sum(float(r.get("cf", 0) or 0) + float(r.get("ca", 0) or 0) for r in sample)
-    existing_xga = sum(
+    goalie_xga = sum(
         float(r.get("goalie_xga", r.get("xga", 0)) or 0)
-        for r in sample
+        for r in reg_rows
         if str(r.get("position") or "").upper() == "G"
     )
-    if existing_cf > 500 and existing_xga > 5:
+    if existing_cf > 500 and goalie_xga > 5:
         try:
             setattr(session, "_analytics_backfill_v2", True)
         except Exception:
@@ -5221,6 +5060,12 @@ def _repair_on_ice_share_to_team_box(session: FranchiseSession) -> bool:
     CF%/xGF% match the sim, not the dump.
     """
     if bool(getattr(session, "_on_ice_share_repair_v2", False)):
+        return False
+    if _stats_ledger_epoch(session) >= STATS_LEDGER_EPOCH:
+        try:
+            setattr(session, "_on_ice_share_repair_v2", True)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         return False
 
     def _num(row: Dict[str, Any], *keys: str) -> float:
@@ -6268,11 +6113,12 @@ def _build_stats_central_payload(session: FranchiseSession) -> Dict[str, Any]:
     """
     stats_rev = int(getattr(session, "_stats_revision", 0) or 0)
     skip_backfill = int(getattr(session, "_stats_backfill_revision", -1) or -1) == stats_rev
-    try:
-        _repair_on_ice_share_to_team_box(session)
-    except Exception:
-        logging.getLogger(__name__).exception("On-ice CF share repair failed")
-    if not skip_backfill:
+    if _stats_ledger_epoch(session) < STATS_LEDGER_EPOCH:
+        try:
+            _repair_on_ice_share_to_team_box(session)
+        except Exception:
+            logging.getLogger(__name__).exception("On-ice CF share repair failed")
+    if not skip_backfill and _stats_ledger_epoch(session) < STATS_LEDGER_EPOCH:
         try:
             _purge_synthetic_universe_artifacts(session)
         except Exception:

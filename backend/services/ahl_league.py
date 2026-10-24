@@ -79,6 +79,37 @@ def _rng(*parts: Any) -> random.Random:
     return random.Random(zlib.crc32("|".join(str(p) for p in parts).encode()) & 0xFFFFFFFF)
 
 
+def _skill_rating(player: Any, *names: str, default: Optional[float] = None) -> float:
+    for name in names:
+        raw = getattr(player, name, None)
+        if raw is not None:
+            try:
+                return float(raw)
+            except (TypeError, ValueError):
+                continue
+    if default is not None:
+        return float(default)
+    return float(player_ovr(player))
+
+
+def _scoring_weight(player: Any, toi_min: float) -> float:
+    fin = _skill_rating(player, "shooting", "wrist_shot", "finishing", default=player_ovr(player))
+    mult = 0.45 if position_bucket(player) == "D" else 1.0
+    return float(toi_min) * (fin / 70.0) ** 3 * mult
+
+
+def _assist_weight(player: Any, toi_min: float) -> float:
+    pm = _skill_rating(player, "playmaking", "passing", "vision", "hands", default=player_ovr(player) * 0.95)
+    mult = 0.72 if position_bucket(player) == "D" else 1.0
+    return float(toi_min) * (pm / 70.0) ** 3 * mult
+
+
+def _discipline_weight(player: Any, toi_min: float) -> float:
+    disc = _skill_rating(player, "discipline", "composure", default=68.0)
+    phys = _skill_rating(player, "physicality", "checking", "aggression", default=player_ovr(player))
+    return float(toi_min) * max(0.35, (phys / 75.0) ** 2) * max(0.5, 1.15 - disc / 95.0)
+
+
 def _poisson(lam: float, rng: random.Random) -> int:
     lam = max(0.05, lam)
     L, k, p = math.exp(-lam), 0, 1.0
@@ -287,7 +318,8 @@ def _on_ice_keys(rng: random.Random, units: Dict[str, Tuple[str, int]], involved
 
 
 def _play_game(session: Any, st: Dict[str, Any], home: Any, away: Any, iso: str) -> None:
-    rng = _rng("ahlgame", st["season"], iso, _tid(home), _tid(away))
+    save_id = str(getattr(session, "session_id", "") or "")
+    rng = _rng("ahlgame", save_id, st["season"], iso, _tid(home), _tid(away))
     sides = []
     for team in (home, away):
         lines = team_ahl_lines(session, team)
@@ -295,8 +327,9 @@ def _play_game(session: Any, st: Dict[str, Any], home: Any, away: Any, iso: str)
         if not skaters:
             return
         starter = goalies[0] if goalies else None
-        if len(goalies) > 1 and rng.random() < 0.3:
-            starter = goalies[1]
+        if len(goalies) > 1:
+            ranked = sorted(goalies, key=player_ovr, reverse=True)
+            starter = ranked[0] if rng.random() < 0.85 else ranked[1]
         sides.append({"team": team, "skaters": skaters, "goalie": starter, "strength": _strength(skaters)})
     h, a = sides
     for me, opp, home_adv in ((h, a, 1.04), (a, h, 1.0)):
@@ -307,7 +340,9 @@ def _play_game(session: Any, st: Dict[str, Any], home: Any, away: Any, iso: str)
         lam *= math.exp(rng.gauss(0.0, 0.16))
         me["xg"] = min(5.5, max(1.5, lam))
         me["goals"] = _poisson(me["xg"], rng)
-        me["shots"] = max(me["goals"] + 12, int(rng.gauss(29 + (me["strength"] - opp["strength"]) * 0.6, 4)))
+        attempts = max(me["goals"] + 10, int(rng.gauss(29 + (me["strength"] - opp["strength"]) * 0.6, 4)))
+        me["shots"] = 0
+        me["_attempts"] = attempts
     ot = h["goals"] == a["goals"]
     if ot:
         if rng.random() < 0.5 + (h["strength"] - a["strength"]) / 60.0:
@@ -333,50 +368,69 @@ def _play_game(session: Any, st: Dict[str, Any], home: Any, away: Any, iso: str)
 
         rows = {player_key(p): _player_row(st, p, side["team"]) for p, _, _ in side["skaters"]}
         game_pts = {k: 0 for k in rows}
+        raw_toi = [float(toi) for _, toi, _ in side["skaters"]]
+        toi_sum = sum(raw_toi) or 1.0
+        team_toi_min = 300.0
         for p, toi, _ in side["skaters"]:
             r = rows[player_key(p)]
             r["gp"] += 1
-            r["toi_sec"] += int(toi * 60 * rng.uniform(0.9, 1.1))
-        weights = [(p, toi * (player_ovr(p) / 70.0) ** 3 * (1.0 if position_bucket(p) == "F" else 0.45)) for p, toi, _ in side["skaters"]]
-        for _ in range(side["shots"]):
-            shooter = _pick(rng, weights)
-            if shooter is not None:
-                rows[player_key(shooter)]["shots"] += 1
-        on_ice_unit = {player_key(p): (position_bucket(p), i) for p, _, i in side["skaters"]}
-        for _ in range(side["goals"]):
-            scorer = _pick(rng, weights)
-            if scorer is None:
+            r["toi_sec"] += int(team_toi_min * 60.0 * (float(toi) / toi_sum))
+        shoot_w = [(_scoring_weight(p, toi), p) for p, toi, _ in side["skaters"]]
+        assist_w = [(_assist_weight(p, toi), p) for p, toi, _ in side["skaters"]]
+        sog_list: List[Any] = []
+        for _ in range(int(side.get("_attempts") or 0)):
+            shooter = _pick(rng, [(p, w) for w, p in shoot_w])
+            if shooter is None:
                 continue
+            if rng.random() < 0.52:
+                sog_list.append(shooter)
+        goals_target = int(side["goals"])
+        while len(sog_list) < goals_target:
+            extra = _pick(rng, [(p, w) for w, p in shoot_w])
+            if extra is not None:
+                sog_list.append(extra)
+        if sog_list and goals_target > 0:
+            goal_idx = set(rng.sample(range(len(sog_list)), min(goals_target, len(sog_list))))
+        else:
+            goal_idx = set()
+        side["shots"] = len(sog_list)
+        on_ice_unit = {player_key(p): (position_bucket(p), i) for p, _, i in side["skaters"]}
+        for i, scorer in enumerate(sog_list):
             sk = player_key(scorer)
-            rows[sk]["goals"] += 1
             rows[sk]["shots"] += 1
+            if i not in goal_idx:
+                continue
+            is_pp = rng.random() < 0.18
+            rows[sk]["goals"] += 1
             game_pts[sk] += 1
-            mates = [(p, w) for p, w in weights if player_key(p) != sk]
+            if is_pp:
+                rows[sk]["pp_goals"] = int(rows[sk].get("pp_goals", 0) or 0) + 1
             involved = [sk]
-            for _a in range(2 if rng.random() < 0.72 else 1):
-                ast = _pick(rng, mates)
-                if ast is None:
-                    break
-                ak = player_key(ast)
-                rows[ak]["assists"] += 1
-                game_pts[ak] += 1
-                involved.append(ak)
-                mates = [(p, w) for p, w in mates if player_key(p) != ak]
-            # even-strength +/-: scorer and assisters are on the ice; the rest of the
-            # five come from their unit with shift mixing. Crediting whole units
-            # gave every linemate an identical +/-.
-            bucket, unit = on_ice_unit.get(sk, ("F", 0))
-            for k in _on_ice_keys(rng, on_ice_unit, involved, unit, min(unit, 2)):
-                rows[k]["plus_minus"] += 1
-            opp_unit = {player_key(p): (position_bucket(p), i) for p, _, i in opp["skaters"]}
-            opp_rows = {player_key(p): (p, opp["team"]) for p, _, _ in opp["skaters"]}
-            for k in _on_ice_keys(rng, opp_unit, [], min(unit, 3), min(unit, 2)):
-                # (named op_team: reusing `ot` here clobbered the overtime flag, so every
-                # later regulation loss in the game was booked as an OT loss)
-                op, op_team = opp_rows[k]
-                _player_row(st, op, op_team)["plus_minus"] -= 1
-        for _ in range(_poisson(3.2, rng)):
-            who = _pick(rng, [(p, toi) for p, toi, _ in side["skaters"]])
+            if rng.random() >= 0.05:
+                mates = [(p, w) for w, p in assist_w if player_key(p) != sk]
+                n_ast = 2 if rng.random() < 0.73 else 1
+                for _ in range(n_ast):
+                    ast = _pick(rng, mates)
+                    if ast is None:
+                        break
+                    ak = player_key(ast)
+                    rows[ak]["assists"] += 1
+                    game_pts[ak] += 1
+                    involved.append(ak)
+                    mates = [(p, w) for p, w in mates if player_key(p) != ak]
+            if not is_pp:
+                bucket, unit = on_ice_unit.get(sk, ("F", 0))
+                for k in _on_ice_keys(rng, on_ice_unit, involved, unit, min(unit, 2)):
+                    rows[k]["plus_minus"] += 1
+                opp_unit = {player_key(p): (position_bucket(p), i) for p, _, i in opp["skaters"]}
+                opp_rows = {player_key(p): (p, opp["team"]) for p, _, _ in opp["skaters"]}
+                pk_unit = rng.randint(0, 2)
+                for k in _on_ice_keys(rng, opp_unit, [], pk_unit, min(pk_unit, 2)):
+                    op, op_team = opp_rows[k]
+                    _player_row(st, op, op_team)["plus_minus"] -= 1
+        pim_w = [(p, _discipline_weight(p, toi)) for p, toi, _ in side["skaters"]]
+        for _ in range(_poisson(3.0, rng)):
+            who = _pick(rng, pim_w)
             if who is not None:
                 rows[player_key(who)]["pim"] += 2
         for k, r in rows.items():
@@ -387,7 +441,7 @@ def _play_game(session: Any, st: Dict[str, Any], home: Any, away: Any, iso: str)
             gr = _player_row(st, g, side["team"])
             gr["gp"] += 1
             gr["shots_against"] += opp["shots"]
-            gr["goals_against"] += opp["goals"] - (1 if ot and opp is winner else 0)
+            gr["goals_against"] += opp["goals"]
             gr["toi_sec"] += 3600 + (300 if ot else 0)
             if side is winner:
                 gr["wins"] += 1
