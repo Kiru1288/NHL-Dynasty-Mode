@@ -723,23 +723,15 @@ def _simulate_one_game(
     if isinstance(live, dict):
         day = int(live.get("playoff_day") or 0)
 
+    from services.franchise_sim import _repair_team_by_id  # noqa: WPS433
+
+    _repair_team_by_id(session)
     team_by_id = getattr(session, "team_by_id", None) or {}
     home = team_by_id.get(home_id)
     away = team_by_id.get(away_id)
     sim = getattr(session, "sim", None)
     ot_periods = 0
     box: Optional[Dict[str, Any]] = None
-    if sim is not None and (home is None or away is None):
-        for tm in list(getattr(getattr(sim, "league", None), "teams", None) or []):
-            tid = str(getattr(tm, "team_id", None) or getattr(tm, "id", "") or "")
-            if tid and tid not in team_by_id:
-                team_by_id[tid] = tm
-        try:
-            session.team_by_id = team_by_id
-        except Exception:
-            pass
-        home = team_by_id.get(home_id)
-        away = team_by_id.get(away_id)
     if sim is not None and home is not None and away is not None:
         import random as _random
         import zlib as _zlib
@@ -765,114 +757,126 @@ def _simulate_one_game(
             stat_scope=po_scope,
             extra=f"{row.get('series_id')}:{game_no}",
         )
-        if po_gid in _processed_playoff_game_ids(session):
-            raise RuntimeError(f"Playoff game already recorded: {po_gid}")
-        user_tid = str(getattr(session, "user_team_id", "") or "")
-        _attach_franchise_saved_lineups(
-            session, home, away, home_id=home_id, away_id=away_id, user_tid=user_tid
-        )
-        h_scale = max(0.93, min(1.07, float(sim._roster_injury_depth_penalty(home))))
-        a_scale = max(0.93, min(1.07, float(sim._roster_injury_depth_penalty(away))))
-        score_res = sim._simulate_game(
-            rng,
-            home,
-            away,
-            smap,
-            home_strength_scale=h_scale,
-            away_strength_scale=a_scale,
-            noise_scale=1.0,
-            is_playoff=True,
-            calendar_day=po_day,
-            home_b2b=False,
-            away_b2b=False,
-            light_mode=True,
-            return_meta=True,
-        )
-        from app.sim_engine.engine import ScoreResult
+        entries_by_gid = getattr(session, "playoff_game_entries_by_gid", None)
+        if not isinstance(entries_by_gid, dict):
+            entries_by_gid = {}
+            session.playoff_game_entries_by_gid = entries_by_gid
+        entry = entries_by_gid.get(po_gid)
+        if entry is None:
+            if po_gid in _processed_playoff_game_ids(session):
+                raise RuntimeError(f"Playoff game already recorded: {po_gid}")
+            user_tid = str(getattr(session, "user_team_id", "") or "")
+            _attach_franchise_saved_lineups(
+                session, home, away, home_id=home_id, away_id=away_id, user_tid=user_tid
+            )
+            h_scale = max(0.93, min(1.07, float(sim._roster_injury_depth_penalty(home))))
+            a_scale = max(0.93, min(1.07, float(sim._roster_injury_depth_penalty(away))))
+            score_res = sim._simulate_game(
+                rng,
+                home,
+                away,
+                smap,
+                home_strength_scale=h_scale,
+                away_strength_scale=a_scale,
+                noise_scale=1.0,
+                is_playoff=True,
+                calendar_day=po_day,
+                home_b2b=False,
+                away_b2b=False,
+                light_mode=True,
+                return_meta=True,
+            )
+            from app.sim_engine.engine import ScoreResult
 
-        if not isinstance(score_res, ScoreResult):
-            raise RuntimeError(f"Playoff score sim failed for {home_id} vs {away_id}")
-        hs, as_ = int(score_res.home), int(score_res.away)
-        ot = bool(score_res.overtime)
-        ot_periods = int(score_res.ot_periods) if ot else 0
-        box = _accumulate_franchise_game_stats(
-            session,
-            home=home,
-            away=away,
-            hid=home_id,
-            aid=away_id,
-            hg=hs,
-            ag=as_,
-            ot=bool(ot),
-            calendar_day=po_day,
-            rng=rng,
-            is_playoff=True,
-            ot_periods=ot_periods,
-            ot_sec=int(score_res.ot_sec) if ot else 0,
-            strength_mu=score_res.mu,
-            en_home=int(score_res.en_home),
-            en_away=int(score_res.en_away),
-            game_key_extra=f"{row.get('series_id')}:{game_no}",
-        )
-        _clear_franchise_saved_lineups(home, away)
+            if not isinstance(score_res, ScoreResult):
+                raise RuntimeError(f"Playoff score sim failed for {home_id} vs {away_id}")
+            hs, as_ = int(score_res.home), int(score_res.away)
+            ot = bool(score_res.overtime)
+            ot_periods = int(score_res.ot_periods) if ot else 0
+            box = _accumulate_franchise_game_stats(
+                session,
+                home=home,
+                away=away,
+                hid=home_id,
+                aid=away_id,
+                hg=hs,
+                ag=as_,
+                ot=bool(ot),
+                calendar_day=po_day,
+                rng=rng,
+                is_playoff=True,
+                ot_periods=ot_periods,
+                ot_sec=int(score_res.ot_sec) if ot else 0,
+                strength_mu=score_res.mu,
+                en_home=int(score_res.en_home),
+                en_away=int(score_res.en_away),
+                game_key_extra=f"{row.get('series_id')}:{game_no}",
+            )
+            _clear_franchise_saved_lineups(home, away)
+            winner_id = home_id if int(hs) > int(as_) else away_id
+            entry = {
+                "game": game_no,
+                "home_id": home_id,
+                "away_id": away_id,
+                "home_score": int(hs),
+                "away_score": int(as_),
+                "ot": ot,
+                "ot_periods": ot_periods,
+                "winner_id": winner_id,
+                "played_at": _now_iso(),
+                "playoff_day": day,
+            }
+            try:
+                stars = _playoff_stars_from_box(box)
+                if stars:
+                    entry["stars"] = stars
+                if isinstance(box, dict):
+                    gl = box.get("goalies") or box.get("goalie_lines")
+                    if gl:
+                        entry["goalies"] = gl
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+            entries_by_gid[po_gid] = entry
     else:
         raise RuntimeError(
             f"Cannot simulate playoff game {home_id} vs {away_id}: "
             f"sim={sim is not None} home={home is not None} away={away is not None}"
         )
 
-    winner_id = home_id if int(hs) > int(as_) else away_id
-    if winner_id == hi:
-        row["wins_high"] = int(row.get("wins_high") or 0) + 1
-    else:
-        row["wins_low"] = int(row.get("wins_low") or 0) + 1
-
-    entry = {
-        "game": game_no,
-        "home_id": home_id,
-        "away_id": away_id,
-        "home_score": int(hs),
-        "away_score": int(as_),
-        "ot": ot,
-        "ot_periods": ot_periods,
-        "winner_id": winner_id,
-        "played_at": _now_iso(),
-        "playoff_day": day,
-    }
-    try:
-        stars = _playoff_stars_from_box(box)
-        if stars:
-            entry["stars"] = stars
-        if isinstance(box, dict):
-            gl = box.get("goalies") or box.get("goalie_lines")
-            if gl:
-                entry["goalies"] = gl
-    except Exception:
-        _swallowed_log.debug("suppressed exception", exc_info=True)
-    if ot_periods >= 3 and getattr(session, "goofy_events_enabled", True):
-        try:
-            from services.franchise_sim import _goofy_pizza_marathon  # noqa: WPS433
-
-            _goofy_pizza_marathon(session, entry)
-        except Exception:
-            _swallowed_log.debug("suppressed exception", exc_info=True)
+    winner_id = str(entry.get("winner_id") or "")
+    ot = bool(entry.get("ot"))
+    ot_periods = int(entry.get("ot_periods") or 0)
     log = list(row.get("game_log") or [])
-    log.append(entry)
-    row["game_log"] = log
-    row["next_game"] = game_no + 1
-    row["status"] = "complete" if _series_complete(row) else "active"
-    if row["status"] == "complete":
-        row["series_score"] = f"{row.get('wins_high')}-{row.get('wins_low')}"
-        row["winner_id"] = _winner_id(row)
-        row["loser_id"] = _loser_id(row)
-    if isinstance(live, dict):
-        try:
-            p_high = _live_game_p_high(session, hi, lo)
-            p_home_est = p_high if home_high else (1.0 - p_high)
-            p_winner = p_home_est if winner_id == home_id else (1.0 - p_home_est)
-            _detect_playoff_events(live, row, entry, p_winner)
-        except Exception:
-            _swallowed_log.debug("suppressed exception", exc_info=True)
+    if not any(isinstance(x, dict) and int(x.get("game") or 0) == int(game_no) for x in log):
+        if winner_id == hi:
+            row["wins_high"] = int(row.get("wins_high") or 0) + 1
+        elif winner_id == lo:
+            row["wins_low"] = int(row.get("wins_low") or 0) + 1
+        if ot_periods >= 3 and getattr(session, "goofy_events_enabled", True):
+            try:
+                from services.franchise_sim import _goofy_pizza_marathon  # noqa: WPS433
+
+                _goofy_pizza_marathon(session, entry)
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+        log.append(entry)
+        row["game_log"] = log
+        row["next_game"] = game_no + 1
+        row["status"] = "complete" if _series_complete(row) else "active"
+        if row["status"] == "complete":
+            row["series_score"] = f"{row.get('wins_high')}-{row.get('wins_low')}"
+            row["winner_id"] = _winner_id(row)
+            row["loser_id"] = _loser_id(row)
+        if isinstance(live, dict):
+            try:
+                p_high = _live_game_p_high(session, hi, lo)
+                p_home_est = p_high if home_high else (1.0 - p_high)
+                home_id = str(entry.get("home_id") or "")
+                p_winner = p_home_est if winner_id == home_id else (1.0 - p_home_est)
+                _detect_playoff_events(live, row, entry, p_winner)
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+    _processed_playoff_game_ids(session).add(po_gid)
     return entry
 
 

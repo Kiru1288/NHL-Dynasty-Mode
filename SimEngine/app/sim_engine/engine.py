@@ -64,7 +64,7 @@ class ScoreResult(NamedTuple):
     overtime: bool
     ot_periods: int
     ot_sec: int
-    mu: Tuple[float, float]
+    mu: Optional[Tuple[float, float]]
     en_home: int
     en_away: int
     pulled_tie: bool
@@ -13243,6 +13243,19 @@ class SimEngine:
             guard += 1
         return out
 
+    def _gm_reset_runtime_caches(self, *teams: Any, extra: Any = ()) -> None:
+        for tm in teams:
+            for p in list(getattr(tm, "roster", None) or []):
+                try:
+                    setattr(p, "_gm_runtime_cache", {})
+                except Exception:
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
+        for p in list(extra or ()):
+            try:
+                setattr(p, "_gm_runtime_cache", {})
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+
     def _gm_ledger_ensure(self, ledger: Dict[str, Dict[str, Any]], p: Any, team_id: str) -> Dict[str, Any]:
         pid = _id_str(p, "id")
         if not pid:
@@ -15405,12 +15418,15 @@ class SimEngine:
         overtime = False
         shootout = False
         shootout_home_win = False
+        ot_periods_event = 0
+        ot_seconds_event = 0
         if reg_home == reg_away:
             overtime = True
             if is_playoff:
                 ot_period = 0
                 while reg_home == reg_away:
                     ot_period += 1
+                    ot_periods_event = int(ot_period)
                     ot_attempts_h = rng.randint(14, 22)
                     ot_attempts_a = rng.randint(14, 22)
                     before_h, before_a = reg_home, reg_away
@@ -15418,6 +15434,7 @@ class SimEngine:
                     ot_home += reg_home - before_h
                     ot_away += reg_away - before_a
                     ot_toi_bonus = rng.randint(180, 300)
+                    ot_seconds_event += int(ot_toi_bonus)
                     goalie_ot_toi_bonus += int(ot_toi_bonus)
                     for p in home_dressed:
                         pid = _id_str(p, "id")
@@ -15438,6 +15455,8 @@ class SimEngine:
                 ot_home = reg_home - before_h
                 ot_away = reg_away - before_a
                 ot_toi_bonus = rng.randint(90, 180)
+                ot_periods_event = 1
+                ot_seconds_event = int(ot_toi_bonus)
                 goalie_ot_toi_bonus += int(ot_toi_bonus)
                 for p in home_dressed:
                     pid = _id_str(p, "id")
@@ -15611,6 +15630,8 @@ class SimEngine:
             "hockey_home_goals": int(player_goals_home),
             "hockey_away_goals": int(player_goals_away),
             "overtime": bool(overtime),
+            "ot_periods": int(ot_periods_event) if overtime else 0,
+            "ot_seconds": int(ot_seconds_event) if overtime else 0,
             "shootout": bool(shootout),
             "shootout_home_win": bool(shootout_home_win),
             "home_shot_attempts": int(home_team_event_stats["cf"]),
@@ -17874,13 +17895,6 @@ class SimEngine:
         """
         from app.sim_engine.gameplay.game_analytics_ledger import estimate_pp_opportunities
 
-        for tm in (home, away):
-            for p in list(getattr(tm, "roster", None) or []):
-                try:
-                    setattr(p, "_gm_runtime_cache", {})
-                except Exception:
-                    _swallowed_log.debug("suppressed exception", exc_info=True)
-
         # ``ledger`` is the SEASON ledger. Snapshot every rostered player's line before the
         # game so the box score carries this game's numbers, not season totals (season
         # totals in boxes made every 3+ goal scorer "record a hat trick" every night).
@@ -17898,6 +17912,14 @@ class SimEngine:
 
         if light_mode:
             setattr(self, "_pending_event_game", None)
+            try:
+                home_dressed, _, _, _ = self._gm_build_dressed_lineup(home, rng)
+                away_dressed, _, _, _ = self._gm_build_dressed_lineup(away, rng)
+                self._gm_reset_runtime_caches(
+                    home, away, extra=list(home_dressed or []) + list(away_dressed or [])
+                )
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             _mu_pair = strength_mu if isinstance(strength_mu, tuple) and len(strength_mu) == 2 else None
             result = self._accumulate_light_strength_game_stats(
                 rng,
@@ -18746,6 +18768,9 @@ class SimEngine:
                     en_h += 1
                 elif tid == str(aid):
                     en_a += 1
+        ot_periods = int(result.get("ot_periods", 0) or 0)
+        if ot and ot_periods <= 0:
+            ot_periods = 1
         ot_sec = int(result.get("ot_seconds", 0) or 0)
         if ot and ot_sec <= 0:
             ot_len = 300 if not is_playoff else 1200
@@ -18754,9 +18779,9 @@ class SimEngine:
             home=hg,
             away=ag,
             overtime=ot,
-            ot_periods=1 if ot else 0,
+            ot_periods=int(ot_periods) if ot else 0,
             ot_sec=int(ot_sec) if ot else 0,
-            mu=(0.0, 0.0),
+            mu=None,
             en_home=int(en_h),
             en_away=int(en_a),
             pulled_tie=False,
@@ -18789,6 +18814,7 @@ class SimEngine:
           Event-driven GM games are far too expensive for ~1,300 league games.
         - light_mode=False: event-driven score for detailed day/playoff presentation.
         """
+        self._gm_reset_runtime_caches(home, away)
         if light_mode:
             setattr(self, "_pending_event_game", None)
             t0 = time.perf_counter()
@@ -18806,18 +18832,6 @@ class SimEngine:
             )
             prof = self._scoring_profile()
             prof["chance_s"] = float(prof.get("chance_s") or 0.0) + (time.perf_counter() - t0)
-            try:
-                lk = getattr(self, "_light_scored_games", None)
-                if not isinstance(lk, set) or len(lk) > 256:
-                    lk = set()
-                lk.add((
-                    str(getattr(home, "team_id", getattr(home, "id", "H"))),
-                    str(getattr(away, "team_id", getattr(away, "id", "A"))),
-                    int(res.home), int(res.away), bool(res.overtime),
-                ))
-                setattr(self, "_light_scored_games", lk)
-            except Exception:
-                _swallowed_log.debug("suppressed exception", exc_info=True)
             if bool(return_meta):
                 return res
             return res.home, res.away, res.overtime

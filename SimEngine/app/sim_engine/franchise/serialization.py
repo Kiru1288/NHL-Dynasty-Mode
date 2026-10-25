@@ -2570,6 +2570,9 @@ def store_compact_box_score(session: Any, box: Dict[str, Any], lines: Optional[D
     aid = str(box.get("away_id") or "")
     hg = int(box.get("home_goals", box.get("home_score", 0)) or 0)
     ag = int(box.get("away_goals", box.get("away_score", 0)) or 0)
+    phg = int(box.get("player_home_goals", hg) or hg)
+    pag = int(box.get("player_away_goals", ag) or ag)
+    sow = box.get("shootout_winner_id")
     ot = bool(box.get("overtime") or box.get("ot"))
     so = bool(box.get("shootout"))
     hp = [int(box.get(f"home_p{i}", 0) or 0) for i in (1, 2, 3)]
@@ -2581,6 +2584,18 @@ def store_compact_box_score(session: Any, box: Dict[str, Any], lines: Optional[D
     hs = int(box.get("home_sog", box.get("home_shots", 0)) or 0)
     as_ = int(box.get("away_sog", box.get("away_shots", 0)) or 0)
     goals: List[List[Any]] = []
+    for lg in list(box.get("light_goals") or []):
+        if not isinstance(lg, dict):
+            continue
+        goals.append([
+            0,
+            "",
+            str(lg.get("for_team_id") or ""),
+            str(lg.get("scorer_id") or ""),
+            [str(x) for x in list(lg.get("assist_ids") or []) if x],
+            str(lg.get("strength") or "EV"),
+            1 if lg.get("empty_net") else 0,
+        ])
     for ev in list(box.get("scoring_events") or []):
         if not isinstance(ev, dict):
             continue
@@ -2631,6 +2646,9 @@ def store_compact_box_score(session: Any, box: Dict[str, Any], lines: Optional[D
         "an": str(box.get("away_name") or ""),
         "hg": hg,
         "ag": ag,
+        "phg": phg,
+        "pag": pag,
+        "sow": sow,
         "ot": ot,
         "so": so,
         "light": bool(box.get("light_box")),
@@ -2698,6 +2716,8 @@ def expand_box_score(session: Any, compact: Dict[str, Any]) -> Dict[str, Any]:
 
     hid, aid = str(compact.get("home")), str(compact.get("away"))
     hg, ag = int(compact.get("hg") or 0), int(compact.get("ag") or 0)
+    phg = int(compact.get("phg", hg) or hg)
+    pag = int(compact.get("pag", ag) or ag)
     skaters: Dict[str, List[Dict[str, Any]]] = {"home": [], "away": []}
     goalies: Dict[str, List[Dict[str, Any]]] = {"home": [], "away": []}
     team_tot = {side: {"hits": 0, "blocks": 0, "fow": 0, "fol": 0, "tk": 0, "gv": 0} for side in ("home", "away")}
@@ -2777,7 +2797,7 @@ def expand_box_score(session: Any, compact: Dict[str, Any]) -> Dict[str, Any]:
             "id": tid,
             "name": str(compact.get("hn" if side == "home" else "an") or (_display_team(tm) if tm is not None else tid)),
             "abbr": _franchise_team_abbrev(tm) if tm is not None else "",
-            "goals": hg if side == "home" else ag,
+            "goals": phg if side == "home" else pag,
             "periods": list((compact.get("periods") or [[], []])[idx] or []),
             "shots": shots,
             "sog": sum(shots),
@@ -2844,8 +2864,8 @@ def _player_game_row(compact: Dict[str, Any], pid: str) -> Optional[Dict[str, An
         return None
     d = _box_line_dict(row)
     home = d["team_id"] == str(compact.get("home"))
-    gf = int((compact.get("hg") if home else compact.get("ag")) or 0)
-    ga = int((compact.get("ag") if home else compact.get("hg")) or 0)
+    gf = int((compact.get("phg", compact.get("hg")) if home else compact.get("pag", compact.get("ag"))) or 0)
+    ga = int((compact.get("pag", compact.get("ag")) if home else compact.get("phg", compact.get("hg"))) or 0)
     res = "W" if gf > ga else ("OTL" if (compact.get("ot") or compact.get("so")) else "L")
     suffix = " (SO)" if compact.get("so") else (" (OT)" if compact.get("ot") else "")
     cf, ca = float(d.get("cf") or 0), float(d.get("ca") or 0)
