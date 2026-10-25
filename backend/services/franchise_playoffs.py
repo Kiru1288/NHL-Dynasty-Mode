@@ -762,9 +762,32 @@ def _simulate_one_game(
             entries_by_gid = {}
             session.playoff_game_entries_by_gid = entries_by_gid
         entry = entries_by_gid.get(po_gid)
-        if entry is None:
-            if po_gid in _processed_playoff_game_ids(session):
+        if entry is None and po_gid in _processed_playoff_game_ids(session):
+            season_y = int(getattr(session, "season_calendar_year", 0) or 0)
+            compact = (
+                ((getattr(session, "box_score_book", None) or {}).get("seasons") or {})
+                .get(str(season_y), {})
+                .get("games", {})
+                .get(po_gid)
+            )
+            if isinstance(compact, dict):
+                ch, ca = str(compact.get("home") or home_id), str(compact.get("away") or away_id)
+                hg_c, ag_c = int(compact.get("hg") or 0), int(compact.get("ag") or 0)
+                entry = {
+                    "game": game_no,
+                    "home_id": ch,
+                    "away_id": ca,
+                    "home_score": hg_c,
+                    "away_score": ag_c,
+                    "ot": bool(compact.get("ot")),
+                    "ot_periods": 1 if bool(compact.get("ot")) else 0,
+                    "winner_id": ch if hg_c > ag_c else ca,
+                    "playoff_day": day,
+                }
+                entries_by_gid[po_gid] = entry
+            else:
                 raise RuntimeError(f"Playoff game already recorded: {po_gid}")
+        if entry is None:
             user_tid = str(getattr(session, "user_team_id", "") or "")
             _attach_franchise_saved_lineups(
                 session, home, away, home_id=home_id, away_id=away_id, user_tid=user_tid
@@ -793,26 +816,29 @@ def _simulate_one_game(
             hs, as_ = int(score_res.home), int(score_res.away)
             ot = bool(score_res.overtime)
             ot_periods = int(score_res.ot_periods) if ot else 0
-            box = _accumulate_franchise_game_stats(
-                session,
-                home=home,
-                away=away,
-                hid=home_id,
-                aid=away_id,
-                hg=hs,
-                ag=as_,
-                ot=bool(ot),
-                calendar_day=po_day,
-                rng=rng,
-                is_playoff=True,
-                ot_periods=ot_periods,
-                ot_sec=int(score_res.ot_sec) if ot else 0,
-                strength_mu=score_res.mu,
-                en_home=int(score_res.en_home),
-                en_away=int(score_res.en_away),
-                game_key_extra=f"{row.get('series_id')}:{game_no}",
-            )
-            _clear_franchise_saved_lineups(home, away)
+            try:
+                box = _accumulate_franchise_game_stats(
+                    session,
+                    home=home,
+                    away=away,
+                    hid=home_id,
+                    aid=away_id,
+                    hg=hs,
+                    ag=as_,
+                    ot=bool(ot),
+                    calendar_day=po_day,
+                    rng=rng,
+                    is_playoff=True,
+                    ot_periods=ot_periods,
+                    ot_sec=int(score_res.ot_sec) if ot else 0,
+                    strength_mu=score_res.mu,
+                    en_home=int(score_res.en_home),
+                    en_away=int(score_res.en_away),
+                    game_key_extra=f"{row.get('series_id')}:{game_no}",
+                    score_source=str(getattr(score_res, "source", "light") or "light"),
+                )
+            finally:
+                _clear_franchise_saved_lineups(home, away)
             winner_id = home_id if int(hs) > int(as_) else away_id
             entry = {
                 "game": game_no,
@@ -823,9 +849,9 @@ def _simulate_one_game(
                 "ot": ot,
                 "ot_periods": ot_periods,
                 "winner_id": winner_id,
-                "played_at": _now_iso(),
                 "playoff_day": day,
             }
+            entries_by_gid[po_gid] = entry
             try:
                 stars = _playoff_stars_from_box(box)
                 if stars:
@@ -836,7 +862,6 @@ def _simulate_one_game(
                         entry["goalies"] = gl
             except Exception:
                 _swallowed_log.debug("suppressed exception", exc_info=True)
-            entries_by_gid[po_gid] = entry
     else:
         raise RuntimeError(
             f"Cannot simulate playoff game {home_id} vs {away_id}: "

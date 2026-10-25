@@ -116,8 +116,12 @@ def team_season_analytics(session: Any) -> Dict[str, Dict[str, Any]]:
                 continue
             r = out.setdefault(tid, {"gp": 0, "gf": 0, "ga": 0, "sf": 0, "sa": 0, "xgf": 0.0, "xga": 0.0, "cf": 0, "ca": 0, "ppg": 0, "ppo": 0, "ppga": 0, "pk_opp": 0})
             r["gp"] += 1
-            r["gf"] += _i(g.get(f"{side}_score", g.get(f"{side}_goals")))
-            r["ga"] += _i(g.get(f"{opp}_score", g.get(f"{opp}_goals")))
+            r["gf"] += _i(
+                g.get(f"player_{side}_goals", g.get(f"hockey_{side}_goals", g.get(f"{side}_score", g.get(f"{side}_goals"))))
+            )
+            r["ga"] += _i(
+                g.get(f"player_{opp}_goals", g.get(f"hockey_{opp}_goals", g.get(f"{opp}_score", g.get(f"{opp}_goals"))))
+            )
             r["sf"] += _i(g.get(f"{side}_sog"))
             r["sa"] += _i(g.get(f"{opp}_sog"))
             r["xgf"] += _f(g.get(f"{side}_xg"))

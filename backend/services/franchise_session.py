@@ -41,6 +41,7 @@ class FranchiseSession:
 
     chaos_index: float = 0.5
     use_world: bool = False
+    event_sim_user_games: bool = False
     injuries_enabled: bool = True
     player_universe: str = "generated"  # generated | real_nhl
     preseason_applied: bool = False

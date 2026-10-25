@@ -8192,6 +8192,10 @@ def generate_next_season(session: FranchiseSession) -> Dict[str, Any]:
         session._gp_day_guard = None
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
+    try:
+        session.playoff_game_entries_by_gid = {}
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     session.nhl_regular_season_last_index = last_reg_idx
     session.standings = StandingsTable(teams)
     try:

@@ -3602,7 +3602,22 @@ def _freeze_team_slice(row: Dict[str, Any], old_team: str) -> None:
     so a deadline trade is not credited entirely to the new team.
     """
     by = row.setdefault("by_team", {})
-    if not old_team or old_team in by:
+    if not old_team:
+        return
+    if old_team in by:
+        prior: Dict[str, int] = {}
+        for sl in by.values():
+            if isinstance(sl, dict):
+                for k, v in sl.items():
+                    if isinstance(v, (int, float)) and not isinstance(v, bool):
+                        prior[k] = prior.get(k, 0) + int(v)
+        snap_add: Dict[str, int] = {}
+        for k in _TEAM_SLICE_KEYS:
+            if k in row or k in prior:
+                snap_add[k] = int(row.get(k) or 0) - int(prior.get(k) or 0)
+        if any(snap_add.values()):
+            for k, v in snap_add.items():
+                by[old_team][k] = int(by[old_team].get(k, 0) or 0) + int(v)
         return
     prior: Dict[str, int] = {}
     for sl in by.values():
@@ -3709,10 +3724,13 @@ def _franchise_stat_scope(session: FranchiseSession, *, is_playoff: bool = False
 
 
 def _stamp_ledger_scope(row: Dict[str, Any], stat_scope: str) -> None:
-    """Season-ledger rows are never playoff rows (playoffs keep their own ledger), so a
-    "playoffs" stamp left by the old phase test is corrected rather than kept."""
-    if str(row.get("stat_scope") or "") in ("", "playoffs", "playoff"):
-        row["stat_scope"] = "regular_season" if stat_scope == "playoffs" else stat_scope
+    """Regular-season ledger rows must stay regular_season (preseason stamps must not stick)."""
+    if stat_scope != "regular_season":
+        row["stat_scope"] = str(stat_scope)
+        return
+    cur = str(row.get("stat_scope") or "")
+    if cur in ("", "playoffs", "playoff", "preseason"):
+        row["stat_scope"] = "regular_season"
 
 
 def _stable_franchise_game_id_for(
@@ -3783,12 +3801,56 @@ def _repair_team_by_id(session: FranchiseSession) -> None:
     session.team_by_id = tb
 
 
+def _migrate_box_layout_v2(session: FranchiseSession) -> None:
+    if bool(getattr(session, "_box_layout_v2_done", False)):
+        return
+    from app.sim_engine.franchise.serialization import _box_three_stars  # noqa: WPS433
+
+    season_y = int(getattr(session, "season_calendar_year", 0) or 0)
+    book = getattr(session, "box_score_book", None) or {}
+    seasons = (book.get("seasons") or {}).get(str(season_y)) or {}
+    games = seasons.get("games") or {}
+    for compact in games.values():
+        if not isinstance(compact, dict) or int(compact.get("lv") or 0) >= 2:
+            continue
+        lines = compact.get("lines") or {}
+        if not isinstance(lines, dict):
+            continue
+        for pid, row in list(lines.items()):
+            if not isinstance(row, (list, tuple)):
+                continue
+            r = list(row)
+            if len(r) == 31:
+                r = r[:25] + [r[25]] + r[27:31] + [0]
+            elif len(r) == 30:
+                r.append(0)
+            lines[pid] = r
+        compact["lines"] = lines
+        compact["lv"] = 2
+        try:
+            compact["stars"] = _box_three_stars(lines, str(compact.get("gwg") or ""))
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    session._box_layout_v2_done = True
+
+
 def _ensure_gp_repair_v3(session: FranchiseSession) -> None:
+    _migrate_box_layout_v2(session)
+    _repair_legacy_shootout_tied_boxes(session)
     if bool(getattr(session, "_gp_repair_v3_done", False)):
+        return
+    attempts = int(getattr(session, "_gp_repair_v3_attempts", 0) or 0)
+    if attempts >= 3:
+        if not bool(getattr(session, "_gp_repair_v3_gave_up_logged", False)):
+            logging.getLogger(__name__).warning(
+                "GP repair v3 abandoned after 3 failures; archived seasons are not repaired."
+            )
+            session._gp_repair_v3_gave_up_logged = True
         return
     try:
         _migrate_stats_ledger_epoch_v3(session)
     except Exception:
+        session._gp_repair_v3_attempts = attempts + 1
         logging.getLogger(__name__).exception("Stats ledger epoch v3 migration failed")
 
 
@@ -3949,8 +4011,8 @@ def _merge_franchise_stat_scratch(
 ) -> None:
     from app.sim_engine.engine import _GM_FLOAT_LEDGER_KEYS
 
-    _ALWAYS_OVERWRITE = ("team_id", "name", "position")
-    _NEVER_SUM = {"player_id", "id", "team_id", "position", "stat_scope", "stat_authority"}
+    _ALWAYS_OVERWRITE = ("team_id", "name", "position", "stat_scope", "stat_authority")
+    _NEVER_SUM = {"player_id", "id", "team_id", "position"}
     for pid, row in (scratch or {}).items():
         if not isinstance(row, dict):
             continue
@@ -3958,6 +4020,10 @@ def _merge_franchise_stat_scratch(
         if not isinstance(dst, dict):
             target[pid] = dict(row)
             continue
+        old_tid = str(dst.get("team_id") or "")
+        new_tid = str(row.get("team_id") or "")
+        if old_tid and new_tid and old_tid != new_tid:
+            _freeze_team_slice(dst, old_tid)
         for k in _ALWAYS_OVERWRITE:
             if row.get(k) not in (None, ""):
                 dst[k] = row[k]
@@ -4022,8 +4088,14 @@ def _repair_gp_from_game_boxes(session: FranchiseSession) -> None:
         lines = compact.get("lines") or {}
         if not isinstance(lines, dict):
             continue
+        ledger_all = {
+            **(getattr(session, "player_season_stats", None) or {}),
+            **(getattr(session, "playoff_player_stats", None) or {}),
+        }
         for pid, row in lines.items():
             if not isinstance(row, (list, tuple)) or len(row) <= toi_i:
+                continue
+            if str(pid) not in ledger_all:
                 continue
             if int(row[toi_i] or 0) <= 0:
                 continue
@@ -4127,6 +4199,7 @@ def _accumulate_franchise_game_stats(
     en_home: int = 0,
     en_away: int = 0,
     game_key_extra: str = "",
+    score_source: str = "",
 ) -> Optional[Dict[str, Any]]:
     """
     Single pipeline: SimEngine accumulates skater/goalie stats from the same _simulate_game outcome.
@@ -4164,7 +4237,7 @@ def _accumulate_franchise_game_stats(
             f"Stat accumulation refused tied final on day {calendar_day}: {hid} {stat_h}, {aid} {stat_a}"
         )
 
-    light_stats = bool(getattr(session, "_light_game_stat_accumulation", False))
+    light_stats = bool(getattr(session, "_light_game_stat_accumulation", False)) or str(score_source or "") == "light"
     # Same counting model for every club during bulk — do not force the user onto
     # the cooler event ledger while CPU teams use light concentration.
     stat_kw: Dict[str, Any] = {
@@ -4344,11 +4417,15 @@ def _accumulate_franchise_game_stats(
         stamp_game_period_lines(box, rng)
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
-    if not light_stats:
-        for row in list(stat_ledger.values()):
-            if isinstance(row, dict):
-                _stamp_ledger_scope(row, stat_scope)
-                row["stat_authority"] = stat_authority
+    scope_stamp = (
+        "regular_season"
+        if stat_ledger is getattr(session, "player_season_stats", None)
+        else stat_scope
+    )
+    for row in scratch_ledger.values():
+        if isinstance(row, dict):
+            _stamp_ledger_scope(row, scope_stamp)
+            row["stat_authority"] = stat_authority
 
     _merge_franchise_stat_scratch(stat_ledger, scratch_ledger)
 
@@ -12898,30 +12975,30 @@ def _franchise_daily_league_tick(session: FranchiseSession, calendar_idx: int) -
     _dl_idx = _calendar_trade_deadline_index(session)
     if _dl_idx is not None and 0 <= int(_dl_idx) - int(calendar_idx) <= 7:
         socio_gap = 1
+    run_market = True
     if bulk and not bool(getattr(session, "_bulk_run_socio_economics", False)):
         last_run = int(getattr(session, "_bulk_socio_last_idx", -99) or -99)
         # Year 2+: last_run is last season's index (the cursor resets to 0), so the gap
         # went negative and the market never opened until the cursor caught up — past
         # the deadline. A stamp ahead of today is stale; treat it as never run.
         if 0 <= (int(calendar_idx) - last_run) < socio_gap:
-            setattr(session, "_last_socio_tick_idx", int(calendar_idx))
-            return
-        setattr(session, "_bulk_socio_last_idx", int(calendar_idx))
+            run_market = False
+        else:
+            setattr(session, "_bulk_socio_last_idx", int(calendar_idx))
     # Legacy audit path: skip socio only when explicitly forced off — light-mode
     # bulk (fast game sim) must still hit the throttle above.
     if bool(getattr(session, "_defer_prospect_sync", False)) and bool(
         getattr(session, "_skip_bulk_socio_economics", False)
     ):
         if not bool(getattr(session, "_bulk_run_socio_economics", False)):
-            setattr(session, "_last_socio_tick_idx", int(calendar_idx))
-            return
+            run_market = False
     sim = session.sim
     league = getattr(sim, "league", None)
     teams = list(getattr(league, "teams", None) or [])
     st = session.standings
     if not teams or st is None:
+        setattr(session, "_last_socio_tick_idx", int(calendar_idx))
         return
-    _refresh_cpu_franchise_profiles(session, calendar_idx=int(calendar_idx), force=False)
     try:
         publish_trade_deadline_state(session)
         setattr(league, "cpu_franchise_profiles", dict(getattr(session, "cpu_franchise_profiles", None) or {}))
@@ -12948,32 +13025,39 @@ def _franchise_daily_league_tick(session: FranchiseSession, calendar_idx: int) -
     ctr: Dict[str, int] = {"trade_executions": 0, "waiver_claims": 0, "major_injuries": 0}
     socio_ok = False
     try:
-        if not light_bulk:
+        sim._daily_roster_maintenance(rng, int(calendar_idx), st, teams, news_tmp, ctr)
+        socio_ok = True
+    except Exception:
+        socio_ok = False
+    if run_market:
+        try:
+            _refresh_cpu_franchise_profiles(session, calendar_idx=int(calendar_idx), force=False)
             from services.transcendent_tank_behavior import apply_tank_daily_behavior
 
             apply_tank_daily_behavior(session, sim, teams, rng, news_tmp, ctr)
-        # Trade volume from governance already flows through league modifiers / CPU proposer.
-        # Don't multiply bulk_comp here — it squares trade work and slows week/month sims.
-        try:
-            _elapsed = int(calendar_idx) - int(getattr(session, "_bulk_socio_prev_idx", int(calendar_idx) - 1) or 0)
-            setattr(
-                league,
-                "_franchise_bulk_trade_day_multiplier",
-                max(1, min(9, _elapsed) if bulk else 1),
-            )
-            setattr(session, "_bulk_socio_prev_idx", int(calendar_idx))
-        except Exception:
-            _swallowed_log.debug("suppressed exception", exc_info=True)
-        sim._season_daily_socio_economics(rng, int(calendar_idx), max_d, st, teams, news_tmp, ctr)
-        socio_ok = True
-        try:
-            from services.cpu_inbound_offers import maybe_generate_inbound_offer
+            # Trade volume from governance already flows through league modifiers / CPU proposer.
+            try:
+                _elapsed = int(calendar_idx) - int(
+                    getattr(session, "_bulk_socio_prev_idx", int(calendar_idx) - 1) or 0
+                )
+                setattr(
+                    league,
+                    "_franchise_bulk_trade_day_multiplier",
+                    max(1, min(15, _elapsed) if bulk else 1),
+                )
+                setattr(session, "_bulk_socio_prev_idx", int(calendar_idx))
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+            sim._daily_trade_market(rng, int(calendar_idx), max_d, st, teams, news_tmp, ctr)
+            socio_ok = True
+            try:
+                from services.cpu_inbound_offers import maybe_generate_inbound_offer
 
-            maybe_generate_inbound_offer(session, int(calendar_idx))
+                maybe_generate_inbound_offer(session, int(calendar_idx))
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         except Exception:
-            _swallowed_log.debug("suppressed exception", exc_info=True)
-    except Exception:
-        socio_ok = False
+            socio_ok = False
     iso = ""
     cal = getattr(session, "nhl_calendar", None) or []
     if 0 <= int(calendar_idx) < len(cal):
@@ -13004,18 +13088,19 @@ def _franchise_daily_league_tick(session: FranchiseSession, calendar_idx: int) -
                     description=str(ev2.get("headline") or "A trade involving your club was processed."),
                     source=f"trade_{calendar_idx}_{ft}_{tt}",
                 )
-    trades_today = sum(1 for ev in news_tmp if str(ev.get("type")) == "trade")
-    try:
-        _maybe_emit_trade_wire_rumors(
-            session,
-            calendar_idx=int(calendar_idx),
-            iso=iso,
-            rng=rng,
-            trades_today=trades_today,
-            light_bulk=light_bulk,
-        )
-    except Exception:
-        _swallowed_log.debug("suppressed exception", exc_info=True)
+    if run_market:
+        trades_today = sum(1 for ev in news_tmp if str(ev.get("type")) == "trade")
+        try:
+            _maybe_emit_trade_wire_rumors(
+                session,
+                calendar_idx=int(calendar_idx),
+                iso=iso,
+                rng=rng,
+                trades_today=trades_today,
+                light_bulk=light_bulk,
+            )
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     if not socio_ok:
         logger = logging.getLogger(__name__)
         logger.warning("Daily socio-economics tick failed at calendar day %s", int(calendar_idx))
@@ -13366,14 +13451,11 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
     bulk_light = bool(getattr(session, "_bulk_calendar_advance", False)) and bool(
         getattr(session, "_light_game_stat_accumulation", False)
     )
-    manual_hybrid = bool(getattr(session, "_manual_hybrid_light_cpu", False))
-
     # team_by_id is keyed by str(team_id); slots may carry int ids (dataclasses do not enforce types).
     hid = _safe_slot_team_id(slot, "home_id")
     aid = _safe_slot_team_id(slot, "away_id")
     is_user_game = user_tid in (hid, aid)
-    cpu_only_light = (bulk_light or manual_hybrid) and not is_user_game
-    cpu_only_bulk = cpu_only_light
+    cpu_only_bulk = False
     home = session.team_by_id.get(hid)
     away = session.team_by_id.get(aid)
     if home is None or away is None:
@@ -13447,257 +13529,218 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
     score_res: Any = None
 
     try:
-        if not cpu_only_bulk:
-            from app.sim_engine.franchise.storyline_stat_bridge import (  # noqa: WPS433
-                prime_franchise_game_stat_modifiers,
-            )
+        from app.sim_engine.franchise.storyline_stat_bridge import (  # noqa: WPS433
+            prime_franchise_game_stat_modifiers,
+        )
 
-            prime_franchise_game_stat_modifiers(
-                session,
-                sim,
-                hid,
-                aid,
-                game_meta={
-                    "game_id": stable_gid,
-                    "calendar_day": d,
-                    "calendar_iso": cal_iso,
-                },
-            )
+        prime_franchise_game_stat_modifiers(
+            session,
+            sim,
+            hid,
+            aid,
+            game_meta={
+                "game_id": stable_gid,
+                "calendar_day": d,
+                "calendar_iso": cal_iso,
+            },
+        )
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
 
     if session.use_world and world_momentum is not None:
-        if cpu_only_bulk:
-            h_scale = max(0.93, min(1.07, float(sim._roster_injury_depth_penalty(home))))
-            a_scale = max(0.93, min(1.07, float(sim._roster_injury_depth_penalty(away))))
-            _, nh = sim._identity_runner_strength_noise_factors(home)
-            _, na = sim._identity_runner_strength_noise_factors(away)
-            noise_scale = min(1.04, 0.5 * (nh + na))
-            score_res = _franchise_resolve_game_score(
-                session,
-                sim,
-                r,
-                home,
-                away,
-                hid,
-                aid,
-                int(d),
-                is_playoff=is_playoff_slot,
-                home_b2b=hb2b,
-                away_b2b=ab2b,
-                light_mode=True,
-                home_strength_scale=h_scale,
-                away_strength_scale=a_scale,
-                noise_scale=noise_scale,
-                is_user_game=is_user_game,
-            )
-            hg, ag, ot = int(score_res.home), int(score_res.away), bool(score_res.overtime)
-            hg, ag = _validate_final_game_result_payload(
-                home_id=hid,
-                away_id=aid,
-                home_goals=hg,
-                away_goals=ag,
-                calendar_day=d,
-                allow_tie=bool(score_res.tie),
-            )
-            if world_injuries is not None:
-                for tm in (home, away):
-                    for pl in getattr(tm, "roster", None) or []:
-                        if int(getattr(pl, "_world_injury_games_remaining", 0) or 0) > 0:
-                            world_injuries.tick_games_missed(pl)
-        elif session.prev_calendar_day is not None and d > session.prev_calendar_day:
+        if session.prev_calendar_day is not None and d > session.prev_calendar_day:
             span = float(d - session.prev_calendar_day)
             world_momentum.decay_all_teams(teams, span * 0.06)
             session.prev_calendar_day = d
 
-        if not cpu_only_bulk:
-            if session.prev_calendar_day is None or d > session.prev_calendar_day:
-                session.prev_calendar_day = d
+        if session.prev_calendar_day is None or d > session.prev_calendar_day:
+            session.prev_calendar_day = d
 
-            for tid, tm in ((hid, home), (aid, away)):
-                lg = session.last_game_day.get(tid)
-                if lg is not None:
-                    gap = d - lg - 1
-                    if gap > 0:
-                        world_fatigue.rest_roster(tm, gap, r)
-                session.last_game_day[tid] = d
+        for tid, tm in ((hid, home), (aid, away)):
+            lg = session.last_game_day.get(tid)
+            if lg is not None:
+                gap = d - lg - 1
+                if gap > 0:
+                    world_fatigue.rest_roster(tm, gap, r)
+            session.last_game_day[tid] = d
 
-            hm = world_momentum.team_strength_modifier(home)
-            am = world_momentum.team_strength_modifier(away)
-            hc = world_chemistry.team_strength_modifier(home)
-            ac = world_chemistry.team_strength_modifier(away)
-            hf = world_fatigue.team_fatigue_strength_factor(home)
-            af = world_fatigue.team_fatigue_strength_factor(away)
-            hmr = world_morale.team_morale_strength_factor(home)
-            amr = world_morale.team_morale_strength_factor(away)
+        hm = world_momentum.team_strength_modifier(home)
+        am = world_momentum.team_strength_modifier(away)
+        hc = world_chemistry.team_strength_modifier(home)
+        ac = world_chemistry.team_strength_modifier(away)
+        hf = world_fatigue.team_fatigue_strength_factor(home)
+        af = world_fatigue.team_fatigue_strength_factor(away)
+        hmr = world_morale.team_morale_strength_factor(home)
+        amr = world_morale.team_morale_strength_factor(away)
 
-            h_scale = max(0.93, min(1.07, hm * hc * hf * hmr)) * float(sim._roster_injury_depth_penalty(home))
-            a_scale = max(0.93, min(1.07, am * ac * af * amr)) * float(sim._roster_injury_depth_penalty(away))
-            try:
-                from app.sim_engine.franchise.storyline_coverage import apply_matchup_to_scales  # noqa: WPS433
+        h_scale = max(0.93, min(1.07, hm * hc * hf * hmr)) * float(sim._roster_injury_depth_penalty(home))
+        a_scale = max(0.93, min(1.07, am * ac * af * amr)) * float(sim._roster_injury_depth_penalty(away))
+        try:
+            from app.sim_engine.franchise.storyline_coverage import apply_matchup_to_scales  # noqa: WPS433
 
-                h_scale, a_scale, _ = apply_matchup_to_scales(
-                    session,
-                    hid,
-                    aid,
-                    h_scale,
-                    a_scale,
-                    {"game_id": f"{hid}_{aid}_{d}", "is_playoff": is_playoff_slot},
-                )
-            except Exception:
-                _swallowed_log.debug("suppressed exception", exc_info=True)
-
-            base_noise = 1.0 + 0.22 * (session.chaos_index - 0.5)
-            nh = world_chemistry.chemistry_chaos_dampen(home, base_noise)
-            na = world_chemistry.chemistry_chaos_dampen(away, base_noise)
-            _, ih = sim._identity_runner_strength_noise_factors(home)
-            _, ia = sim._identity_runner_strength_noise_factors(away)
-            noise_scale = 0.5 * (nh + na) * (0.5 * (ih + ia))
-
-            world_fatigue.tick_roster_fatigue_for_game(home, r, hb2b, session.schedule, d, hid)
-            world_fatigue.tick_roster_fatigue_for_game(away, r, ab2b, session.schedule, d, aid)
-            _attach_franchise_saved_lineups(
-                session, home, away, home_id=hid, away_id=aid, user_tid=user_tid
-            )
-            # Bulk/light season accumulation must use one counting model for every club.
-            # Forcing the user onto full event sim while CPU–CPU stays light systematically
-            # under-scored the controlled team vs the rest of the league.
-            use_light = bool(getattr(session, "_light_game_stat_accumulation", False)) or (
-                manual_hybrid and not is_user_game
-            )
-            score_res = _franchise_resolve_game_score(
+            h_scale, a_scale, _ = apply_matchup_to_scales(
                 session,
-                sim,
-                r,
-                home,
-                away,
                 hid,
                 aid,
-                int(d),
-                is_playoff=is_playoff_slot,
-                home_b2b=hb2b,
-                away_b2b=ab2b,
-                light_mode=use_light,
-                home_strength_scale=h_scale,
-                away_strength_scale=a_scale,
-                noise_scale=noise_scale,
-                is_user_game=is_user_game,
+                h_scale,
+                a_scale,
+                {"game_id": f"{hid}_{aid}_{d}", "is_playoff": is_playoff_slot},
             )
-            hg, ag, ot = int(score_res.home), int(score_res.away), bool(score_res.overtime)
-            hg, ag = _validate_final_game_result_payload(
-                home_id=hid,
-                away_id=aid,
-                home_goals=hg,
-                away_goals=ag,
-                calendar_day=d,
-                allow_tie=bool(score_res.tie),
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+
+        base_noise = 1.0 + 0.22 * (session.chaos_index - 0.5)
+        nh = world_chemistry.chemistry_chaos_dampen(home, base_noise)
+        na = world_chemistry.chemistry_chaos_dampen(away, base_noise)
+        _, ih = sim._identity_runner_strength_noise_factors(home)
+        _, ia = sim._identity_runner_strength_noise_factors(away)
+        noise_scale = 0.5 * (nh + na) * (0.5 * (ih + ia))
+
+        world_fatigue.tick_roster_fatigue_for_game(home, r, hb2b, session.schedule, d, hid)
+        world_fatigue.tick_roster_fatigue_for_game(away, r, ab2b, session.schedule, d, aid)
+        _attach_franchise_saved_lineups(
+            session, home, away, home_id=hid, away_id=aid, user_tid=user_tid
+        )
+        use_light = not (
+            is_user_game and bool(getattr(session, "event_sim_user_games", False))
+        )
+        try:
+            sim._gm_season_ledger_ref = session.player_season_stats
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+        score_res = _franchise_resolve_game_score(
+            session,
+            sim,
+            r,
+            home,
+            away,
+            hid,
+            aid,
+            int(d),
+            is_playoff=is_playoff_slot,
+            home_b2b=hb2b,
+            away_b2b=ab2b,
+            light_mode=use_light,
+            home_strength_scale=h_scale,
+            away_strength_scale=a_scale,
+            noise_scale=noise_scale,
+            is_user_game=is_user_game,
+        )
+        hg, ag, ot = int(score_res.home), int(score_res.away), bool(score_res.overtime)
+        hg, ag = _validate_final_game_result_payload(
+            home_id=hid,
+            away_id=aid,
+            home_goals=hg,
+            away_goals=ag,
+            calendar_day=d,
+            allow_tie=bool(score_res.tie),
+        )
+
+        world_momentum.update_momentum_after_game(home, hg, ag, r)
+        world_momentum.update_momentum_after_game(away, ag, hg, r)
+        blow = abs(hg - ag) >= 3
+        world_chemistry.update_after_game(home, hg > ag, blow, r)
+        world_chemistry.update_after_game(away, ag > hg, blow, r)
+        try:
+            from app.sim_engine.systems.chemistry import apply_post_game_familiarity  # noqa: WPS433
+
+            apply_post_game_familiarity(home, r)
+            apply_post_game_familiarity(away, r)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+
+        for p in getattr(home, "roster", None) or []:
+            if getattr(p, "retired", False):
+                continue
+            world_morale.update_after_team_result(
+                p,
+                hg > ag,
+                hg - ag,
+                r,
+                role_satisfaction_proxy=float(
+                    getattr(getattr(p, "psych", None), "role_satisfaction", 0.5) or 0.5
+                ),
+            )
+        for p in getattr(away, "roster", None) or []:
+            if getattr(p, "retired", False):
+                continue
+            world_morale.update_after_team_result(
+                p,
+                ag > hg,
+                ag - hg,
+                r,
+                role_satisfaction_proxy=float(
+                    getattr(getattr(p, "psych", None), "role_satisfaction", 0.5) or 0.5
+                ),
             )
 
-            world_momentum.update_momentum_after_game(home, hg, ag, r)
-            world_momentum.update_momentum_after_game(away, ag, hg, r)
-            blow = abs(hg - ag) >= 3
-            world_chemistry.update_after_game(home, hg > ag, blow, r)
-            world_chemistry.update_after_game(away, ag > hg, blow, r)
-            try:
-                from app.sim_engine.systems.chemistry import apply_post_game_familiarity  # noqa: WPS433
-
-                apply_post_game_familiarity(home, r)
-                apply_post_game_familiarity(away, r)
-            except Exception:
-                _swallowed_log.debug("suppressed exception", exc_info=True)
-
-            for p in getattr(home, "roster", None) or []:
-                if getattr(p, "retired", False):
-                    continue
-                world_morale.update_after_team_result(
-                    p,
-                    hg > ag,
-                    hg - ag,
-                    r,
-                    role_satisfaction_proxy=float(
-                        getattr(getattr(p, "psych", None), "role_satisfaction", 0.5) or 0.5
-                    ),
-                )
-            for p in getattr(away, "roster", None) or []:
-                if getattr(p, "retired", False):
-                    continue
-                world_morale.update_after_team_result(
-                    p,
-                    ag > hg,
-                    ag - hg,
-                    r,
-                    role_satisfaction_proxy=float(
-                        getattr(getattr(p, "psych", None), "role_satisfaction", 0.5) or 0.5
-                    ),
-                )
-
-            for tm in (home, away):
-                tid_tm = str(getattr(tm, "team_id", None) or getattr(tm, "id", "") or "")
-                for pl in getattr(tm, "roster", None) or []:
-                    if int(getattr(pl, "_world_injury_games_remaining", 0) or 0) > 0:
-                        world_injuries.tick_games_missed(pl)
-                    has_conduct = bool(getattr(pl, "_conduct_incident_id", None)) or int(
-                        getattr(pl, "_world_conduct_games_remaining", 0) or 0
-                    ) > 0
-                    if has_conduct:
-                        try:
-                            from app.sim_engine.franchise.conduct_incidents import (  # noqa: WPS433
-                                apply_dress_backlash,
-                                player_eligible_to_dress,
-                                tick_incident_games,
-                            )
-
-                            tick_incident_games(session, pl)
-                            if player_eligible_to_dress(pl, session) and float(
-                                getattr(pl, "_conduct_dress_backlash_risk", 0) or 0
-                            ) >= 0.08:
-                                apply_dress_backlash(session, team_id=tid_tm, player=pl)
-                        except Exception:
-                            try:
-                                from app.sim_engine.franchise.storyline_conduct import (  # noqa: WPS433
-                                    tick_conduct_games_missed,
-                                )
-
-                                tick_conduct_games_missed(pl)
-                            except Exception:
-                                _swallowed_log.debug("suppressed exception", exc_info=True)
+        for tm in (home, away):
+            tid_tm = str(getattr(tm, "team_id", None) or getattr(tm, "id", "") or "")
+            for pl in getattr(tm, "roster", None) or []:
+                if int(getattr(pl, "_world_injury_games_remaining", 0) or 0) > 0:
+                    world_injuries.tick_games_missed(pl)
+                has_conduct = bool(getattr(pl, "_conduct_incident_id", None)) or int(
+                    getattr(pl, "_world_conduct_games_remaining", 0) or 0
+                ) > 0
+                if has_conduct:
                     try:
                         from app.sim_engine.franchise.conduct_incidents import (  # noqa: WPS433
-                            roll_on_ice_suspensions_for_team_after_game,
+                            apply_dress_backlash,
+                            player_eligible_to_dress,
+                            tick_incident_games,
                         )
 
-                        roll_on_ice_suspensions_for_team_after_game(
-                            session,
-                            tm,
-                            rng=r,
-                            game_id=f"{hid}_{aid}_{d}",
-                        )
+                        tick_incident_games(session, pl)
+                        if player_eligible_to_dress(pl, session) and float(
+                            getattr(pl, "_conduct_dress_backlash_risk", 0) or 0
+                        ) >= 0.08:
+                            apply_dress_backlash(session, team_id=tid_tm, player=pl)
                     except Exception:
-                        _swallowed_log.debug("suppressed exception", exc_info=True)
+                        try:
+                            from app.sim_engine.franchise.storyline_conduct import (  # noqa: WPS433
+                                tick_conduct_games_missed,
+                            )
 
-            if getattr(session, "injuries_enabled", True):
-                for tm in (home, away):
-                    ev = world_injuries.maybe_injure_roster_subset(
-                        tm, r, session.chaos_index, max_checks=8,
-                        rate_mult=_governance_injury_mult(session),
+                            tick_conduct_games_missed(pl)
+                        except Exception:
+                            _swallowed_log.debug("suppressed exception", exc_info=True)
+                try:
+                    from app.sim_engine.franchise.conduct_incidents import (  # noqa: WPS433
+                        roll_on_ice_suspensions_for_team_after_game,
                     )
-                    tid_inj = next((str(v) for v in (getattr(tm, "team_id", None), getattr(tm, "id", None)) if v is not None), "")
-                    abbrev = _franchise_team_abbrev(tm)
-                    slot_user_game = user_tid in (hid, aid)
-                    for label, tier, games, pid in ev:
-                        _franchise_log_injury_and_ui(
-                            session,
-                            player_id=pid,
-                            player_name=label,
-                            team_id=tid_inj,
-                            team_abbrev=abbrev,
-                            tier=str(tier),
-                            games=int(games),
-                            injury_type=str(tier),
-                            calendar_day=int(d),
-                            calendar_iso=cal_iso,
-                            game_day_injury=bool(slot_user_game and tid_inj.lower() == user_tid.lower()),
-                        )
+
+                    roll_on_ice_suspensions_for_team_after_game(
+                        session,
+                        tm,
+                        rng=r,
+                        game_id=f"{hid}_{aid}_{d}",
+                    )
+                except Exception:
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
+
+        if getattr(session, "injuries_enabled", True):
+            for tm in (home, away):
+                ev = world_injuries.maybe_injure_roster_subset(
+                    tm, r, session.chaos_index, max_checks=8,
+                    rate_mult=_governance_injury_mult(session),
+                )
+                tid_inj = next((str(v) for v in (getattr(tm, "team_id", None), getattr(tm, "id", None)) if v is not None), "")
+                abbrev = _franchise_team_abbrev(tm)
+                slot_user_game = user_tid in (hid, aid)
+                for label, tier, games, pid in ev:
+                    _franchise_log_injury_and_ui(
+                        session,
+                        player_id=pid,
+                        player_name=label,
+                        team_id=tid_inj,
+                        team_abbrev=abbrev,
+                        tier=str(tier),
+                        games=int(games),
+                        injury_type=str(tier),
+                        calendar_day=int(d),
+                        calendar_iso=cal_iso,
+                        game_day_injury=bool(slot_user_game and tid_inj.lower() == user_tid.lower()),
+                    )
     else:
         _, nh = sim._identity_runner_strength_noise_factors(home)
         _, na = sim._identity_runner_strength_noise_factors(away)
@@ -13732,12 +13775,18 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
             is_playoff=is_playoff_slot,
             home_b2b=hb2b,
             away_b2b=ab2b,
-            light_mode=bool(getattr(session, "_light_game_stat_accumulation", False)),
+            light_mode=not (
+                is_user_game and bool(getattr(session, "event_sim_user_games", False))
+            ),
             home_strength_scale=h_inj,
             away_strength_scale=a_inj,
             noise_scale=id_noise,
             is_user_game=is_user_game,
         )
+        try:
+            sim._gm_season_ledger_ref = session.player_season_stats
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         hg, ag, ot = int(score_res.home), int(score_res.away), bool(score_res.overtime)
         hg, ag = _validate_final_game_result_payload(
             home_id=hid,
@@ -13877,6 +13926,7 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
             strength_mu=_strength_mu,
             en_home=_en_home,
             en_away=_en_away,
+            score_source=str(getattr(score_res, "source", "") or ""),
         )
     except Exception as stat_exc:
         logging.getLogger(__name__).exception(
@@ -13950,17 +14000,6 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
         )
         _standings_recorded_gids(session).add(stable_gid)
     
-
-    if cpu_only_bulk:
-        try:
-            from app.sim_engine.franchise.storyline_stat_bridge import (  # noqa: WPS433
-                clear_franchise_game_stat_modifiers,
-            )
-
-            clear_franchise_game_stat_modifiers(sim)
-        except Exception:
-            _swallowed_log.debug("suppressed exception", exc_info=True)
-        return None, None
 
     hn = (_display_team(home) or "?")[:24]
     an = (_display_team(away) or "?")[:24]
@@ -14753,16 +14792,18 @@ def _run_bulk_incremental_catchup(session: FranchiseSession, *, steps_n: int) ->
         apply_passive_scouting_progress(session, days=max(1, steps_n))
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
+    try:
+        n_extra = _due("_bulk_extra_dev_day", 1)
+        if n_extra:
+            from app.sim_engine.league_hierarchy_bootstrap import tick_extra_league_development
+
+            tick_extra_league_development(session.sim, session.sim.rng, days=n_extra)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _run_bulk_finalize_season_extras(session: FranchiseSession, *, narrative_days: int) -> None:
     """One-shot extras reserved for season sim / phase transitions."""
-    try:
-        from app.sim_engine.league_hierarchy_bootstrap import tick_extra_league_development
-
-        tick_extra_league_development(session.sim, session.sim.rng)
-    except Exception:
-        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         pending_fa = int(getattr(session, "_bulk_fa_days_pending", 0) or 0)
         if pending_fa > 0 and bool(getattr(session, "free_agency_open", False)):
@@ -15403,9 +15444,9 @@ def _finalize_regular_calendar_day(
     try:
         from app.sim_engine.league_hierarchy_bootstrap import tick_extra_league_development
 
-        # Thousands of minor-league rating ticks — defer during bulk, catch up once at end.
         if not bulk:
-            tick_extra_league_development(session.sim, session.sim.rng)
+            tick_extra_league_development(session.sim, session.sim.rng, days=1)
+            session._bulk_extra_dev_day = int(getattr(session, "calendar_days_finished", 0) or 0)
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
@@ -21213,7 +21254,12 @@ def _user_team_record_from_game_results(session: FranchiseSession) -> Dict[str, 
     Matches NHL-style counting: OTL is not a regulation loss; OT loss earns 1 point.
     """
     uid = str(session.user_team_id or "")
-    out: Dict[str, Any] = {"gp": 0, "w": 0, "l": 0, "otl": 0, "pts": 0}
+    rules = getattr(getattr(session, "standings", None), "points_rules", None) or {}
+    p_rw = int(rules.get("pts_reg_win", 2) or 2)
+    p_otw = int(rules.get("pts_ot_win", 2) or 2)
+    p_otl = int(rules.get("pts_otl", 1) or 1)
+    p_tie = int(rules.get("pts_tie", 1) or 1)
+    out: Dict[str, Any] = {"gp": 0, "w": 0, "l": 0, "otl": 0, "t": 0, "so_unknown": 0, "pts": 0}
     if not uid:
         return out
     for g in getattr(session, "game_results", None) or []:
@@ -21226,40 +21272,29 @@ def _user_team_record_from_game_results(session: FranchiseSession) -> Dict[str, 
             ag = int(g.get("away_goals") or 0)
         except (TypeError, ValueError):
             continue
+        if bool(g.get("tie")):
+            out["gp"] += 1
+            out["t"] += 1
+            out["pts"] += p_tie
+            continue
         wid = str(g.get("winner_id") or "")
-        if wid:
-            if wid != uid:
-                if bool(g.get("tie")):
-                    out["gp"] += 1
-                elif bool(g.get("overtime")) and not bool(g.get("shootout")):
-                    out["otl"] += 1
-                    out["pts"] += 1
-                    out["gp"] += 1
-                else:
-                    out["l"] += 1
-                    out["gp"] += 1
-            else:
-                out["w"] += 1
-                out["pts"] += 2
-                out["gp"] += 1
+        if not wid and bool(g.get("shootout")) and hg == ag:
+            out["gp"] += 1
+            out["so_unknown"] += 1
             continue
-        if hg == ag:
-            if bool(g.get("tie")):
-                out["gp"] += 1
-            continue
+        if not wid:
+            wid = hid if hg > ag else aid if ag > hg else ""
         ot = bool(g.get("overtime"))
-        is_home = hid == uid
-        us = hg if is_home else ag
-        them = ag if is_home else hg
-        if us > them:
+        so = bool(g.get("shootout"))
+        out["gp"] += 1
+        if wid == uid:
             out["w"] += 1
-            out["pts"] += 2
-        elif ot and us < them:
+            out["pts"] += p_otw if (ot or so) else p_rw
+        elif ot or so:
             out["otl"] += 1
-            out["pts"] += 1
+            out["pts"] += p_otl
         else:
             out["l"] += 1
-        out["gp"] += 1
     return out
 
 
@@ -26036,6 +26071,7 @@ def _build_state_payload_impl(session: FranchiseSession, *, include_heavy: bool 
         "cpu_franchise_profiles": dict(getattr(session, "cpu_franchise_profiles", None) or {}),
         "schedule_upcoming": _build_schedule_upcoming(session, limit=14),
         "flags": {
+            "event_sim_user_games": bool(getattr(session, "event_sim_user_games", False)),
             "playoffs_done": session.playoffs_simulated,
             "can_advance": (
                 len(session.pending_decisions) == 0

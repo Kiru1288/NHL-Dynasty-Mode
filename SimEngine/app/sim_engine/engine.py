@@ -71,6 +71,7 @@ class ScoreResult(NamedTuple):
     shootout: bool = False
     shootout_winner_home: Optional[bool] = None
     tie: bool = False
+    source: str = "light"
 
 
 _GM_FLOAT_LEDGER_KEYS = frozenset(
@@ -114,7 +115,7 @@ _SKATER_LEDGER_ANALYTICS_KEYS = (
 _BOX_LINE_KEYS = (
     "gp", "g", "a", "plus_minus", "pim", "sog", "hit", "blk", "toi_sec",
     "ppg", "ppa", "shg", "sha", "pp_toi_sec", "pk_toi_sec", "cf", "ca", "ixg",
-    "saves", "shots_against", "ga", "w", "l", "otl", "so",
+    "saves", "shots_against", "ga", "w", "l", "otl", "so", "t",
 )
 
 
@@ -13368,7 +13369,9 @@ class SimEngine:
         moved up and a slumping top-liner kept his minutes. Points per game are
         compared with what his rating predicts, trusted more as games pile up.
         """
-        ledger = getattr(self, "_gm_current_ledger", None)
+        ledger = getattr(self, "_gm_season_ledger_ref", None)
+        if not isinstance(ledger, dict):
+            ledger = getattr(self, "_gm_current_ledger", None)
         if not isinstance(ledger, dict):
             return 0.0
         pid = _id_str(p, "id")
@@ -15529,6 +15532,8 @@ class SimEngine:
                     "toi_sec": int(gr.get("goalie_toi_sec", 0) or (full_toi if is_starter else 0)),
                 }
                 if is_starter:
+                    gkw["gs"] = 1
+                    gkw["starts"] = 1
                     if won:
                         gkw["w"] = 1
                         if int(team_ga) == 0:
@@ -15551,6 +15556,8 @@ class SimEngine:
                     "saves": int(saves),
                     "shots_against": int(faced_sa),
                     "starter": bool(is_starter),
+                    "gs": 1 if is_starter else 0,
+                    "starts": 1 if is_starter else 0,
                 })
             return rows
 
@@ -17808,11 +17815,6 @@ class SimEngine:
             self._gm_ledger_add(ledger, p, hid, gp=1)
         for p in away_dressed:
             self._gm_ledger_add(ledger, p, aid, gp=1)
-        for g in list(home_gl or []):
-            self._gm_ledger_add(ledger, g, hid, gp=1)
-        for g in list(away_gl or []):
-            self._gm_ledger_add(ledger, g, aid, gp=1)
-
         return {
             "home_pim": int(home_pim),
             "away_pim": int(away_pim),
@@ -18713,6 +18715,7 @@ class SimEngine:
             shootout=bool(shootout),
             shootout_winner_home=shootout_winner_home,
             tie=bool(tie),
+            source="light",
         )
 
     def _simulate_game_strength(
@@ -18788,6 +18791,7 @@ class SimEngine:
             shootout=shootout,
             shootout_winner_home=so_home if shootout else None,
             tie=bool(shootout and hg == ag),
+            source="event",
         )
 
     def _simulate_game(
@@ -18901,17 +18905,16 @@ class SimEngine:
             except Exception:
                 _swallowed_log.debug("suppressed exception", exc_info=True)
 
-    def _season_daily_socio_economics(
+    def _daily_roster_maintenance(
         self,
         rng: random.Random,
         day: int,
-        max_day: int,
         standings: StandingsTable,
         teams: List[Any],
         news_out: List[Dict[str, Any]],
         counters: Dict[str, int],
     ) -> None:
-        """Per simulated calendar day: waivers, optional trades, roster pressure."""
+        """Waivers, claims, injury call-ups / send-downs (runs every franchise calendar day)."""
         self._standings_sync_team_metrics(standings, teams)
         wire = list(getattr(self.league, "waiver_wire", None) or [])
         for tm in teams:
@@ -18946,6 +18949,48 @@ class SimEngine:
                 }
             )
 
+        rm = RosterManager()
+        tbl = standings.league_table()
+        n_t = max(1, len(tbl))
+        rank_by_tid = {str(getattr(x, "team_id", "") or ""): i for i, x in enumerate(tbl)}
+        for tm in teams:
+            tid = str(getattr(tm, "team_id", getattr(tm, "id", "")))
+            rec = standings.records.get(tid)
+            rank = int(rank_by_tid.get(tid, n_t))
+            inj_ct = sum(1 for p in self._gm_skaters(tm) if self._injury_sidelined(p))
+            if inj_ct < 2 and rank <= int(0.42 * n_t):
+                continue
+            if rng.random() > 0.22:
+                continue
+            try:
+                logs = rm.manage(tm, self.league)
+            except Exception:
+                logs = []
+            for ln in logs[:2]:
+                u = str(ln).upper()
+                if "PROMOTION" in u or "CALL" in u or "RECALL" in u:
+                    news_out.append(
+                        {
+                            "type": "callup",
+                            "date": int(day),
+                            "headline": str(ln),
+                            "team": tid,
+                            "players": [],
+                            "priority": "LOW",
+                        }
+                    )
+
+    def _daily_trade_market(
+        self,
+        rng: random.Random,
+        day: int,
+        max_day: int,
+        standings: StandingsTable,
+        teams: List[Any],
+        news_out: List[Dict[str, Any]],
+        counters: Dict[str, int],
+    ) -> None:
+        """CPU trade proposer / execution and deadline-week market (may be throttled in bulk sim)."""
         from app.sim_engine.trades.trade_deadline import (
             DEADLINE_WEEK_DAYS,
             deadline_day_index,
@@ -19122,36 +19167,19 @@ class SimEngine:
                 except Exception:
                     _swallowed_log.debug("suppressed exception", exc_info=True)
 
-        rm = RosterManager()
-        tbl = standings.league_table()
-        n_t = max(1, len(tbl))
-        rank_by_tid = {str(getattr(x, "team_id", "") or ""): i for i, x in enumerate(tbl)}
-        for tm in teams:
-            tid = str(getattr(tm, "team_id", getattr(tm, "id", "")))
-            rec = standings.records.get(tid)
-            rank = int(rank_by_tid.get(tid, n_t))
-            inj_ct = sum(1 for p in self._gm_skaters(tm) if self._injury_sidelined(p))
-            if inj_ct < 2 and rank <= int(0.42 * n_t):
-                continue
-            if rng.random() > 0.22:
-                continue
-            try:
-                logs = rm.manage(tm, self.league)
-            except Exception:
-                logs = []
-            for ln in logs[:2]:
-                u = str(ln).upper()
-                if "PROMOTION" in u or "CALL" in u or "RECALL" in u:
-                    news_out.append(
-                        {
-                            "type": "callup",
-                            "date": int(day),
-                            "headline": str(ln),
-                            "team": tid,
-                            "players": [],
-                            "priority": "LOW",
-                        }
-                    )
+    def _season_daily_socio_economics(
+        self,
+        rng: random.Random,
+        day: int,
+        max_day: int,
+        standings: StandingsTable,
+        teams: List[Any],
+        news_out: List[Dict[str, Any]],
+        counters: Dict[str, int],
+    ) -> None:
+        """Per simulated calendar day: waivers, optional trades, roster pressure."""
+        self._daily_roster_maintenance(rng, int(day), standings, teams, news_out, counters)
+        self._daily_trade_market(rng, int(day), int(max_day), standings, teams, news_out, counters)
 
     def simulate_league_season(self, year: int, rng: Optional[random.Random] = None) -> Optional[LeagueSeasonResult]:
         """

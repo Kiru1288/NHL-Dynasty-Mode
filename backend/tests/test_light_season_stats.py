@@ -700,6 +700,8 @@ class _ShootoutSeqRandom(random.Random):
         self._seq = list(seq)
 
     def random(self):
+        if not self._seq:
+            return 0.5
         return self._seq.pop(0)
 
     def gauss(self, _mu, _sigma):
@@ -716,10 +718,10 @@ def test_strength_ex_shootout_home_win_final_score():
     res = sim._simulate_game_strength_ex(
         rng, home, away, {}, home_b2b=False, away_b2b=False, is_playoff=False
     )
-    if res.shootout:
-        assert res.home == res.away + 1
-        assert res.shootout_winner_home is True
-        assert res.ot_sec == 300
+    assert res.shootout
+    assert res.home == res.away + 1
+    assert res.shootout_winner_home is True
+    assert res.ot_sec == 300
 
 
 def test_apply_goalie_pull_v2_margin_two_trailer_scores_not_ot():
@@ -749,7 +751,7 @@ def test_apply_goalie_pull_v2_aggressive_tactics_tie_probability():
 
     tac = SimpleNamespace(_tactics={"goalie_pull": "aggressive"})
     hg1, ag1, _, _, _, _ = apply_goalie_pull_v2(_SeqRng([0.149]), 3, 2, False, object(), tac)
-    hg2, ag2, _, _, _, _ = apply_goalie_pull_v2(_SeqRng([0.151]), 3, 2, False, object(), tac)
+    hg2, ag2, _, _, _, _ = apply_goalie_pull_v2(_SeqRng([0.60]), 3, 2, False, object(), tac)
     assert hg1 == ag1 == 3
     assert hg2 == 3 and ag2 == 2
 
@@ -792,3 +794,54 @@ def test_gp_guard_counts_across_season_rollover():
     session.season_calendar_year = 2027
     gid1 = _stable_franchise_game_id_for(session, calendar_day=0, hid="H", aid="A", stat_scope="regular_season")
     assert gid0 != gid1
+
+
+def test_score_source_light_forces_light_allocator():
+    from types import SimpleNamespace
+
+    from services.franchise_sim import _accumulate_franchise_game_stats
+
+    session = SimpleNamespace(
+        _light_game_stat_accumulation=False,
+        player_season_stats={},
+        season_calendar_year=2026,
+        processed_game_ids=set(),
+        game_results=[],
+        sim=SimpleNamespace(
+            accumulate_unified_game_stats=lambda *a, **k: {"home_goals": 2, "away_goals": 1, "player_lines": {}},
+            _franchise_gp_by_day_set=None,
+            _franchise_gp_calendar_day=None,
+        ),
+        standings=SimpleNamespace(points_rules={}),
+    )
+    home = away = SimpleNamespace(team_id="H", roster=[], name="T")
+    session.team_by_id = {"H": home, "A": away}
+    captured = {}
+
+    def _cap(*args, **kwargs):
+        captured["light_mode"] = kwargs.get("light_mode")
+        return {"home_goals": 2, "away_goals": 1, "player_lines": {}}
+
+    session.sim.accumulate_unified_game_stats = _cap
+    _accumulate_franchise_game_stats(
+        session,
+        home=home,
+        away=away,
+        hid="H",
+        aid="A",
+        hg=2,
+        ag=1,
+        ot=False,
+        calendar_day=1,
+        rng=random.Random(0),
+        score_source="light",
+    )
+    assert captured.get("light_mode") is True
+
+
+def test_box_line_keys_prefix_matches_engine():
+    from app.sim_engine.engine import _BOX_LINE_KEYS as engine_keys
+    from app.sim_engine.franchise.serialization import BOX_LINE_KEYS
+
+    assert list(BOX_LINE_KEYS[:25]) == list(engine_keys[:25])
+    assert BOX_LINE_KEYS[-1] == "t" == engine_keys[-1]

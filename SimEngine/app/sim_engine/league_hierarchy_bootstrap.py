@@ -1956,7 +1956,7 @@ def _tick_ratings(rng: random.Random, player: Any, *, overseas: bool, junior: bo
         player.ratings[k] = cap
 
 
-def tick_extra_league_development(sim: Any, rng: random.Random) -> None:
+def _tick_extra_league_development_once(sim: Any, rng: random.Random) -> None:
     league = getattr(sim, "league", None)
     if league is None:
         return
@@ -1980,6 +1980,13 @@ def tick_extra_league_development(sim: Any, rng: random.Random) -> None:
                 elif getattr(p, "pipeline_steal", False):
                     setattr(p, "dev_type", "elite")
                 _tick_ratings(rng, p, overseas=False, junior=True)
+
+
+def tick_extra_league_development(sim: Any, rng: random.Random, days: int = 1) -> None:
+    """Apply ``days`` independent daily rating rolls (Bernoulli per player per day)."""
+    n = max(1, int(days or 1))
+    for _ in range(n):
+        _tick_extra_league_development_once(sim, rng)
 
 
 def maybe_spawn_overseas_star(league: Any, rng: random.Random, season_year: int) -> Optional[Any]:

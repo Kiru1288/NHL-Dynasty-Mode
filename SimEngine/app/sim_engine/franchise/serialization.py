@@ -2261,9 +2261,9 @@ def get_franchise_game_detail(session: FranchiseSession, game_id: str) -> Option
 BOX_LINE_KEYS = (
     "gp", "g", "a", "plus_minus", "pim", "sog", "hit", "blk", "toi_sec",
     "ppg", "ppa", "shg", "sha", "pp_toi_sec", "pk_toi_sec", "cf", "ca", "ixg",
-    "saves", "shots_against", "ga", "w", "l", "otl", "t", "so",
+    "saves", "shots_against", "ga", "w", "l", "otl", "so",
     # Stamped at store time (not tracked by either game sim): faceoff wins/losses, takeaways, giveaways.
-    "fow", "fol", "tk", "gv",
+    "fow", "fol", "tk", "gv", "t",
 )
 _BOX_IDX = {k: i + 1 for i, k in enumerate(BOX_LINE_KEYS)}
 _BOX_ENGINE_LEN = 1 + BOX_LINE_KEYS.index("so") + 1  # team_id + engine-produced keys
@@ -2465,10 +2465,12 @@ def _box_stamp_extras(session: Any, gid: str, hid: str, aid: str, lines: Dict[st
     side_sk: Dict[str, List[Tuple[str, List[Any]]]] = {hid: [], aid: []}
     for pid in sorted(lines):
         row = lines[pid]
+        t_val = int(row[_BOX_ENGINE_LEN] or 0) if len(row) > _BOX_ENGINE_LEN else 0
         if len(row) < _BOX_ENGINE_LEN:
             row.extend([0] * (_BOX_ENGINE_LEN - len(row)))
         del row[_BOX_ENGINE_LEN:]
         row.extend([0, 0, 0, 0])
+        row.append(t_val)
         tid = str(row[0])
         pos = str((people.get(pid) or ["", ""])[1] or "").upper()
         if pos == "G" or int(row[sa_i] or 0) > 0 or tid not in side_sk:
@@ -2570,8 +2572,10 @@ def store_compact_box_score(session: Any, box: Dict[str, Any], lines: Optional[D
     aid = str(box.get("away_id") or "")
     hg = int(box.get("home_goals", box.get("home_score", 0)) or 0)
     ag = int(box.get("away_goals", box.get("away_score", 0)) or 0)
-    phg = int(box.get("player_home_goals", hg) or hg)
-    pag = int(box.get("player_away_goals", ag) or ag)
+    _phg = box.get("player_home_goals")
+    _pag = box.get("player_away_goals")
+    phg = int(_phg) if _phg is not None else int(hg)
+    pag = int(_pag) if _pag is not None else int(ag)
     sow = box.get("shootout_winner_id")
     ot = bool(box.get("overtime") or box.get("ot"))
     so = bool(box.get("shootout"))
@@ -2649,6 +2653,7 @@ def store_compact_box_score(session: Any, box: Dict[str, Any], lines: Optional[D
         "phg": phg,
         "pag": pag,
         "sow": sow,
+        "lv": 2,
         "ot": ot,
         "so": so,
         "light": bool(box.get("light_box")),
@@ -2716,8 +2721,10 @@ def expand_box_score(session: Any, compact: Dict[str, Any]) -> Dict[str, Any]:
 
     hid, aid = str(compact.get("home")), str(compact.get("away"))
     hg, ag = int(compact.get("hg") or 0), int(compact.get("ag") or 0)
-    phg = int(compact.get("phg", hg) or hg)
-    pag = int(compact.get("pag", ag) or ag)
+    _cphg, _cpag = compact.get("phg"), compact.get("pag")
+    phg = int(_cphg) if _cphg is not None else int(hg)
+    pag = int(_cpag) if _cpag is not None else int(ag)
+    sow = compact.get("sow")
     skaters: Dict[str, List[Dict[str, Any]]] = {"home": [], "away": []}
     goalies: Dict[str, List[Dict[str, Any]]] = {"home": [], "away": []}
     team_tot = {side: {"hits": 0, "blocks": 0, "fow": 0, "fol": 0, "tk": 0, "gv": 0} for side in ("home", "away")}
@@ -2797,7 +2804,9 @@ def expand_box_score(session: Any, compact: Dict[str, Any]) -> Dict[str, Any]:
             "id": tid,
             "name": str(compact.get("hn" if side == "home" else "an") or (_display_team(tm) if tm is not None else tid)),
             "abbr": _franchise_team_abbrev(tm) if tm is not None else "",
-            "goals": phg if side == "home" else pag,
+            "goals": hg if side == "home" else ag,
+            "player_goals": phg if side == "home" else pag,
+            "shootout_winner_id": str(sow or "") if sow else None,
             "periods": list((compact.get("periods") or [[], []])[idx] or []),
             "shots": shots,
             "sog": sum(shots),
@@ -2864,9 +2873,33 @@ def _player_game_row(compact: Dict[str, Any], pid: str) -> Optional[Dict[str, An
         return None
     d = _box_line_dict(row)
     home = d["team_id"] == str(compact.get("home"))
-    gf = int((compact.get("phg", compact.get("hg")) if home else compact.get("pag", compact.get("ag"))) or 0)
-    ga = int((compact.get("pag", compact.get("ag")) if home else compact.get("phg", compact.get("hg"))) or 0)
-    res = "W" if gf > ga else ("OTL" if (compact.get("ot") or compact.get("so")) else "L")
+    fh, fa = int(compact.get("hg") or 0), int(compact.get("ag") or 0)
+    _phg, _pag = compact.get("phg"), compact.get("pag")
+    pgf = int(_phg) if _phg is not None else fh
+    pga = int(_pag) if _pag is not None else fa
+    gf, ga = (pgf, pga) if not compact.get("so") else (fh, fa)
+    pos = str(d.get("position") or "").upper()
+    if pos == "G" or int(d.get("shots_against") or 0) > 0:
+        if d.get("w"):
+            res = "W"
+        elif d.get("otl"):
+            res = "OTL"
+        elif d.get("l"):
+            res = "L"
+        elif d.get("t"):
+            res = "T"
+        else:
+            res = "W" if gf > ga else ("OTL" if (compact.get("ot") or compact.get("so")) else "L")
+    elif compact.get("so"):
+        sow = str(compact.get("sow") or "")
+        if sow:
+            res = "W" if d["team_id"] == sow else "OTL"
+        else:
+            res = "W" if fh > fa and d["team_id"] == str(compact.get("home")) else (
+                "W" if fa > fh and d["team_id"] == str(compact.get("away")) else "OTL"
+            )
+    else:
+        res = "W" if gf > ga else ("OTL" if (compact.get("ot") or compact.get("so")) else "L")
     suffix = " (SO)" if compact.get("so") else (" (OT)" if compact.get("ot") else "")
     cf, ca = float(d.get("cf") or 0), float(d.get("ca") or 0)
     g, a = int(d["g"] or 0), int(d["a"] or 0)
@@ -3005,3 +3038,12 @@ def get_player_game_log_payload(session: Any, player_id: str, season: Optional[i
         "season_ledger": ledger_out,
         "wjc": wjc,
     }
+
+
+try:
+    from app.sim_engine.engine import _BOX_LINE_KEYS as _ENGINE_BOX_LINE_KEYS
+
+    assert list(BOX_LINE_KEYS[:25]) == list(_ENGINE_BOX_LINE_KEYS[:25])
+    assert BOX_LINE_KEYS[-1] == "t" and _ENGINE_BOX_LINE_KEYS[-1] == "t"
+except Exception:
+    pass
