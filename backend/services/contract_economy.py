@@ -8828,6 +8828,7 @@ def handle_player_contract_expiry(
             player.ufa_from_team_id = tid
             player.previous_nhl_team_id = tid
             player.ufa_exclusive = True
+            player.ufa_exclusive_season = int(season_year)
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
     return "ufa"
@@ -10200,6 +10201,7 @@ def run_cpu_rfa_decisions(
     *,
     fa_day: Optional[int] = None,
     final: bool = False,
+    schedule_only: bool = False,
 ) -> Dict[str, Any]:
     """Resolve every CPU team's restricted free agents each offseason.
 
@@ -10219,6 +10221,38 @@ def run_cpu_rfa_decisions(
     re_signed: List[Dict[str, Any]] = []
     walked: List[Dict[str, Any]] = []
     deferred: List[Dict[str, Any]] = []
+
+    if schedule_only:
+        # Spread CPU decisions across the 7-day exclusive window. Signing the
+        # whole league the moment the desk opens left no negotiation time.
+        for team in _get(league, "teams", None) or []:
+            tid = str(_get(team, "team_id", "") or _get(team, "id", ""))
+            if tid == user_tid:
+                continue
+            for entry in list(_ensure_rfa_rights_list(team)):
+                if entry.get("cpu_resolve_day"):
+                    continue
+                player = entry.get("player_ref")
+                age_now = _player_age(player) if player is not None else 26
+                ovr_now = _player_ovr(player) if player is not None else 70.0
+                seed = _stable_seed("rfa-window", entry.get("player_id"), season_year)
+                if age_now <= 22 or ovr_now >= 82:
+                    entry["cpu_resolve_day"] = 1 + (seed % 3)
+                else:
+                    entry["cpu_resolve_day"] = 3 + (seed % 5)
+                deferred.append({
+                    "team_id": tid,
+                    "player_id": str(entry.get("player_id") or ""),
+                    "resolve_day": entry["cpu_resolve_day"],
+                })
+        return {
+            "re_signed": re_signed,
+            "walked": walked,
+            "deferred": deferred,
+            "re_signed_count": 0,
+            "walked_count": 0,
+            "scheduled": True,
+        }
 
     for team in _get(league, "teams", None) or []:
         tid = str(_get(team, "team_id", "") or _get(team, "id", ""))
@@ -10316,6 +10350,13 @@ def run_cpu_rfa_decisions(
                 start_aav = round(max(qo, min(want, retain_ceiling)), 3)
                 unaffordable = cap_space < start_aav or slots_left <= 0
 
+            # 18- and 19-year-olds were walking because their overall was still
+            # in the 70s. A qualifying offer that fits keeps the asset.
+            age_now = _player_age(player)
+            young_asset = age_now <= 22 and slots_left > 0 and cap_space >= float(qo)
+            if young_asset:
+                overload = False
+                unaffordable = False
             # Walk away from cheap depth pieces the team has no room/need for; keep
             # anyone with real value if it can be afforded.
             if slots_left <= 0 or (overload and ovr < 78) or (unaffordable and ovr < 80):
@@ -12893,17 +12934,21 @@ def build_contract_office(session: Any) -> Dict[str, Any]:
                 or ""
             )
             exclusive = bool(getattr(p, "ufa_exclusive", False))
-            if from_tid == user_tid and exclusive:
+            try:
+                exclusive_season = int(getattr(p, "ufa_exclusive_season", 0) or 0)
+            except (TypeError, ValueError):
+                exclusive_season = 0
+            # A missing stamp is this summer only. Re-arming the flag every
+            # offseason put year-1 unsigned players back on the desk in year 4.
+            if from_tid == user_tid and exclusive and (
+                exclusive_season == season_year or exclusive_season == 0
+            ):
+                if exclusive_season == 0:
+                    try:
+                        setattr(p, "ufa_exclusive_season", season_year)
+                    except Exception:
+                        _swallowed_log.debug("suppressed exception", exc_info=True)
                 try:
-                    own_expired_ufas.append(
-                        build_own_ufa_resign_row(p, user_team, season_year, league)
-                    )
-                except Exception:
-                    continue
-            elif from_tid == user_tid and not fa_open:
-                # Legacy: tagged former team but flag missing — still give home desk rights.
-                try:
-                    setattr(p, "ufa_exclusive", True)
                     own_expired_ufas.append(
                         build_own_ufa_resign_row(p, user_team, season_year, league)
                     )

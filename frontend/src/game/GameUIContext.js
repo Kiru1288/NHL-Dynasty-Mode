@@ -1562,6 +1562,8 @@ export function GameUIProvider({ children }) {
         setScreen(SCREENS.SCOUTING);
       } else if (item.id === "chemistry") {
         setScreen(SCREENS.CHEMISTRY);
+      } else if (item.id === "puckgpt") {
+        setScreen(SCREENS.PUCKGPT);
       } else if (item.id === "office") {
         setScreen(SCREENS.HUB);
       } else if (item.id === "settings") {

@@ -2016,7 +2016,7 @@ def resolve_development_profile(player: Any, context: Optional[Any] = None) -> D
                 existing.get("breakout_chance"),
                 _safe_float(getattr(player, "_steal_momentum", 0.08), 0.08),
             ),
-            decline_state=str(existing.get("decline_state") or _decline_state_for(age)),
+            decline_state=_decline_state_for(age),
             source="existing_profile",
             base=existing,
         )
@@ -2224,7 +2224,31 @@ def _realization_rng(player: Any) -> random.Random:
 def assign_prospect_realization(player: Any, rng: Any = None, *, force: bool = False) -> Optional[float]:
     """Roll the hidden ceiling once. The shown potential is left alone."""
     existing = getattr(player, "_dev_realization", None)
-    if existing is not None:
+    if existing is not None and not force:
+        try:
+            realization = float(existing)
+        except (TypeError, ValueError):
+            realization = None
+        if realization is not None and player is not None and _get_player_age(player) <= 26:
+            pot99 = _scout_potential99(player)
+            ovr99 = _player_ovr99(player)
+            ceiling = _growth_ceiling99(player)
+            # Rolled before potential was on the card. The hidden ceiling sat on
+            # today's overall, so a 78/90 never moved again.
+            if (
+                ceiling is not None
+                and pot99 - ovr99 >= 4.0
+                and float(ceiling) <= ovr99 + 1.5
+            ):
+                share = max(0.70, min(0.92, realization if realization > 0.2 else 0.78))
+                new_ceiling = min(float(pot99), ovr99 + share * (pot99 - ovr99))
+                try:
+                    setattr(player, "_dev_real_ceiling", round(float(new_ceiling), 2))
+                    setattr(player, "_dev_realization_base_ovr", round(float(ovr99), 2))
+                    setattr(player, "_dev_realization_pot", round(float(pot99), 2))
+                    setattr(player, "_dev_realization", round(float(share), 4))
+                except Exception:
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
         try:
             return float(existing)
         except (TypeError, ValueError):
@@ -2324,6 +2348,19 @@ def calculate_season_growth_budget(
     ceiling99 = _growth_ceiling99(player)
     if ceiling99 is not None:
         expected = float(ceiling99) / 99.0
+    age_for_ceiling = _get_player_age(player)
+    ovr99_now = current * 99.0 if current <= 1.5 else current
+    scout_pot = _scout_potential99(player)
+    if (
+        age_for_ceiling <= 25
+        and scout_pot - ovr99_now >= 6.0
+        and (ceiling99 is None or float(ceiling99) <= ovr99_now + 1.5)
+    ):
+        # Displayed potential is the destination when the hidden ceiling is stuck.
+        expected = max(
+            expected,
+            min(scout_pot, ovr99_now + 0.55 * (scout_pot - ovr99_now)) / 99.0,
+        )
     gap_exp = float(normalize_rating_gap(current, expected))
     gap_max = float(normalize_rating_gap(current, maximum))
 
@@ -2433,6 +2470,13 @@ def calculate_season_growth_budget(
     ovr100 = current * 99.0 if current <= 1.5 else current
     expected_prod = _expected_production_score_for_deployment(player, ovr100)
     overperf = _clamp((production - expected_prod) * 1.35, -0.25, 0.45)
+    # A harder chair that still produces is a development rep: wrong position,
+    # bottom six putting up real offense, or a defenseman holding a top pair.
+    hard_chair = str(getattr(player, "_dev_off_position_note", "") or "")
+    hard_games = int(getattr(player, "_dev_off_position_games", 0) or 0)
+    produced = overperf > 0.04 and age <= 28 and hard_games >= 10
+    if produced and hard_chair in ("bottom_six", "top_pair", "center", "defense"):
+        mod *= 1.0 + min(0.22, overperf * 0.55)
     # Production vs. what his rating usually produces is the main lever after age:
     # a big year can ~1.5x the budget, a bad one roughly halves it.
     mod *= _clamp(0.85 + overperf * 1.1 + (production - 0.5) * 0.10, 0.55, 1.28)
@@ -2499,8 +2543,16 @@ def calculate_season_growth_budget(
         budget *= 0.78
 
     decline = str(profile.get("decline_state") or "none")
-    if decline != "none" and budget > 0:
-        budget *= 0.50 if decline == "late_decline" else 0.70
+    if age >= 33:
+        decline = "late_decline" if age >= 36 else "early_decline"
+    if decline == "late_decline":
+        budget = min(budget, -0.016)
+    elif decline == "early_decline":
+        budget = min(budget, -0.010)
+    elif decline == "aging" and budget > 0.004:
+        budget = min(budget, 0.004)
+    elif decline != "none" and budget > 0:
+        budget *= 0.70
 
     if budget > 0 and _young_ahl_development_opportunity(player):
         # A top AHL job is a development role. It is not "failed to make the NHL."
@@ -3542,8 +3594,8 @@ def apply_in_season_development_pulse(
     pulse_budget *= float(perf_mult)
     pulse_budget += carry
     if abs(pulse_budget) < 0.0005:
-        if age <= 24 and gap >= 0.05 and phase not in ("STALL",):
-            pulse_budget = 0.0016 if phase != "SPIKE" else 0.0024
+        if age <= 24 and gap >= 0.06:
+            pulse_budget = 0.0024 if phase == "SPIKE" else 0.0018
         else:
             try:
                 setattr(player, _IN_SEASON_BUDGET_CARRY_KEY, carry + pulse_budget)

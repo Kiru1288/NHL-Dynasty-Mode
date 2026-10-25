@@ -37,6 +37,7 @@ const EditLines = React.lazy(() => import("./screens/editLines"));
 const AhlCenter = React.lazy(() => import("./screens/AhlCenter"));
 const ProspectSigningScreen = React.lazy(() => import("./screens/ProspectSigningScreen"));
 const Scouting = React.lazy(() => import("./screens/Scouting"));
+const PuckGptScreen = React.lazy(() => import("./screens/PuckGptScreen"));
 const CapLedger = React.lazy(() => import("./screens/CapLedger"));
 const FreeAgency = React.lazy(() => import("./screens/FreeAgency"));
 const LeagueOperations = React.lazy(() => import("./screens/LeagueOperations"));
@@ -206,6 +207,7 @@ function GameRoot() {
         {screen === SCREENS.DRAFT_LOTTERY && <DraftLottery />}
         {screen === SCREENS.TEAM_NEEDS && <TeamNeeds />}
         {screen === SCREENS.SCOUTING && <Scouting />}
+        {screen === SCREENS.PUCKGPT && <PuckGptScreen />}
         {screen === SCREENS.OFFICE && <OfficeScreen />}
         {screen === SCREENS.LEAGUE_OPERATIONS && <LeagueOperations />}
         {screen === SCREENS.GM_WORLD && <LeagueOperations />}

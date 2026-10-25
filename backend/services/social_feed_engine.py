@@ -812,6 +812,12 @@ def _add_post(
     if acct.get("player_id"):
         post["author_player_id"] = acct["player_id"]
     F.posts.append(post)
+    try:
+        from services.sim_history import archive_social_line
+
+        archive_social_line(F.session, post)
+    except Exception:
+        pass
     if player_id:
         F.mentions[str(player_id)] = F.mentions.get(str(player_id), 0) + 1
     return post

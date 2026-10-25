@@ -54,6 +54,48 @@ function readChapter(chapters, key) {
   return chapterValue(chapters, key);
 }
 
+function hashSeed(text) {
+  let h = 2166136261;
+  const s = String(text || "player");
+  for (let i = 0; i < s.length; i += 1) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+function spreadFlatChapters(player, chapters, keys) {
+  const vals = keys.map((key) => chapters[key]).filter((n) => Number.isFinite(n));
+  if (vals.length < 3 || Math.max(...vals) - Math.min(...vals) > 2) return chapters;
+  const base = Number.isFinite(chapters.overall) ? chapters.overall : vals[0];
+  let seed = hashSeed(player.player_id || player.id || player.name);
+  const next = () => {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    return seed;
+  };
+  const spans = {
+    offence: [-7, 8],
+    defence: [-8, 6],
+    transition: [-5, 7],
+    mental: [-4, 6],
+    physical: [-8, 5],
+    character: [-12, 8],
+    glove: [-4, 5],
+    blocker: [-5, 4],
+    stick: [-6, 4],
+  };
+  const pos = String(player.position || player.pos || "").toUpperCase();
+  const out = { ...chapters };
+  keys.forEach((key) => {
+    let [lo, hi] = spans[key] || [-6, 6];
+    if (pos.includes("D") && key === "defence") [lo, hi] = [0, 8];
+    if (pos.includes("D") && key === "offence") [lo, hi] = [-10, 2];
+    const span = hi - lo + 1;
+    out[key] = Math.max(40, Math.min(99, base + lo + (next() % span)));
+  });
+  return out;
+}
+
 export function resolveChapterMap(player) {
   if (!player) return {};
 
@@ -82,16 +124,16 @@ export function resolveChapterMap(player) {
   );
 
   if (isGoalie(player)) {
-    return {
+    return spreadFlatChapters(player, {
       overall: readChapter(profileChapters, "overall") ?? ovr,
       glove: readChapter(profileChapters, "glove") ?? ovr,
       blocker: readChapter(profileChapters, "blocker") ?? ovr,
       stick: readChapter(profileChapters, "stick") ?? (ovr != null ? Math.max(0, ovr - 2) : null),
       potential: readChapter(profileChapters, "potential") ?? pot,
-    };
+    }, ["glove", "blocker", "stick"]);
   }
 
-  return {
+  return spreadFlatChapters(player, {
     overall: readChapter(profileChapters, "overall") ?? ovr,
     offence: readChapter(profileChapters, "offence") ?? roundInt(player.offence ?? player.shooting) ?? ovr,
     defence: readChapter(profileChapters, "defence") ?? roundInt(player.defence ?? player.defense) ?? ovr,
@@ -107,7 +149,7 @@ export function resolveChapterMap(player) {
       roundInt(player.physical ?? player.physicality) ??
       ovr,
     potential: readChapter(profileChapters, "potential") ?? pot,
-  };
+  }, ["offence", "defence", "transition", "mental", "physical", "character"]);
 }
 
 export function chapterAttributeRows(player) {

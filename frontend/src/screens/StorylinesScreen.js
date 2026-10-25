@@ -388,6 +388,8 @@ function collectLeagueProspectsDeduped(organizations, developmentLeagues) {
   const seen = new Set();
   leagueProspects.forEach((p) => {
     const key = p.player_id || `${p.team_id}:${p.name}`;
+    const nhlGames = Number(p.nhl_career_gp ?? p.raw?.nhl_career_gp ?? p.gp ?? 0);
+    if (Number.isFinite(nhlGames) && nhlGames >= 25) return;
     if (!p.potential || p.potential <= 0 || seen.has(key)) return;
     seen.add(key);
     deduped.push(p);

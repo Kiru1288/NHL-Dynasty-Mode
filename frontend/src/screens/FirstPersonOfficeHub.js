@@ -1006,6 +1006,7 @@ import React, {
     TEAM_IDENTITY: "teamIdentity",
     TASKS: "tasks",
     LEAGUE_CENTRAL: "leagueCentral",
+    PUCKGPT: "puckgpt",
   };
 
   const OFFICE_NAV_TARGETS = {
@@ -1028,6 +1029,7 @@ import React, {
 
     DRAFT_CLASS: "draft-class",
     SCOUTING: "scouting",
+    PUCKGPT: "puckgpt",
     WATCHLIST: "watchlist",
     ASSIGN_SCOUTS: "assign-scouts",
 
@@ -1412,6 +1414,17 @@ import React, {
       enabled: true,
     },
     {
+      id: "puckgpt",
+      label: "PuckGPT",
+      eyebrow: "Save Search",
+      description: "Ask the save. Dates, lineups, social posts, and roster fit.",
+      group: "frontOffice",
+      target: "puckgpt",
+      type: "navigate",
+      screen: SCREENS.PUCKGPT,
+      enabled: true,
+    },
+    {
       id: "settings",
       label: "Settings",
       eyebrow: "Display & Graphics",
@@ -1507,6 +1520,7 @@ import React, {
     routes[OFFICE_NAV_TARGETS.DRAFT_LOTTERY] = screenRoute(SCREENS.DRAFT_LOTTERY);
     routes[OFFICE_NAV_TARGETS.TEAM_NEEDS] = screenRoute(SCREENS.TEAM_NEEDS);
     routes[OFFICE_NAV_TARGETS.SCOUTING] = screenRoute(SCREENS.SCOUTING);
+    routes[OFFICE_NAV_TARGETS.PUCKGPT] = screenRoute(SCREENS.PUCKGPT);
     routes[OFFICE_NAV_TARGETS.WATCHLIST] = screenRoute(SCREENS.SCOUTING);
     routes[OFFICE_NAV_TARGETS.CONTRACTS] = screenRoute(SCREENS.CAP_LEDGER, { capTab: "contracts" });
     routes[OFFICE_NAV_TARGETS.EXTENSIONS] = screenRoute(SCREENS.CAP_LEDGER, { capTab: "contracts" });
@@ -1605,6 +1619,7 @@ import React, {
     [OFFICE_PANEL_IDS.TEAM_IDENTITY]: "franchise-identity",
     [OFFICE_PANEL_IDS.TASKS]: "decision-desk",
     [OFFICE_PANEL_IDS.LEAGUE_CENTRAL]: "league-central",
+    [OFFICE_PANEL_IDS.PUCKGPT]: "puckgpt",
   };
 
   const OFFICE_INTERACTIVE_PANEL_IDS = [
@@ -1768,6 +1783,7 @@ import React, {
         ["Draft Class", OFFICE_NAV_TARGETS.DRAFT_CLASS],
         ["Prospect Rankings", OFFICE_NAV_TARGETS.PROSPECT_RANKINGS],
         ["Scouting", OFFICE_NAV_TARGETS.SCOUTING],
+        ["PuckGPT", OFFICE_NAV_TARGETS.PUCKGPT],
         ["Watchlist", OFFICE_NAV_TARGETS.WATCHLIST],
       ],
     },
@@ -6762,6 +6778,13 @@ import React, {
           onClick={() => onOpenStation?.(OFFICE_PANEL_IDS.DRAFT)}
         >
           Draft war room
+        </button>
+        <button
+          type="button"
+          className="office-edge office-edge--right"
+          onClick={() => onOpenStation?.(OFFICE_PANEL_IDS.PUCKGPT)}
+        >
+          PuckGPT
         </button>
 
         <button

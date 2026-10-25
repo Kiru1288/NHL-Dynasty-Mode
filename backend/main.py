@@ -416,6 +416,18 @@ def get_franchise_narrative(x_franchise_session: Optional[str] = Header(default=
     }
 
 
+@app.get("/api/franchise/puckgpt")
+def get_puckgpt(
+    q: str = "",
+    x_franchise_session: Optional[str] = Header(default=None),
+) -> dict[str, Any]:
+    from services.json_safe import json_safe
+    from services.sim_history import answer_save_query
+
+    s = _session_or_404(x_franchise_session)
+    return json_safe(answer_save_query(s, q))
+
+
 @app.get("/api/franchise/stats-central")
 def get_franchise_stats_central(x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
     from services.json_safe import json_safe
@@ -1207,7 +1219,7 @@ def get_franchise_game(game_id: str, x_franchise_session: Optional[str] = Header
 
 @app.get("/api/franchise/box-score/{game_id}")
 def get_franchise_box_score(game_id: str, x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
-    """Compact box score for one finished game (current + previous season are kept)."""
+    """Compact box score for one finished game. Every season stays in the book."""
     from app.sim_engine.franchise.serialization import get_box_score_payload  # noqa: WPS433
 
     s = _session_or_404(x_franchise_session)

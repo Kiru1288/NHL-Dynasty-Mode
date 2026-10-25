@@ -1760,6 +1760,9 @@ def _franchise_log_injury_and_ui(
     }
 
     session.injury_log_all.append(injury_log_row)
+    # CPU games now roll injuries every night. Keep the in-memory logs bounded.
+    if len(session.injury_log_all) > 800:
+        session.injury_log_all = session.injury_log_all[-800:]
 
     if is_major:
         session.injury_log_major.append(
@@ -1776,6 +1779,8 @@ def _franchise_log_injury_and_ui(
                 "calendar_iso": str(calendar_iso or ""),
             }
         )
+        if len(session.injury_log_major) > 200:
+            session.injury_log_major = session.injury_log_major[-200:]
 
     priority = "HIGH" if is_major else "MEDIUM"
     summary = (
@@ -3590,7 +3595,8 @@ def _team_shooting_profile(team: Any) -> float:
 _TEAM_SLICE_KEYS = (
     "gp", "g", "a", "pts", "sog", "pim", "hit", "blk", "toi_sec", "plus_minus",
     "ppg", "shg", "gwg", "w", "l", "otl", "t", "so", "ga", "shots_against", "saves",
-    "ixg", "fow", "fol", "primary_assists", "secondary_assists",
+    "ixg", "fow", "fol", "primary_assists", "secondary_assists", "gs", "starts",
+    "otg", "eng", "gwg",
     "ev_toi_sec", "pp_toi_sec", "pk_toi_sec",
 )
 
@@ -3631,6 +3637,28 @@ def _freeze_team_slice(row: Dict[str, Any], old_team: str) -> None:
             snap[k] = int(row.get(k) or 0) - int(prior.get(k) or 0)
     if any(snap.values()):
         by[str(old_team)] = snap
+
+
+def _row_team_slices(row: Dict[str, Any]) -> List[Tuple[str, Dict[str, int]]]:
+    """Previous clubs in ``by_team``, plus the current club as row minus those slices."""
+    by = row.get("by_team") or {}
+    out: List[Tuple[str, Dict[str, int]]] = []
+    prior: Dict[str, int] = {}
+    if isinstance(by, dict):
+        for tid, sl in by.items():
+            if not isinstance(sl, dict):
+                continue
+            counts = {k: int(sl.get(k) or 0) for k in _TEAM_SLICE_KEYS}
+            out.append((str(tid), counts))
+            for k, v in counts.items():
+                prior[k] = prior.get(k, 0) + int(v)
+    cur = str(row.get("team_id") or "")
+    if cur:
+        current = {k: int(row.get(k) or 0) - int(prior.get(k) or 0) for k in _TEAM_SLICE_KEYS}
+        out.append((cur, current))
+    elif not out:
+        out.append(("", {k: int(row.get(k) or 0) for k in _TEAM_SLICE_KEYS}))
+    return out
 
 
 def _stat_ensure(session: FranchiseSession, p: Any, team_id: str) -> Dict[str, Any]:
@@ -3802,36 +3830,69 @@ def _repair_team_by_id(session: FranchiseSession) -> None:
 
 
 def _migrate_box_layout_v2(session: FranchiseSession) -> None:
-    if bool(getattr(session, "_box_layout_v2_done", False)):
+    # Older builds set _box_layout_v2_done after fixing only the current season.
+    if bool(getattr(session, "_box_layout_v2_all_seasons_done", False)):
         return
     from app.sim_engine.franchise.serialization import _box_three_stars  # noqa: WPS433
+    from app.sim_engine.franchise.storyline_stat_bridge import update_box_score_records  # noqa: WPS433
 
-    season_y = int(getattr(session, "season_calendar_year", 0) or 0)
     book = getattr(session, "box_score_book", None) or {}
-    seasons = (book.get("seasons") or {}).get(str(season_y)) or {}
-    games = seasons.get("games") or {}
-    for compact in games.values():
-        if not isinstance(compact, dict) or int(compact.get("lv") or 0) >= 2:
-            continue
-        lines = compact.get("lines") or {}
-        if not isinstance(lines, dict):
-            continue
-        for pid, row in list(lines.items()):
-            if not isinstance(row, (list, tuple)):
+    seasons = book.get("seasons") or {}
+    migrated: List[Dict[str, Any]] = []
+    if isinstance(seasons, dict):
+        for season_games in seasons.values():
+            games = (season_games or {}).get("games") if isinstance(season_games, dict) else None
+            if not isinstance(games, dict):
                 continue
-            r = list(row)
-            if len(r) == 31:
-                r = r[:25] + [r[25]] + r[27:31] + [0]
-            elif len(r) == 30:
-                r.append(0)
-            lines[pid] = r
-        compact["lines"] = lines
-        compact["lv"] = 2
+            for compact in games.values():
+                if not isinstance(compact, dict) or int(compact.get("lv") or 0) >= 2:
+                    if isinstance(compact, dict):
+                        migrated.append(compact)
+                    continue
+                lines = compact.get("lines") or {}
+                if not isinstance(lines, dict):
+                    continue
+                for pid, row in list(lines.items()):
+                    if not isinstance(row, (list, tuple)):
+                        continue
+                    r = list(row)
+                    if len(r) == 31:
+                        r = r[:25] + [r[25]] + r[27:31] + [0]
+                    elif len(r) == 30:
+                        r.append(0)
+                    lines[pid] = r
+                compact["lines"] = lines
+                compact["lv"] = 2
+                try:
+                    compact["stars"] = _box_three_stars(lines, str(compact.get("gwg") or ""))
+                except Exception:
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
+                migrated.append(compact)
+    recs = getattr(session, "box_score_records", None)
+    if isinstance(recs, dict):
+        for key in (
+            "season_game",
+            "franchise_game",
+            "league_season_game",
+            "team_season",
+            "team_alltime",
+            "vs_user_season",
+            "vs_user",
+        ):
+            recs[key] = {}
+        recs["season"] = None
+    for compact in migrated:
         try:
-            compact["stars"] = _box_three_stars(lines, str(compact.get("gwg") or ""))
+            update_box_score_records(session, compact, publish=False)
+        except TypeError:
+            try:
+                update_box_score_records(session, compact)
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
     session._box_layout_v2_done = True
+    session._box_layout_v2_all_seasons_done = True
 
 
 def _ensure_gp_repair_v3(session: FranchiseSession) -> None:
@@ -3852,6 +3913,13 @@ def _ensure_gp_repair_v3(session: FranchiseSession) -> None:
     except Exception:
         session._gp_repair_v3_attempts = attempts + 1
         logging.getLogger(__name__).exception("Stats ledger epoch v3 migration failed")
+    # v3 used max(gp, box count), so backups who already had ~82 GP were never lowered.
+    if not bool(getattr(session, "_goalie_gp_toi_repair_done", False)):
+        try:
+            _repair_gp_from_game_boxes(session)
+            session._goalie_gp_toi_repair_done = True
+        except Exception:
+            logging.getLogger(__name__).exception("Goalie GP toi recount failed")
 
 
 def _repair_legacy_shootout_tied_boxes(session: FranchiseSession) -> None:
@@ -3923,6 +3991,20 @@ def _franchise_resolve_game_score(
         "light_mode": bool(light_mode),
         "return_meta": True,
     }
+    try:
+        home_g, away_g = sim._gm_pick_game_starters(
+            rng, home, away,
+            calendar_day=int(calendar_day),
+            home_b2b=bool(home_b2b),
+            away_b2b=bool(away_b2b),
+            is_playoff=bool(is_playoff),
+        )
+        kw["home_goalie"] = home_g
+        kw["away_goalie"] = away_g
+        sim._locked_home_goalie = home_g
+        sim._locked_away_goalie = away_g
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     first_failed = False
     try:
         out = sim._simulate_game(rng, home, away, smap, **kw)
@@ -3964,6 +4046,8 @@ def _franchise_resolve_game_score(
         home_b2b=bool(home_b2b),
         away_b2b=bool(away_b2b),
         is_playoff=bool(is_playoff),
+        home_goalie=kw.get("home_goalie"),
+        away_goalie=kw.get("away_goalie"),
     )
 
 
@@ -4161,9 +4245,22 @@ def _repair_gp_from_game_boxes(session: FranchiseSession) -> None:
             if str(row.get("stat_scope") or scope) != scope:
                 continue
             tid = str(row.get("team_id") or "")
+            new_gp = len(gp_map.get(str(pid), set()))
+            is_goalie = str(row.get("position") or "").upper().startswith("G")
+            if is_goalie:
+                # Light games used to give every healthy goalie a GP and a 0-TOI box
+                # line. Recounting from toi_sec > 0 lowers backup GP back to games played.
+                if tid and tid in eligible:
+                    row["gp"] = int(new_gp)
+                else:
+                    row["gp"] = max(
+                        int(new_gp),
+                        int(row.get("gs") or 0),
+                        int(row.get("starts") or 0),
+                    )
+                continue
             if tid and tid not in eligible:
                 continue
-            new_gp = len(gp_map.get(str(pid), set()))
             if new_gp > 0:
                 row["gp"] = max(int(row.get("gp", 0) or 0), int(new_gp))
 
@@ -4433,6 +4530,12 @@ def _accumulate_franchise_game_stats(
     if not bool(is_playoff):
         session.game_results.append(box)
         processed.add(gid)
+        try:
+            from services.sim_history import record_final_score
+
+            record_final_score(session, box, lines=_box_lines)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         from app.sim_engine.franchise.serialization import store_compact_box_score  # noqa: WPS433
         from app.sim_engine.franchise.storyline_stat_bridge import update_box_score_records  # noqa: WPS433
@@ -4447,7 +4550,8 @@ def _accumulate_franchise_game_stats(
             update_box_score_records(session, _compact)
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
-    if not light_stats:
+    user_in_game = str(getattr(session, "user_team_id", "") or "") in (str(hid), str(aid))
+    if user_in_game or not light_stats:
         try:
             from app.sim_engine.franchise.storyline_coverage import ingest_game_box_storylines  # noqa: WPS433
 
@@ -4682,9 +4786,26 @@ def _goofy_on_ice_moments(
                 pl._world_conduct_status = "league_suspended"
                 served = f" {_nm(inst)} has been suspended {ban} game{'s' if ban > 1 else ''} for instigating."
             fine = r.choice((25, 50, 100))
-            emit("line_brawl", f"Bench-clearing brawl: {abbr[hid]} vs {abbr[aid]}",
-                 f"All ten skaters paired off and the backups wanted in too. The league fined both clubs ${fine},000 and both coaches ${fine // 2},000.{served}",
-                 tid, inst, popup=user_game, story=True, theme="warning")
+            emit(
+                "line_brawl",
+                f"Bench-clearing brawl: {abbr[hid]} vs {abbr[aid]}",
+                f"All ten skaters paired off and the backups wanted in too. The league fined both clubs ${fine},000 and both coaches ${fine // 2},000.{served}",
+                tid,
+                inst,
+                popup=user_game,
+                story=True,
+                theme="warning",
+            )
+            if served:
+                other = aid if tid == hid else hid
+                emit(
+                    "suspension",
+                    f"{_nm(inst)} suspended {ban} games",
+                    f"{_nm(inst)} suspended {ban} games for instigating a line brawl against {abbr.get(other, 'the opponent')}.",
+                    tid,
+                    inst,
+                    popup=tid == utid,
+                )
 
     # 5. Mascot shenanigans (home club).
     if r.random() < _GOOFY_P_MASCOT:
@@ -6212,7 +6333,7 @@ def _build_team_analytics_rows(session: FranchiseSession) -> List[Dict[str, Any]
         ot_flag = (hot + aot) > 0
         first_id = str(game.get("first_goal_team_id") or "")
         h_en = a_en = 0
-        for ev in game.get("scoring_events") or []:
+        for ev in list(game.get("scoring_events") or []) or list(game.get("light_goals") or []):
             if not isinstance(ev, dict) or not ev.get("empty_net"):
                 continue
             scorer_team = str(ev.get("for_team_id") or "")
@@ -6243,9 +6364,16 @@ def _build_team_analytics_rows(session: FranchiseSession) -> List[Dict[str, Any]
     for row in list((getattr(session, "player_season_stats", None) or {}).values()):
         if not isinstance(row, dict):
             continue
-        tid = str(row.get("team_id") or "")
-        if tid:
-            rows_by_team[tid].append(row)
+        for tid, counts in _row_team_slices(row):
+            if not tid:
+                continue
+            sliced = {
+                "player_id": row.get("player_id"),
+                "position": row.get("position"),
+                "team_id": tid,
+            }
+            sliced.update(counts)
+            rows_by_team[tid].append(sliced)
 
     out: List[Dict[str, Any]] = []
     for tid, team in (getattr(session, "team_by_id", None) or {}).items():
@@ -6737,6 +6865,7 @@ def _build_stats_central_payload(session: FranchiseSession) -> Dict[str, Any]:
                         _swallowed_log.debug("suppressed exception", exc_info=True)
 
         rows: List[Dict[str, Any]] = []
+        src_by_pid: Dict[str, Dict[str, Any]] = {}
         for src in list((getattr(session, "player_season_stats", None) or {}).values()):
             if not isinstance(src, dict):
                 continue
@@ -6745,6 +6874,8 @@ def _build_stats_central_payload(session: FranchiseSession) -> Dict[str, Any]:
             # Copy — never mutate live ledger team_id (broke team GF vs standings after trades).
             row = dict(src)
             pid = str(row.get("player_id") or row.get("id") or "")
+            if pid:
+                src_by_pid[pid] = src
             player = player_by_id.get(pid)
             if player is not None:
                 try:
@@ -6782,13 +6913,30 @@ def _build_stats_central_payload(session: FranchiseSession) -> Dict[str, Any]:
                 if pid:
                     user_player_ids.add(pid)
             break
+        def _team_slice_view(r: Dict[str, Any], tid: str) -> Dict[str, Any]:
+            src = src_by_pid.get(str(r.get("player_id") or r.get("id") or ""))
+            if not isinstance(src, dict):
+                return r
+            for slice_tid, counts in _row_team_slices(src):
+                if slice_tid != tid:
+                    continue
+                out = dict(r)
+                out.update(counts)
+                out["team_id"] = tid
+                if str(out.get("position") or "").upper() != "G":
+                    out["pts"] = int(out.get("g") or 0) + int(out.get("a") or 0)
+                return out
+            return r
+
         if user_player_ids:
             enriched["user_team_skaters"] = [
-                r for r in list(enriched.get("skaters") or [])
+                _team_slice_view(r, uid)
+                for r in list(enriched.get("skaters") or [])
                 if str(r.get("player_id") or r.get("id") or "") in user_player_ids
             ]
             enriched["user_team_goalies"] = [
-                r for r in list(enriched.get("goalies") or [])
+                _team_slice_view(r, uid)
+                for r in list(enriched.get("goalies") or [])
                 if str(r.get("player_id") or r.get("id") or "") in user_player_ids
             ]
 
@@ -6844,7 +6992,7 @@ def _build_stats_central_payload(session: FranchiseSession) -> Dict[str, Any]:
                 bucket = enriched.get(list_key)
                 if isinstance(bucket, list) and bucket:
                     attach_relative_team_rates(bucket, team_rows, share_source=skater_rows)
-            season_len = int(getattr(session, "season_length", None) or getattr(session, "games_per_team", None) or 82)
+            season_len = int(getattr(session, "games_per_team_schedule", None) or 82)
             league = getattr(getattr(session, "sim", None), "league", None)
             league_teams = list(getattr(league, "teams", None) or [])
             season_year = int(getattr(session, "season_calendar_year", 2026) or 2026)
@@ -6900,7 +7048,7 @@ def _build_stats_central_payload(session: FranchiseSession) -> Dict[str, Any]:
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
         integrity["league_shooting"] = _league_weighted_shooting_metrics(session)
-        if race_sealed:
+        if bool(getattr(session, "regular_season_complete", False)):
             try:
                 _log_season_scoring_calibration(session)
             except Exception:
@@ -8588,6 +8736,15 @@ def _serialize_player_row(
             "rights_status": str(cnorm.get("rights_status") or getattr(p, "rights_status", "") or "") or None,
         }
         try:
+            from services.contract_economy import resolved_rights_status
+
+            resolved_rights = resolved_rights_status(p, cnorm if isinstance(cnorm, dict) else None)
+            row["contract"]["rights_status"] = resolved_rights
+            row["contract"]["rights"] = resolved_rights
+            row["rights_status"] = resolved_rights
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+        try:
             from app.sim_engine.franchise.player_agent_engine import agent_public_view  # noqa: WPS433
 
             row["contract"]["agent"] = agent_public_view(p, session)
@@ -8648,14 +8805,46 @@ def _serialize_player_row(
             }
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
+    try:
+        banked = int(getattr(p, "nhl_career_gp", 0) or 0)
+    except (TypeError, ValueError):
+        banked = 0
+    season_gp = 0
+    if session is not None:
+        stats_ledger = getattr(session, "player_season_stats", None) or {}
+        stat_row = stats_ledger.get(pid) or stats_ledger.get(str(getattr(p, "id", "") or ""))
+        if isinstance(stat_row, dict):
+            try:
+                season_gp = int(stat_row.get("gp") or 0)
+            except (TypeError, ValueError):
+                season_gp = 0
+    row["nhl_career_gp"] = banked + season_gp
     # Awards / career stats when stored on the player.
     try:
         awards = getattr(p, "career_awards", None) or getattr(p, "awards_won", None)
         if isinstance(awards, list) and awards:
-            row["career_awards"] = [
-                (a if isinstance(a, (str, int, float)) else dict(a) if isinstance(a, dict) else str(a))
-                for a in awards[:24]
-            ]
+            published_through = 0
+            current_season = 0
+            if session is not None:
+                try:
+                    published_through = int(getattr(session, "awards_published_through", 0) or 0)
+                    current_season = int(getattr(session, "season_calendar_year", 0) or 0)
+                except (TypeError, ValueError):
+                    published_through = 0
+            visible = []
+            for award in awards[:24]:
+                if isinstance(award, dict) and current_season:
+                    try:
+                        award_season = int(award.get("season") or 0)
+                    except (TypeError, ValueError):
+                        award_season = 0
+                    if award_season == current_season and published_through < current_season:
+                        continue
+                visible.append(
+                    award if isinstance(award, (str, int, float)) else dict(award) if isinstance(award, dict) else str(award)
+                )
+            if visible:
+                row["career_awards"] = visible
         career = getattr(p, "career_stats", None)
         if isinstance(career, dict) and career:
             seasons = career.get("seasons") or career.get("by_season") or career.get("history")
@@ -9900,6 +10089,10 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
 
     rng = getattr(sim, "rng", None)
     calendar_iso = _scouting_calendar_iso(session)
+    try:
+        scout_month = int(str(calendar_iso)[5:7])
+    except (TypeError, ValueError):
+        scout_month = 0
     season_year = int(getattr(session, "season_calendar_year", 2025) or 2025)
     stat_keys = (
         "gp", "games_played", "goals", "assists", "points", "ppg", "points_per_game",
@@ -10097,6 +10290,8 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
                 if wkg:
                     row["weight"] = round(wkg * 2.20462)
 
+                if scout_month:
+                    row["calendar_month"] = scout_month
                 enrich_prospect_row_from_player(p, row)
 
                 if scoring_available:
@@ -10287,6 +10482,8 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
             p = row.get("_player")
             if p is not None and row.get("_ovr_floor_repaired"):
                 try:
+                    if scout_month:
+                        row["calendar_month"] = scout_month
                     enrich_prospect_row_from_player(p, row)
                 except Exception:
                     _swallowed_log.debug("suppressed exception", exc_info=True)
@@ -12959,9 +13156,16 @@ def _franchise_daily_league_tick(session: FranchiseSession, calendar_idx: int) -
         _franchise_bootstrap_scoring_gravity(session)
         last_elite = int(getattr(session, "_scoring_elite_refresh_idx", -99) or -99)
         # Negative gap = stamp from last season's calendar (cursor resets to 0 each year).
-        if int(calendar_idx) - last_elite >= 14 or int(calendar_idx) < last_elite:
+        strength_rev = int(getattr(session, "_roster_revision", 0) or 0)
+        if (
+            int(calendar_idx) - last_elite >= 14
+            or int(calendar_idx) < last_elite
+            or getattr(session, "_strength_roster_rev", None) != strength_rev
+        ):
             _franchise_refresh_scoring_elite_pool(session)
+            _franchise_refresh_strength_map(session)
             session._scoring_elite_refresh_idx = int(calendar_idx)
+            session._strength_roster_rev = strength_rev
     # Bulk calendar advance: socio/trades dominate wall time. Throttle waivers/roster
     # pressure, but compensate trade cadence on the days we do run (see engine).
     bulk = bool(getattr(session, "_bulk_calendar_advance", False))
@@ -13101,6 +13305,9 @@ def _franchise_daily_league_tick(session: FranchiseSession, calendar_idx: int) -
             )
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
+    roster_news = any(str(ev.get("type") or "") in ("trade", "waiver", "callup") for ev in news_tmp if isinstance(ev, dict))
+    if roster_news or int(ctr.get("trade_executions") or 0) or int(ctr.get("waiver_claims") or 0):
+        session._roster_revision = int(getattr(session, "_roster_revision", 0) or 0) + 1
     if not socio_ok:
         logger = logging.getLogger(__name__)
         logger.warning("Daily socio-economics tick failed at calendar day %s", int(calendar_idx))
@@ -13108,9 +13315,8 @@ def _franchise_daily_league_tick(session: FranchiseSession, calendar_idx: int) -
     try:
         from app.sim_engine.systems.chemistry import apply_daily_chemistry_tick  # noqa: WPS433
 
-        user_team = session.team_by_id.get(utid) if utid else None
-        if user_team is not None:
-            apply_daily_chemistry_tick(user_team, session=session, rng=rng)
+        for tm in teams:
+            apply_daily_chemistry_tick(tm, session=session, rng=rng)
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
     _prune_expired_storylines(session, int(calendar_idx))
@@ -13763,6 +13969,10 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
         _attach_franchise_saved_lineups(
             session, home, away, home_id=hid, away_id=aid, user_tid=user_tid
         )
+        try:
+            sim._gm_season_ledger_ref = session.player_season_stats
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         score_res = _franchise_resolve_game_score(
             session,
             sim,
@@ -13783,10 +13993,6 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
             noise_scale=id_noise,
             is_user_game=is_user_game,
         )
-        try:
-            sim._gm_season_ledger_ref = session.player_season_stats
-        except Exception:
-            _swallowed_log.debug("suppressed exception", exc_info=True)
         hg, ag, ot = int(score_res.home), int(score_res.away), bool(score_res.overtime)
         hg, ag = _validate_final_game_result_payload(
             home_id=hid,
@@ -13970,6 +14176,12 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
         }
         session.game_results.append(box)
         _processed_game_ids(session).add(stable_gid)
+        try:
+            from services.sim_history import record_final_score
+
+            record_final_score(session, box)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     _clear_franchise_saved_lineups(home, away)
     if not isinstance(box, dict):
         box = {}
@@ -14124,17 +14336,7 @@ def _simulate_slots_for_day(
         if ll:
             league_lines.append(ll)
 
-    if bulk_light:
-        missing = sorted(expected_keys - completed_keys)
-        if missing:
-            raise RuntimeError(
-                f"Game result integrity error on calendar day {calendar_day}: "
-                f"{len(missing)} scheduled game(s) did not produce a valid final result. "
-                f"First missing: {missing[0][0]} vs {missing[0][1]}"
-            )
-        return lines, league_lines
-
-    # Verify result store has a valid final for every scheduled slot.
+    # Both day and bulk require a saved final for every slot that was supposed to sim.
     all_results = getattr(session, "game_results", None) or []
     saved_for_day = [
         g
@@ -14733,6 +14935,66 @@ def _bulk_trade_demand_catchup(session: FranchiseSession) -> None:
     session._bulk_demand_last_check_idx = idx
 
 
+def _run_due_development_ticks(session: FranchiseSession) -> None:
+    """NHL, prospect, depth, ELC, and free-agency ticks on the same calendar days in every sim mode."""
+    day_now = int(getattr(session, "calendar_days_finished", 0) or 0)
+
+    def _due(attr: str, every: int) -> int:
+        last = getattr(session, attr, None)
+        if last is None:
+            last = 0
+        n = max(0, (day_now - int(last)) // int(every))
+        if n:
+            setattr(session, attr, int(last) + n * int(every))
+        return n
+
+    for _ in range(_due("_bulk_dev_tick_day", 8)):
+        try:
+            _nhl_in_season_development_tick(session)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+        try:
+            _prospect_in_season_development_tick(session)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    for _ in range(_due("_bulk_depth_tick_day", 5)):
+        _depth_pool_progression_tick(session)
+    for _ in range(_due("_bulk_elc_tick_day", 30)):
+        try:
+            from services.contract_economy import run_cpu_prospect_elc_pass
+
+            run_cpu_prospect_elc_pass(session)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    fa_n = _due("_fa_tick_day", 5)
+    if fa_n and bool(getattr(session, "free_agency_open", False)):
+        try:
+            from services.fa_market_engine import tick_free_agency_market
+            from services.franchise_offseason import _open_free_agency
+
+            tick = tick_free_agency_market(session, days=int(fa_n) * 5)
+            session._last_fa_market_tick = tick
+            _open_free_agency(session, force=False)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    elif fa_n and str(getattr(session, "phase", "") or "") == "regular":
+        try:
+            league = getattr(session.sim, "league", None)
+            pool = list(getattr(league, "free_agents", None) or []) if league else []
+            if pool:
+                from services.fa_market_engine import ensure_fa_market_book, tick_free_agency_market
+
+                ensure_fa_market_book(session)
+                tick_free_agency_market(
+                    session,
+                    days=int(fa_n),
+                    max_signings_per_day=1,
+                    max_offers_per_day=4,
+                )
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+
+
 def _run_bulk_incremental_catchup(session: FranchiseSession, *, steps_n: int) -> None:
     """Spread narrative/prospect/dev catch-up across bulk steps (delta per chunk)."""
     steps_n = max(1, int(steps_n))
@@ -14744,36 +15006,8 @@ def _run_bulk_incremental_catchup(session: FranchiseSession, *, steps_n: int) ->
     # however the days were chunked. ``max(1, steps // 8)`` ran a full league-wide
     # growth pulse on every short bulk call, so a season's 22 prospect pulses were
     # spent in ~70 days and each cost ~20s.
-    day_now = int(getattr(session, "calendar_days_finished", 0) or 0)
-
-    def _due(attr: str, every: int) -> int:
-        last = getattr(session, attr, None)
-        if last is None:
-            last = day_now - steps_n
-        n = max(0, (day_now - int(last)) // every)
-        if n:
-            setattr(session, attr, int(last) + n * every)
-        return n
-
     try:
-        for _ in range(_due("_bulk_dev_tick_day", 8)):
-            try:
-                _nhl_in_season_development_tick(session)
-            except Exception:
-                _swallowed_log.debug("suppressed exception", exc_info=True)
-            try:
-                _prospect_in_season_development_tick(session)
-            except Exception:
-                _swallowed_log.debug("suppressed exception", exc_info=True)
-        for _ in range(_due("_bulk_depth_tick_day", 5)):
-            _depth_pool_progression_tick(session)
-        for _ in range(_due("_bulk_elc_tick_day", 30)):
-            try:
-                from services.contract_economy import run_cpu_prospect_elc_pass
-
-                run_cpu_prospect_elc_pass(session)
-            except Exception:
-                _swallowed_log.debug("suppressed exception", exc_info=True)
+        _run_due_development_ticks(session)
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
 
@@ -14793,7 +15027,17 @@ def _run_bulk_incremental_catchup(session: FranchiseSession, *, steps_n: int) ->
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
-        n_extra = _due("_bulk_extra_dev_day", 1)
+        # calendar_days_finished only increments inside _finalize_regular_calendar_day,
+        # and day mode applies one extra-league tick per that increment, including
+        # preseason. This catch-up runs on every light bulk step that went through
+        # the same finalize, so the day count matches. It is not regular-season-only.
+        day_now = int(getattr(session, "calendar_days_finished", 0) or 0)
+        last_extra = getattr(session, "_bulk_extra_dev_day", None)
+        if last_extra is None:
+            last_extra = day_now - int(steps_n)
+        n_extra = max(0, day_now - int(last_extra))
+        if n_extra:
+            session._bulk_extra_dev_day = day_now
         if n_extra:
             from app.sim_engine.league_hierarchy_bootstrap import tick_extra_league_development
 
@@ -14850,14 +15094,9 @@ def _run_bulk_finalize_catchup(
             steps_n
         )
 
-    try:
-        stat_scope = _franchise_stat_scope(session, is_playoff=False)
-        for row in (getattr(session, "player_season_stats", None) or {}).values():
-            if isinstance(row, dict):
-                _stamp_ledger_scope(row, stat_scope)
-                row["stat_authority"] = "session.player_season_stats"
-    except Exception:
-        _swallowed_log.debug("suppressed exception", exc_info=True)
+    # Per-game accumulation already stamps stat_scope. A finalize pass here used the
+    # live phase, so a bulk run that stopped in "playoffs" or "preseason" relabeled
+    # the entire regular-season ledger.
 
     if bool(getattr(session, "_pending_prospect_revision_bump", False)):
         session._pending_prospect_revision_bump = False
@@ -15455,65 +15694,8 @@ def _finalize_regular_calendar_day(
             _sync_prospect_stats_to_calendar(session)
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
-    if not bulk and int(session.calendar_days_finished) % 5 == 0:
-        _depth_pool_progression_tick(session)
-        session._bulk_depth_tick_day = int(session.calendar_days_finished)
-
-    if not bulk and int(session.calendar_days_finished) % 8 == 0:
-        # Keep the bulk path's calendar in step so it never re-runs these ticks.
-        session._bulk_dev_tick_day = int(session.calendar_days_finished)
-        try:
-            _nhl_in_season_development_tick(session)
-        except Exception:
-            _swallowed_log.debug("suppressed exception", exc_info=True)
-        try:
-            _prospect_in_season_development_tick(session)
-        except Exception:
-            _swallowed_log.debug("suppressed exception", exc_info=True)
-
-    if not bulk and int(session.calendar_days_finished) % 30 == 0:
-        try:
-            from services.contract_economy import run_cpu_in_season_free_agency
-
-            run_cpu_in_season_free_agency(session)
-        except Exception:
-            _swallowed_log.debug("suppressed exception", exc_info=True)
-        try:
-            from services.contract_economy import run_cpu_prospect_elc_pass
-
-            run_cpu_prospect_elc_pass(session)
-        except Exception:
-            _swallowed_log.debug("suppressed exception", exc_info=True)
-
-    # Living FA market: during bulk, accumulate days and tick once at bulk end (see advance_franchise_bulk).
-    try:
-        if bool(getattr(session, "free_agency_open", False)):
-            if bulk:
-                session._bulk_fa_days_pending = int(getattr(session, "_bulk_fa_days_pending", 0) or 0) + 1
-            else:
-                from services.fa_market_engine import tick_free_agency_market
-                from services.franchise_offseason import _open_free_agency
-
-                tick = tick_free_agency_market(session, days=1)
-                session._last_fa_market_tick = tick
-                _open_free_agency(session, force=False)
-        elif not light_bulk and not bulk and str(getattr(session, "phase", "") or "") == "regular":
-            # Sparse in-season FA chatter between the heavier 30-day waves
-            if int(session.calendar_days_finished) % 5 == 0:
-                league = getattr(session.sim, "league", None)
-                pool = list(getattr(league, "free_agents", None) or []) if league else []
-                if pool:
-                    from services.fa_market_engine import ensure_fa_market_book, tick_free_agency_market
-
-                    ensure_fa_market_book(session)
-                    tick_free_agency_market(
-                        session,
-                        days=1,
-                        max_signings_per_day=1,
-                        max_offers_per_day=4,
-                    )
-    except Exception:
-        _swallowed_log.debug("suppressed exception", exc_info=True)
+    if not bulk:
+        _run_due_development_ticks(session)
 
     _maybe_enqueue_wjc_loan_decisions(session, day_meta)
     _maybe_enqueue_showcase_popups(session, day_meta)
@@ -19793,12 +19975,21 @@ def advance_franchise_day(session: FranchiseSession) -> Dict[str, Any]:
     - Move cursor exactly once after successful simulation.
     """
     _ensure_gp_repair_v3(session)
+    try:
+        session.sim.season_calendar_year = int(getattr(session, "season_calendar_year", 0) or 0)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     # Identity + roster repair walk every NHL/AHL list. During a week or month
     # sim that is most of the non-game cost, so it runs once a week and again
     # when the bulk sim finishes.
-    bulk_now = bool(getattr(session, "_bulk_calendar_advance", False))
-    guard_day = int(getattr(session, "calendar_cursor", 0) or 0)
-    if (not bulk_now) or (guard_day % 7 == 0):
+    roster_rev = int(getattr(session, "_roster_revision", 0) or 0)
+    identity_week = int(getattr(session, "calendar_days_finished", 0) or 0) // 7
+    if (
+        getattr(session, "_identity_roster_rev", None) != roster_rev
+        or getattr(session, "_identity_week", None) != identity_week
+    ):
+        session._identity_roster_rev = roster_rev
+        session._identity_week = identity_week
         try:
             from services.team_identity_service import refresh_team_identities as _rti
 
@@ -19809,16 +20000,46 @@ def advance_franchise_day(session: FranchiseSession) -> Dict[str, Any]:
             _league_roster_integrity_pass(session)
         except Exception:
             _startup_log.exception("roster integrity pass failed")
+    try:
+        from services.roster_compliance import ahl_roster_shortfalls, fill_team_ahl_minimum
+
+        user_id = str(getattr(session, "user_team_id", "") or "")
+        league = getattr(getattr(session, "sim", None), "league", None)
+        rng = getattr(getattr(session, "sim", None), "rng", None)
+        user_team = None
+        for club in list(getattr(league, "teams", None) or []):
+            tid = str(getattr(club, "team_id", None) or getattr(club, "id", "") or "")
+            if user_id and tid == user_id:
+                user_team = club
+                continue
+            if rng is not None:
+                fill_team_ahl_minimum(club, rng)
+        if user_team is not None:
+            gaps = ahl_roster_shortfalls(user_team)
+            if gaps:
+                return _advance_blocked_result(
+                    session,
+                    reason="ahl_roster",
+                    message=(
+                        "Your AHL roster is short ("
+                        + ", ".join(gaps)
+                        + "). Sign or assign players before advancing."
+                    ),
+                )
+    except Exception:
+        _startup_log.exception("ahl roster gate failed")
     _ensure_session_event_lists(session)
     _sync_session_phase_from_calendar(session)
     bulk_light = bool(getattr(session, "_bulk_calendar_advance", False)) and bool(
         getattr(session, "_light_game_stat_accumulation", False)
     )
-    cap_sy = int(getattr(session, "season_calendar_year", 2025) or 2025)
-    if not bulk_light or int(getattr(session, "_bulk_cap_season_year", -1) or -1) != cap_sy:
+    cap_key = (
+        int(getattr(session, "season_calendar_year", 2025) or 2025),
+        int(getattr(session, "_roster_revision", 0) or 0),
+    )
+    if getattr(session, "_cap_check_key", None) != cap_key:
         ensure_session_nhl_salary_cap(session)
-        if bulk_light:
-            session._bulk_cap_season_year = cap_sy
+        session._cap_check_key = cap_key
 
     if getattr(session, "pending_decisions", None):
         return _advance_blocked_result(
@@ -19898,8 +20119,7 @@ def advance_franchise_day(session: FranchiseSession) -> Dict[str, Any]:
     # 2. Off-day injury check for the user's team.
     # This can create an injury popup/decision. If it does, stop before games.
     if (
-        not bulk_light
-        and world_injuries is not None
+        world_injuries is not None
         and getattr(session, "injuries_enabled", True)
         and not _team_plays_on_day(
             session.by_day,
@@ -20222,8 +20442,6 @@ def advance_franchise_bulk(
     # single-day manual advance where the user may inspect box scores.
     use_light_bulk = eff_mode in ("season", "days")
     session._light_game_stat_accumulation = bool(use_light_bulk)
-    if use_light_bulk:
-        _franchise_refresh_strength_map(session)
     session._bulk_calendar_advance = True
     session._bulk_fa_days_pending = 0
     session._bulk_auto_resolve_injuries = bool(auto_resolve_decisions)
@@ -20373,6 +20591,10 @@ def advance_franchise_bulk(
                 stopped=stopped,
             )
             _run_bulk_finalize_catchup(session, steps_n=steps_n, full=full_finalize)
+            try:
+                _sync_prospect_stats_to_calendar(session, force=True)
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         session._defer_prospect_sync = prior_defer
         session._light_game_stat_accumulation = prior_light
         session._bulk_auto_resolve_injuries = prior_bulk_inj
@@ -21255,10 +21477,17 @@ def _user_team_record_from_game_results(session: FranchiseSession) -> Dict[str, 
     """
     uid = str(session.user_team_id or "")
     rules = getattr(getattr(session, "standings", None), "points_rules", None) or {}
-    p_rw = int(rules.get("pts_reg_win", 2) or 2)
-    p_otw = int(rules.get("pts_ot_win", 2) or 2)
-    p_otl = int(rules.get("pts_otl", 1) or 1)
-    p_tie = int(rules.get("pts_tie", 1) or 1)
+    def _rule_pts(key: str, default: int) -> int:
+        raw = rules.get(key, default) if isinstance(rules, dict) else default
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return int(default)
+
+    p_rw = _rule_pts("pts_reg_win", 2)
+    p_otw = _rule_pts("pts_ot_win", 2)
+    p_otl = _rule_pts("pts_otl", 1)
+    p_tie = _rule_pts("pts_tie", 1)
     out: Dict[str, Any] = {"gp": 0, "w": 0, "l": 0, "otl": 0, "t": 0, "so_unknown": 0, "pts": 0}
     if not uid:
         return out
@@ -26611,6 +26840,8 @@ def get_cached_stats_central_payload(session: FranchiseSession) -> Dict[str, Any
             payload["cache_hit"] = True
             return payload
     payload = _build_stats_central_payload(session)
+    if isinstance(payload, dict):
+        payload["season_year"] = int(getattr(session, "season_calendar_year", 0) or 0)
     # Re-read revision — repair may bump it during payload build.
     rev = int(getattr(session, "_stats_revision", 0) or 0)
     session._stats_central_cache = {
@@ -27581,7 +27812,12 @@ def _build_contract_ledger_row(p: Any, session: FranchiseSession, season_year: i
     yrs = _contract_years_remaining(p)
     age = _player_age_int(p)
     ovr = round(_player_ovr99(p))
-    rights = str(getattr(c, "rights_status", "") or ("RFA" if age < 27 else "UFA")).upper()
+    try:
+        from services.contract_economy import resolved_rights_status
+
+        rights = resolved_rights_status(p, c if isinstance(c, dict) else None)
+    except Exception:
+        rights = "RFA" if age < 27 else "UFA"
     expiry_year = int(getattr(c, "expiry_year", 0) or (season_year + yrs))
 
     tags: List[str] = []

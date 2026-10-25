@@ -1601,6 +1601,19 @@ def formal_demand_eligible(stability_row: Dict[str, Any]) -> bool:
     management, trade talk, personal life…), not just the team's record.
     """
     score = float(stability_row.get("trade_stability_score") or 100.0)
+    character = float(stability_row.get("character") or 74)
+    try:
+        age = int(stability_row.get("age") or 27)
+    except (TypeError, ValueError):
+        age = 27
+    # Character is the gate. A high-character kid does not demand a trade
+    # because the power play dried up for a month.
+    if character >= 85 and score > 14:
+        return False
+    if age <= 23 and character >= 75 and score > 12:
+        return False
+    if age <= 23 and character >= 65 and score > 8:
+        return False
     level = stability_to_escalation_level(score)
     if level < 3:
         return False
@@ -1695,6 +1708,7 @@ def compute_instant_stability(session: Any, player: Any, team: Any) -> Dict[str,
         "pressures": {k: round(v, 2) for k, v in pressures.items()},
         "character": int(snap.character),
         "mental": int(snap.mental),
+        "age": int(getattr(getattr(player, "identity", None), "age", None) or getattr(player, "age", 27) or 27),
         "readiness_penalties": penalties,
         "snap": snap,
     }
@@ -1781,6 +1795,7 @@ def apply_daily_stability_update(session: Any, player: Any, team: Any, calendar_
         "pressures": instant["pressures"],
         "character": int(character),
         "mental": int(mental),
+        "age": int(getattr(getattr(player, "identity", None), "age", None) or getattr(player, "age", 27) or 27),
         "readiness_penalties": penalties,
         "prev_escalation_level": prev_level,
         "last_calendar_day": int(calendar_idx),

@@ -55,7 +55,48 @@ def _abbr(session: Any, tid: str) -> str:
     return str(getattr(t, "abbreviation", None) or getattr(t, "abbr", None) or tid)
 
 
+def _career_line(session: Any, row: Dict[str, Any], *, label: str, team_id: str, counts: Dict[str, Any], team_label: str) -> Dict[str, Any]:
+    pos = str(row.get("position") or "").upper()
+    goalie = pos.startswith("G")
+    gp = _i(counts.get("gp", row.get("gp")))
+    line: Dict[str, Any] = {
+        "season": label,
+        "team": team_label,
+        "team_abbrev": team_label,
+        "league": "NHL",
+        "gp": gp,
+        "source": "sim",
+        "team_id": str(team_id or ""),
+    }
+    if goalie:
+        sa = _i(counts.get("shots_against", row.get("shots_against") or row.get("goalie_shots_against")))
+        ga = _i(counts.get("ga", row.get("ga") or row.get("goalie_ga")))
+        toi = _i(counts.get("toi_sec", row.get("toi_sec")))
+        line.update({
+            "wins": _i(counts.get("w", row.get("w"))),
+            "losses": _i(counts.get("l", row.get("l"))),
+            "otl": _i(counts.get("otl", row.get("otl"))),
+            "ties": _i(counts.get("t", row.get("t"))),
+            "gs": _i(counts.get("gs", row.get("gs") or row.get("starts"))),
+            "sv_pct": round(1 - ga / sa, 3) if sa else None,
+            "gaa": round(ga * 3600 / toi, 2) if toi else None,
+            "shutouts": _i(counts.get("so", row.get("so"))),
+        })
+    else:
+        g, a = _i(counts.get("g", row.get("g"))), _i(counts.get("a", row.get("a")))
+        line.update({
+            "g": g, "a": a, "pts": g + a,
+            "plus_minus": _i(counts.get("plus_minus", row.get("plus_minus") or row.get("pm"))),
+            "pim": _i(counts.get("pim", row.get("pim"))),
+            "sog": _i(counts.get("sog", row.get("sog"))),
+            "toi_per_gp": round(_i(counts.get("toi_sec", row.get("toi_sec"))) / 60.0 / max(1, gp), 1),
+        })
+    return line
+
+
 def archive_player_lines(session: Any, season_year: int) -> int:
+    from services.franchise_sim import _row_team_slices
+
     pss = getattr(session, "player_season_stats", None) or {}
     label = season_label(season_year)
     players = _players_by_id(session)
@@ -65,20 +106,18 @@ def archive_player_lines(session: Any, season_year: int) -> int:
         if not isinstance(row, dict) or _i(row.get("gp")) <= 0:
             continue
         pos = str(row.get("position") or "").upper()
-        goalie = pos.startswith("G")
-        line: Dict[str, Any] = {"season": label, "team": _abbr(session, row.get("team_id")), "team_abbrev": _abbr(session, row.get("team_id")),
-                                "league": "NHL", "gp": _i(row.get("gp")), "source": "sim"}
-        if goalie:
-            sa = _i(row.get("shots_against") or row.get("goalie_shots_against"))
-            ga = _i(row.get("ga") or row.get("goalie_ga"))
-            toi = _i(row.get("toi_sec"))
-            line.update({"wins": _i(row.get("w")), "losses": _i(row.get("l")), "otl": _i(row.get("otl")),
-                         "sv_pct": round(1 - ga / sa, 3) if sa else None, "gaa": round(ga * 3600 / toi, 2) if toi else None,
-                         "shutouts": _i(row.get("so"))})
-        else:
-            g, a = _i(row.get("g")), _i(row.get("a"))
-            line.update({"g": g, "a": a, "pts": _i(row.get("pts")) or g + a, "plus_minus": _i(row.get("plus_minus") or row.get("pm")),
-                         "pim": _i(row.get("pim")), "sog": _i(row.get("sog")), "toi_per_gp": round(_i(row.get("toi_sec")) / 60.0 / max(1, _i(row.get("gp"))), 1)})
+        slices = [(tid, counts) for tid, counts in _row_team_slices(row) if tid and _i(counts.get("gp")) > 0]
+        if not slices:
+            slices = [(str(row.get("team_id") or ""), {"gp": _i(row.get("gp"))})]
+        lines_out: List[Dict[str, Any]] = []
+        for tid, counts in slices:
+            lines_out.append(_career_line(session, row, label=label, team_id=tid, counts=counts, team_label=_abbr(session, tid)))
+        if len(lines_out) > 1:
+            lines_out.append(_career_line(
+                session, row, label=label, team_id=str(row.get("team_id") or ""),
+                counts=row, team_label="TOT",
+            ))
+        line = lines_out[-1] if len(lines_out) > 1 else lines_out[0]
         compact[str(pid)] = {**line, "name": row.get("name"), "position": pos, "team_id": str(row.get("team_id") or "")}
         p = players.get(str(pid))
         if p is None:
@@ -87,11 +126,23 @@ def archive_player_lines(session: Any, season_year: int) -> int:
         cs = dict(cs) if isinstance(cs, dict) else {}
         seasons: List[Dict[str, Any]] = [s for s in list(cs.get("seasons") or []) if isinstance(s, dict)]
         if any(str(s.get("season")) == label and s.get("source") == "sim" for s in seasons):
-            continue
-        # a real-import row for the same season label (shouldn't exist for sim seasons) is replaced
-        seasons = [s for s in seasons if str(s.get("season")) != label]
-        seasons.append(line)
-        cs["seasons"] = seasons
+            pass
+        else:
+            seasons = [s for s in seasons if str(s.get("season")) != label]
+            seasons.extend(lines_out)
+            cs["seasons"] = seasons
+        po = (getattr(session, "playoff_player_stats", None) or {}).get(str(pid))
+        if isinstance(po, dict) and _i(po.get("gp")) > 0:
+            po_line = _career_line(
+                session, po, label=label, team_id=str(po.get("team_id") or row.get("team_id") or ""),
+                counts=po, team_label=_abbr(session, str(po.get("team_id") or row.get("team_id") or "")),
+            )
+            po_line["league"] = "NHL"
+            po_seasons = [s for s in list(cs.get("playoff_seasons") or []) if isinstance(s, dict)]
+            if not any(str(s.get("season")) == label and s.get("source") == "sim" for s in po_seasons):
+                po_seasons = [s for s in po_seasons if str(s.get("season")) != label]
+                po_seasons.append(po_line)
+                cs["playoff_seasons"] = po_seasons
         try:
             setattr(p, "career_stats", cs)
             n += 1

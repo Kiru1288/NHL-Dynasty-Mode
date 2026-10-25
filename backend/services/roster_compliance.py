@@ -13,6 +13,12 @@ ACTIVE_ROSTER_MIN = 20
 MIN_FORWARDS = 12
 MIN_DEFENSE = 6
 MIN_GOALIES = 2
+# AHL clubs dress a full pro roster. The sim used to advance with an empty
+# affiliate, so call-ups and development had nobody to draw from.
+MIN_AHL_SKATERS = 18
+MIN_AHL_FORWARDS = 12
+MIN_AHL_DEFENSE = 6
+MIN_AHL_GOALIES = 2
 
 FORWARD_CODES = frozenset({"C", "LW", "RW", "W", "F"})
 DEFENSE_CODES = frozenset({"D", "LD", "RD", "LHD", "RHD"})
@@ -413,6 +419,97 @@ def fill_team_roster_minimum(team: Any, rng: Any) -> int:
         roster = list(getattr(team, "roster", None) or [])
         roster.append(player)
         team.roster = roster
+        added += 1
+    return added
+
+
+def summarize_ahl_roster(team: Any) -> Dict[str, int]:
+    """Count non-retired players already on the AHL list."""
+    forwards = defense = goalies = 0
+    for player in list(_get(team, "ahl_roster", None) or []):
+        if is_retired(player):
+            continue
+        bucket = position_bucket(player)
+        if bucket == "F":
+            forwards += 1
+        elif bucket == "D":
+            defense += 1
+        elif bucket == "G":
+            goalies += 1
+    return {
+        "forwards": forwards,
+        "defense": defense,
+        "goalies": goalies,
+        "skaters": forwards + defense,
+        "total": forwards + defense + goalies,
+    }
+
+
+def ahl_roster_shortfalls(team: Any) -> List[str]:
+    counts = summarize_ahl_roster(team)
+    gaps: List[str] = []
+    if counts["forwards"] < MIN_AHL_FORWARDS:
+        gaps.append(f"{counts['forwards']}/{MIN_AHL_FORWARDS} forwards")
+    if counts["defense"] < MIN_AHL_DEFENSE:
+        gaps.append(f"{counts['defense']}/{MIN_AHL_DEFENSE} defense")
+    if counts["goalies"] < MIN_AHL_GOALIES:
+        gaps.append(f"{counts['goalies']}/{MIN_AHL_GOALIES} goalies")
+    return gaps
+
+
+def fill_team_ahl_minimum(team: Any, rng: Any) -> int:
+    """Sign league-minimum AHL bodies until the affiliate can dress a lineup.
+
+    CPU clubs are filled automatically. The user's club is left for the GM.
+    """
+    if team is None or rng is None:
+        return 0
+    from app.sim_engine.entities.player import Position
+    from app.sim_engine.league_hierarchy_bootstrap import _spawn_player
+
+    added = 0
+    used: set = set()
+    for _ in range(24):
+        counts = summarize_ahl_roster(team)
+        need_g = counts["goalies"] < MIN_AHL_GOALIES
+        need_d = counts["defense"] < MIN_AHL_DEFENSE
+        need_f = counts["forwards"] < MIN_AHL_FORWARDS
+        if not (need_g or need_d or need_f):
+            break
+        if need_g:
+            pos = Position.G
+        elif need_d:
+            pos = Position.D
+        else:
+            pos = rng.choice([Position.C, Position.LW, Position.RW])
+        player = _spawn_player(
+            rng,
+            pos=pos,
+            ovr_lo=0.50,
+            ovr_hi=0.62,
+            age_lo=21,
+            age_hi=28,
+            used_names=used,
+            league_players=[],
+            pool_context="ahl",
+        )
+        aav = 0.80
+        player.contract = {
+            "type": "AHL",
+            "contract_type": "AHL",
+            "years": 1,
+            "years_remaining": 1,
+            "aav_m": aav,
+            "cap_hit_m": aav,
+            "salary_m": aav,
+            "rights_status": "UFA",
+            "source": "ahl_minimum_fill",
+        }
+        player.aav_m = aav
+        player.cap_hit_m = aav
+        roster = list(getattr(team, "ahl_roster", None) or [])
+        roster.append(player)
+        team.ahl_roster = roster
         added += 1
     return added
 

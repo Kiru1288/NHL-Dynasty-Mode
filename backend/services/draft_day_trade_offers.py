@@ -297,7 +297,8 @@ def _creative_package(
                 continue
             if v > 4.0:
                 players.append((v, p))
-    need_lo, need_hi = gap * 0.95, gap * 1.3 + 4.0
+    overpay = bool(gap >= 8 and rng.random() < 0.28)
+    need_lo, need_hi = gap * 0.95, (gap * 1.85 + 8.0 if overpay else gap * 1.3 + 4.0)
     options: List[Dict[str, Any]] = []
     # 1) one asset that covers it (a future 1st, a 2nd, or a prospect)
     for v, row in picks:
@@ -578,6 +579,13 @@ def generate_draft_day_trade_offers(
             need_pos = str(needs[0].get("position") if isinstance(needs[0], dict) else needs[0] or "").upper()
 
         grade = "Fair" if gap <= 8 else ("Lean +" if gap <= 14 else "Plus")
+        value_letter = "B" if gap <= 8 else "B+"
+        if user_on_clock and true_target and (sweeteners or sweetener_players):
+            paid = float((creative or {}).get("paid") or 0.0)
+            if paid >= gap * 1.35 or (rng.random() < 0.22 and gap >= 8):
+                grade = "Steal"
+                value_letter = "A"
+                offer_style = "cant_refuse"
         urgency = "high" if overall <= 15 or user_on_clock else "medium"
         true_key = _entry_key(true_target)
         candidate_intel = [
@@ -611,9 +619,10 @@ def generate_draft_day_trade_offers(
                 team_by_id=team_by_id,
                 ctx=ctx,
             )
-        offer_style = "desperate" if urgency == "high" and slots_moved <= 4 else "standard"
-        if float(gap) >= 12 and sweeteners:
-            offer_style = "pay_up"
+        if grade != "Steal":
+            offer_style = "desperate" if urgency == "high" and slots_moved <= 4 else "standard"
+            if float(gap) >= 12 and sweeteners:
+                offer_style = "pay_up"
         offers.append(
             {
                 "offer_id": _offer_id(overall, partner, partner_overall, on_clock_pick_id, partner_pick_id),
@@ -638,12 +647,16 @@ def generate_draft_day_trade_offers(
                 "target_candidates": candidate_rows,
                 "candidate_intel": candidate_intel,
                 "intel_lines": intel_lines,
-                "pitch_headline": f"Move back to #{partner_overall} and add capital",
+                "pitch_headline": (
+                    f"Too good to pass — move back to #{partner_overall}"
+                    if grade == "Steal"
+                    else f"Move back to #{partner_overall} and add capital"
+                ),
                 "true_target_prospect_id": true_key,
                 "target_prospect_id": true_key,
                 "target_prospect_name": None,
                 "value": grade,
-                "value_grade": "B" if gap <= 8 else "B+",
+                "value_grade": value_letter,
                 "risk": "Only one rumored name is their real target",
                 "urgency": urgency,
                 "urgency_label": "On the phone" if urgency == "high" else "Monitoring",

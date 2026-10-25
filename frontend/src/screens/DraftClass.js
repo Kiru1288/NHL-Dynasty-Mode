@@ -1067,7 +1067,7 @@ function mapBackendDraftBoard(entries, dateContext) {
     const completion = dedicatedScoutingPct ?? publicScoutingConfidence ?? (Number(base.completion) || 40);
     // Only YOUR dedicated file reveals the real OVR (it fell back to league-wide
     // coverage, so well-known prospects you never scouted showed an exact OVR).
-    const ovrRevealed = (dedicatedScoutingPct ?? 0) >= OVR_REVEAL_THRESHOLD || Boolean(row?.ovr_revealed);
+    const ovrRevealed = false;
     const rawRange = row?.ovr_range;
     let ovrRange = rawRange && rawRange.low != null && rawRange.high != null
       ? { low: Number(rawRange.low), high: Number(rawRange.high) }
@@ -1168,9 +1168,13 @@ function mapBackendDraftBoard(entries, dateContext) {
         : row?.isBustRisk != null
         ? Boolean(row.isBustRisk)
         : base.isBustRisk,
-      ovrHint: ovrRevealed ? Math.round(Number(coalesce(row?.true_ovr, 0)) || 0) : null,
+      ovrHint: null,
       ovrRange,
       ovrRevealed,
+      scoutTags: Array.isArray(row?.scout_tags) ? row.scout_tags : (row?.auto_scout?.tags || []),
+      scoutProjection: row?.scout_projection || row?.auto_scout?.projection || "",
+      scoutConfidence: row?.scout_confidence || row?.auto_scout?.confidence || "",
+      scoutSummary: row?.scout_summary || row?.auto_scout?.summary || "",
       skating: attrFromBackend(row, base, "skating", "skating"),
       shooting: attrFromBackend(row, base, "shooting", "shooting"),
       passing: attrFromBackend(row, base, "passing", "passing"),
@@ -2363,9 +2367,7 @@ function wrNumClassForTier(tierKey) {
 /** Current ability estimate for the board column. Ceiling fog does not blank present skill. */
 function resolveCurrentEstimate(player, profile, ceilingHidden, dedicatedFile) {
   const exact = Number(profile?.scoutedOverall ?? profile?.currentOvrEstimate ?? player?.ovrHint);
-  const revealed = Boolean(player?.ovrRevealed) || (
-    Number(profile?.userScoutPct ?? player?.dedicatedScoutingPct ?? 0) >= OVR_REVEAL_THRESHOLD
-  );
+  const revealed = false;
   if (revealed && (!ceilingHidden || dedicatedFile) && Number.isFinite(exact) && exact > 0) {
     return { text: String(Math.round(exact)), detail: "Scouted OVR", exact: true };
   }
@@ -2459,6 +2461,9 @@ function ProspectBoardRow({ player, index, selected, expanded, onSelect, onPrefe
           </span>
           <span className="dc-prospect-row__sub">
             {player.teamDisplay || player.team || league} · {player.age || "—"} yrs
+            {player.scoutProjection ? ` · ${player.scoutProjection}` : ""}
+            {player.scoutConfidence ? ` · ${player.scoutConfidence} confidence` : ""}
+            {Array.isArray(player.scoutTags) && player.scoutTags.length ? ` · ${player.scoutTags.slice(0, 2).join(", ")}` : ""}
             {player.overager ? <em className="dc-overage-pill">Overager</em> : null}
             {player.characterConcerns ? <em className="dc-char-pill">Character</em> : null}
             {reasonLabel ? <em className="wr-reason-chip">{reasonLabel}</em> : null}

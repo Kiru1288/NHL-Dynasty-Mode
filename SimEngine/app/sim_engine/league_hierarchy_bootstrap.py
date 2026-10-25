@@ -1303,7 +1303,10 @@ def _shape_draft_class_pipeline(
                     continue
                 draft_age.append(p)
                 code_by_id[id(p)] = code
-    if len(draft_age) < 12:
+    # A thin class used to return here with no star or depth tiers. Year 3
+    # dropped to a handful of 19-year-olds and the whole draft looked empty.
+    thin_class = len(draft_age) < 12
+    if not draft_age:
         try:
             setattr(league, "_pipeline_shaped_for_draft_year", dy)
         except Exception:
@@ -1318,6 +1321,10 @@ def _shape_draft_class_pipeline(
         if roll <= acc:
             tier_label, n_franchise, n_elite, n_top, top_range = label, nf, ne, nt, rng_top
             break
+    if thin_class:
+        n_franchise = min(int(n_franchise), 1)
+        n_elite = min(int(n_elite), 2)
+        n_top = min(int(n_top), max(0, len(draft_age) - 3))
     league.draft_class_strength = tier_label
 
     d_roll = rng.random()
@@ -1724,6 +1731,124 @@ def lift_shallow_draft_depth(
     return lifted
 
 
+def replenish_junior_entry_class(
+    league: Any,
+    rng: random.Random,
+    *,
+    season_year: int,
+) -> Dict[str, int]:
+    """Add the next wave of juniors before the draft class is shaped.
+
+    The junior tree is built once. Without a yearly intake the original
+    16-year-olds are 19 by the third draft, and the first-year pool is too
+    small to receive a talent tier. New classes stay mostly 17–18.
+    """
+    added_16 = 0
+    added_first_year = 0
+    if league is None or rng is None:
+        return {"age_16": 0, "first_year": 0}
+    season_year = int(season_year)
+    draft_year = season_year + 1
+    set_spawn_as_of_year(season_year)
+    from app.sim_engine.entities.player import Position
+    from app.sim_engine.generation.prospect_league_teams import (
+        choose_nationality_for_league,
+        validate_prospect_league_fit,
+    )
+
+    if not hasattr(league, "players") or league.players is None:
+        league.players = []
+    league_players: List[Any] = list(league.players)
+    used_names: set = set()
+    for p in league_players:
+        ident = getattr(p, "identity", None)
+        nm = getattr(ident, "full_name", None) or getattr(ident, "name", None) if ident else None
+        if nm:
+            used_names.add(str(nm))
+
+    junior_codes = {"OHL", "WHL", "QMJHL", "USHL", "CHL"}
+
+    def _spawn_onto(block: Dict[str, Any], tm: Dict[str, Any], age: int) -> bool:
+        code = str(block.get("league_code") or "OHL")
+        roster = list(tm.get("players") or [])
+        pos = rng.choice([Position.C, Position.LW, Position.RW, Position.D, Position.D])
+        nat = choose_nationality_for_league(rng, code)
+        player = None
+        for _attempt in range(8):
+            player = _spawn_player(
+                rng,
+                pos=pos,
+                ovr_lo=0.48,
+                ovr_hi=0.66,
+                age_lo=age,
+                age_hi=age,
+                used_names=used_names,
+                league_players=league_players,
+                pool_context=_pool_context_for_level("junior", code),
+                nationality=nat,
+                league_code=code,
+                as_of_year=season_year,
+            )
+            birth_country = str(getattr(getattr(player, "identity", None), "birth_country", "") or "")
+            if validate_prospect_league_fit(birth_country, code):
+                break
+            nat = choose_nationality_for_league(rng, code)
+        if player is None:
+            return False
+        tid_j = str(tm.get("team_id") or tm.get("id") or f"{code}_x")
+        club_name = str(tm.get("name") or tm.get("city") or code)
+        try:
+            player.context.current_team_id = tid_j
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+        _set_assignment(player, level="junior", league_code=code, club=club_name)
+        roster.append(player)
+        tm["players"] = roster
+        league_players.append(player)
+        try:
+            league.players.append(player)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+        return True
+
+    first_years = 0
+    for block in getattr(league, "development_leagues", None) or []:
+        code = str(block.get("league_code") or "").upper()
+        if code not in junior_codes and "CHL" not in code and code not in ("OHL", "WHL", "QMJHL"):
+            # European and NCAA trees still need bodies, but the age drift
+            # the user sees is the CHL draft class.
+            if code not in ("NCAA", "SHL", "LIIGA", "NL", "DEL", "KHL", "HOCKEYALLSVENSKAN"):
+                continue
+        for tm in block.get("teams") or []:
+            ages = [_player_sept15_age(p, draft_year) for p in (tm.get("players") or [])]
+            if code in junior_codes or code in ("OHL", "WHL", "QMJHL", "USHL"):
+                if not any(a <= 16 for a in ages):
+                    if _spawn_onto(block, tm, 16):
+                        added_16 += 1
+            first_years += sum(1 for a in ages if a == 18)
+
+    target_first_years = 80
+    if first_years < target_first_years:
+        hosts: List[tuple] = []
+        for block in getattr(league, "development_leagues", None) or []:
+            code = str(block.get("league_code") or "").upper()
+            if code not in ("OHL", "WHL", "QMJHL", "USHL", "NCAA"):
+                continue
+            for tm in block.get("teams") or []:
+                hosts.append((block, tm))
+        rng.shuffle(hosts)
+        need = target_first_years - first_years
+        cursor = 0
+        while need > 0 and hosts and cursor < need * 3:
+            block, tm = hosts[cursor % len(hosts)]
+            # Age 17 on July 1 of this season is 18 on draft-year Sept 15.
+            if _spawn_onto(block, tm, 17):
+                added_first_year += 1
+                need -= 1
+            cursor += 1
+    return {"age_16": added_16, "first_year": added_first_year}
+
+
 def prepare_draft_class_for_season(
     league: Any,
     rng: random.Random,
@@ -1763,6 +1888,9 @@ def prepare_draft_class_for_season(
     if not getattr(league, "_junior_dobs_reanchored", False):
         reanchor_generated_junior_dobs(league, season_year)
 
+    out["junior_intake"] = replenish_junior_entry_class(
+        league, rng, season_year=season_year
+    )
     _shape_draft_class_pipeline(league, rng, draft_year=draft_year)
     out["lifted"] = lift_shallow_draft_depth(league, rng, draft_year=draft_year)
 

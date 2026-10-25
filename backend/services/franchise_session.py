@@ -139,7 +139,7 @@ class FranchiseSession:
     game_results: List[Dict[str, Any]] = field(default_factory=list)
     player_season_stats: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     processed_game_ids: Set[str] = field(default_factory=set)
-    # Compact box scores + per-player game index, current + previous season
+    # Compact box scores + per-player game index. Every season is kept.
     # (serialization.store_compact_box_score). Records are incremental max-compares.
     box_score_book: Dict[str, Any] = field(default_factory=dict)
     box_score_records: Dict[str, Any] = field(default_factory=dict)

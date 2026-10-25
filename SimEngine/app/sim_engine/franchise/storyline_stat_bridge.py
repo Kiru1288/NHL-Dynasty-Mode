@@ -261,7 +261,7 @@ def _rec_try(book: Dict[str, Any], key: str, value: float, row_fn: Any) -> bool:
     return True
 
 
-def update_box_score_records(session: Any, compact: Dict[str, Any]) -> List[Dict[str, Any]]:
+def update_box_score_records(session: Any, compact: Dict[str, Any], *, publish: bool = True) -> List[Dict[str, Any]]:
     """
     Fold one stored box into the season / franchise-history record books and
     publish a storyline when a meaningful record falls.
@@ -357,13 +357,14 @@ def update_box_score_records(session: Any, compact: Dict[str, Any]) -> List[Dict
             elif _rec_try(recs["team_season"], stat, v, mk):
                 broken.append({"book": "team_season", "stat": stat, **recs["team_season"][stat]})
 
-    for rec in broken:
-        if float(rec.get("value") or 0) < _REC_PUBLISH_MIN.get(str(rec.get("stat")), 99):
-            continue
-        try:
-            _publish_record(session, rec)
-        except Exception:
-            continue
+    if publish:
+        for rec in broken:
+            if float(rec.get("value") or 0) < _REC_PUBLISH_MIN.get(str(rec.get("stat")), 99):
+                continue
+            try:
+                _publish_record(session, rec)
+            except Exception:
+                continue
     return broken
 
 

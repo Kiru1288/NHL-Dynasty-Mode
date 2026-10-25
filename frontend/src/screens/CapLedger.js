@@ -241,7 +241,7 @@ function ContractBoardRow({ row, onSelect, isSelected = false }) {
       <span className="cl-row__status">
         {expiring ? (
           <span className={`cl-tag is-${tone}`}>
-            {expiry || "UFA"}{Number.isFinite(daysLeft) ? ` in ${Math.max(0, Math.round(daysLeft))}d` : ""}
+            {expiry || (Number(row?.age) > 0 && Number(row?.age) < 27 ? "RFA" : "UFA")}{Number.isFinite(daysLeft) ? ` in ${Math.max(0, Math.round(daysLeft))}d` : ""}
           </span>
         ) : tone === "elc" ? (
           <span className="cl-tag is-elc">ELC</span>

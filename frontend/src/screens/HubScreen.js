@@ -33,6 +33,7 @@ const HUB_INDEX_FOR_SCREEN = {
   [ROUTE_SCREENS.DRAFT_LOTTERY]: menuIndexById("draft_class", 4),
   [ROUTE_SCREENS.TEAM_NEEDS]: menuIndexById("draft_class", 4),
   [ROUTE_SCREENS.SCOUTING]: menuIndexById("scouting", 5),
+  [ROUTE_SCREENS.PUCKGPT]: menuIndexById("puckgpt", 6),
   [ROUTE_SCREENS.HUB]: menuIndexById("office", 6),
   [ROUTE_SCREENS.OFFICE]: menuIndexById("office", 6),
   [ROUTE_SCREENS.GM_WORLD]: menuIndexById("office", 6),

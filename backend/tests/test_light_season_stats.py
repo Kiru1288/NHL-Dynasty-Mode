@@ -714,7 +714,9 @@ def test_strength_ex_shootout_home_win_final_score():
     away_sk = [_skater(f"a{i}", f"A{i}", "C", 80) for i in range(12)]
     home = _team("H", home_sk, [_goalie("hg", "HG")])
     away = _team("A", away_sk, [_goalie("ag", "AG")])
-    rng = _ShootoutSeqRandom([0.99, 0.99, 0.99, 0.01, 0.99, 0.01])
+    # Tied 3-3 (gauss stub). Pull returns immediately on a tie, so the first
+    # random() is the shootout roll and must be under so_share (~0.38).
+    rng = _ShootoutSeqRandom([0.01, 0.01])
     res = sim._simulate_game_strength_ex(
         rng, home, away, {}, home_b2b=False, away_b2b=False, is_playoff=False
     )
@@ -807,19 +809,22 @@ def test_score_source_light_forces_light_allocator():
         season_calendar_year=2026,
         processed_game_ids=set(),
         game_results=[],
+        phase="regular",
+        box_score_book={"seasons": {}, "order": []},
+        goofy_events_enabled=False,
         sim=SimpleNamespace(
-            accumulate_unified_game_stats=lambda *a, **k: {"home_goals": 2, "away_goals": 1, "player_lines": {}},
             _franchise_gp_by_day_set=None,
             _franchise_gp_calendar_day=None,
         ),
         standings=SimpleNamespace(points_rules={}),
     )
-    home = away = SimpleNamespace(team_id="H", roster=[], name="T")
+    home = _team("H", [], [_goalie("hg", "HG")])
+    away = _team("A", [], [_goalie("ag", "AG")])
     session.team_by_id = {"H": home, "A": away}
     captured = {}
 
-    def _cap(*args, **kwargs):
-        captured["light_mode"] = kwargs.get("light_mode")
+    def _cap(*args, light_mode=None, **kwargs):
+        captured["light_mode"] = light_mode
         return {"home_goals": 2, "away_goals": 1, "player_lines": {}}
 
     session.sim.accumulate_unified_game_stats = _cap
@@ -845,3 +850,194 @@ def test_box_line_keys_prefix_matches_engine():
 
     assert list(BOX_LINE_KEYS[:25]) == list(engine_keys[:25])
     assert BOX_LINE_KEYS[-1] == "t" == engine_keys[-1]
+
+
+def _blank_box_row(team_id: str) -> list:
+    from app.sim_engine.franchise.serialization import BOX_LINE_KEYS
+
+    return [team_id] + [0] * len(BOX_LINE_KEYS)
+
+
+def test_player_game_row_shootout_winner_and_phg_zero():
+    from app.sim_engine.franchise.serialization import _player_game_row
+
+    winner = _blank_box_row("H")
+    loser = _blank_box_row("A")
+    compact = {
+        "lines": {"w": winner, "l": loser},
+        "home": "H",
+        "away": "A",
+        "hn": "Home",
+        "an": "Away",
+        "hg": 4,
+        "ag": 3,
+        "phg": 3,
+        "pag": 3,
+        "so": 1,
+        "sow": "H",
+    }
+    assert _player_game_row(compact, "w")["team_result"] == "W"
+    assert _player_game_row(compact, "l")["team_result"] == "OTL"
+    shutout_skater = _blank_box_row("H")
+    zero = {
+        "lines": {"p": shutout_skater},
+        "home": "H",
+        "away": "A",
+        "hn": "Home",
+        "an": "Away",
+        "hg": 2,
+        "ag": 1,
+        "phg": 0,
+        "pag": 1,
+        "so": 0,
+    }
+    row = _player_game_row(zero, "p")
+    assert row["result"].split()[1].startswith("0-")
+
+
+def test_user_record_otl_point_and_zero_tie_points():
+    from services.franchise_sim import _user_team_record_from_game_results
+
+    session = SimpleNamespace(
+        user_team_id="U",
+        standings=SimpleNamespace(points_rules={"pts_reg_win": 2, "pts_ot_win": 2, "pts_otl": 0, "pts_tie": 0}),
+        game_results=[
+            {"home_id": "U", "away_id": "C", "home_goals": 3, "away_goals": 2, "shootout": True, "winner_id": "C", "overtime": True},
+            {"home_id": "U", "away_id": "C", "home_goals": 2, "away_goals": 2, "tie": True, "winner_id": ""},
+        ],
+    )
+    rec = _user_team_record_from_game_results(session)
+    assert rec["otl"] == 1
+    assert rec["t"] == 1
+    assert rec["pts"] == 0
+
+
+def test_trade_split_freeze_on_merge():
+    from services.franchise_sim import _merge_franchise_stat_scratch, _row_team_slices
+
+    target = {"p": {"player_id": "p", "team_id": "OLD", "position": "C", "g": 10, "a": 4, "gp": 20}}
+    _merge_franchise_stat_scratch(
+        target,
+        {"p": {"player_id": "p", "team_id": "NEW", "position": "C", "name": "P", "g": 2, "a": 1, "gp": 3}},
+    )
+    slices = dict(_row_team_slices(target["p"]))
+    assert slices["OLD"]["g"] == 10
+    assert slices["OLD"]["gp"] == 20
+    assert slices["NEW"]["g"] == 2
+
+
+def test_goalie_gp_repair_drops_zero_toi_backups():
+    from services.franchise_sim import _repair_gp_from_game_boxes
+    from app.sim_engine.franchise.serialization import BOX_LINE_KEYS
+
+    toi_i = 1 + BOX_LINE_KEYS.index("toi_sec")
+    starter = ["H"] + [0] * len(BOX_LINE_KEYS)
+    starter[toi_i] = 3600
+    backup = ["H"] + [0] * len(BOX_LINE_KEYS)
+    session = SimpleNamespace(
+        season_calendar_year=2026,
+        player_season_stats={
+            "sg": {"player_id": "sg", "team_id": "H", "position": "G", "gp": 82, "stat_scope": "regular_season"},
+            "bg": {"player_id": "bg", "team_id": "H", "position": "G", "gp": 82, "stat_scope": "regular_season"},
+        },
+        playoff_player_stats={},
+        standings=SimpleNamespace(records={"H": SimpleNamespace(gp=1)}),
+        box_score_book={
+            "seasons": {
+                "2026": {
+                    "games": {
+                        "g1": {
+                            "scope": "regular_season",
+                            "home": "H",
+                            "away": "A",
+                            "lines": {"sg": starter, "bg": backup},
+                        }
+                    }
+                }
+            }
+        },
+    )
+    _repair_gp_from_game_boxes(session)
+    assert session.player_season_stats["sg"]["gp"] == 1
+    assert session.player_season_stats["bg"]["gp"] == 0
+
+
+def test_cpu_game_rolls_in_game_injury(monkeypatch):
+    import services.franchise_sim as fs
+    from app.sim_engine.engine import ScoreResult
+
+    calls = []
+
+    def _inj(team, rng, chaos, max_checks=8, rate_mult=1.0, low_intensity=False):
+        calls.append(getattr(team, "team_id", None))
+        return []
+
+    monkeypatch.setattr(fs.world_injuries, "maybe_injure_roster_subset", _inj)
+    monkeypatch.setattr(fs.world_injuries, "tick_games_missed", lambda p: None)
+    home = _team("H", [_skater("h", "H", "C")], [_goalie("hg", "HG")])
+    away = _team("A", [_skater("a", "A", "C")], [_goalie("ag", "AG")])
+    score = ScoreResult(home=2, away=1, overtime=False, ot_periods=0, ot_sec=0, mu=None, en_home=0, en_away=0, pulled_tie=False, shootout=False, shootout_winner_home=None, tie=False, source="light")
+
+    class _Sim:
+        rng = random.Random(1)
+        league = SimpleNamespace(teams=[home, away])
+
+        def _simulate_game(self, *a, **k):
+            return score
+
+        def _identity_runner_strength_noise_factors(self, team):
+            return 1.0, 1.0
+
+        def _roster_injury_depth_penalty(self, team):
+            return 1.0
+
+        def accumulate_unified_game_stats(self, *a, light_mode=None, **k):
+            return {"home_goals": 2, "away_goals": 1, "player_lines": {}}
+
+    session = SimpleNamespace(
+        sim=_Sim(),
+        user_team_id="U",
+        use_world=False,
+        team_by_id={"H": home, "A": away},
+        play_days={},
+        schedule=[],
+        chaos_index=0.5,
+        injuries_enabled=True,
+        phase="regular",
+        season_calendar_year=2026,
+        processed_game_ids=set(),
+        game_results=[],
+        player_season_stats={},
+        box_score_book={"seasons": {}, "order": []},
+        goofy_events_enabled=False,
+        nhl_calendar=[{"iso": "2026-10-01"}],
+        pending_decisions=[],
+        injury_log_all=[],
+        injury_log_major=[],
+        calendar_events=[],
+        standings=SimpleNamespace(points_rules={}, record_game=lambda *a, **k: None),
+    )
+    slot = SimpleNamespace(day=0, home_id="H", away_id="A", is_playoff=False)
+    fs._simulate_franchise_slot(session, slot)
+    assert "H" in calls and "A" in calls
+
+
+def test_extra_league_days_matches_repeated_single_ticks():
+    from app.sim_engine.league_hierarchy_bootstrap import tick_extra_league_development
+
+    def _league(players):
+        return SimpleNamespace(
+            teams=[SimpleNamespace(ahl_roster=players, echl_roster=[])],
+            free_agents=[],
+            overseas_free_agents=[],
+            development_leagues=[],
+        )
+
+    # Same RNG stream: days=7 is seven daily Bernoulli passes.
+    players_a = [SimpleNamespace(ratings={"skating": 40}) for _ in range(40)]
+    players_b = [SimpleNamespace(ratings={"skating": 40}) for _ in range(40)]
+    tick_extra_league_development(SimpleNamespace(league=_league(players_a)), random.Random(7), days=7)
+    rng = random.Random(7)
+    for _ in range(7):
+        tick_extra_league_development(SimpleNamespace(league=_league(players_b)), rng, days=1)
+    assert [p.ratings["skating"] for p in players_a] == [p.ratings["skating"] for p in players_b]

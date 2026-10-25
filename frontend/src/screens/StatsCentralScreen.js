@@ -2100,7 +2100,8 @@ export function StatsCentralScreen() {
   useEffect(() => {
     let cancelled = false;
     const revision = franchiseState?.stats_revision ?? null;
-    const cached = peekStatsCentral(revision);
+    const seasonYear = franchiseState?.season_year ?? franchiseState?.season_calendar_year ?? null;
+    const cached = peekStatsCentral(revision, seasonYear);
 
     if (cached) {
       setLazyStatsCentral(cached);
@@ -2109,7 +2110,7 @@ export function StatsCentralScreen() {
       setStatsLoadState("loading");
     }
 
-    getStatsCentral(revision)
+    getStatsCentral(revision, seasonYear)
       .then((payload) => {
         if (cancelled) return;
         setLazyStatsCentral(payload || {});
@@ -2130,7 +2131,7 @@ export function StatsCentralScreen() {
     return () => {
       cancelled = true;
     };
-  }, [franchiseState?.stats_revision, expireFranchiseSession]);
+  }, [franchiseState?.stats_revision, franchiseState?.season_year, franchiseState?.season_calendar_year, expireFranchiseSession]);
 
   const data = useMemo(() => {
     const statsCentral =

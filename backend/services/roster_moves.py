@@ -708,6 +708,7 @@ def _sync_lineup_after_move(session: Any, player: Any, action: str, moved: str) 
         status = "vacated"
     else:
         status = "unchanged"
+    session._roster_revision = int(getattr(session, "_roster_revision", 0) or 0) + 1
     return {
         "ok": True,
         "status": status,

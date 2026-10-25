@@ -419,6 +419,25 @@ def apply_temporary_ovr_modifier(
                 "impact_reason": str(reason or ""),
                 "already_active": True,
             }
+    # Stacked story beats were reaching −10. Form can sag; it cannot wipe a tier.
+    active_sum = 0
+    for existing_mod in mods:
+        if existing_mod.get("resolved"):
+            continue
+        try:
+            active_sum += int(existing_mod.get("amount") or 0)
+        except (TypeError, ValueError):
+            continue
+    if amt < 0 and active_sum + amt < -4:
+        amt = -4 - active_sum
+        if amt >= 0:
+            return {
+                "overall_before": get_effective_ovr_display(player),
+                "overall_after": get_effective_ovr_display(player),
+                "overall_delta": 0,
+                "already_active": True,
+                "impact_reason": "Form is already weighed down by an active storyline.",
+            }
     ovr_before = get_effective_ovr_display(player)
     entry = {
         "id": f"mod_{uuid.uuid4().hex[:10]}",
@@ -755,9 +774,9 @@ def apply_storyline_ovr_nudge(
     if amount is not None:
         signed = int(amount)
     elif sev == "major":
-        signed = -int(r.randint(4, 8))
+        signed = -int(r.randint(2, 4))
     elif sev in ("moderate", "mid"):
-        signed = -int(r.randint(2, 5))
+        signed = -int(r.randint(1, 3))
     else:
         signed = -int(r.randint(1, 3))
 

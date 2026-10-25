@@ -4539,11 +4539,22 @@ function ContractPanel({ player }) {
   const contractRights = safeStr(contract.rightsStatus || contract.rights_status, "");
   const rightsHeadline = (() => {
     if (contract.isSigned && (rightsStatus || contractRights)) {
-      const code = rightsStatus || contractRights;
+      let code = rightsStatus || contractRights;
+      const age = Number(player.age);
+      const source = String(contract.rights_source || contract.rightsSource || player.rights_source || "").toLowerCase();
+      const trustedUfa = source === "spotrac" || source === "capwages" || source === "user";
+      if (String(code).toUpperCase() === "UFA" && age > 0 && age < 27 && !trustedUfa) code = "RFA";
       if (/^[ur]fa$/i.test(code)) return `Expires as ${code.toUpperCase()}`;
       return humanizeDossierValue(code);
     }
-    if (rightsStatus) return humanizeDossierValue(rightsStatus);
+    if (rightsStatus) {
+      let code = rightsStatus;
+      const age = Number(player.age);
+      const source = String(player.rights_source || "").toLowerCase();
+      const trustedUfa = source === "spotrac" || source === "capwages" || source === "user";
+      if (String(code).toUpperCase() === "UFA" && age > 0 && age < 27 && !trustedUfa) code = "RFA";
+      return humanizeDossierValue(code);
+    }
     if (rightsType) return `${humanizeDossierValue(rightsType)} rights`;
     return contract.isSigned ? "Under contract" : "Unsigned";
   })();

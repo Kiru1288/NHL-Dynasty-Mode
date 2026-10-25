@@ -75,8 +75,121 @@ POST_DRAFT_STAGES: Tuple[str, ...] = (
 
 # Signing bonuses unlock once club revenue clears this floor (stars / wins / global draw help).
 SIGNING_BONUS_REVENUE_FLOOR_M = 155.0
-OWN_FA_MORATORIUM_DAYS = 6
+OWN_FA_MORATORIUM_DAYS = 7
 INSTANT_ACCEPT_INTEREST = 88.0
+
+
+def _release_expired_prospect_rights(session: Any) -> None:
+    """Rights that already lapsed stay off prospect lists.
+
+    They used to remain on the board until a re-sign attempt reported the
+    player missing. Unsigned players with a passed expiry join free agency.
+    """
+    league = getattr(getattr(session, "sim", None), "league", None)
+    if league is None:
+        return
+    season_year = int(getattr(session, "season_calendar_year", 0) or 0)
+    if season_year < 2000:
+        return
+    fa_pool = list(getattr(league, "free_agents", None) or [])
+    fa_ids = {str(getattr(p, "id", "") or getattr(p, "player_id", "") or "") for p in fa_pool}
+
+    def _expired(player: Any) -> bool:
+        try:
+            expiry = int(getattr(player, "rights_expiry_year", 0) or 0)
+        except (TypeError, ValueError):
+            return False
+        return expiry > 0 and expiry < season_year
+
+    def _release(player: Any) -> None:
+        try:
+            player.nhl_rights_team_id = None
+            player.rights_team_id = None
+            player.drafted_by = None
+        except Exception:
+            return
+        if bool(getattr(player, "retired", False)):
+            return
+        if str(getattr(player, "signed_status", "") or "").lower() == "signed":
+            return
+        pid = str(getattr(player, "id", "") or getattr(player, "player_id", "") or "")
+        if pid and pid not in fa_ids:
+            fa_pool.append(player)
+            fa_ids.add(pid)
+
+    for team in list(getattr(league, "teams", None) or []):
+        kept = []
+        for player in list(getattr(team, "prospect_pool", None) or []):
+            if _expired(player):
+                _release(player)
+            else:
+                kept.append(player)
+        try:
+            team.prospect_pool = kept
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    for block in list(getattr(league, "development_leagues", None) or []):
+        if not isinstance(block, dict):
+            continue
+        for club in list(block.get("teams") or []):
+            if not isinstance(club, dict):
+                continue
+            for player in list(club.get("players") or []):
+                if _expired(player):
+                    _release(player)
+    try:
+        league.free_agents = fa_pool
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+
+
+def _bank_nhl_career_games(session: Any) -> None:
+    """Fold this season's NHL games into a career total before the ledger resets.
+
+    Prospect boards use the total. Without the bank, a player who played 20
+    games last year looks like a prospect again every October.
+    """
+    stats = getattr(session, "player_season_stats", None) or {}
+    if not isinstance(stats, dict) or not stats:
+        return
+    league = getattr(getattr(session, "sim", None), "league", None)
+    index: Dict[str, Any] = {}
+
+    def _remember(player: Any) -> None:
+        pid = str(getattr(player, "id", "") or getattr(player, "player_id", "") or "")
+        if pid:
+            index[pid] = player
+
+    for team in list(getattr(league, "teams", None) or []):
+        for attr in ("roster", "ahl_roster", "echl_roster", "prospects"):
+            for player in list(getattr(team, attr, None) or []):
+                _remember(player)
+    for player in list(getattr(league, "free_agents", None) or []):
+        _remember(player)
+    for row in stats.values():
+        if not isinstance(row, dict):
+            continue
+        scope = str(row.get("stat_scope") or "regular_season")
+        if scope not in ("regular_season", ""):
+            continue
+        try:
+            gp = int(row.get("gp") or 0)
+        except (TypeError, ValueError):
+            gp = 0
+        if gp <= 0:
+            continue
+        pid = str(row.get("player_id") or row.get("id") or "")
+        player = index.get(pid)
+        if player is None:
+            continue
+        try:
+            prev = int(getattr(player, "nhl_career_gp", 0) or 0)
+        except (TypeError, ValueError):
+            prev = 0
+        try:
+            player.nhl_career_gp = prev + gp
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _stable_hash(value):
@@ -892,7 +1005,7 @@ def complete_playoffs_from_live_result(session: FranchiseSession, live: Dict[str
         playoff_player_stats=playoff_rows,
         season_seed=season_seed,
         season_year=season_year,
-        season_length=int(getattr(session, "season_length", 82) or 82),
+        season_length=int(getattr(session, "games_per_team_schedule", 82) or 82),
         history_by_player=history_by_player,
     )
 
@@ -909,7 +1022,7 @@ def complete_playoffs_from_live_result(session: FranchiseSession, live: Dict[str
         awards,
         season=season_year,
         season_seed=season_seed,
-        season_length=int(getattr(session, "season_length", 82) or 82),
+        season_length=int(getattr(session, "games_per_team_schedule", 82) or 82),
     )
     payload["metadata"] = dict(payload.get("metadata") or {})
     payload["metadata"]["season_year"] = season_year
@@ -1046,7 +1159,7 @@ def complete_playoffs(session: FranchiseSession) -> Dict[str, Any]:
         playoff_player_stats=playoff_rows,
         season_seed=season_seed,
         season_year=season_year,
-        season_length=int(getattr(session, "season_length", 82) or 82),
+        season_length=int(getattr(session, "games_per_team_schedule", 82) or 82),
         history_by_player=history_by_player,
     )
 
@@ -1058,7 +1171,7 @@ def complete_playoffs(session: FranchiseSession) -> Dict[str, Any]:
     session.stanley_cup_winner = session.champion_id
 
     result_id = f"awards:{season_year}:{season_seed}"
-    payload = build_awards_payload(awards, season=season_year, season_seed=season_seed, season_length=int(getattr(session, "season_length", 82) or 82))
+    payload = build_awards_payload(awards, season=season_year, season_seed=season_seed, season_length=int(getattr(session, "games_per_team_schedule", 82) or 82))
     payload["metadata"] = dict(payload.get("metadata") or {})
     payload["metadata"]["season_year"] = season_year
     payload["metadata"]["result_id"] = result_id
@@ -1311,7 +1424,7 @@ def _ensure_franchise_awards_computed(session: FranchiseSession) -> bool:
         playoff_player_stats=playoff_rows,
         season_seed=season_seed,
         season_year=season_year,
-        season_length=int(getattr(session, "season_length", 82) or 82),
+        season_length=int(getattr(session, "games_per_team_schedule", 82) or 82),
         history_by_player=history_by_player,
     )
 
@@ -1320,7 +1433,7 @@ def _ensure_franchise_awards_computed(session: FranchiseSession) -> bool:
         awards,
         season=season_year,
         season_seed=season_seed,
-        season_length=int(getattr(session, "season_length", 82) or 82),
+        season_length=int(getattr(session, "games_per_team_schedule", 82) or 82),
     )
     payload["metadata"] = dict(payload.get("metadata") or {})
     payload["metadata"]["season_year"] = season_year
@@ -1621,6 +1734,20 @@ def continue_offseason(
 
     if current == "awards":
         _legacy_stage(session, "awards")
+        try:
+            session.awards_published_through = int(
+                getattr(session, "season_calendar_year", 0) or 0
+            )
+            from services.sim_history import append_sim_history
+
+            append_sim_history(
+                session,
+                "awards",
+                f"Awards published for {session.awards_published_through}",
+                season_year=session.awards_published_through,
+            )
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     if current == "retirements":
         _legacy_stage(session, "retirements")
@@ -4096,9 +4223,30 @@ def _run_draft_lottery(session: FranchiseSession) -> Dict[str, Any]:
 
     sim = session.sim
     standings_rows = _build_standings_rows(session)
-    ordered = sorted(standings_rows, key=lambda r: (int(r.get("pts", 0)), -int(r.get("w", 0))))
+    by_points = sorted(standings_rows, key=lambda r: (int(r.get("pts", 0)), -int(r.get("w", 0))))
+    playoff_ids: set = set()
+    table = getattr(session, "standings", None)
+    if table is not None and hasattr(table, "playoff_status_map"):
+        try:
+            status_map = table.playoff_status_map() or {}
+            playoff_ids = {
+                str(tid)
+                for tid, info in status_map.items()
+                if isinstance(info, dict) and info.get("is_playoff_team")
+            }
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+            playoff_ids = set()
+    # Lottery is the clubs that missed the playoffs. A 13th-place team can miss
+    # and a 19th-place team can sneak in as a wild card. Points rank is only a
+    # fallback when the standings table has no playoff classification.
+    if playoff_ids:
+        missed = [row for row in by_points if str(row.get("team_id") or "") not in playoff_ids]
+    else:
+        missed = list(by_points)
+    ordered = missed[:16]
     pre_lottery_order: List[Dict[str, Any]] = []
-    for i, row in enumerate(ordered[:16], start=1):
+    for i, row in enumerate(ordered, start=1):
         tid = str(row.get("team_id", ""))
         tm = session.team_by_id.get(tid)
         pre_lottery_order.append({
@@ -4122,7 +4270,7 @@ def _run_draft_lottery(session: FranchiseSession) -> Dict[str, Any]:
 
         lot_teams = [
             LotteryTeam(team_id=str(row.get("team_id", "")), points=int(row.get("pts", 0)))
-            for row in ordered[:16]
+            for row in ordered
         ]
         result = run_draft_lottery(teams=lot_teams, seed=seed)
         order = list(getattr(result, "pick_order", None) or [])
@@ -5914,6 +6062,19 @@ def _run_prospect_rights_stage(session: FranchiseSession, *, force: bool = False
             player = get_player(league, pid) if league is not None else None
         except Exception:
             player = None
+        # A reserve row with no player is the "Prospect Not Found" ghost.
+        if player is None:
+            continue
+        try:
+            expiry_year = int(
+                e.get("rights_expiry_year")
+                or getattr(player, "rights_expiry_year", 0)
+                or 0
+            )
+        except (TypeError, ValueError):
+            expiry_year = 0
+        if expiry_year and expiry_year < season_year:
+            continue
         card = (
             rights_card_payload(player, team=team, season_year=season_year)
             if player is not None
@@ -5933,14 +6094,44 @@ def _run_prospect_rights_stage(session: FranchiseSession, *, force: bool = False
                 ],
             }
         )
+        ident = getattr(player, "identity", None)
+        try:
+            draft_year = int(card.get("draft_year") or getattr(player, "draft_year", 0) or 0)
+        except (TypeError, ValueError):
+            draft_year = 0
+        try:
+            pot = int(round(float(
+                getattr(player, "potential", None)
+                or getattr(getattr(player, "ratings", None), "get", lambda *_a, **_k: None)("dev_potential")
+                or (getattr(player, "ratings", {}) or {}).get("dev_potential")
+                or 0
+            )))
+        except (TypeError, ValueError):
+            pot = 0
+        if pot and pot <= 1:
+            pot = int(round(pot * 99))
+        stats = getattr(player, "season_stats", None) or {}
+        if not isinstance(stats, dict):
+            stats = {}
         prospect_cards.append({
+            **card,
             "player_id": pid,
             "name": e.get("name") or card.get("name"),
-            "position": e.get("position"),
-            "age": e.get("age") or getattr(getattr(player, "identity", None), "age", None) if player else None,
+            "position": e.get("position") or str(getattr(getattr(ident, "position", None), "value", getattr(ident, "position", "")) or ""),
+            "age": e.get("age") or getattr(ident, "age", None),
+            "potential": pot or card.get("potential") or None,
+            "draft_round": getattr(player, "draft_round", None) or card.get("draft_round"),
+            "draft_pick": getattr(player, "draft_pick_number", None) or card.get("draft_pick"),
+            "years_since_drafted": (season_year - draft_year) if draft_year else None,
+            "rights_expiry_date": getattr(player, "rights_expiry_date", None) or card.get("rights_signing_deadline"),
+            "key_stats": {
+                "gp": stats.get("gp") or stats.get("games_played"),
+                "goals": stats.get("goals") or stats.get("g"),
+                "assists": stats.get("assists") or stats.get("a"),
+                "points": stats.get("points") or stats.get("pts"),
+            },
             "decision_status": card.get("decision_status") or e.get("decision_status") or "pending",
             "contract_slot_impact": 1 if card.get("entry_level_contract_eligible", True) else 0,
-            **card,
         })
 
     warnings = []
@@ -6046,7 +6237,9 @@ def _prepare_resign_payload(session: FranchiseSession, *, force: bool = False) -
         try:
             from services.contract_economy import run_cpu_rfa_decisions
 
-            session.cpu_rfa_resign_decisions = run_cpu_rfa_decisions(session)
+            session.cpu_rfa_resign_decisions = run_cpu_rfa_decisions(
+                session, schedule_only=True
+            )
         except Exception:
             _swallowed_log.debug("cpu rfa re-sign pass failed", exc_info=True)
     if not force and isinstance(existing, dict) and existing.get("version") == STAGE_PAYLOAD_VERSION["re_sign"]:
@@ -6437,12 +6630,11 @@ def _prepare_resign_payload(session: FranchiseSession, *, force: bool = False) -
     resolved_count = max(0, int(summary.get("rfaCount") or 0) - remaining_count)
     window = ensure_own_fa_window(session)
     bonus = team_signing_bonus_eligibility(session)
-    # Opening FA is always allowed from re-sign; exclusive days and open RFAs are optional.
-    can_continue = True
-    if not window.get("complete"):
+    can_continue = bool(window.get("complete"))
+    if not can_continue:
         warnings.append(
-            f"Exclusive window Day {window.get('day', 0)}/{window.get('days_total', 6)} — "
-            "Sim Day to progress offers, or Open Free Agency to end exclusivity"
+            f"Exclusive window Day {window.get('day', 0)}/{window.get('days_total', OWN_FA_MORATORIUM_DAYS)} — "
+            "Sim all 7 re-sign days before free agency opens"
         )
 
     payload = {
@@ -6573,7 +6765,16 @@ def _open_free_agency(session: FranchiseSession, *, force: bool = False) -> Dict
     # exclusive window is optional negotiating time on the re-sign desk — it must
     # not leave the Wire empty when the GM chooses Open Free Agency.
     if not force and not window.get("complete") and not session.free_agency_open:
-        force = True
+        return {
+            "ok": False,
+            "status": "blocked",
+            "reason": "exclusive_window",
+            "message": (
+                f"Sim all {OWN_FA_MORATORIUM_DAYS} re-sign days before opening free agency "
+                f"({int(window.get('day') or 0)}/{OWN_FA_MORATORIUM_DAYS} complete)."
+            ),
+            "own_fa_window": window,
+        }
 
     existing_market = getattr(session, "free_agency_market_payload", None)
     already_open = bool(session.free_agency_open)
@@ -6825,6 +7026,17 @@ def advance_contract_negotiation_day(session: FranchiseSession, *, days: int = 1
 
     for _ in range(days):
         session.own_fa_window_day = int(getattr(session, "own_fa_window_day", 0) or 0) + 1
+        try:
+            from services.contract_economy import run_cpu_rfa_decisions
+
+            day_now = int(session.own_fa_window_day)
+            run_cpu_rfa_decisions(
+                session,
+                fa_day=day_now,
+                final=day_now >= OWN_FA_MORATORIUM_DAYS,
+            )
+        except Exception:
+            _swallowed_log.debug("cpu rfa day pass failed", exc_info=True)
         for pid, entry in list(neg_map.items()):
             if not isinstance(entry, dict):
                 continue
@@ -8211,6 +8423,14 @@ def generate_next_season(session: FranchiseSession) -> Dict[str, Any]:
             getattr(session, "strength_map", None) or {},
             games=int(getattr(session, "games_per_team_schedule", 82) or 82),
         )
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    try:
+        _bank_nhl_career_games(session)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    try:
+        _release_expired_prospect_rights(session)
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
     session.player_season_stats = {}

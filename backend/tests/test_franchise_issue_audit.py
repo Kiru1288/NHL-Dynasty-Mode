@@ -31,11 +31,14 @@ def test_aging_pin_survives_playoffs_and_june_calendar():
 def test_ga_balance_mult_no_longer_crushes_stars():
     eng = object.__new__(SimEngine)
     p = SimpleNamespace(id="s1", player_type="power_forward", ratings={"shot": 90, "passing": 70})
-    eng._gm_is_certified_sniper = lambda _p: False  # type: ignore
+    eng._gm_is_goal_first_scorer = lambda _p: True  # type: ignore
     eng._gm_is_certified_playmaker = lambda _p: False  # type: ignore
+    eng._gm_is_assist_leaning_forward = lambda _p: False  # type: ignore
+    eng._gm_pos_str = lambda _p: "C"  # type: ignore
     ledger = {"s1": {"g": 40, "a": 18}}
     mult = eng._gm_goal_assist_balance_mult(p, ledger, "T", role="score")
-    assert mult >= 0.85, mult
+    # A real sniper who is ahead on goals is eased back, not wiped out.
+    assert mult >= 0.55, mult
 
 
 def test_trade_context_sets_draft_day_flag():
@@ -64,7 +67,7 @@ def test_trade_context_sets_draft_day_flag():
 def test_light_path_builds_units_before_toi_in_source():
     import inspect
 
-    src = inspect.getsource(SimEngine._accumulate_light_strength_game_stats)
+    src = inspect.getsource(SimEngine._accumulate_light_strength_game_stats_impl)
     units_at = src.find("_gm_build_game_units")
     toi_at = src.find("_gm_allocate_conserved_toi")
     assert units_at > 0 and toi_at > units_at

@@ -2253,8 +2253,8 @@ def get_franchise_game_detail(session: FranchiseSession, game_id: str) -> Option
 #
 # Each finished NHL game keeps one compact box copied from data the sim already
 # produced (final, period goals, scoring events, per-player ledger deltas).
-# Stored on ``session.box_score_book`` (pickled with the session) and bounded
-# to the current + previous season.
+# Stored on ``session.box_score_book`` (pickled with the session). Every season
+# stays in the book.
 # ---------------------------------------------------------------------------
 
 # Wire order of each ``lines`` row after team_id — mirrors engine._BOX_LINE_KEYS.
@@ -2267,7 +2267,6 @@ BOX_LINE_KEYS = (
 )
 _BOX_IDX = {k: i + 1 for i, k in enumerate(BOX_LINE_KEYS)}
 _BOX_ENGINE_LEN = 1 + BOX_LINE_KEYS.index("so") + 1  # team_id + engine-produced keys
-_BOX_SEASONS_KEPT = 2
 
 
 def _box_book(session: Any) -> Dict[str, Any]:
@@ -2290,9 +2289,6 @@ def _box_season_bucket(book: Dict[str, Any], season: int) -> Dict[str, Any]:
         bucket = {"games": {}, "players": {}, "people": {}}
         book["seasons"][key] = bucket
         book["order"].append(key)
-        while len(book["order"]) > _BOX_SEASONS_KEPT:
-            old = book["order"].pop(0)
-            book["seasons"].pop(old, None)
     return bucket
 
 
@@ -3040,10 +3036,7 @@ def get_player_game_log_payload(session: Any, player_id: str, season: Optional[i
     }
 
 
-try:
-    from app.sim_engine.engine import _BOX_LINE_KEYS as _ENGINE_BOX_LINE_KEYS
+from app.sim_engine.engine import _BOX_LINE_KEYS as _ENGINE_BOX_LINE_KEYS
 
-    assert list(BOX_LINE_KEYS[:25]) == list(_ENGINE_BOX_LINE_KEYS[:25])
-    assert BOX_LINE_KEYS[-1] == "t" and _ENGINE_BOX_LINE_KEYS[-1] == "t"
-except Exception:
-    pass
+assert list(BOX_LINE_KEYS[:25]) == list(_ENGINE_BOX_LINE_KEYS[:25])
+assert BOX_LINE_KEYS[-1] == "t" and _ENGINE_BOX_LINE_KEYS[-1] == "t"

@@ -1134,6 +1134,12 @@ def _attach_chapter_profile_to_row(player: Any, row: Dict[str, Any], ratings: Ma
         chapters["character"] = _resolve_character_chapter_score(row, player, mental=mental, ovr=ovr)
     payload["chapters"] = {k: int(v) for k, v in chapters.items() if v is not None}
 
+    try:
+        from services.auto_scout import attach_auto_scout
+
+        attach_auto_scout(player, row)
+    except Exception:
+        pass
     row["chapter_profile"] = payload
     for key, val in payload["chapters"].items():
         try:

@@ -1150,7 +1150,9 @@ def should_cpu_auto_sign_elc(
         return True, "rights_expiration_risk"
 
     # Clearly NHL-ready (OVR / depth chart). NCAA teenagers stay in school.
-    if nhl_ready and path != "ncaa":
+    # An 18 or 19 year old is not "ready" at 74. He needs 80 overall, or the
+    # draft-age check below at 89 potential.
+    if nhl_ready and path != "ncaa" and (age > 19 or ovr >= 80.0):
         return True, "prospect_readiness"
     if path == "ncaa" and age >= 21 and (ovr >= 78.0 or would_crack_nhl_roster(player, team)):
         return True, "age_and_readiness"
@@ -1160,6 +1162,26 @@ def should_cpu_auto_sign_elc(
         return True, "age_and_readiness"
     if path == "europe" and age >= 21 and ovr >= 76.0:
         return True, "age_and_readiness"
+
+    # An 18 or 19 year old with a real ceiling was still unsigned in year 4.
+    # NCAA stays in school. Everyone else at that age is a contract, not a maybe.
+    if age <= 19 and path != "ncaa":
+        pot = 0.0
+        ratings = getattr(player, "ratings", None)
+        if isinstance(ratings, dict):
+            try:
+                pot = float(ratings.get("dev_potential") or 0)
+            except (TypeError, ValueError):
+                pot = 0.0
+        if pot <= 0:
+            try:
+                pot = float(getattr(player, "potential", 0) or 0)
+            except (TypeError, ValueError):
+                pot = 0.0
+        if 0 < pot <= 1.5:
+            pot *= 99.0
+        if pot >= 89.0 or ovr >= 80.0:
+            return True, "draft_age_control"
 
     # Cap / slots: do not auto-sign if org is near contract limit
     try:

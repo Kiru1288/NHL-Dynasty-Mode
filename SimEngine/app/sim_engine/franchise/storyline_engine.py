@@ -11260,10 +11260,40 @@ def _u_run_major_league_event_pass(session: Any, rng: random.Random, days: int =
             availability = _u_set_player_availability(session, player_id, status="investigative_leave", reason="Arrest / league review", days=rng.randint(5, 14))
             ovr_delta, days = -max(8, min(18, 11 + (60 - mental) * 0.12)), rng.randint(60, 120)
         elif event_type == "LEAGUE_SUSPENSION":
-            games = rng.randint(8, 30)
-            headline = f"League suspends {name} for {games} games"
-            summary = f"The league announced a {games}-game suspension for {name}. The player is immediately unavailable."
-            availability = _u_set_player_availability(session, player_id, status="suspended", reason="League suspension", games=games)
+            games = rng.randint(2, 8)
+            cause = rng.choice((
+                "an illegal check to the head",
+                "a boarding major",
+                "a knee-on-knee hit",
+                "abuse of an official",
+                "instigating a line brawl",
+            ))
+            foe = ""
+            try:
+                recent = list(getattr(session, "game_results", None) or [])[-40:]
+                for box in reversed(recent):
+                    if not isinstance(box, dict):
+                        continue
+                    hid = str(box.get("home_id") or box.get("home_team_id") or "")
+                    aid = str(box.get("away_id") or box.get("away_team_id") or "")
+                    if str(team_id) not in (hid, aid):
+                        continue
+                    other_id = aid if str(team_id) == hid else hid
+                    other = (getattr(session, "team_by_id", None) or {}).get(other_id)
+                    foe = str(
+                        getattr(other, "abbreviation", None)
+                        or getattr(other, "abbr", None)
+                        or getattr(other, "name", None)
+                        or ""
+                    )
+                    break
+            except Exception:
+                foe = ""
+            against = f" against {foe}" if foe else ""
+            issued = iso or "today"
+            headline = f"{name} suspended {games} games for {cause}{against}"
+            summary = f"On {issued}, {name} was suspended {games} games for {cause}{against}."
+            availability = _u_set_player_availability(session, player_id, status="suspended", reason=cause, games=games)
             ovr_delta, days = -max(6, min(16, 8 + (58 - mental) * 0.10)), rng.randint(45, 90)
         elif event_type == "PLAYER_BANNED":
             days_banned = rng.randint(180, 365)

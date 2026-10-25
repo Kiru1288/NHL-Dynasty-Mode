@@ -599,7 +599,7 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
       setDayFlash(
         signed.length
           ? `Day advanced — ${signed.map((s) => s.name || s.player_id).join(", ")} signed`
-          : `Day ${result?.own_fa_window?.day ?? "—"} / ${result?.own_fa_window?.days_total ?? 6} — no signatures yet`
+          : `Day ${result?.own_fa_window?.day ?? "—"} / ${result?.own_fa_window?.days_total ?? 7} — no signatures yet`
       );
       setResponse(result);
     } catch (e) {
@@ -609,13 +609,6 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
     }
   };
 
-  const continueDisabled = busy || !canContinue;
-  const continueTitle = continueDisabled
-    ? safeArray(payload?.blocking_reasons)[0] ||
-      (blocking[0]?.message || blocking[0]) ||
-      "Resolve required RFA decisions before continuing"
-    : undefined;
-
   const selectedOvr = selected?.overall ?? selected?.ovr ?? getPlayerOverall(selected);
   const selectedInterest = resignInterestLabel(selected);
   const selectedArchetype = resignArchetype(selected);
@@ -624,6 +617,17 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
   const ufaCount = summary.ufaCount ?? filterCounts.ufa;
   const rfaCount = summary.rfaCount ?? filterCounts.rfa;
   const ownWindow = payload?.own_fa_window || {};
+  const windowDay = Number(ownWindow.day || 0);
+  const windowTotal = Number(ownWindow.days_total || 7);
+  const windowOpen = Boolean(ownWindow.complete) || windowDay >= windowTotal;
+  const continueDisabled = busy || !canContinue || !windowOpen;
+  const continueTitle = continueDisabled
+    ? (!windowOpen
+        ? `Sim all ${windowTotal} re-sign days before opening free agency (${windowDay}/${windowTotal})`
+        : safeArray(payload?.blocking_reasons)[0] ||
+          (blocking[0]?.message || blocking[0]) ||
+          "Resolve required RFA decisions before continuing")
+    : undefined;
   const slotUsed =
     slots.used != null
       ? slots.used
@@ -3619,64 +3623,6 @@ function parseContractSlots(payload) {
   return { used: null, limit: 50 };
 }
 
-function prospectPriorityMeta(p, { priorityIds, seasonYear }) {
-  const through = p?.rights_through != null ? Number(p.rights_through) : null;
-  const path = String(p?.returning_to || p?.development_environment?.path || "").toUpperCase();
-  const eta = p?.eta != null ? Number(p.eta) : null;
-  const rec = p?.recommended_action;
-  const isPriority = priorityIds.has(String(p?.player_id || ""));
-  const nearExpiry =
-    through != null && seasonYear != null && through <= Number(seasonYear) + 1;
-  if (isPriority || nearExpiry || rec === "sign_elc") {
-    return { label: "Sign now", tone: "hot", rank: 5 };
-  }
-  if (rec === "allow_expire") return { label: "Rights expire soon", tone: "hot", rank: 4 };
-  if (path.includes("EUROPE") || rec === "keep_europe") {
-    return { label: "Leave in Europe", tone: "calm", rank: 2 };
-  }
-  if (path.includes("NCAA") || rec === "keep_college") {
-    return { label: "NCAA path", tone: "calm", rank: 2 };
-  }
-  if (rec === "return_junior") return { label: "Return to junior", tone: "calm", rank: 2 };
-  if (rec === "keep_unsigned" || rec === "delay") {
-    return { label: eta != null && eta >= 4 ? "Defer" : "Defer", tone: "soft", rank: 1 };
-  }
-  if (eta != null && eta >= 4) return { label: "Long-term project", tone: "soft", rank: 1 };
-  return { label: "Review", tone: "soft", rank: 0 };
-}
-
-function buildRightsTimeline(focus, seasonYear) {
-  const steps = [];
-  const draftYear = focus?.draft_year != null ? Number(focus.draft_year) : null;
-  if (draftYear) steps.push({ key: "draft", label: "Drafted", value: String(draftYear), tone: "now" });
-  safeArray(focus?.path_visual)
-    .slice(0, 3)
-    .forEach((step, i) => {
-      steps.push({
-        key: `path-${i}`,
-        label: String(step),
-        value: i === 0 && seasonYear != null ? String(Math.max(Number(seasonYear), draftYear || 0)) : "Next",
-        tone: i === 0 ? "now" : "future",
-      });
-    });
-  if (focus?.rights_signing_deadline) {
-    steps.push({
-      key: "deadline",
-      label: "Sign deadline",
-      value: String(focus.rights_signing_deadline),
-      tone: "deadline",
-    });
-  } else if (focus?.rights_through != null) {
-    steps.push({
-      key: "expire",
-      label: "Rights expire",
-      value: String(focus.rights_through),
-      tone: "deadline",
-    });
-  }
-  return steps.slice(0, 6);
-}
-
 function buildDecisionPackages(focus) {
   const actions = safeArray(focus?.available_actions);
   const byId = Object.fromEntries(actions.map((a) => [a.id, a]));
@@ -3781,23 +3727,38 @@ export function ProspectRightsEventMenu({ franchiseState = {}, eventData = {}, o
   const railItemRefs = React.useRef({});
 
   const prospects = safeArray(payload?.prospects);
-  const priority = safeArray(payload?.recommended_signing_priority);
   const warnings = safeArray(payload?.warning_reasons);
   const seasonYear = payload?.season_year || franchiseState?.season_year || franchiseState?.seasonYear;
   const slots = parseContractSlots(payload);
-  const priorityIds = React.useMemo(
-    () => new Set(priority.map((p) => String(p?.player_id || "")).filter(Boolean)),
-    [priority]
-  );
 
   const sortedProspects = React.useMemo(() => {
     return [...prospects].sort((a, b) => {
-      const ma = prospectPriorityMeta(a, { priorityIds, seasonYear });
-      const mb = prospectPriorityMeta(b, { priorityIds, seasonYear });
-      if (mb.rank !== ma.rank) return mb.rank - ma.rank;
-      return (Number(a?.eta) || 99) - (Number(b?.eta) || 99);
+      const oa = Number(a?.overall ?? a?.ovr ?? 0);
+      const ob = Number(b?.overall ?? b?.ovr ?? 0);
+      if (ob !== oa) return ob - oa;
+      const pa = Number(a?.potential ?? a?.potential_score ?? 0);
+      const pb = Number(b?.potential ?? b?.potential_score ?? 0);
+      if (pb !== pa) return pb - pa;
+      const ea = Number(a?.rights_through ?? a?.rights_expiry_year ?? 9999);
+      const eb = Number(b?.rights_through ?? b?.rights_expiry_year ?? 9999);
+      return ea - eb;
     });
-  }, [prospects, priorityIds, seasonYear]);
+  }, [prospects]);
+  const expiringSoon = sortedProspects.filter((p) => {
+    const through = Number(p?.rights_through ?? p?.rights_expiry_year);
+    return Number.isFinite(through) && seasonYear != null && through <= Number(seasonYear) + 1;
+  });
+  const [leaveArmed, setLeaveArmed] = React.useState(false);
+  const handleLeave = () => {
+    if (expiringSoon.length && !leaveArmed) {
+      setLeaveArmed(true);
+      setError(
+        `Warning: ${expiringSoon.length} prospect${expiringSoon.length === 1 ? "" : "s"} have rights expiring this offseason. Continue again to leave.`
+      );
+      return;
+    }
+    onContinue?.();
+  };
 
   React.useEffect(() => {
     if (!prospects.length) {
@@ -3817,7 +3778,6 @@ export function ProspectRightsEventMenu({ franchiseState = {}, eventData = {}, o
     packages.find((p) => p.recommended && !p.disabled) ||
     packages.find((p) => !p.disabled) ||
     null;
-  const selectedAction = selectedPackage?.action || null;
   const isSigning = selectedPackage?.kind === "elc";
   const [assignmentPlanOverride, setAssignmentPlanOverride] = React.useState(null);
   // Negotiated ELC bonus money ($M). null = the package's template amounts.
@@ -3882,10 +3842,6 @@ export function ProspectRightsEventMenu({ franchiseState = {}, eventData = {}, o
   const acceptance = preview?.acceptance || focus?.elc_acceptance_summary || null;
   const signingResult = preview?.signing_result || null;
   const slotPreview = preview?.slot_preview || null;
-  const pros = safeArray(selectedAction?.pros || acceptance?.positives);
-  const cons = safeArray(selectedAction?.cons || acceptance?.concerns);
-  const agentWants = safeArray(acceptance?.agent_wants);
-  const timeline = focus ? buildRightsTimeline(focus, seasonYear) : [];
   const ovr = focus?.overall != null ? focus.overall : getPlayerOverall(focus);
   const pot =
     focus?.potential != null
@@ -4031,7 +3987,7 @@ export function ProspectRightsEventMenu({ franchiseState = {}, eventData = {}, o
       tickerItems={PROSPECT_RIGHTS_TABS}
       persistRevealKey="prospectrights-revealed"
       footerAlign="split"
-      onContinue={onContinue}
+      onContinue={handleLeave}
       onBack={onBack}
       railTitle="Unsigned Prospects"
       railHint={prospects.length ? "↑↓ switch" : null}
@@ -4051,16 +4007,19 @@ export function ProspectRightsEventMenu({ franchiseState = {}, eventData = {}, o
                     {[
                       focus.position || getPlayerPosition(focus),
                       ovr != null ? `${ovr} OVR` : null,
-                      pot != null ? `potential ${Math.round(Number(pot))}` : null,
-                      focus.age != null ? `age ${focus.age}` : null,
-                      focus.shoots ? `shoots ${/^r/i.test(String(focus.shoots)) ? "right" : /^l/i.test(String(focus.shoots)) ? "left" : String(focus.shoots).toLowerCase()}` : null,
+                      pot != null ? `${Math.round(Number(pot))} POT` : null,
+                      focus.age != null ? `Age ${focus.age}` : null,
                     ].filter(Boolean).join(" · ")}
                   </p>
                   <p className="nd2-agent">
                     {[
-                      focus.draft_year ? `Drafted ${focus.draft_year}${focus.draft_overall_pick ? `, pick ${focus.draft_overall_pick}` : ""}` : null,
-                      focus.current_league_id || focus.returning_to ? String(focus.current_league_id || focus.returning_to).replace(/^CHL_/, "") : null,
-                      focus.eta != null ? `NHL in about ${focus.eta} ${Number(focus.eta) === 1 ? "year" : "years"}` : null,
+                      focus.draft_year
+                        ? `Draft ${focus.draft_year}${focus.draft_round ? ` R${focus.draft_round}` : ""}${focus.draft_overall_pick ? ` #${focus.draft_overall_pick}` : ""}`
+                        : null,
+                      focus.years_since_drafted != null ? `${focus.years_since_drafted}y since draft` : null,
+                      (focus.rights_expiry_date || focus.rights_through)
+                        ? `Rights through ${focus.rights_expiry_date || focus.rights_through}`
+                        : null,
                     ].filter(Boolean).join(" · ")}
                   </p>
                 </div>
@@ -4091,23 +4050,10 @@ export function ProspectRightsEventMenu({ franchiseState = {}, eventData = {}, o
                     <div className="nd2-gauge__track">
                       <i className="nd2-gauge__fill" style={{ width: `${Math.max(4, Number(acceptance?.acceptance_pct) || 4)}%` }} />
                     </div>
-                    <small>
-                      {[
-                        agentWants.length ? `Wants ${agentWants.slice(0, 3).map((w, i) => (i === 0 ? String(w.label) : String(w.label).replace(/^[A-Z](?=[a-z])/, (c) => c.toLowerCase()))).join(", ")}` : null,
-                        acceptance?.main_concern ? `Concern: ${acceptance.main_concern}` : null,
-                      ].filter(Boolean).join(" · ") || "Chance he signs this offer"}
-                    </small>
+                    <small>Chance he signs this offer</small>
                   </div>
                 </section>
-              ) : (
-                <section className="nd2-gauge" aria-label="Path decision">
-                  <strong>{"→"}</strong>
-                  <div className="nd2-gauge__body">
-                    <span>{selectedPackage?.title || "Choose a path"}</span>
-                    <small>{selectedPackage?.blurb || "No contract signed: his rights stay with you and no slot is used."}</small>
-                  </div>
-                </section>
-              )}
+              ) : null}
 
               <div className="nd2-body">
                 <section className="nd2-offer" aria-label="Your decision">
@@ -4230,49 +4176,22 @@ export function ProspectRightsEventMenu({ franchiseState = {}, eventData = {}, o
                   ) : null}
                 </section>
 
-                <section className="nd2-talk" aria-label="What this means">
+                <section className="nd2-talk" aria-label="Prospect line">
                   {isSigning && signingResult ? (
                     <dl className="pr-result">
-                      <div><dt>Contract starts</dt><dd>{signingResult.contract_starts}</dd></div>
                       <div><dt>Cap hit</dt><dd>{offer?.aav_display || signingResult.cap_impact_display}</dd></div>
                       <div><dt>Assigned to</dt><dd>{humanizeLabel(signingResult.assignment)}</dd></div>
-                      <div><dt>Slide year</dt><dd>{(offer?.slide_eligible ?? selectedPackage?.slide) ? "Eligible" : "No"}</dd></div>
-                      {signingResult.rights ? <div><dt>Rights after</dt><dd>{signingResult.rights}</dd></div> : null}
                     </dl>
                   ) : null}
-                  {(pros.length || cons.length) ? (
-                    <div className="dr-evidence">
-                      {pros.slice(0, 3).map((item) => (
-                        <p key={`pro-${item}`} className="is-up"><b aria-hidden="true">+</b>{item}</p>
-                      ))}
-                      {cons.slice(0, 3).map((item) => (
-                        <p key={`con-${item}`} className="is-down"><b aria-hidden="true">{"−"}</b>{item}</p>
-                      ))}
-                    </div>
-                  ) : null}
-                  {timeline.length ? (
-                    <div>
-                      <span className="nd2-market__label">His path</span>
-                      <ol className="dr-road pr-road" aria-label="Rights timeline">
-                        {timeline.map((step) => (
-                          <li
-                            key={step.key}
-                            className={step.tone === "deadline" ? "is-projection pr-deadline" : step.tone === "future" ? "" : "is-next"}
-                          >
-                            <span className="dr-road__when">{step.value}</span>
-                            <strong>{step.label}</strong>
-                          </li>
-                        ))}
-                      </ol>
-                    </div>
-                  ) : null}
-                  {focus.season_stats ? (
+                  {focus.season_stats || focus.key_stats ? (
                     <p className="nd2-note">
-                      This season{focus.season_stats.league ? ` in the ${String(focus.season_stats.league).replace(/^CHL_/, "")}` : ""}:{" "}
-                      {focus.season_stats.save_pct != null && focus.position === "G"
-                        ? `${focus.season_stats.gp} GP, ${focus.season_stats.wins ?? 0} W, ${Number(focus.season_stats.save_pct).toFixed(3)} save %`
-                        : `${focus.season_stats.gp} GP, ${focus.season_stats.goals ?? 0}G ${focus.season_stats.assists ?? 0}A ${focus.season_stats.points ?? 0}P${focus.season_stats.ppg != null ? ` (${Number(focus.season_stats.ppg).toFixed(2)} per game)` : ""}`}
-                      {focus.season_stats.stock_label ? ` · stock ${String(focus.season_stats.stock_label).toLowerCase()}` : ""}
+                      {focus.season_stats
+                        ? `This season${focus.season_stats.league ? ` in the ${String(focus.season_stats.league).replace(/^CHL_/, "")}` : ""}: ${
+                            focus.season_stats.save_pct != null && focus.position === "G"
+                              ? `${focus.season_stats.gp} GP, ${focus.season_stats.wins ?? 0} W, ${Number(focus.season_stats.save_pct).toFixed(3)} save %`
+                              : `${focus.season_stats.gp} GP, ${focus.season_stats.goals ?? 0}G ${focus.season_stats.assists ?? 0}A ${focus.season_stats.points ?? 0}P`
+                          }`
+                        : `Season line: ${focus.key_stats.gp ?? 0} GP, ${focus.key_stats.goals ?? 0}G ${focus.key_stats.assists ?? 0}A ${focus.key_stats.points ?? 0}P`}
                     </p>
                   ) : null}
                 </section>
@@ -4323,7 +4242,6 @@ export function ProspectRightsEventMenu({ franchiseState = {}, eventData = {}, o
           sortedProspects.map((p, i) => {
             const id = String(p.player_id || i);
             const active = String(p.player_id || "") === String(selectedId);
-            const meta = prospectPriorityMeta(p, { priorityIds, seasonYear });
             const rowOvr = p.overall != null ? p.overall : null;
             return (
               <button
@@ -4343,24 +4261,17 @@ export function ProspectRightsEventMenu({ franchiseState = {}, eventData = {}, o
                   </div>
                   <div className={`${prefix}-haul-body`}>
                     <strong>{p.name || getPlayerName(p)}</strong>
-                    <span
-                      className={`${prefix}-rail-priority${
-                        meta.tone === "calm" ? " is-calm" : meta.tone === "soft" ? " is-soft" : ""
-                      }`}
-                    >
-                      {meta.label}
-                    </span>
                     <div className={`${prefix}-card-details`}>
                       <span>
                         {[
+                          rowOvr != null ? `${rowOvr} OVR` : null,
+                          p.potential != null ? `${p.potential} POT` : null,
                           p.age != null ? `Age ${p.age}` : null,
-                          rowOvr != null ? `OVR ${rowOvr}` : null,
-                          p.potential != null
-                            ? `POT ${p.potential}`
-                            : p.potential_score != null
-                              ? `POT ${Math.round(Number(p.potential_score))}`
-                              : null,
-                          p.eta != null ? `ETA ${p.eta}y` : null,
+                          p.draft_year ? `${p.draft_year}` : null,
+                          (p.rights_through || p.rights_expiry_year)
+                            ? `Rights ${p.rights_through || p.rights_expiry_year}`
+                            : null,
+                          p.key_stats?.points != null ? `${p.key_stats.points} P` : null,
                         ]
                           .filter(Boolean)
                           .join(" · ")}

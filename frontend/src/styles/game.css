@@ -31982,6 +31982,9 @@ h1:not([class*="replay"] *){font-family:var(--dd-font-display)!important;font-we
 }
 .office-menu-icon__name{font-size:25px!important;-webkit-text-stroke:2.6px #1a0d05!important}
 .office-edge.office-edge--left{top:auto!important;bottom:118px!important;transform:none!important}
+.office-edge.office-edge--right{top:22%!important;bottom:auto!important;transform:none!important;font-family:var(--dd-font-display)!important;color:var(--dd-cream)!important;border:3px solid!important;border-right:0!important;
+  border-color:var(--dd-gold-hi) var(--dd-gold) var(--dd-gold-lo) var(--dd-gold)!important;border-radius:10px 0 0 10px!important;background:linear-gradient(270deg,#183a94,#2f5fd0)!important;
+  box-shadow:0 0 0 2px var(--dd-gold-lo),0 8px 16px rgba(0,0,0,.4)!important;text-shadow:0 2px 0 #071440}
 @media (max-width:1280px){.hub-alert{left:auto;right:16px;transform:none;width:min(620px,calc(100vw - 260px))}}
 /* Big monitors: the 3D wall scales with the window, so the HUD scales too */
 @media (min-width:1700px){.office-broadcast,.office-urgent-desk,.hub-alert,.hub-console,.office-control-bar,.office-edge,.office-wire-ticker{zoom:1.25}}
@@ -32532,3 +32535,81 @@ h1:not([class*="replay"] *){font-family:var(--dd-font-display)!important;font-we
 .sl-life__feed li.is-bad{border-left-color:var(--cs-coral,#ff6b5c)}
 .sl-life__feed li span{font-size:11px;font-weight:800;color:var(--cs-soft,#a9bfdc)}
 .sl-life__feed li p{margin:2px 0 0;font-size:13px;font-weight:600;line-height:1.4;color:#eef4ff}
+
+/* PuckGPT — a search desk over the save. Uses the office tokens, not a separate theme. */
+.puckgpt-screen {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 22px 28px 32px;
+  color: var(--cs-cream, #fff3d6);
+  background:
+    radial-gradient(1200px 420px at 10% -10%, rgba(248, 213, 138, 0.08), transparent 55%),
+    linear-gradient(180deg, rgba(8, 18, 46, 0.2), rgba(8, 18, 46, 0.55));
+}
+.puckgpt-bar {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid var(--office-line-strong, rgba(248, 213, 138, 0.35));
+  padding-bottom: 10px;
+}
+.puckgpt-mark {
+  font-family: var(--font-office-display);
+  letter-spacing: 0.22em;
+  font-size: 1.15rem;
+  color: var(--office-brass, #f8d58a);
+}
+.puckgpt-bar p {
+  margin: 4px 0 0;
+  color: var(--cs-soft, #a9bfdc);
+  font-size: 13px;
+}
+.puckgpt-back,
+.puckgpt-go,
+.puckgpt-chip {
+  font-family: var(--font-office-display);
+  letter-spacing: 0.06em;
+  border: 1px solid var(--office-line-strong, rgba(248, 213, 138, 0.35));
+  background: rgba(8, 18, 46, 0.55);
+  color: var(--cs-cream, #fff3d6);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.puckgpt-back { padding: 6px 12px; }
+.puckgpt-back:hover,
+.puckgpt-go:hover,
+.puckgpt-chip:hover { background: var(--office-brass, #f8d58a); color: #1a1408; }
+.puckgpt-search { display: flex; gap: 8px; }
+.puckgpt-query {
+  flex: 1;
+  padding: 12px 14px;
+  border-radius: 4px;
+  border: 1px solid var(--office-line-strong, rgba(248, 213, 138, 0.35));
+  background: rgba(6, 14, 36, 0.72);
+  color: #fff;
+  font-size: 16px;
+}
+.puckgpt-go { padding: 0 18px; font-size: 15px; }
+.puckgpt-go:disabled { opacity: 0.55; cursor: default; }
+.puckgpt-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.puckgpt-chip { padding: 6px 10px; font-size: 13px; }
+.puckgpt-answer {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 800;
+  line-height: 1.25;
+}
+.puckgpt-hits { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.puckgpt-hit {
+  padding: 10px 12px;
+  background: rgba(8, 18, 46, 0.55);
+  border-left: 3px solid var(--office-brass, #f8d58a);
+  color: #d6e2f4;
+  font-size: 14px;
+  line-height: 1.4;
+}
+.puckgpt-hit em { font-style: normal; color: var(--office-brass, #f8d58a); margin-right: 8px; }
+.puckgpt-error { color: var(--cs-coral, #ff6b5c); margin: 0; }

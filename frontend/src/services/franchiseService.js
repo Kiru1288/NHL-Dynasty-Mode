@@ -278,6 +278,11 @@ export async function getFranchiseCrisis() {
   return data;
 }
 
+export async function askPuckGpt(query) {
+  const { data } = await api.get("/api/franchise/puckgpt", { params: { q: query || "" } });
+  return data;
+}
+
 export async function getFranchiseNarrative() {
   const sid = getFranchiseSessionId();
   if (!sid) throw new Error("No franchise session");
@@ -297,18 +302,17 @@ let statsCentralCache = null;
 let statsCentralInflight = null;
 let statsCentralInflightRev = null;
 
-export function peekStatsCentral(revision) {
+export function peekStatsCentral(revision, seasonYear) {
   if (!statsCentralCache?.payload) return null;
-  if (revision == null) return statsCentralCache.payload;
-  if (statsCentralCache.revision == null || statsCentralCache.revision === revision) {
-    return statsCentralCache.payload;
-  }
+  if (revision == null) return null;
+  if (seasonYear != null && statsCentralCache.seasonYear !== seasonYear) return null;
+  if (statsCentralCache.revision === revision) return statsCentralCache.payload;
   return null;
 }
 
-export function prefetchStatsCentral(revision) {
+export function prefetchStatsCentral(revision, seasonYear) {
   const rev = revision ?? null;
-  const cached = peekStatsCentral(rev);
+  const cached = peekStatsCentral(rev, seasonYear);
   if (cached) return Promise.resolve(cached);
   if (statsCentralInflight && statsCentralInflightRev === rev) return statsCentralInflight;
   statsCentralInflightRev = rev;
@@ -317,7 +321,8 @@ export function prefetchStatsCentral(revision) {
     .then((res) => {
       const payload = res.data;
       const storedRev = payload?.stats_revision == null ? rev : payload.stats_revision;
-      statsCentralCache = { revision: storedRev, payload };
+      const storedSeason = payload?.season_year ?? payload?.season_calendar_year ?? seasonYear ?? null;
+      statsCentralCache = { revision: storedRev, seasonYear: storedSeason, payload };
       return payload;
     })
     .finally(() => {
@@ -329,8 +334,8 @@ export function prefetchStatsCentral(revision) {
   return statsCentralInflight;
 }
 
-export async function getStatsCentral(revision) {
-  return prefetchStatsCentral(revision ?? null);
+export async function getStatsCentral(revision, seasonYear) {
+  return prefetchStatsCentral(revision ?? null, seasonYear ?? null);
 }
 
 export async function getDraftClassDetail() {

@@ -794,6 +794,18 @@ def _simulate_one_game(
             )
             h_scale = max(0.93, min(1.07, float(sim._roster_injury_depth_penalty(home))))
             a_scale = max(0.93, min(1.07, float(sim._roster_injury_depth_penalty(away))))
+            try:
+                sim._gm_season_ledger_ref = getattr(session, "player_season_stats", None)
+            except Exception:
+                pass
+            try:
+                home_g, away_g = sim._gm_pick_game_starters(
+                    rng, home, away, calendar_day=int(po_day), is_playoff=True,
+                )
+                sim._locked_home_goalie = home_g
+                sim._locked_away_goalie = away_g
+            except Exception:
+                home_g = away_g = None
             score_res = sim._simulate_game(
                 rng,
                 home,
@@ -808,6 +820,8 @@ def _simulate_one_game(
                 away_b2b=False,
                 light_mode=True,
                 return_meta=True,
+                home_goalie=home_g,
+                away_goalie=away_g,
             )
             from app.sim_engine.engine import ScoreResult
 

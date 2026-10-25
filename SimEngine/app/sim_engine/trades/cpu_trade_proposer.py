@@ -199,8 +199,13 @@ def _seller_must_protect(player: Any, *, window: str, deadline: float) -> bool:
     if window in ("rebuild", "declining") and ovr >= CPU_SELLER_CORE_OVR and not rental:
         # Rebuilders do not move 82+ non-rentals via ambient without futures motive.
         return True
-    if _is_prospect(player) and ovr >= 76 and not late_sell:
-        return True
+    if _is_prospect(player) and not late_sell:
+        pot = _player_potential_ovr(player)
+        drafted = bool(getattr(player, "drafted", False)) or getattr(player, "draft_year", None)
+        # High-upside kids were being moved for picks because their current
+        # overall was still in the mid-70s. Potential is the asset.
+        if pot >= 80 or ovr >= 74 or (drafted and pot >= 74):
+            return True
     return False
 
 

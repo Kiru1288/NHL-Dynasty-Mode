@@ -750,8 +750,80 @@ def ensure_player_attribute_profile(
     return profile
 
 
+_FLAT_CHAPTER_SPREAD = {
+    "offence": (-7, 8),
+    "defence": (-8, 6),
+    "transition": (-5, 7),
+    "mental": (-4, 6),
+    "physical": (-8, 5),
+    "character": (-12, 8),
+    "glove": (-4, 5),
+    "blocker": (-5, 4),
+    "stick": (-6, 4),
+}
+
+
+def uncollapse_flat_chapters(player: Any) -> None:
+    """Generated prospects were storing every chapter equal to overall.
+
+    Hidden attributes already vary. When the visible chapters are a flat line,
+    rebuild them from those hidden scores, then from a seeded spread so the
+    dossier shows a real shape.
+    """
+    profile = getattr(player, "attribute_profile", None)
+    if not isinstance(profile, dict):
+        return
+    chapters = profile.get("chapters")
+    if not isinstance(chapters, dict) or not chapters:
+        return
+    skill_keys = [k for k in chapters.keys() if str(k) not in ("overall", "potential")]
+    vals: List[int] = []
+    for key in skill_keys:
+        try:
+            vals.append(int(chapters[key]))
+        except (TypeError, ValueError):
+            continue
+    if len(vals) < 3 or max(vals) - min(vals) > 2:
+        return
+    hidden = profile.get("hidden") or {}
+    ptype = str(profile.get("player_type") or "skater")
+    anchor = vals[0]
+    if isinstance(hidden, dict) and hidden:
+        for key in skill_keys:
+            agg = aggregate_chapter_score(str(key), hidden, player_type=ptype)
+            if agg is None:
+                continue
+            if abs(int(agg) - anchor) > 2:
+                chapters[key] = int(_clamp_rating(agg))
+    vals = []
+    for key in skill_keys:
+        try:
+            vals.append(int(chapters[key]))
+        except (TypeError, ValueError):
+            continue
+    if len(vals) >= 3 and max(vals) - min(vals) <= 2:
+        pid = str(getattr(player, "id", "") or getattr(player, "player_id", "") or anchor)
+        rng = random.Random(pid)
+        try:
+            base = int(chapters.get("overall") or anchor)
+        except (TypeError, ValueError):
+            base = anchor
+        pos = str(getattr(getattr(player, "identity", None), "position", "") or getattr(player, "position", "") or "").upper()
+        for key in skill_keys:
+            lo, hi = _FLAT_CHAPTER_SPREAD.get(str(key), (-6, 6))
+            if "D" in pos and key == "defence":
+                lo, hi = 0, 8
+            elif "D" in pos and key == "offence":
+                lo, hi = -10, 2
+            elif pos == "G" and key in ("glove", "blocker", "stick"):
+                lo, hi = -5, 6
+            chapters[key] = int(_clamp_rating(base + rng.randint(lo, hi)))
+    profile["chapters"] = chapters
+
+
 def get_player_chapters(player: Any) -> Dict[str, int]:
     """Visible chapter ratings for UI/API."""
+    uncollapse_flat_chapters(player)
     profile = getattr(player, "attribute_profile", None)
     if isinstance(profile, dict):
         chapters = dict(profile.get("chapters") or {})

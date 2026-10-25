@@ -129,6 +129,8 @@ function formatPlayerTermLabel(item) {
   if (years > 0) return `${years}Y`;
   const contractType = String(item?.contractType || "").toLowerCase();
   if (contractType.includes("unsigned")) return "UNSIGNED";
+  const age = Number(item?.age);
+  if (age > 0 && age < 27) return "RFA";
   return "UFA";
 }
 
@@ -2302,6 +2304,8 @@ function assetCardTermLabel(asset) {
   if (years > 0) return `${years}Y`;
   const contractType = String(asset?.contractType || "").toLowerCase();
   if (contractType.includes("entry")) return "ELC";
+  const age = Number(asset?.age);
+  if (age > 0 && age < 27) return "RFA";
   return "UFA";
 }
 

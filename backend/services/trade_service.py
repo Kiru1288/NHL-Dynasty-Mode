@@ -825,6 +825,10 @@ def execute_franchise_trade(
 
     if record_notifications_fn is not None:
         record_notifications_fn(session, exec_result, ctx)
+    if isinstance(exec_result, dict) and (
+        exec_result.get("moved_players") or exec_result.get("moved_assets") or exec_result.get("history_record")
+    ):
+        session._roster_revision = int(getattr(session, "_roster_revision", 0) or 0) + 1
 
     # Live draft: refresh on-clock owner immediately after any pick trade.
     try:

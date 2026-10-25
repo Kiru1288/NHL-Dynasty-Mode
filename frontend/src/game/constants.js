@@ -14,6 +14,7 @@ export const SCREENS = {
   DRAFT_LOTTERY: "draft_lottery",
   TEAM_NEEDS: "team_needs",
   SCOUTING: "scouting",
+  PUCKGPT: "puckgpt",
   CHEMISTRY: "chemistry",
   EDIT_LINES: "edit_lines",
   AHL_CENTER: "ahl_center",
@@ -39,6 +40,7 @@ export const HUB_MENU = [
   { id: "ops", label: "TRADE FLOOR" },
   { id: "draft_class", label: "DRAFT CLASS" },
   { id: "office", label: "GM OFFICE" },
+  { id: "puckgpt", label: "PUCKGPT" },
   { id: "settings", label: "SYSTEMS" },
   { id: "new", label: "NEW FRANCHISE" },
 ];

@@ -427,8 +427,14 @@ def create_conduct_incident(
     )
     if team_status == "administrative_leave":
         _append_history(incident, "Team placed player on administrative leave pending facts.")
-    if league_status == "suspended":
-        _append_history(incident, "League suspended player pending investigation.")
+    if league_status == "suspended" or int(games) > 0:
+        ident = getattr(player, "identity", None)
+        pname = str(getattr(ident, "name", "") or getattr(player, "name", "") or "Player")
+        why = _safe_str(reason) or str(family or "a league incident").replace("_", " ")
+        _append_history(
+            incident,
+            f"{pname} suspended {int(games)} games for {why}.",
+        )
 
     reg = _get_registry(host)
     reg[incident_id] = incident
