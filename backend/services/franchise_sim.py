@@ -15818,6 +15818,10 @@ def _snapshot_season_start_ovrs(session: FranchiseSession) -> None:
                     setattr(p, "_nhl_checkpoint_marks", None)
                     setattr(p, "_nhl_checkpoint_done", [])
                     setattr(p, "_in_season_budget_carry_01", 0.0)
+                    _prof = getattr(p, "development_profile", None)
+                    if isinstance(_prof, dict):
+                        _prof["pulse_carry"] = 0.0
+                        _prof["form_offset"] = 0.0
                     try:
                         from app.sim_engine.progression.development import clear_in_season_performance_state
 
@@ -15987,6 +15991,11 @@ def _nhl_in_season_development_tick(session: FranchiseSession) -> int:
     rng = getattr(sim, "rng", None) or random.Random()
     moved = 0
     notables: List[tuple] = []
+    vet_moves: List[tuple] = []
+    try:
+        from app.sim_engine.franchise.storyline_conduct import get_base_ovr_display
+    except Exception:
+        get_base_ovr_display = None  # type: ignore
 
     try:
         from services.franchise_offseason import _dev_stamp_season_production
@@ -16010,9 +16019,7 @@ def _nhl_in_season_development_tick(session: FranchiseSession) -> int:
                     _swallowed_log.debug("suppressed exception", exc_info=True)
             if getattr(p, "season_start_ovr", None) is None:
                 try:
-                    from app.sim_engine.franchise.storyline_conduct import get_base_ovr_display
-
-                    ov = int(get_base_ovr_display(p))
+                    ov = int(get_base_ovr_display(p)) if get_base_ovr_display is not None else int(round(_player_ovr99(p)))
                     accum = float(getattr(p, "_in_season_ovr_delta_accum", 0.0) or 0.0)
                     start = int(round(ov - accum))
                     setattr(p, "season_start_ovr", start)
@@ -16042,10 +16049,24 @@ def _nhl_in_season_development_tick(session: FranchiseSession) -> int:
                     _record_rating_history(session, p)
                     if abs(batch) >= 0.8:
                         notables.append((abs(batch), _name_str(p), batch))
+                try:
+                    _age = int(getattr(p, "age", 0) or getattr(getattr(p, "identity", None), "age", 0) or 0)
+                    _start = getattr(p, "season_start_ovr", None)
+                    if _start is None:
+                        _start = getattr(p, "_season_start_ovr", None)
+                    if _age >= 25 and _start is not None and get_base_ovr_display is not None:
+                        _start_f = float(_start)
+                        if _start_f <= 1.5:
+                            _start_f *= 99.0
+                        _cum = float(get_base_ovr_display(p)) - _start_f
+                        if abs(_cum) >= 0.4:
+                            vet_moves.append((_name_str(p), _cum))
+                except Exception:
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
             except Exception:
                 continue
 
-    if moved:
+    if moved or vet_moves:
         try:
             session._cached_roster_browser_payload = None
             session._growth_needs_save = True
@@ -16061,6 +16082,13 @@ def _nhl_in_season_development_tick(session: FranchiseSession) -> int:
             summary = ", ".join(bits) if bits else f"{moved} players moved"
             if bits and moved > len(bits):
                 summary = f"{summary} · {moved} players moved"
+            if vet_moves:
+                vet_moves.sort(key=lambda row: abs(row[1]), reverse=True)
+                vet_bits = []
+                for name, delta in vet_moves[:8]:
+                    sign = "+" if delta > 0 else ""
+                    vet_bits.append(f"{name} {sign}{delta:.1f}")
+                summary = f"{summary}. Risers/Fallers (Veterans): {', '.join(vet_bits)}"
             sy = int(getattr(session, "season_calendar_year", 0) or 0)
             _append_showcase_popup(
                 session,

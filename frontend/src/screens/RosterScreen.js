@@ -6250,7 +6250,7 @@ export function PlayerProfileModal({
                 sub={
                   [
                     getOverallModifierBadge(player),
-                    growthLabel ? `${growthLabel} this season` : null,
+                    growthLabel ? `Recent overall ${growthLabel}` : null,
                   ]
                     .filter(Boolean)
                     .join(" · ") || "No change"

@@ -342,6 +342,165 @@ def _checkpoint_pulse_fraction(player: Any, checkpoint_gp: int, marks: Tuple[int
     return base * perf_mult
 
 
+def _checkpoint_form_weight(checkpoint_gp: int, marks: Tuple[int, ...]) -> float:
+    try:
+        idx = list(marks).index(int(checkpoint_gp))
+    except ValueError:
+        idx = 0
+    return float(_NHL_CHECKPOINT_PULSE_WEIGHTS[min(idx, len(_NHL_CHECKPOINT_PULSE_WEIGHTS) - 1)])
+
+
+def _goalie_form_perf_z(player: Any) -> Optional[float]:
+    """SV% or GSAx already stored on the player. None when neither is present.
+
+    No per-overall save-percentage table exists. Expected SV% is the engine's
+    .905 league anchor, shifted 0.0012 per overall point from 82.
+    """
+    gsax = getattr(player, "_dev_gsax", None)
+    if gsax is None:
+        gsax = getattr(player, "gsax", None)
+    if gsax is not None:
+        try:
+            return float(gsax) / 8.0
+        except (TypeError, ValueError):
+            pass
+    sv = getattr(player, "_dev_save_pct", None)
+    if sv is None:
+        sv = getattr(player, "save_pct", None)
+    if sv is None:
+        sv = getattr(player, "sv_pct", None)
+    if sv is None:
+        return None
+    try:
+        sv_f = float(sv)
+    except (TypeError, ValueError):
+        return None
+    if sv_f <= 0:
+        return None
+    if sv_f > 1.5:
+        sv_f = sv_f / 100.0
+    ovr = _get_player_ovr_0_100(player)
+    expected = 0.905 + (float(ovr) - 82.0) * 0.0012
+    expected = _clamp(expected, 0.880, 0.935)
+    return (sv_f - expected) / 0.010
+
+
+def _skater_form_perf_z(player: Any) -> Optional[float]:
+    """Points per 60 versus the points per 60 his overall should be scoring."""
+    gp = _get_games_played(player)
+    if gp <= 0:
+        return None
+    pts = float(getattr(player, "_dev_season_points", 0) or 0)
+    expected = float(expected_season_points_for_player(player, gp))
+    toi = getattr(player, "_dev_toi_sec", None)
+    if toi is None:
+        toi = getattr(player, "toi_sec", None)
+    try:
+        toi_f = float(toi or 0)
+    except (TypeError, ValueError):
+        toi_f = 0.0
+    if toi_f >= 60.0:
+        return (pts - expected) * 3600.0 / toi_f
+    return (pts - expected) / float(gp)
+
+
+def _apply_veteran_form_pulse(
+    player: Any,
+    rng: Any,
+    marks: Tuple[int, ...],
+    checkpoint_gp: int,
+) -> float:
+    """Zero-mean form for age 25+, including goalies. Does not move the ceiling.
+
+    Form may sit at most +1.0 overall above ``_dev_real_ceiling`` during the
+    season. The offseason drops half of ``form_offset`` and keeps the rest.
+    """
+    from app.sim_engine.entities.player import persist_recomputed_ovr, player_current_ovr_01
+
+    if player is None or getattr(player, "retired", False):
+        return 0.0
+    age = _get_player_age(player)
+    if age < 25:
+        return 0.0
+    if _is_goalie(player):
+        perf_z = _goalie_form_perf_z(player)
+        if perf_z is None:
+            try:
+                setattr(player, "_goalie_form_skipped", "no_sv_or_gsax")
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+            return 0.0
+    else:
+        perf_z = _skater_form_perf_z(player)
+        if perf_z is None:
+            return 0.0
+    k = _checkpoint_form_weight(checkpoint_gp, marks)
+    form = _clamp(k * float(perf_z), -0.6, 0.6)
+    if age >= 31:
+        form *= 0.75
+    ceiling = _growth_ceiling99(player)
+    if ceiling is not None and form > 0:
+        room = (float(ceiling) + 1.0) - _player_ovr99(player)
+        form = min(form, max(0.0, room))
+    profile = getattr(player, "development_profile", None)
+    if not isinstance(profile, dict):
+        profile = {}
+    prev = float(profile.get("form_offset") or 0.0)
+    new_off = _clamp(prev + form, -1.2, 1.2)
+    applied = new_off - prev
+    profile["form_offset"] = float(new_off)
+    try:
+        setattr(player, "development_profile", profile)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    if abs(applied) < 0.02:
+        return 0.0
+    if not isinstance(rng, random.Random):
+        rng = random.Random()
+    ovr_before_01 = float(player_current_ovr_01(player))
+    ensure_displayed_ovr_delta(
+        player,
+        ovr_before_01=ovr_before_01,
+        target_display_delta=float(applied),
+        rng=rng,
+        phase="NORMAL" if applied >= 0 else "REGRESSION",
+        tolerance=0.05,
+        max_iters=4,
+        min_abs_target=0.02,
+    )
+    ovr_after_01 = float(persist_recomputed_ovr(player))
+    delta_disp = (ovr_after_01 - ovr_before_01) * 99.0
+    try:
+        accum = float(getattr(player, "_in_season_ovr_delta_accum", 0.0) or 0.0)
+        setattr(player, "_in_season_ovr_delta_accum", accum + delta_disp)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    return float(delta_disp)
+
+
+def _revert_checkpoint_tails(player: Any, budget: float) -> float:
+    """Drop half of in-season form. Unpaid pulse dust is already inside budget.
+
+    Offseason budget is the yearly number minus what checkpoints already applied
+    (``_in_season_growth_net_01``). ``pulse_carry`` was never added to that
+    spent total, so folding it again would pay the same dust twice. Zero it.
+    """
+    profile = getattr(player, "development_profile", None)
+    if not isinstance(profile, dict):
+        return float(budget)
+    profile["pulse_carry"] = 0.0
+    form_off = float(profile.get("form_offset") or 0.0)
+    profile["form_offset"] = 0.0
+    try:
+        setattr(player, "development_profile", profile)
+        setattr(player, _IN_SEASON_BUDGET_CARRY_KEY, 0.0)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    if abs(form_off) < 0.02:
+        return float(budget)
+    return float(budget) - (0.5 * form_off) / 99.0
+
+
 def apply_nhl_in_season_checkpoint(
     player: Any,
     rng: Any,
@@ -367,6 +526,7 @@ def apply_nhl_in_season_checkpoint(
         apply_in_season_development_pulse(player, rng, pulse_fraction=frac, checkpoint_gp=int(checkpoint_gp))
         or 0.0
     )
+    delta += float(_apply_veteran_form_pulse(player, rng, marks, int(checkpoint_gp)) or 0.0)
     try:
         perf_idx = list(marks).index(int(checkpoint_gp))
         perf_ck = int(_PERF_CHECKPOINT_GP[perf_idx])
@@ -557,7 +717,7 @@ def apply_in_season_performance_checkpoints(
     done = set(int(x) for x in (getattr(player, "_perf_checkpoint_gp_done", None) or []))
     bump_total = float(getattr(player, "_in_season_perf_bump_total", 0.0) or 0.0)
     age = _get_player_age(player)
-    pos_rate = 0.5 if age >= 31 else 1.0
+    pos_rate = 0.75 if age >= 31 else 1.0
     applied_total = 0.0
 
     ck_iter = (
@@ -2513,9 +2673,7 @@ def calculate_season_growth_budget(
         close = 0.08
     else:
         close = 0.04
-    if phase == "STALL":
-        close *= 0.45
-    elif phase == "SPIKE":
+    if phase == "SPIKE":
         close *= 1.35
     elif phase == "REGRESSION":
         close = 0.0
@@ -2532,7 +2690,9 @@ def calculate_season_growth_budget(
     elif gap_exp <= 0.008:
         budget = -0.006 * max(0.0, 0.85 - coeff)
     else:
-        budget = gap_exp * close * coeff
+        # STALL slows a rise. It does not shrink a decline budget.
+        used_close = close * (0.45 if phase == "STALL" else 1.0)
+        budget = gap_exp * used_close * coeff
         # One season closes a slice of the gap. The ceiling itself is potential, not an age wall.
         step_cap = 0.042 if age <= 25 else 0.024
         budget = min(budget, gap_exp * (0.45 if phase == "SPIKE" else 0.35), step_cap)
@@ -2680,6 +2840,7 @@ def ensure_displayed_ovr_delta(
     archetype: Any = None,
     tolerance: float = 0.55,
     max_iters: int = 10,
+    min_abs_target: float = 0.35,
 ) -> Dict[str, float]:
     """
     After attribute spray, correct toward the intended displayed OVR change.
@@ -2691,7 +2852,7 @@ def ensure_displayed_ovr_delta(
     if not isinstance(rng, random.Random):
         rng = random.Random()
     target = float(target_display_delta)
-    if abs(target) < 0.35:
+    if abs(target) < float(min_abs_target):
         return {}
 
     corrective: Dict[str, float] = {}
@@ -3076,6 +3237,18 @@ def apply_player_development(player: Any, rng: Any) -> None:
             growth_eligible = True
 
     if not growth_eligible:
+        revert_budget = _revert_checkpoint_tails(player, 0.0)
+        if abs(revert_budget) >= 0.0002:
+            ensure_displayed_ovr_delta(
+                player,
+                ovr_before_01=ovr_before,
+                target_display_delta=float(revert_budget) * 99.0,
+                rng=rng,
+                phase="REGRESSION" if revert_budget < 0 else "NORMAL",
+                tolerance=0.05,
+                max_iters=4,
+                min_abs_target=0.02,
+            )
         ovr_after = float(persist_recomputed_ovr(player))
         _mark_ledger(
             ovr_before=ovr_before,
@@ -3290,6 +3463,7 @@ def apply_player_development(player: Any, rng: Any) -> None:
         # Aging decline: about -1 a year at 30-31, -2 at 32-34, steeper after 35.
         _age_now = _get_player_age(player)
         budget *= 2.0 if _age_now >= 35 else (1.7 if _age_now >= 32 else (1.3 if _age_now >= 30 else 1.0))
+    budget = _revert_checkpoint_tails(player, budget)
 
     # Prospects already received their in-season pulses: only pay what is still owed.
     # AHL and junior seasons use the gap-scaled year, not the NHL close rate.
@@ -3552,10 +3726,16 @@ def apply_in_season_development_pulse(
     # pulse and reset at season start. Re-rolling the phase every pulse (SPIKE
     # 1.55-2.2x) moved the in-season cap around and scattered same-age players
     # from +1 to +16. The archetype now picks the phase, as for prospects.
+    decline_now = str(profile.get("decline_state") or "none")
+    if age >= 36:
+        decline_now = "late_decline"
+    elif age >= 33:
+        decline_now = "early_decline"
+    # Age-driven decline keeps a negative pulse. STALL is only for a flat prime.
+    must_decline = age >= 33 or decline_now in ("early_decline", "late_decline")
     plan = getattr(player, "_nhl_season_plan", None)
     if not isinstance(plan, dict):
-        # In-season checkpoints never apply year-end-style REGRESSION (age decline is offseason-only).
-        if age >= 32 or (age >= 29 and gap <= 0.015):
+        if (not must_decline) and (age >= 32 or (age >= 29 and gap <= 0.015)):
             phase = "STALL"
         else:
             archetype_p = str(getattr(player, "_dev_archetype", "") or "")
@@ -3580,7 +3760,9 @@ def apply_in_season_development_pulse(
         _sync_in_season_remaining(player, plan)
         _safe_setattr(player, "_nhl_season_plan", plan)
     phase = str(plan.get("phase") or "NORMAL")
-    if phase == "REGRESSION":
+    # A regression roll stays a regression once decline has started.
+    # Younger rolls still become a stall so a bad archetype year does not dump them.
+    if phase == "REGRESSION" and not must_decline:
         phase = "STALL"
         plan["phase"] = phase
     if checkpoint_gp is not None:
@@ -3589,21 +3771,37 @@ def apply_in_season_development_pulse(
     annual = float(plan.get("annual") or 0.0)
     # Pulses draw only from the in-season share of the annual budget.
     season_pool = abs(float(annual)) * float(_IN_SEASON_POOL_SHARE)
-    carry = float(getattr(player, _IN_SEASON_BUDGET_CARRY_KEY, 0.0) or 0.0)
-    pulse_budget = season_pool * float(frac) * (1.0 if annual >= 0 else -1.0)
-    pulse_budget *= float(perf_mult)
-    pulse_budget += carry
-    if abs(pulse_budget) < 0.0005:
-        if age <= 24 and gap >= 0.06:
+    prev_carry = float(profile.get("pulse_carry") or 0.0)
+    pulse_slice = season_pool * float(frac) * (1.0 if annual >= 0 else -1.0)
+    pulse_slice *= float(perf_mult)
+    raw = pulse_slice + prev_carry
+    spent_now = float(getattr(player, "_in_season_growth_spent_01", 0.0) or 0.0)
+    # Carry is part of the 40% share, not an extra on top of the year.
+    if annual >= 0:
+        room = max(0.0, season_pool - spent_now)
+        if raw > room:
+            raw = room
+    else:
+        room = -max(0.0, season_pool - spent_now)
+        if raw < room:
+            raw = room
+    if abs(raw) < 0.0005:
+        if age <= 24 and gap >= 0.06 and annual >= 0:
             pulse_budget = 0.0024 if phase == "SPIKE" else 0.0018
+            profile["pulse_carry"] = 0.0
         else:
+            profile["pulse_carry"] = float(raw)
             try:
-                setattr(player, _IN_SEASON_BUDGET_CARRY_KEY, carry + pulse_budget)
+                setattr(player, "development_profile", profile)
             except Exception:
                 _swallowed_log.debug("suppressed exception", exc_info=True)
             return 0.0
+    else:
+        pulse_budget = float(raw)
+        profile["pulse_carry"] = 0.0
     try:
-        setattr(player, _IN_SEASON_BUDGET_CARRY_KEY, 0.0)
+        setattr(player, "development_profile", profile)
+        setattr(player, _IN_SEASON_BUDGET_CARRY_KEY, float(profile.get("pulse_carry") or 0.0))
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
 
@@ -3649,6 +3847,7 @@ def apply_in_season_development_pulse(
         archetype=archetype or None,
         tolerance=0.4,
         max_iters=6,
+        min_abs_target=0.04,
     )
     ovr_after_01 = float(persist_recomputed_ovr(player))
     delta_disp = (ovr_after_01 - ovr_before_01) * 99.0

@@ -3713,6 +3713,10 @@ def _dev_stamp_season_production(session: FranchiseSession, player: Any) -> None
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
     toi_sec = int(stats.get("toi_sec") or stats.get("toi_total_sec") or 0)
+    try:
+        setattr(player, "_dev_toi_sec", int(toi_sec))
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     if toi_sec > 0:
         avg_min = toi_sec / float(gp) / 60.0
         toi_q = _dev_toi_quality_for_league(
@@ -3738,6 +3742,14 @@ def _dev_stamp_season_production(session: FranchiseSession, player: Any) -> None
             sv = sv / 100.0
         # .900 → ~0.55, .920 → ~0.78, .930 → ~0.90
         score = 0.35 + max(0.0, (sv - 0.880) * 8.5) if sv > 0 else 0.5
+        try:
+            if sv > 0:
+                setattr(player, "_dev_save_pct", round(float(sv), 4))
+            gsax = stats.get("gsax", stats.get("gsaa"))
+            if gsax is not None:
+                setattr(player, "_dev_gsax", float(gsax))
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     else:
         # Score the NHL-equivalent rate, not raw junior points. Checkpoints use the same points.
         ppg = float(stats.get("nhl_eq_ppg") or 0.0)
