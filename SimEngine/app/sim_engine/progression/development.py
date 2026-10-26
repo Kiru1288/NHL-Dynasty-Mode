@@ -385,8 +385,20 @@ def _goalie_form_perf_z(player: Any) -> Optional[float]:
     return (sv_f - expected) / 0.010
 
 
-def _skater_form_perf_z(player: Any) -> Optional[float]:
-    """Points per 60 versus the points per 60 his overall should be scoring."""
+# League scoring baseline for form, by group ("F"/"D"). The points line per
+# overall is a fixed table; real scoring drifts with the save, so form is read
+# against how the whole league is doing versus that table. Set by the franchise
+# tick before checkpoints pay; empty means no adjustment.
+_FORM_BASELINE: Dict[str, float] = {}
+
+
+def set_form_baseline(baseline: Dict[str, float]) -> None:
+    _FORM_BASELINE.clear()
+    _FORM_BASELINE.update({str(k): float(v) for k, v in (baseline or {}).items()})
+
+
+def raw_skater_form_perf_z(player: Any) -> Optional[float]:
+    """Unadjusted points per 60 versus the table line for his overall."""
     gp = _get_games_played(player)
     if gp <= 0:
         return None
@@ -402,6 +414,14 @@ def _skater_form_perf_z(player: Any) -> Optional[float]:
     if toi_f >= 60.0:
         return (pts - expected) * 3600.0 / toi_f
     return (pts - expected) / float(gp)
+
+
+def _skater_form_perf_z(player: Any) -> Optional[float]:
+    """Points per 60 versus his overall's line, measured against the league's own scoring."""
+    z = raw_skater_form_perf_z(player)
+    if z is None:
+        return None
+    return z - _FORM_BASELINE.get("D" if _is_defense(player) else "F", 0.0)
 
 
 def _apply_veteran_form_pulse(
@@ -436,11 +456,12 @@ def _apply_veteran_form_pulse(
             return 0.0
     k = _checkpoint_form_weight(checkpoint_gp, marks)
     form = _clamp(k * float(perf_z), -0.6, 0.6)
-    if age >= 31:
+    if age >= 31 and form < 0:
         form *= 0.75
     ceiling = _growth_ceiling99(player)
     if ceiling is not None and form > 0:
-        room = (float(ceiling) + 1.0) - _player_ovr99(player)
+        # A veteran putting up big numbers can play past his listed potential.
+        room = (float(ceiling) + 3.0) - _player_ovr99(player)
         form = min(form, max(0.0, room))
     profile = getattr(player, "development_profile", None)
     if not isinstance(profile, dict):
@@ -470,6 +491,13 @@ def _apply_veteran_form_pulse(
     )
     ovr_after_01 = float(persist_recomputed_ovr(player))
     delta_disp = (ovr_after_01 - ovr_before_01) * 99.0
+    if delta_disp > 0:
+        try:
+            from app.sim_engine.progression.potential import lift_potential_with_growth
+
+            lift_potential_with_growth(player, ovr_before_01, ovr_after_01)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         accum = float(getattr(player, "_in_season_ovr_delta_accum", 0.0) or 0.0)
         setattr(player, "_in_season_ovr_delta_accum", accum + delta_disp)
@@ -717,7 +745,13 @@ def apply_in_season_performance_checkpoints(
     done = set(int(x) for x in (getattr(player, "_perf_checkpoint_gp_done", None) or []))
     bump_total = float(getattr(player, "_in_season_perf_bump_total", 0.0) or 0.0)
     age = _get_player_age(player)
-    pos_rate = 0.75 if age >= 31 else 1.0
+    # Great numbers earn the bump at any age; only the downside eases with age.
+    pos_rate = 1.0
+    neg_rate = 0.75 if age >= 31 else 1.0
+    if _runway_kid(player):
+        # A producing kid with room to grow earns more; a slow stretch costs less.
+        pos_rate, neg_rate = 1.35, 0.5
+    per_game_base = _FORM_BASELINE.get("D_pg" if _is_defense(player) else "F_pg", 0.0)
     applied_total = 0.0
 
     ck_iter = (
@@ -729,7 +763,8 @@ def apply_in_season_performance_checkpoints(
         if gp < ck_gp or ck_gp in done:
             continue
         cap = float(_PERF_CHECKPOINT_CAPS[ck_gp])
-        surplus = season_points_surplus_vs_expectation(player, pts, gp)
+        # Measured against how the whole league scores versus the table.
+        surplus = season_points_surplus_vs_expectation(player, pts, gp) - per_game_base * gp
         threshold = 6.0 * float(ck_gp) / 82.0
         remaining_cap = max(0.0, cap - bump_total)
         if remaining_cap <= 0.001:
@@ -770,7 +805,7 @@ def apply_in_season_performance_checkpoints(
                     except Exception:
                         _swallowed_log.debug("suppressed exception", exc_info=True)
         elif surplus < -threshold:
-            raw = -min(remaining_cap, (abs(surplus) - threshold) * 0.06 * pos_rate)
+            raw = -min(remaining_cap, (abs(surplus) - threshold) * 0.06 * neg_rate)
             floor = _PERF_CHECKPOINT_NEG_FLOOR - bump_total
             if raw < floor:
                 raw = max(raw, floor - bump_total)
@@ -2678,15 +2713,26 @@ def calculate_season_growth_budget(
     elif phase == "REGRESSION":
         close = 0.0
 
+    # In-season, a drop has to be earned: missing his production line, low morale,
+    # or a poor development environment. Age only scales how big the drop is.
+    # The offseason keeps its age curve.
+    under = 1.0
+    if for_in_season:
+        under = _clamp(
+            -float(overperf) / 0.15 + (0.5 - float(morale)) * 0.5 + (1.0 - float(env_g)) * 1.0,
+            0.0,
+            1.0,
+        )
+
     over_pot = current - expected
     if over_pot > 0.008:
         # Overall ran past potential. It comes back a couple of points a year.
         # A good year slows that; a bad year does not dump a whole tier at once.
         hold = _clamp(coeff, 0.75, 1.40)
         step = 0.018 if coeff >= 0.90 else 0.026
-        budget = -min(over_pot * 0.22, step) * (1.0 / hold)
+        budget = -min(over_pot * 0.22, step) * (1.0 / hold) * under
     elif phase == "REGRESSION":
-        budget = -min(0.030, 0.008 + gap_exp * 0.15)
+        budget = -min(0.030, 0.008 + gap_exp * 0.15) * under
     elif gap_exp <= 0.008:
         budget = -0.006 * max(0.0, 0.85 - coeff)
     else:
@@ -2706,13 +2752,18 @@ def calculate_season_growth_budget(
     if age >= 33:
         decline = "late_decline" if age >= 36 else "early_decline"
     if decline == "late_decline":
-        budget = min(budget, -0.016)
+        budget = min(budget, -0.016 * under)
     elif decline == "early_decline":
-        budget = min(budget, -0.010)
+        budget = min(budget, -0.010 * under)
     elif decline == "aging" and budget > 0.004:
         budget = min(budget, 0.004)
     elif decline != "none" and budget > 0:
         budget *= 0.70
+
+    if for_in_season and under <= 0.0 and overperf > 0.04:
+        # Out-producing his rating is growth at any age, even at or past potential.
+        earned = float(overperf) * 0.03 * _clamp(env_g, 0.85, 1.15) * (0.9 + 0.2 * float(morale))
+        budget = max(budget, earned)
 
     if budget > 0 and _young_ahl_development_opportunity(player):
         # A top AHL job is a development role. It is not "failed to make the NHL."
@@ -2744,6 +2795,25 @@ def _young_ahl_development_opportunity(player: Any) -> bool:
 # Separate mid-season vs season-end pools (design §11).
 _IN_SEASON_POOL_SHARE = 0.40  # share of ONE annual budget spent in-season (year-end pays the rest)
 _SEASON_END_POOL_SHARE = 0.58
+
+
+def _runway_kid(player: Any) -> bool:
+    """23 or under with at least five points of potential left to grow into."""
+    if _get_player_age(player) > 23:
+        return False
+    return (_potential(player) - _get_player_ovr(player)) * 99.0 >= 5.0
+
+
+def _in_season_share(player: Any) -> float:
+    """Share of the ONE yearly budget paid during the season.
+
+    High-potential kids grow while they play: more of their year lands at the
+    checkpoints and less at the summer pass. The year's total is unchanged,
+    because the summer pass pays only what in-season growth did not.
+    """
+    if _runway_kid(player):
+        return 0.60 if _get_player_age(player) <= 21 else 0.52
+    return float(_IN_SEASON_POOL_SHARE)
 
 
 _META_RATING_KEYS = frozenset(
@@ -3653,10 +3723,10 @@ def _sync_in_season_remaining(player: Any, plan: Dict[str, Any]) -> None:
     annual = float(plan.get("annual") or 0.0)
     if annual < 0:
         net = float(getattr(player, "_in_season_growth_net_01", 0.0) or 0.0)
-        plan["in_season_remaining"] = min(0.0, annual * float(_IN_SEASON_POOL_SHARE) - min(0.0, net))
+        plan["in_season_remaining"] = min(0.0, annual * _in_season_share(player) - min(0.0, net))
         return
     spent = float(getattr(player, "_in_season_growth_spent_01", 0.0) or 0.0)
-    plan["in_season_remaining"] = max(0.0, annual * float(_IN_SEASON_POOL_SHARE) - spent)
+    plan["in_season_remaining"] = max(0.0, annual * _in_season_share(player) - spent)
 
 
 def _refresh_nhl_plan_annual(player: Any, plan: Dict[str, Any], rng: Any, phase: str) -> None:
@@ -3731,8 +3801,11 @@ def apply_in_season_development_pulse(
         decline_now = "late_decline"
     elif age >= 33:
         decline_now = "early_decline"
-    # Age-driven decline keeps a negative pulse. STALL is only for a flat prime.
-    must_decline = age >= 33 or decline_now in ("early_decline", "late_decline")
+    # A declining veteran keeps a negative pulse only while he is under his
+    # production line. Producing at or above it holds him (STALL) instead.
+    must_decline = (age >= 33 or decline_now in ("early_decline", "late_decline")) and (
+        rel_pulse < 0.35 or perf_gap < 0.0
+    )
     plan = getattr(player, "_nhl_season_plan", None)
     if not isinstance(plan, dict):
         if (not must_decline) and (age >= 32 or (age >= 29 and gap <= 0.015)):
@@ -3760,6 +3833,9 @@ def apply_in_season_development_pulse(
         _sync_in_season_remaining(player, plan)
         _safe_setattr(player, "_nhl_season_plan", plan)
     phase = str(plan.get("phase") or "NORMAL")
+    if phase == "REGRESSION" and rel_pulse >= 0.35 and perf_gap >= 0.0:
+        # Rolled as a decline year, but he is producing: this pulse holds.
+        phase = "STALL"
     # A regression roll stays a regression once decline has started.
     # Younger rolls still become a stall so a bad archetype year does not dump them.
     if phase == "REGRESSION" and not must_decline:
@@ -3770,7 +3846,7 @@ def apply_in_season_development_pulse(
     frac = pulse_fraction * rng.uniform(0.85, 1.15)
     annual = float(plan.get("annual") or 0.0)
     # Pulses draw only from the in-season share of the annual budget.
-    season_pool = abs(float(annual)) * float(_IN_SEASON_POOL_SHARE)
+    season_pool = abs(float(annual)) * _in_season_share(player)
     prev_carry = float(profile.get("pulse_carry") or 0.0)
     pulse_slice = season_pool * float(frac) * (1.0 if annual >= 0 else -1.0)
     pulse_slice *= float(perf_mult)
@@ -3815,12 +3891,15 @@ def apply_in_season_development_pulse(
         if pulse_budget > 0:
             pulse_budget = min(pulse_budget, left)
     else:
-        pool_cap = abs(float(annual)) * float(_IN_SEASON_POOL_SHARE)
+        pool_cap = abs(float(annual)) * _in_season_share(player)
         if pulse_budget < 0 and spent + abs(pulse_budget) > pool_cap:
             pulse_budget = -max(0.0, pool_cap - spent)
     if pulse_budget == 0.0:
         return 0.0
     _room = _realization_room99(player)
+    if _room is not None and perf_gap > 0.04 and rel_pulse >= 0.35:
+        # Production can carry a player a few points past his hidden ceiling.
+        _room += 3.0
     if _room is not None and pulse_budget > 0:
         pulse_budget = min(float(pulse_budget), max(0.0, float(_room)) / 99.0)
     if pulse_budget == 0.0:

@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass, field
+import random
 from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -682,9 +683,10 @@ def spawn_player_from_dynasty_entry(
         weight_kg=86,
         position=pos,
         shoots=Shoots.L if rng.random() < 0.58 else Shoots.R,
+        # Round and pick are unknown here; the dossier looks up the real draft.
         draft_year=max(2015, birth_year + 18),
-        draft_round=2,
-        draft_pick=15,
+        draft_round=0,
+        draft_pick=0,
     )
     backstory = BackstoryUpbringing(
         backstory=BackstoryType.GRINDER,
@@ -711,5 +713,11 @@ def spawn_player_from_dynasty_entry(
             apply_player_bio_by_name(player, registry, as_of_year=year)
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
+    try:
+        from app.sim_engine.generation.birthdays import stamp_birthday
+
+        stamp_birthday(player.identity, random.Random(f"dob|{name}|{birth_year}"))
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     league_players.append(player)
     return player

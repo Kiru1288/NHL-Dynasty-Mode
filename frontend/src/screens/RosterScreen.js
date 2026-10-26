@@ -4016,7 +4016,8 @@ function resolveDossierDraft(player, franchiseState) {
     player.draftedByTeamName ||
     (player.draft_team_abbr ? resolveDraftTeamName(player.draft_team_abbr, franchiseState) : "") ||
     resolveDraftTeamName(teamId, franchiseState);
-  const hasDraft = Boolean(year || overall || round || teamId || player.drafted);
+  // A year alone is a projected draft year for an undrafted junior, not a draft.
+  const hasDraft = Boolean(overall || round || player.drafted);
   const isUndrafted = Boolean(player.undrafted) && !hasDraft;
   const pickLabel =
     overall != null ? (round != null ? `Round ${round} · #${overall} overall` : `#${overall} overall`) : round != null ? `Round ${round}` : "";

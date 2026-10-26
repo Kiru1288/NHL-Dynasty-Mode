@@ -70,9 +70,13 @@ def _draft_payload_from_player(p: Any) -> Dict[str, Any]:
         or getattr(p, "draft_team_id", None)
         or getattr(p, "drafted_by", None)
     )
+    # A year alone is a projected draft year, not a draft.
+    drafted = bool(getattr(p, "drafted", False) or ov_i or dr_i)
+    if not drafted:
+        dy_i = None
     return {
-        "drafted": bool(getattr(p, "drafted", False) or dy_i or ov_i),
-        "undrafted": bool(getattr(p, "undrafted", False)) and not (dy_i or ov_i),
+        "drafted": drafted,
+        "undrafted": bool(getattr(p, "undrafted", False)) and not drafted,
         "draft_year": dy_i,
         "draft_round": dr_i,
         "draft_overall_pick": ov_i,
@@ -119,6 +123,9 @@ def player_career_history(session: Any, pid: str, *, fetch: bool = True) -> Dict
 
                 if player_missing_nhl_career_seasons(p):
                     ensure_player_nhl_landing_data(p, fetch=True, league=league)
+                from services.real_nhl_roster_importer import ensure_prospect_draft_from_nhl
+
+                ensure_prospect_draft_from_nhl(p, league=league)
         except Exception:
             log.debug("career landing fetch failed", exc_info=True)
     cs = getattr(p, "career_stats", None)

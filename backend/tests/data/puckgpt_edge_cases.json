@@ -1,0 +1,861 @@
+{
+ "about": "PuckGPT edge-case dataset. Each group runs as one conversation, in order, so follow-ups see the earlier turns. 'expect' lists every acceptable answer type (intent). 'prime' turns are asked first and not scored.",
+ "groups": [
+  {
+   "name": "Ambiguous references",
+   "prime": [
+    "compare mcdavid and matthews"
+   ],
+   "cases": [
+    {
+     "q": "Who's better?",
+     "expect": [
+      "compare"
+     ]
+    },
+    {
+     "q": "Should I trade him?",
+     "expect": [
+      "trade_advice"
+     ]
+    },
+    {
+     "q": "Is he worth it?",
+     "expect": [
+      "worth_it",
+      "player_contract",
+      "trade_advice"
+     ]
+    },
+    {
+     "q": "What about the other guy?",
+     "expect": [
+      "other_player"
+     ]
+    },
+    {
+     "q": "How old is he?",
+     "expect": [
+      "player_age"
+     ]
+    },
+    {
+     "q": "Which one has more upside?",
+     "expect": [
+      "compare"
+     ]
+    },
+    {
+     "q": "Would he fit?",
+     "expect": [
+      "fit_check"
+     ]
+    },
+    {
+     "q": "Is he still available?",
+     "expect": [
+      "available"
+     ]
+    },
+    {
+     "q": "Did he win anything?",
+     "expect": [
+      "player_awards"
+     ]
+    },
+    {
+     "q": "Why is he unhappy?",
+     "expect": [
+      "player_morale"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Follow-up context",
+   "prime": [],
+   "cases": [
+    {
+     "q": "Show me top LD.",
+     "expect": [
+      "find_players",
+      "best_on_team"
+     ]
+    },
+    {
+     "q": "Which one scores more?",
+     "expect": [
+      "compare"
+     ]
+    },
+    {
+     "q": "Which one fits my second pair?",
+     "expect": [
+      "fit_partner",
+      "fit_check"
+     ]
+    },
+    {
+     "q": "What's his contract?",
+     "expect": [
+      "player_contract"
+     ]
+    },
+    {
+     "q": "Compare him to my current guy.",
+     "expect": [
+      "compare_current"
+     ]
+    },
+    {
+     "q": "Can I afford him?",
+     "expect": [
+      "afford"
+     ]
+    },
+    {
+     "q": "What if I move him to RD?",
+     "expect": [
+      "move_position"
+     ]
+    },
+    {
+     "q": "Would he work with Tanev?",
+     "expect": [
+      "pair_with"
+     ]
+    },
+    {
+     "q": "What about his brother?",
+     "expect": [
+      "brother"
+     ]
+    },
+    {
+     "q": "Was he drafted by us?",
+     "expect": [
+      "drafted_by_us"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Severe misspellings",
+   "prime": [
+    "mcdavid"
+   ],
+   "cases": [
+    {
+     "q": "whos my bets playr",
+     "expect": [
+      "best_on_team"
+     ]
+    },
+    {
+     "q": "shuld i trde mcdvdi",
+     "expect": [
+      "trade_advice"
+     ]
+    },
+    {
+     "q": "best secnd paiir ld",
+     "expect": [
+      "fit_partner"
+     ]
+    },
+    {
+     "q": "hwo many gols did he score",
+     "expect": [
+      "player_card",
+      "player_metric"
+     ]
+    },
+    {
+     "q": "wahts his potntial",
+     "expect": [
+      "player_card",
+      "player_metric"
+     ]
+    },
+    {
+     "q": "dos he fit owr roster",
+     "expect": [
+      "fit_check"
+     ]
+    },
+    {
+     "q": "who wonn the cup lst year",
+     "expect": [
+      "champions"
+     ]
+    },
+    {
+     "q": "largst win strek",
+     "expect": [
+      "streak"
+     ]
+    },
+    {
+     "q": "top prospct avalible",
+     "expect": [
+      "top_prospects",
+      "find_players",
+      "available"
+     ]
+    },
+    {
+     "q": "sho me best ceter",
+     "expect": [
+      "best_on_team",
+      "find_players"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Hockey slang",
+   "prime": [],
+   "cases": [
+    {
+     "q": "Need a puck mover.",
+     "expect": [
+      "rank_metric",
+      "fit_partner"
+     ]
+    },
+    {
+     "q": "Need a stay-at-home guy.",
+     "expect": [
+      "rank_metric",
+      "fit_partner"
+     ]
+    },
+    {
+     "q": "Need a shutdown center.",
+     "expect": [
+      "rank_metric",
+      "fit_partner"
+     ]
+    },
+    {
+     "q": "Who's a beauty?",
+     "expect": [
+      "rank_metric"
+     ]
+    },
+    {
+     "q": "Who carries the mail offensively?",
+     "expect": [
+      "rank_metric",
+      "carried_us",
+      "leaders_season"
+     ]
+    },
+    {
+     "q": "Which goalie steals games?",
+     "expect": [
+      "rank_metric"
+     ]
+    },
+    {
+     "q": "Need a guy with jam.",
+     "expect": [
+      "rank_metric"
+     ]
+    },
+    {
+     "q": "Need more grit.",
+     "expect": [
+      "rank_metric"
+     ]
+    },
+    {
+     "q": "Who drives play?",
+     "expect": [
+      "rank_metric"
+     ]
+    },
+    {
+     "q": "Need a locker room guy.",
+     "expect": [
+      "rank_metric"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Unclear team references",
+   "prime": [
+    "how are the oilers doing"
+   ],
+   "cases": [
+    {
+     "q": "Best player on my team.",
+     "expect": [
+      "best_on_team"
+     ]
+    },
+    {
+     "q": "Best player on their team.",
+     "expect": [
+      "best_on_team",
+      "team_card",
+      "rank_metric"
+     ]
+    },
+    {
+     "q": "Best player in the division.",
+     "expect": [
+      "rank_metric"
+     ]
+    },
+    {
+     "q": "Best player we've ever had.",
+     "expect": [
+      "leaders_career",
+      "leaders_career_fr"
+     ]
+    },
+    {
+     "q": "Best player they traded away.",
+     "expect": [
+      "transactions",
+      "worst_trade",
+      "traded_away"
+     ]
+    },
+    {
+     "q": "Best player available.",
+     "expect": [
+      "rank_metric",
+      "find_players"
+     ]
+    },
+    {
+     "q": "Best playoff performer.",
+     "expect": [
+      "leaders_career",
+      "rank_metric",
+      "leaders_season",
+      "playoff_performer"
+     ]
+    },
+    {
+     "q": "Best player under 23.",
+     "expect": [
+      "find_players"
+     ]
+    },
+    {
+     "q": "Best player for the money.",
+     "expect": [
+      "rank_metric",
+      "contracts_value"
+     ]
+    },
+    {
+     "q": "Best player nobody talks about.",
+     "expect": [
+      "rank_metric"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Historical",
+   "prime": [],
+   "cases": [
+    {
+     "q": "Who scored the biggest goal in franchise history?",
+     "expect": [
+      "biggest_goal",
+      "not_tracked:important_goal"
+     ]
+    },
+    {
+     "q": "What's our worst trade ever?",
+     "expect": [
+      "worst_trade"
+     ]
+    },
+    {
+     "q": "Biggest upset ever?",
+     "expect": [
+      "biggest_upset"
+     ]
+    },
+    {
+     "q": "Most goals in a season?",
+     "expect": [
+      "season_record"
+     ]
+    },
+    {
+     "q": "Most points by a defenseman?",
+     "expect": [
+      "leaders_career",
+      "season_record",
+      "rank_metric",
+      "leaders_season"
+     ]
+    },
+    {
+     "q": "Longest losing streak?",
+     "expect": [
+      "streak"
+     ]
+    },
+    {
+     "q": "Longest point streak?",
+     "expect": [
+      "point_streak"
+     ]
+    },
+    {
+     "q": "First captain in franchise history?",
+     "expect": [
+      "first_captain"
+     ]
+    },
+    {
+     "q": "Most games played?",
+     "expect": [
+      "leaders_career",
+      "leaders_season",
+      "rank_metric",
+      "leaders_career_fr"
+     ]
+    },
+    {
+     "q": "Best draft class ever?",
+     "expect": [
+      "draft_history"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Reasoning",
+   "prime": [],
+   "cases": [
+    {
+     "q": "Why are we losing?",
+     "expect": [
+      "diagnose"
+     ]
+    },
+    {
+     "q": "Why can't we score?",
+     "expect": [
+      "diagnose"
+     ]
+    },
+    {
+     "q": "Why is our powerplay bad?",
+     "expect": [
+      "diagnose"
+     ]
+    },
+    {
+     "q": "Why is our penalty kill bad?",
+     "expect": [
+      "diagnose"
+     ]
+    },
+    {
+     "q": "Why are prospects stalling?",
+     "expect": [
+      "prospects_stalling"
+     ]
+    },
+    {
+     "q": "Why do we miss playoffs every year?",
+     "expect": [
+      "playoff_history"
+     ]
+    },
+    {
+     "q": "Why are we good but keep losing?",
+     "expect": [
+      "luck"
+     ]
+    },
+    {
+     "q": "Why is morale dropping?",
+     "expect": [
+      "team_morale"
+     ]
+    },
+    {
+     "q": "Why do players want out?",
+     "expect": [
+      "players_want_out"
+     ]
+    },
+    {
+     "q": "Why is attendance falling?",
+     "expect": [
+      "attendance"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Contradictory requests",
+   "prime": [],
+   "cases": [
+    {
+     "q": "Make us younger but stay competitive.",
+     "expect": [
+      "strategy"
+     ]
+    },
+    {
+     "q": "Get better without spending assets.",
+     "expect": [
+      "strategy"
+     ]
+    },
+    {
+     "q": "Improve defense without losing offense.",
+     "expect": [
+      "strategy"
+     ]
+    },
+    {
+     "q": "Improve now and rebuild later.",
+     "expect": [
+      "strategy"
+     ]
+    },
+    {
+     "q": "Trade veterans but still contend.",
+     "expect": [
+      "strategy"
+     ]
+    },
+    {
+     "q": "Free cap space without losing talent.",
+     "expect": [
+      "strategy"
+     ]
+    },
+    {
+     "q": "Become tougher without getting slower.",
+     "expect": [
+      "strategy"
+     ]
+    },
+    {
+     "q": "Get a top goalie cheaply.",
+     "expect": [
+      "strategy"
+     ]
+    },
+    {
+     "q": "Tank while staying profitable.",
+     "expect": [
+      "strategy",
+      "standings"
+     ]
+    },
+    {
+     "q": "Improve prospect pool immediately.",
+     "expect": [
+      "strategy"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Draft and prospects",
+   "prime": [],
+   "cases": [
+    {
+     "q": "Best prospect who isn't actually a prospect anymore.",
+     "expect": [
+      "draft_lists"
+     ]
+    },
+    {
+     "q": "Best late bloomer.",
+     "expect": [
+      "draft_lists"
+     ]
+    },
+    {
+     "q": "Best player drafted outside round one.",
+     "expect": [
+      "draft_lists"
+     ]
+    },
+    {
+     "q": "Biggest draft steal.",
+     "expect": [
+      "draft_lists"
+     ]
+    },
+    {
+     "q": "Biggest draft bust.",
+     "expect": [
+      "draft_lists"
+     ]
+    },
+    {
+     "q": "Underrated prospect.",
+     "expect": [
+      "draft_lists"
+     ]
+    },
+    {
+     "q": "Prospect most likely to fail.",
+     "expect": [
+      "draft_lists"
+     ]
+    },
+    {
+     "q": "Prospect closest to NHL ready.",
+     "expect": [
+      "top_prospects"
+     ]
+    },
+    {
+     "q": "Prospect with highest ceiling.",
+     "expect": [
+      "draft_lists",
+      "top_prospects",
+      "rank_metric"
+     ]
+    },
+    {
+     "q": "Prospect with lowest floor.",
+     "expect": [
+      "draft_lists"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Trade logic",
+   "prime": [
+    "mcdavid"
+   ],
+   "cases": [
+    {
+     "q": "Trade everyone over 28.",
+     "expect": [
+      "trade_logic"
+     ]
+    },
+    {
+     "q": "Trade everyone except untouchables.",
+     "expect": [
+      "trade_logic"
+     ]
+    },
+    {
+     "q": "Which trade hurts us least?",
+     "expect": [
+      "trade_logic"
+     ]
+    },
+    {
+     "q": "Can I trade my way into the top 5?",
+     "expect": [
+      "trade_logic"
+     ]
+    },
+    {
+     "q": "Is trading down worth it?",
+     "expect": [
+      "trade_logic"
+     ]
+    },
+    {
+     "q": "Who overpays for defensemen?",
+     "expect": [
+      "trade_logic"
+     ]
+    },
+    {
+     "q": "Which team is desperate for goaltending?",
+     "expect": [
+      "trade_logic"
+     ]
+    },
+    {
+     "q": "Who values prospects most?",
+     "expect": [
+      "trade_logic"
+     ]
+    },
+    {
+     "q": "Who would overpay for this player?",
+     "expect": [
+      "trade_logic"
+     ]
+    },
+    {
+     "q": "What's the most realistic blockbuster trade?",
+     "expect": [
+      "trade_logic"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Truly hard cases",
+   "prime": [
+    "compare mcdavid and matthews"
+   ],
+   "cases": [
+    {
+     "q": "we suck",
+     "expect": [
+      "diagnose"
+     ]
+    },
+    {
+     "q": "fix team",
+     "expect": [
+      "diagnose"
+     ]
+    },
+    {
+     "q": "should i do it",
+     "expect": [
+      "repeat_last"
+     ]
+    },
+    {
+     "q": "what about him",
+     "expect": [
+      "player_card",
+      "compare",
+      "player_card_ctx"
+     ]
+    },
+    {
+     "q": "compare em",
+     "expect": [
+      "compare"
+     ]
+    },
+    {
+     "q": "the other one",
+     "expect": [
+      "other_player"
+     ]
+    },
+    {
+     "q": "which is better",
+     "expect": [
+      "compare"
+     ]
+    },
+    {
+     "q": "best fit",
+     "expect": [
+      "fit_partner",
+      "fit_check"
+     ]
+    },
+    {
+     "q": "who can score",
+     "expect": [
+      "rank_metric",
+      "leaders_season"
+     ]
+    },
+    {
+     "q": "need defense",
+     "expect": [
+      "fit_partner",
+      "rank_metric"
+     ]
+    },
+    {
+     "q": "why bad",
+     "expect": [
+      "diagnose"
+     ]
+    },
+    {
+     "q": "why no playoffs",
+     "expect": [
+      "playoff_history"
+     ]
+    },
+    {
+     "q": "young guy not growing",
+     "expect": [
+      "prospects_stalling"
+     ]
+    },
+    {
+     "q": "who won it",
+     "expect": [
+      "champions"
+     ]
+    },
+    {
+     "q": "what happened last year",
+     "expect": [
+      "last_season"
+     ]
+    },
+    {
+     "q": "show that trade again",
+     "expect": [
+      "show_last_trade"
+     ]
+    },
+    {
+     "q": "best prospect not drafted by us",
+     "expect": [
+      "draft_lists"
+     ]
+    },
+    {
+     "q": "best player i can actually afford",
+     "expect": [
+      "afford",
+      "rank_metric",
+      "find_players"
+     ]
+    },
+    {
+     "q": "best trade we almost made",
+     "expect": [
+      "almost_trade"
+     ]
+    },
+    {
+     "q": "who hates being here",
+     "expect": [
+      "players_want_out",
+      "rank_metric"
+     ]
+    },
+    {
+     "q": "who carries the locker room",
+     "expect": [
+      "rank_metric"
+     ]
+    },
+    {
+     "q": "show me the guy i was asking about before",
+     "expect": [
+      "previous_player"
+     ]
+    },
+    {
+     "q": "which player has the worst transition rating",
+     "expect": [
+      "rank_metric"
+     ]
+    }
+   ]
+  }
+ ]
+}

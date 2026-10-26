@@ -1,0 +1,665 @@
+{
+ "about": "Analytical PuckGPT questions. Each case lists the handler that answers it (layer:measure). Not-tracked and needs-history answers are deliberate.",
+ "groups": [
+  {
+   "name": "Analytics 1",
+   "prime": [],
+   "cases": [
+    {
+     "q": "Which left-shot defenseman under age 26 currently in my organization projects to provide the most surplus value over the next three seasons relative to his cap hit?",
+     "expect": [
+      "player:surplus3"
+     ]
+    },
+    {
+     "q": "Which AHL forward is closest to replacing my third-line RW if he gets injured tomorrow?",
+     "expect": [
+      "special:replacement"
+     ]
+    },
+    {
+     "q": "Which player on my roster is producing first-line results despite receiving third-line minutes?",
+     "expect": [
+      "player:prod_vs_toi"
+     ]
+    },
+    {
+     "q": "Which defenseman is benefiting most from his partner's performance?",
+     "expect": [
+      "player:partner_lift"
+     ]
+    },
+    {
+     "q": "Which player would lose the most overall rating if moved to his non-natural position full time?",
+     "expect": [
+      "not_tracked:non_natural"
+     ]
+    },
+    {
+     "q": "Which prospect is blocked by my current NHL roster construction?",
+     "expect": [
+      "player:blocked"
+     ]
+    },
+    {
+     "q": "Which player is most likely to become waiver eligible before earning an NHL role?",
+     "expect": [
+      "player:waiver_risk"
+     ]
+    },
+    {
+     "q": "Which player is receiving power-play points that are inflating his actual impact?",
+     "expect": [
+      "player:pp_share"
+     ]
+    },
+    {
+     "q": "Which player would benefit most from increased ice time?",
+     "expect": [
+      "player:prod_vs_toi"
+     ]
+    },
+    {
+     "q": "Which player is hurting his linemates despite having decent point totals?",
+     "expect": [
+      "player:hurts_linemates"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Analytics 2",
+   "prime": [],
+   "cases": [
+    {
+     "q": "Which player has grown the least relative to expectations since being drafted?",
+     "expect": [
+      "player:draft_vs_slot"
+     ]
+    },
+    {
+     "q": "Which prospect has gained the most hidden development value over the past two seasons?",
+     "expect": [
+      "player:gap_to_potential"
+     ]
+    },
+    {
+     "q": "Which player has the largest gap between current overall and potential?",
+     "expect": [
+      "player:gap_to_potential"
+     ]
+    },
+    {
+     "q": "Which 20-year-old has the highest chance of becoming a top-line player?",
+     "expect": [
+      "player:top_line_chance"
+     ]
+    },
+    {
+     "q": "Which player is developing slower than historical comparables with similar ratings?",
+     "expect": [
+      "player:stagnation"
+     ]
+    },
+    {
+     "q": "Which player is at risk of completely stagnating?",
+     "expect": [
+      "player:stagnation"
+     ]
+    },
+    {
+     "q": "Which player has outperformed his development curve the most?",
+     "expect": [
+      "player:season_change"
+     ]
+    },
+    {
+     "q": "Which player's statistical production suggests an upcoming overall increase?",
+     "expect": [
+      "player:form"
+     ]
+    },
+    {
+     "q": "Which prospect's growth is most dependent on NHL ice time?",
+     "expect": [
+      "player:stagnation"
+     ]
+    },
+    {
+     "q": "Which player has elite potential but lacks the attributes to realistically reach it?",
+     "expect": [
+      "player:lacks_tools"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Analytics 3",
+   "prime": [],
+   "cases": [
+    {
+     "q": "Which prospect should be ranked higher than scouting currently suggests?",
+     "expect": [
+      "board:undervalued"
+     ]
+    },
+    {
+     "q": "Which projected second-round pick has first-round talent?",
+     "expect": [
+      "board:second_round_talent"
+     ]
+    },
+    {
+     "q": "Which prospect is most likely to become a draft steal?",
+     "expect": [
+      "board:steal"
+     ]
+    },
+    {
+     "q": "Which prospect's production is being carried by stronger teammates?",
+     "expect": [
+      "board:carried"
+     ]
+    },
+    {
+     "q": "Which prospect has the highest bust risk among the top ten?",
+     "expect": [
+      "board:bust_top10"
+     ]
+    },
+    {
+     "q": "Which prospect would be ranked highest if skating was weighted twice as heavily?",
+     "expect": [
+      "board:skating2x"
+     ]
+    },
+    {
+     "q": "Which prospect has the lowest floor in the first round?",
+     "expect": [
+      "board:low_floor_r1"
+     ]
+    },
+    {
+     "q": "Which prospect has the highest ceiling outside the lottery?",
+     "expect": [
+      "board:ceiling_outside_lottery"
+     ]
+    },
+    {
+     "q": "Which prospect is most NHL-ready right now?",
+     "expect": [
+      "board_or_org:ready"
+     ]
+    },
+    {
+     "q": "Which prospect possesses the rarest combination of traits in this draft class?",
+     "expect": [
+      "board:rare_traits"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Analytics 4",
+   "prime": [],
+   "cases": [
+    {
+     "q": "Which rebuilding team has a surplus of NHL-ready left defensemen?",
+     "expect": [
+      "special:surplus_ld"
+     ]
+    },
+    {
+     "q": "Which contender is most likely to overpay for a rental winger?",
+     "expect": [
+      "special:rental_winger"
+     ]
+    },
+    {
+     "q": "What is the maximum return I could realistically expect for Mitch Marner before entering unrealistic territory?",
+     "expect": [
+      "special:max_return"
+     ]
+    },
+    {
+     "q": "Which team is one injury away from desperately needing a goaltender?",
+     "expect": [
+      "team:goalie_injury_risk"
+     ]
+    },
+    {
+     "q": "Which team values prospects more than draft picks?",
+     "expect": [
+      "team:pipeline"
+     ]
+    },
+    {
+     "q": "Which team is most likely to overvalue veteran leadership?",
+     "expect": [
+      "special:team_veterans"
+     ]
+    },
+    {
+     "q": "Which team is making a playoff push despite poor underlying numbers?",
+     "expect": [
+      "team:luck_gap"
+     ]
+    },
+    {
+     "q": "Which team would see my player as a better fit than I do?",
+     "expect": [
+      "special:better_fit"
+     ]
+    },
+    {
+     "q": "Which organization has the weakest center depth in the league?",
+     "expect": [
+      "team:center_depth"
+     ]
+    },
+    {
+     "q": "Which trade partner creates the largest improvement to my future cap structure?",
+     "expect": [
+      "special:cap_partner"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Analytics 5",
+   "prime": [],
+   "cases": [
+    {
+     "q": "Which RFA is most likely to break out if signed long term?",
+     "expect": [
+      "neg:breakout_rfa"
+     ]
+    },
+    {
+     "q": "Which player represents the greatest risk on a 7-year contract?",
+     "expect": [
+      "player:contract_risk_7"
+     ]
+    },
+    {
+     "q": "Which player is asking for significantly more money than comparable players?",
+     "expect": [
+      "neg:asking_more"
+     ]
+    },
+    {
+     "q": "Which contract on my roster is likely to become unmovable?",
+     "expect": [
+      "player:unmovable"
+     ]
+    },
+    {
+     "q": "Which expiring contract should be prioritized before free agency opens?",
+     "expect": [
+      "neg:priority"
+     ]
+    },
+    {
+     "q": "Which player's market value is being inflated by a career year?",
+     "expect": [
+      "player:overperformance"
+     ]
+    },
+    {
+     "q": "Which player could realistically be signed below expected market value?",
+     "expect": [
+      "neg:below_market"
+     ]
+    },
+    {
+     "q": "Which player would likely accept a bridge deal?",
+     "expect": [
+      "neg:bridge"
+     ]
+    },
+    {
+     "q": "Which negotiation is most urgent if I can only complete one?",
+     "expect": [
+      "neg:urgent"
+     ]
+    },
+    {
+     "q": "Which player is least likely to age well?",
+     "expect": [
+      "player:aging_risk"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Analytics 6",
+   "prime": [],
+   "cases": [
+    {
+     "q": "Which drafted player generated the highest value relative to draft position?",
+     "expect": [
+      "history:draft_value_history"
+     ]
+    },
+    {
+     "q": "Who scored the most important goal in franchise history?",
+     "expect": [
+      "not_tracked:important_goal"
+     ]
+    },
+    {
+     "q": "Which trade changed the direction of the franchise most significantly?",
+     "expect": [
+      "history:trade_direction"
+     ]
+    },
+    {
+     "q": "Which draft class produced the most NHL games?",
+     "expect": [
+      "history:draft_class_games"
+     ]
+    },
+    {
+     "q": "Which playoff series represented the largest upset?",
+     "expect": [
+      "history:playoff_upset"
+     ]
+    },
+    {
+     "q": "Which player improved the most after leaving my organization?",
+     "expect": [
+      "history:improved_after_leaving"
+     ]
+    },
+    {
+     "q": "Which GM decision had the biggest long-term impact?",
+     "expect": [
+      "not_tracked:gm_decision"
+     ]
+    },
+    {
+     "q": "What was the most valuable free-agent signing in franchise history?",
+     "expect": [
+      "history:best_fa_signing"
+     ]
+    },
+    {
+     "q": "Which prospect was the most hyped but ultimately failed?",
+     "expect": [
+      "history:hyped_failed"
+     ]
+    },
+    {
+     "q": "Which season exceeded expectations the most?",
+     "expect": [
+      "history:season_expectations"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Analytics 7",
+   "prime": [],
+   "cases": [
+    {
+     "q": "If I trade my top prospect for a top-pair defenseman today, how would that affect my Cup odds over the next five years?",
+     "expect": [
+      "reason:prospect_for_d"
+     ]
+    },
+    {
+     "q": "Should I trade for immediate help or preserve cap flexibility for next offseason?",
+     "expect": [
+      "reason:now_vs_flex"
+     ]
+    },
+    {
+     "q": "Is my team failing because of roster construction or bad luck?",
+     "expect": [
+      "reason:roster_vs_luck"
+     ]
+    },
+    {
+     "q": "Which single move would increase my championship probability the most?",
+     "expect": [
+      "reason:single_move"
+     ]
+    },
+    {
+     "q": "Is it smarter to rebuild now or remain competitive for another season?",
+     "expect": [
+      "reason:rebuild_or_compete"
+     ]
+    },
+    {
+     "q": "Which player's departure would hurt team chemistry the most?",
+     "expect": [
+      "player:chemistry_total"
+     ]
+    },
+    {
+     "q": "Am I one superstar away from contention or several pieces away?",
+     "expect": [
+      "reason:superstar_away"
+     ]
+    },
+    {
+     "q": "Is my prospect pipeline strong enough to avoid a rebuild?",
+     "expect": [
+      "reason:pipeline"
+     ]
+    },
+    {
+     "q": "Which veteran is secretly holding back younger players?",
+     "expect": [
+      "reason:vet_blocking"
+     ]
+    },
+    {
+     "q": "Would promoting Easton Cowan today help or hurt his long-term development?",
+     "expect": [
+      "reason:promote"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Analytics 8",
+   "prime": [],
+   "cases": [
+    {
+     "q": "Which winger has produced the most with playmakers but struggled beside snipers?",
+     "expect": [
+      "not_tracked:line_combos"
+     ]
+    },
+    {
+     "q": "Which line combination has the best expected goal differential despite poor point production?",
+     "expect": [
+      "not_tracked:line_combos"
+     ]
+    },
+    {
+     "q": "Which center elevates his linemates the most?",
+     "expect": [
+      "player:elevates"
+     ]
+    },
+    {
+     "q": "Which player benefits most from offensive zone starts?",
+     "expect": [
+      "not_tracked:zone_starts"
+     ]
+    },
+    {
+     "q": "Which player appears carried by his linemates?",
+     "expect": [
+      "player:carried"
+     ]
+    },
+    {
+     "q": "Which line combination creates the most offense per minute played?",
+     "expect": [
+      "not_tracked:line_combos"
+     ]
+    },
+    {
+     "q": "Which player is suppressing another player's production?",
+     "expect": [
+      "not_tracked:suppressing"
+     ]
+    },
+    {
+     "q": "Which defense pairing consistently controls possession?",
+     "expect": [
+      "player:xg_share"
+     ]
+    },
+    {
+     "q": "Which line performs best against elite competition?",
+     "expect": [
+      "not_tracked:competition"
+     ]
+    },
+    {
+     "q": "Which player should never be separated from his current linemate?",
+     "expect": [
+      "special:never_separate"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Analytics 9",
+   "prime": [],
+   "cases": [
+    {
+     "q": "Which player would my scouts consider untouchable but analytics would suggest trading immediately?",
+     "expect": [
+      "player:overrated"
+     ]
+    },
+    {
+     "q": "Which prospect currently has the highest chance of winning a major NHL award?",
+     "expect": [
+      "player:award_chance"
+     ]
+    },
+    {
+     "q": "Which trade proposal received in franchise history would look smartest in hindsight?",
+     "expect": [
+      "not_tracked:proposals"
+     ]
+    },
+    {
+     "q": "Which player became a star only because of an injury to another player?",
+     "expect": [
+      "not_tracked:injury_star"
+     ]
+    },
+    {
+     "q": "Which player benefited most from a coaching change?",
+     "expect": [
+      "not_tracked:coaching"
+     ]
+    },
+    {
+     "q": "Which draft pick hurt the franchise most because of the players selected afterwards?",
+     "expect": [
+      "history:draft_pick_regret"
+     ]
+    },
+    {
+     "q": "Which championship team was actually the weakest statistically?",
+     "expect": [
+      "history:weakest_champion"
+     ]
+    },
+    {
+     "q": "Which player has quietly become the face of the franchise?",
+     "expect": [
+      "player:face_of_franchise"
+     ]
+    },
+    {
+     "q": "Which team has the brightest future over the next decade?",
+     "expect": [
+      "team:future"
+     ]
+    },
+    {
+     "q": "Which player is most likely to surprise everyone and become elite?",
+     "expect": [
+      "player:surprise_elite"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Analytics 10",
+   "prime": [],
+   "cases": [
+    {
+     "q": "Why does my team feel worse even though it's statistically better?",
+     "expect": [
+      "reason:feel_worse"
+     ]
+    },
+    {
+     "q": "Why do I always lose in the second round?",
+     "expect": [
+      "history:second_round"
+     ]
+    },
+    {
+     "q": "Which player looks good on paper but hurts winning?",
+     "expect": [
+      "player:hurts_linemates"
+     ]
+    },
+    {
+     "q": "Who is the most overrated player in my organization?",
+     "expect": [
+      "player:overrated"
+     ]
+    },
+    {
+     "q": "Who is the most underrated player in the entire league?",
+     "expect": [
+      "player:underrated"
+     ]
+    },
+    {
+     "q": "If I could redo one decision in franchise history, which would have the biggest impact?",
+     "expect": [
+      "history:redo_decision"
+     ]
+    },
+    {
+     "q": "Which prospect should I trust despite terrible recent production?",
+     "expect": [
+      "player:gap_to_potential"
+     ]
+    },
+    {
+     "q": "Which player has been the luckiest over the last three seasons?",
+     "expect": [
+      "history:three_seasons"
+     ]
+    },
+    {
+     "q": "Which player has been the unluckiest over the last three seasons?",
+     "expect": [
+      "history:three_seasons"
+     ]
+    },
+    {
+     "q": "Based on every piece of information available in this save file, what is the single smartest move I can make right now?",
+     "expect": [
+      "reason:smartest"
+     ]
+    }
+   ]
+  }
+ ]
+}

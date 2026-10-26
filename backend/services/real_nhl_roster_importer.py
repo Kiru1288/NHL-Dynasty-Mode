@@ -899,6 +899,80 @@ def _player_needs_draft_from_landing(player: Any) -> bool:
         return True
 
 
+def resolve_nhl_id_by_name(player: Any) -> Optional[int]:
+    """NHL id for a real prospect who came in without one (ratings-file prospects)."""
+    nid = nhl_player_id_from_obj(player)
+    if nid is not None:
+        return nid
+    if getattr(player, "_nhl_id_lookup_done", False):
+        return None
+    try:
+        setattr(player, "_nhl_id_lookup_done", True)
+    except Exception:
+        pass
+    ident = getattr(player, "identity", None)
+    name = str(getattr(ident, "name", "") or "").strip()
+    if len(name.split()) < 2:
+        return None
+    url = "https://search.d3.nhle.com/api/v1/search/player?culture=en-us&limit=20&q=" + urllib.parse.quote(name)
+    try:
+        rows = _http_get_json(url, timeout=6.0)
+    except Exception:
+        return None
+    if not isinstance(rows, list):
+        return None
+
+    def _norm(s: str) -> str:
+        import unicodedata
+
+        s = unicodedata.normalize("NFKD", str(s or "")).encode("ascii", "ignore").decode().lower()
+        return " ".join(s.replace(".", " ").replace("-", " ").split())
+
+    want = _norm(name)
+    hits = [r for r in rows if isinstance(r, dict) and _norm(r.get("name")) == want]
+    if not hits:
+        return None
+    pos = str(getattr(getattr(ident, "position", None), "value", getattr(ident, "position", "")) or "").upper()[:1]
+    # Same name twice: prefer the active one at the same position.
+    hits.sort(key=lambda r: (not r.get("active"), str(r.get("positionCode") or "")[:1] != pos))
+    try:
+        nid = int(hits[0].get("playerId"))
+    except (TypeError, ValueError):
+        return None
+    try:
+        setattr(player, "nhl_player_id", nid)
+    except Exception:
+        pass
+    return nid
+
+
+def ensure_prospect_draft_from_nhl(player: Any, *, league: Any = None) -> bool:
+    """Real draft year, round, pick and team for a named prospect, from NHL.com."""
+    if player is None or bool(getattr(player, "real_nhl_import", False)):
+        return False
+    if getattr(player, "_nhl_draft_checked", False):
+        return True
+    nid = resolve_nhl_id_by_name(player)
+    if nid is None:
+        return False
+    landing = _PLAYER_LANDING_CACHE.get(nid) or _fetch_player_landing(nid)
+    if not isinstance(landing, dict):
+        return False
+    _PLAYER_LANDING_CACHE[nid] = landing
+    draft = landing.get("draftDetails")
+    teams = list(getattr(league, "teams", None) or []) if league is not None else []
+    if isinstance(draft, dict) and draft.get("year"):
+        try:
+            _apply_draft_and_body(player, roster_row={}, landing={"draftDetails": draft}, teams=teams)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    try:
+        setattr(player, "_nhl_draft_checked", True)
+    except Exception:
+        pass
+    return True
+
+
 def ensure_player_nhl_landing_data(player: Any, *, fetch: bool = True, league: Any = None) -> bool:
     """Fetch NHL landing once; attach career seasons, draft record, and trophy cache."""
     if player is None:

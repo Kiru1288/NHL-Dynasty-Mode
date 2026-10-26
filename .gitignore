@@ -33,3 +33,7 @@ backend/audit_20_results.json
 
 # Disposable WJC/draft dev snapshots (safe to delete)
 backend/tmp/
+
+# PuckGPT: trained intent model cache and per-save archives (built on demand)
+backend/services/puckgpt/.cache/
+backend/data/puckgpt/

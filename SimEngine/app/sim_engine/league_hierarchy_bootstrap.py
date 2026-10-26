@@ -299,8 +299,11 @@ def reanchor_generated_junior_dobs(league: Any, as_of_year: int) -> int:
                 ident.birth_year = year - spawn_age
                 ident.age = spawn_age
                 try:
-                    ident.birth_month = 7
-                    ident.birth_day = 1
+                    from app.sim_engine.generation.birthdays import random_birthday
+
+                    ident.birth_month, ident.birth_day = random_birthday(
+                        random.Random(f"dob|{getattr(p, 'id', '')}|{ident.birth_year}"), ident.birth_year
+                    )
                 except Exception:
                     _swallowed_log.debug("suppressed exception", exc_info=True)
                 try:
@@ -395,13 +398,15 @@ def _spawn_player(
         weight_kg=w_kg,
         position=pos,
         shoots=Shoots.L if rng.random() < 0.58 else Shoots.R,
+        # Projected draft year only. Juniors are not drafted yet, so no round or pick.
         draft_year=max(2015, birth_year + 18),
-        draft_round=1 + (rng.randint(1, 7)),
-        draft_pick=1 + (rng.randint(0, 30)),
+        draft_round=0,
+        draft_pick=0,
     )
     try:
-        identity.birth_month = 7
-        identity.birth_day = 1
+        from app.sim_engine.generation.birthdays import random_birthday
+
+        identity.birth_month, identity.birth_day = random_birthday(rng, birth_year)
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
     backstory = BackstoryUpbringing(

@@ -11,6 +11,7 @@ import logging
 import os
 import random
 import threading
+import statistics
 import time
 import types
 import uuid
@@ -8595,7 +8596,14 @@ def _serialize_player_row(
     draft_overall = getattr(p, "draft_overall_pick", None)
     if draft_overall is None and ident is not None:
         draft_overall = getattr(ident, "draft_pick", None)
-    is_drafted = bool(getattr(p, "drafted", False) or draft_overall or draft_year)
+    try:
+        _has_pick = int(draft_overall or 0) > 0 or int(draft_round or 0) > 0
+    except (TypeError, ValueError):
+        _has_pick = False
+    # A projected draft year with no round or pick is not a draft.
+    is_drafted = bool(getattr(p, "drafted", False) or _has_pick)
+    if not is_drafted:
+        draft_year = None
     is_undrafted = bool(getattr(p, "undrafted", False)) and not is_drafted
     if is_drafted or is_undrafted or draft_year or draft_overall:
         row.update({
@@ -15985,8 +15993,54 @@ def _nhl_in_season_development_tick(session: FranchiseSession) -> int:
     roster_pool: List[Any] = []
     for tm in list(getattr(league, "teams", None) or []):
         roster_pool.extend(list(getattr(tm, "roster", None) or []))
+    # Checkpoints are due by games played, and the production stamp below is
+    # what writes games played. Refresh the count first or nothing is ever due.
+    try:
+        from services.franchise_offseason import _dev_season_stats
+    except Exception:
+        _dev_season_stats = None  # type: ignore
+    if _dev_season_stats is not None:
+        for p in roster_pool:
+            if p is None or getattr(p, "retired", False):
+                continue
+            try:
+                gp_now = int((_dev_season_stats(session, p) or {}).get("gp", 0) or 0)
+                setattr(p, "games_played", gp_now)
+                setattr(p, "gp", gp_now)
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
     if not any_nhl_roster_checkpoint_due(roster_pool, season_year):
         return 0
+
+    # Centre form on the league: median gap between real scoring and the
+    # points-per-overall table, per forwards and defense, from regulars only.
+    try:
+        from services.franchise_offseason import _dev_stamp_season_production as _stamp
+        from app.sim_engine.progression.development import (
+            _is_defense,
+            _is_goalie,
+            raw_skater_form_perf_z,
+            season_points_surplus_vs_expectation,
+            set_form_baseline,
+        )
+
+        groups: Dict[str, List[float]] = {"F": [], "D": [], "F_pg": [], "D_pg": []}
+        for p in roster_pool:
+            if p is None or getattr(p, "retired", False) or _is_goalie(p):
+                continue
+            if int(getattr(p, "games_played", 0) or 0) < 10:
+                continue
+            _stamp(session, p)
+            z = raw_skater_form_perf_z(p)
+            if z is not None:
+                groups["D" if _is_defense(p) else "F"].append(float(z))
+            gp_i = int(getattr(p, "games_played", 0) or 0)
+            groups["D_pg" if _is_defense(p) else "F_pg"].append(
+                season_points_surplus_vs_expectation(p, int(getattr(p, "_dev_season_points", 0) or 0), gp_i) / float(gp_i)
+            )
+        set_form_baseline({k: statistics.median(v) for k, v in groups.items() if len(v) >= 40})
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     rng = getattr(sim, "rng", None) or random.Random()
     moved = 0

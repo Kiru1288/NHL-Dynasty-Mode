@@ -422,10 +422,10 @@ def get_puckgpt(
     x_franchise_session: Optional[str] = Header(default=None),
 ) -> dict[str, Any]:
     from services.json_safe import json_safe
-    from services.sim_history import answer_save_query
+    from services.puckgpt.engine import ask
 
     s = _session_or_404(x_franchise_session)
-    return json_safe(answer_save_query(s, q))
+    return json_safe(ask(s, q))
 
 
 @app.get("/api/franchise/stats-central")

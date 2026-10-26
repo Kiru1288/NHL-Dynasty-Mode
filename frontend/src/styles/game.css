@@ -32536,13 +32536,14 @@ h1:not([class*="replay"] *){font-family:var(--dd-font-display)!important;font-we
 .sl-life__feed li span{font-size:11px;font-weight:800;color:var(--cs-soft,#a9bfdc)}
 .sl-life__feed li p{margin:2px 0 0;font-size:13px;font-weight:600;line-height:1.4;color:#eef4ff}
 
-/* PuckGPT — a search desk over the save. Uses the office tokens, not a separate theme. */
+/* PuckGPT — a chat desk over the save. Uses the office tokens, not a separate theme. */
 .puckgpt-screen {
-  min-height: 100%;
+  height: 100%;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 22px 28px 32px;
+  gap: 12px;
+  padding: 22px 28px 20px;
   color: var(--cs-cream, #fff3d6);
   background:
     radial-gradient(1200px 420px at 10% -10%, rgba(248, 213, 138, 0.08), transparent 55%),
@@ -32556,22 +32557,20 @@ h1:not([class*="replay"] *){font-family:var(--dd-font-display)!important;font-we
   border-bottom: 1px solid var(--office-line-strong, rgba(248, 213, 138, 0.35));
   padding-bottom: 10px;
 }
+.puckgpt-bar__actions { display: flex; gap: 8px; }
 .puckgpt-mark {
   font-family: var(--font-office-display);
   letter-spacing: 0.22em;
   font-size: 1.15rem;
   color: var(--office-brass, #f8d58a);
 }
-.puckgpt-bar p {
-  margin: 4px 0 0;
-  color: var(--cs-soft, #a9bfdc);
-  font-size: 13px;
-}
+.puckgpt-bar p { margin: 4px 0 0; color: var(--cs-soft, #a9bfdc); font-size: 13px; }
 .puckgpt-back,
 .puckgpt-go,
-.puckgpt-chip {
+.puckgpt-chip,
+.puckgpt-card {
   font-family: var(--font-office-display);
-  letter-spacing: 0.06em;
+  letter-spacing: 0.04em;
   border: 1px solid var(--office-line-strong, rgba(248, 213, 138, 0.35));
   background: rgba(8, 18, 46, 0.55);
   color: var(--cs-cream, #fff3d6);
@@ -32580,11 +32579,78 @@ h1:not([class*="replay"] *){font-family:var(--dd-font-display)!important;font-we
 }
 .puckgpt-back { padding: 6px 12px; }
 .puckgpt-back:hover,
-.puckgpt-go:hover,
-.puckgpt-chip:hover { background: var(--office-brass, #f8d58a); color: #1a1408; }
+.puckgpt-go:hover:not(:disabled),
+.puckgpt-chip:hover,
+.puckgpt-card:hover { background: var(--office-brass, #f8d58a); color: #1a1408; }
+.puckgpt-thread {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding-right: 6px;
+}
+.puckgpt-empty h2 { margin: 18px 0 12px; font-size: 24px; font-weight: 800; }
+.puckgpt-empty h3 { margin: 20px 0 8px; font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--cs-soft, #a9bfdc); }
+.puckgpt-turn { display: flex; flex-direction: column; gap: 8px; }
+.puckgpt-q {
+  align-self: flex-end;
+  max-width: 70%;
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 4px;
+  background: rgba(248, 213, 138, 0.14);
+  border: 1px solid rgba(248, 213, 138, 0.3);
+  font-size: 15px;
+  font-weight: 700;
+}
+.puckgpt-thinking { margin: 0; color: var(--cs-soft, #a9bfdc); font-style: italic; }
+.puckgpt-reply {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  background: rgba(6, 14, 36, 0.6);
+  border-left: 3px solid var(--office-brass, #f8d58a);
+}
+.puckgpt-readas { font-size: 12px; color: var(--cs-soft, #a9bfdc); }
+.puckgpt-readas span { text-transform: uppercase; letter-spacing: 0.12em; margin-right: 4px; }
+.puckgpt-readas b { margin-left: 6px; color: var(--cs-lime, #9be564); }
+.puckgpt-readas.is-medium b { color: var(--office-brass, #f8d58a); }
+.puckgpt-readas.is-low b { color: var(--cs-coral, #ff6b5c); }
+.puckgpt-answer { margin: 0; font-size: 20px; font-weight: 800; line-height: 1.3; }
+.puckgpt-analysis { margin: 0; padding-left: 18px; color: #d6e2f4; font-size: 14px; line-height: 1.5; }
+.puckgpt-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.puckgpt-chip { padding: 6px 10px; font-size: 13px; display: inline-flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; }
+.puckgpt-chip small { font-family: inherit; font-size: 11px; opacity: 0.7; letter-spacing: 0; }
+.puckgpt-chip--ghost { border-style: dashed; }
+.puckgpt-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; }
+.puckgpt-card { padding: 8px 10px; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; }
+.puckgpt-card b { font-size: 14px; }
+.puckgpt-card span { font-size: 12px; opacity: 0.8; }
+.puckgpt-table-wrap { overflow-x: auto; max-height: 360px; overflow-y: auto; }
+.puckgpt-table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+.puckgpt-table th {
+  position: sticky;
+  top: 0;
+  background: rgba(8, 18, 46, 0.95);
+  text-align: left;
+  padding: 6px 8px;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--office-brass, #f8d58a);
+  border-bottom: 1px solid var(--office-line-strong, rgba(248, 213, 138, 0.35));
+}
+.puckgpt-table td { padding: 6px 8px; border-bottom: 1px solid rgba(169, 191, 220, 0.12); color: #e6eefb; white-space: nowrap; }
+.puckgpt-table tr.is-link { cursor: pointer; }
+.puckgpt-table tr.is-link:hover td { background: rgba(248, 213, 138, 0.1); }
+.puckgpt-meta { margin: 0; font-size: 11px; color: var(--cs-soft, #a9bfdc); opacity: 0.7; }
 .puckgpt-search { display: flex; gap: 8px; }
 .puckgpt-query {
   flex: 1;
+  min-width: 0;
   padding: 12px 14px;
   border-radius: 4px;
   border: 1px solid var(--office-line-strong, rgba(248, 213, 138, 0.35));
@@ -32594,22 +32660,8 @@ h1:not([class*="replay"] *){font-family:var(--dd-font-display)!important;font-we
 }
 .puckgpt-go { padding: 0 18px; font-size: 15px; }
 .puckgpt-go:disabled { opacity: 0.55; cursor: default; }
-.puckgpt-chips { display: flex; flex-wrap: wrap; gap: 8px; }
-.puckgpt-chip { padding: 6px 10px; font-size: 13px; }
-.puckgpt-answer {
-  margin: 0;
-  font-size: 22px;
-  font-weight: 800;
-  line-height: 1.25;
-}
-.puckgpt-hits { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
-.puckgpt-hit {
-  padding: 10px 12px;
-  background: rgba(8, 18, 46, 0.55);
-  border-left: 3px solid var(--office-brass, #f8d58a);
-  color: #d6e2f4;
-  font-size: 14px;
-  line-height: 1.4;
-}
-.puckgpt-hit em { font-style: normal; color: var(--office-brass, #f8d58a); margin-right: 8px; }
 .puckgpt-error { color: var(--cs-coral, #ff6b5c); margin: 0; }
+@media (max-width: 640px) {
+  .puckgpt-screen { padding: 14px 16px; }
+  .puckgpt-q { max-width: 90%; }
+}
