@@ -16,6 +16,7 @@ import { flagApiUrl, resolveCountryCode } from "../../utils/countryFlags";
 import { buildDraftFanTweets, buildDraftPickReactionTweet } from "../awardsNight/awardHelpers";
 import { resolveWjcDossierBlock } from "../../screens/prospectDossierHelpers";
 import { buildProspectDossierModel } from "../../components/dossier/prospectDossierModel";
+import { ProjectionRange, RankChange, StockTrajectory } from "../../components/franchise/commandVisuals";
 import { DossierCommandSheet, DossierLayoutStyles } from "../../components/dossier/ProspectDossierView";
 import {
   formatPick,
@@ -822,10 +823,6 @@ function buildDraftGrade(userPicks) {
   return "F";
 }
 
-function clip15(text) {
-  return String(text || "").trim().split(/\s+/).filter(Boolean).slice(0, 15).join(" ");
-}
-
 function pubDelta(pick) {
   let d = pick?.public_rank_delta;
   if (d == null) d = pick?.public_board_delta;
@@ -844,46 +841,40 @@ function fmtSigned(v, digits = 0) {
   return n > 0 ? `+${s}` : s;
 }
 
-function numOrDash(v) {
-  return v == null || v === "" || Number.isNaN(Number(v)) ? "—" : Math.round(Number(v));
+function recapVerdict(pick) {
+  const delta = pubDelta(pick);
+  if (delta == null) return null;
+  const label = delta >= 10 ? "VALUE" : delta <= -10 ? "REACH" : "EXPECTED";
+  const tone = label === "VALUE" ? "value" : label === "REACH" ? "reach" : "expected";
+  const shown = delta > 0 ? `+${delta}` : delta < 0 ? `−${Math.abs(delta)}` : "0";
+  return { label, tone, text: `${label} ${shown}` };
 }
 
-function ovrVal(p) {
-  // Drafted players are revealed; the fogged floor_grade is only a pre-draft value.
-  return numOrDash(
-    p?.drafted_overall ?? p?.overall ?? p?.floor_grade ?? p?.true_ovr ?? p?.scouted_ovr
-  );
+function recapConfidence(p) {
+  const point = getConfidence(p);
+  if (point != null) return { text: `${Math.round(point)}%`, muted: point < 45 };
+  const range = getConfidenceRange(p);
+  if (!range) return null;
+  return { text: `${Math.round(range[0])}–${Math.round(range[1])}%`, muted: true };
 }
+
+function projectionLeagueLabel(p) {
+  const raw = p?.development_path || p?.rights_card?.development_path || p?.dossier?.development_path;
+  if (raw == null || String(raw).trim() === "") return null;
+  return String(raw).trim();
+}
+
+function isStealOrReachLine(text) {
+  return /\b(steal|steals|reach|reaches)\b/i.test(String(text || ""));
+}
+
+const SCOUTED_NOTE = "Public rank is the consensus board at the moment of selection. Scouted OVR is the fogged pre-draft band; revealed OVR is the true ability unlocked once the player is off the board.";
 
 function potVal(p) {
   const v = p?.drafted_potential ?? p?.ceiling_grade ?? p?.potential_score;
   if (v != null && !Number.isNaN(Number(v))) return Math.round(Number(v));
   return p?.potential_grade || "—";
 }
-
-function projVal(p) {
-  const raw = p?.player_type || p?.development_path || p?.nhl_readiness;
-  if (raw) return String(raw);
-  return p?.nhl_eta != null ? `${p.nhl_eta}y` : "—";
-}
-
-function teamAccent(team) {
-  const abbr = String(getTeamAbbreviation(team) || "").toUpperCase();
-  if (!abbr) return "var(--ed-gold)";
-  let hash = 0;
-  for (let i = 0; i < abbr.length; i += 1) hash = abbr.charCodeAt(i) + ((hash << 5) - hash);
-  const hue = Math.abs(hash) % 360;
-  return `hsl(${hue} 62% 52%)`;
-}
-
-const RECAP_POS_COLORS = {
-  C: "#4fb0ff",
-  LW: "#6ce5b0",
-  RW: "#ffd166",
-  D: "#c792ea",
-  G: "#ff7b72",
-  W: "#6ce5b0",
-};
 
 /* ------------------------------------------------------------------ */
 /* Stylesheet                                                          */
@@ -2165,69 +2156,6 @@ const SHEET = `
   text-align:left;box-shadow:inset 0 1px 0 rgba(255,255,255,.04);
 }
 
-/* ---------- recap ---------- */
-.edraft-recap{flex:1;min-height:0;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:12px;position:relative;z-index:2;}
-.edraft-recap-top{display:grid;grid-template-columns:270px minmax(0,1fr);gap:12px;}
-.edraft-grade{
-  display:flex;flex-direction:column;align-items:center;gap:7px;padding:18px 14px;
-  background:linear-gradient(180deg,rgba(20,32,45,.9),rgba(16, 34, 76, .9));
-  border:1px solid var(--ed-line);border-top:2px solid var(--rc-accent,var(--ed-gold));
-}
-.edraft-grade img{width:56px;height:56px;object-fit:contain;}
-.edraft-grade-kicker{font-size:9.5px;letter-spacing:.22em;text-transform:uppercase;color:var(--ed-ink-3);}
-.edraft-grade-letter{font-family:var(--ed-number);font-size:76px;font-weight:800;line-height:.9;color:var(--rc-accent,var(--ed-gold));}
-.edraft-grade-meta{display:flex;gap:9px;font-size:11px;color:var(--ed-ink-3);}
-.edraft-grade p{margin:4px 0 0;font-size:12px;color:var(--ed-ink-2);text-align:center;line-height:1.4;}
-.edraft-metrics{display:grid;grid-template-columns:repeat(6,1fr);gap:1px;background:var(--ed-line-soft);}
-.edraft-metric{background:var(--ed-panel);padding:10px 11px;}
-.edraft-metric strong{display:block;font-family:var(--ed-number);font-size:1.55rem;font-weight:800;line-height:1;}
-.edraft-metric span{display:block;margin-top:2px;font-family:var(--ed-body);font-size:.56rem;letter-spacing:.14em;text-transform:uppercase;color:var(--ed-ink-3);}
-.edraft-metric.good strong{color:var(--ed-good);}
-.edraft-metric.bad strong{color:var(--ed-bad);}
-.edraft-card{background:var(--ed-panel);border:1px solid var(--ed-line-soft);display:flex;flex-direction:column;}
-.edraft-card-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 12px;border-bottom:1px solid var(--ed-line-soft);}
-.edraft-card-head h4{margin:0;font-family:var(--ed-head);font-size:.78rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;}
-.edraft-card-head span{font-size:10.5px;color:var(--ed-ink-3);}
-.edraft-mid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;}
-.edraft-dna-bar{display:flex;height:20px;margin:11px 12px 6px;overflow:hidden;}
-.edraft-dna-seg{display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#0e224d;}
-.edraft-dna-legend{display:flex;flex-wrap:wrap;gap:9px;padding:0 12px 11px;font-size:10.5px;color:var(--ed-ink-3);}
-.edraft-dna-legend span{display:inline-flex;align-items:center;gap:4px;}
-.edraft-dna-legend i{width:8px;height:8px;}
-.edraft-needs{margin:0;padding:6px 12px 11px;list-style:none;display:flex;flex-direction:column;gap:5px;}
-.edraft-needs li{display:grid;grid-template-columns:14px minmax(0,1fr) auto;gap:7px;align-items:center;font-size:12px;}
-.edraft-needs li.is-filled{color:var(--ed-good);}
-.edraft-needs li.is-open{color:var(--ed-ink-3);}
-.edraft-table{display:flex;flex-direction:column;}
-.edraft-thead,.edraft-trow{
-  display:grid;grid-template-columns:34px 54px minmax(0,1.6fr) 40px 44px 44px minmax(0,1.2fr) 56px 18px;
-  gap:7px;align-items:center;padding:7px 12px;
-}
-.edraft-thead{font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--ed-ink-3);border-bottom:1px solid var(--ed-line-soft);}
-.edraft-trow{border-bottom:1px solid var(--ed-line-soft);cursor:pointer;font-size:12.3px;}
-.edraft-trow:hover{background:rgba(255,255,255,.04);}
-.edraft-trow.is-best{background:var(--gold-soft);box-shadow:inset 0 0 0 2px rgba(233,168,60,.42);}
-.edraft-trow .pos{color:var(--ed-good);}
-.edraft-trow .neg{color:var(--ed-bad);}
-.edraft-bottom{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;}
-.edraft-vrow{
-  display:flex;align-items:center;justify-content:space-between;gap:9px;width:100%;
-  padding:7px 12px;border-bottom:1px solid var(--ed-line-soft);
-  background:none;border-inline:0;border-top:0;color:inherit;font:inherit;font-size:12.2px;
-  text-align:left;cursor:pointer;
-}
-.edraft-vrow:hover{background:rgba(255,255,255,.04);}
-.edraft-vrow .pos{color:var(--ed-good);}
-.edraft-vrow .neg{color:var(--ed-bad);}
-.edraft-story{
-  display:grid;grid-template-columns:6px minmax(0,1fr) 14px;gap:8px;align-items:start;width:100%;
-  padding:8px 12px;background:none;border:0;border-bottom:1px solid var(--ed-line-soft);
-  text-align:left;color:var(--ed-ink-2);font:inherit;font-size:12.2px;line-height:1.42;cursor:pointer;
-}
-.edraft-story i{width:6px;height:6px;margin-top:5px;background:var(--ed-gold);}
-.edraft-story span{overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;}
-.edraft-story.is-open span{-webkit-line-clamp:unset;}
-
 .edraft-overlay-msg{
   position:absolute;inset:0;z-index:35;display:flex;align-items:center;justify-content:center;
   background:rgba(12, 28, 67, .72);font-family:var(--ed-head);font-size:20px;letter-spacing:.14em;
@@ -2356,37 +2284,13 @@ const SHEET = `
 .edraft-board-tools.is-rich .edraft-seg{flex:none;}
 .edraft-board-tools.is-rich .edraft-board-tools-row{flex:none;}
 .edraft-sheet--dossier{width:min(920px,100%);}
-.edraft-alloc{display:flex;flex-direction:column;gap:10px;}
-.edraft-alloc-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;}
-.edraft-alloc-table{display:flex;flex-direction:column;}
-.edraft-alloc-head,.edraft-alloc-row{
-  display:grid;grid-template-columns:minmax(120px,1.4fr) 52px 52px 64px 72px 72px 70px 70px;
-  gap:8px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--line-soft);
-}
-.edraft-alloc-head{
-  font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);font-weight:900;
-}
-.edraft-alloc-row strong{font-size:13px;}
-.edraft-alloc-row span{font-size:12px;color:var(--muted);}
-.edraft-alloc-row .pos{color:var(--green);}
-.edraft-alloc-row .neg{color:var(--red);}
-.edraft-recap-haul{min-height:280px;max-height:42vh;display:flex;flex-direction:column;}
-.edraft-recap-haul .edraft-haul{flex:1;}
 
 @media (max-width:1400px){
   .edraft-floor{grid-template-columns:220px minmax(0,1fr);}
-  .edraft-bottom{grid-template-columns:repeat(2,1fr);}
-  .edraft-alloc-metrics{grid-template-columns:repeat(2,minmax(0,1fr));}
 }
 @media (max-width:1180px){
   .edraft-floor{grid-template-columns:minmax(0,1fr);}
   .edraft-pane--log{display:none;}
-  .edraft-recap-top{grid-template-columns:1fr;}
-  .edraft-metrics{grid-template-columns:repeat(3,1fr);}
-  .edraft-alloc-head,.edraft-alloc-row{
-    grid-template-columns:minmax(100px,1fr) 44px 44px 56px 64px 64px;
-  }
-  .edraft-alloc-head span:nth-child(n+7),.edraft-alloc-row span:nth-child(n+7){display:none;}
 }
 
 /* Visual dossier additions */
@@ -3519,82 +3423,6 @@ function DossierPopup({
   );
 }
 
-function InfoAllocationReport({ completed, userPicks }) {
-  const mine = safeArray(userPicks);
-  const league = safeArray(completed);
-  const revealed = league.filter((p) => p.ability_revealed || p.drafted_overall != null).length;
-  const avgDelta = mine.length
-    ? mine.reduce((s, p) => s + (getPickValueDelta(p) || 0), 0) / mine.length
-    : 0;
-  const aligned = mine.filter((p) => {
-    const d = getPickValueDelta(p);
-    return d != null && Math.abs(d) <= 4;
-  }).length;
-  const confHits = mine.filter((p) => {
-    const conf = getConfidence(p);
-    const d = getPickValueDelta(p);
-    return conf != null && conf >= 60 && d != null && d >= 0;
-  }).length;
-
-  return (
-    <div className={`${PREFIX}-card ${PREFIX}-alloc`}>
-      <div className={`${PREFIX}-card-head`}>
-        <h4>Info allocation</h4>
-        <span>Scouted board vs revealed ability after the pick</span>
-      </div>
-      <div className={`${PREFIX}-alloc-metrics`}>
-        <Metric label="Revealed" value={`${revealed}/${league.length || 0}`} />
-        <Metric label="On-board picks" value={aligned} />
-        <Metric label="Scout hits" value={confHits} tone="good" />
-        <Metric label="Avg value" value={fmtSigned(avgDelta, 1) ?? "0.0"} tone={avgDelta >= 0 ? "good" : "bad"} />
-      </div>
-      <div className={`${PREFIX}-alloc-table`}>
-        <div className={`${PREFIX}-alloc-head`}>
-          <span>Player</span>
-          <span>Slot</span>
-          <span>Pub</span>
-          <span>Yours</span>
-          <span>Scouted</span>
-          <span>Revealed</span>
-          <span>Conf</span>
-          <span>Value</span>
-        </div>
-        {mine.length ? mine.map((p) => {
-          const pub = getPublicRankAtPick(p);
-          const team = getTeamRank(p);
-          const scouted = scoutedOvrLabel(p);
-          const revealedOvr = revealedOvrValue(p);
-          const delta = getPickValueDelta(p);
-          const { tag, tone } = getPickDisplayTag(p);
-          return (
-            <div key={p.overall_pick || getId(p)} className={`${PREFIX}-alloc-row`}>
-              <strong>
-                {p.prospect_name || getPlayerName(p)}
-                <span> · {p.position || getPlayerPosition(p)} · {teamAbbrev(p.team_id, p.team_name)}</span>
-              </strong>
-              <span className={`${PREFIX}-tabular`}>{p.overall_pick ?? "—"}</span>
-              <span className={`${PREFIX}-tabular`}>{pub ?? "—"}</span>
-              <span className={`${PREFIX}-tabular`}>{team ?? "—"}</span>
-              <span className={`${PREFIX}-tabular`}>{scouted || "—"}</span>
-              <span className={`${PREFIX}-tabular`}>{revealedOvr ?? "—"}</span>
-              <span className={`${PREFIX}-tabular`}>{formatConfidence(p) || "—"}</span>
-              <span className={delta == null ? "" : delta > 0 ? "pos" : delta < 0 ? "neg" : ""}>
-                {tag ? <PickBadge tag={tag} tone={tone} /> : (delta == null ? "—" : fmtSigned(delta))}
-              </span>
-            </div>
-          );
-        }) : (
-          <p className={`${PREFIX}-empty`}>No user selections to audit.</p>
-        )}
-      </div>
-      <p className={`${PREFIX}-muted`} style={{ padding: "0 12px 10px" }}>
-        Public rank is the consensus board at the moment of selection. Scouted OVR is the fogged pre-draft band;
-        revealed OVR is the true ability unlocked once the player is off the board.
-      </p>
-    </div>
-  );
-}
-
 /* ------------------------------------------------------------------ */
 /* Centre stage — scouting dossier (position aware)                    */
 /* ------------------------------------------------------------------ */
@@ -4490,236 +4318,671 @@ function RoundRecapPanel({ recap, onContinue }) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Recap                                                               */
-/* ------------------------------------------------------------------ */
+/* Recap — war-room composition (spliced into EntryDraftMenu.js) */
 
-function Metric({ label, value, tone = "" }) {
+function RecapDash() {
+  return <span className="edraft-muted">—</span>;
+}
+
+function recapCapTone(grade) {
+  const g = String(grade || "").trim().toUpperCase();
+  if (/^A|^B/.test(g)) return "green";
+  if (/^D|^F/.test(g) || g === "—") return "danger";
+  return "gold";
+}
+
+function parseLeagueRank(rankStr) {
+  const m = String(rankStr || "").match(/(\d+)/);
+  const n = m ? Number(m[1]) : null;
+  return Number.isFinite(n) && n >= 1 && n <= 32 ? n : null;
+}
+
+function buildGmHeadline(r, grade) {
+  const steals = Number(r.user_steal_count) || 0;
+  const reaches = Number(r.user_reach_count) || 0;
+  const picks = Number(r.user_pick_count) || 0;
+  const g = String(grade || "").trim().toUpperCase();
+  const band = /^A/.test(g) ? "A" : /^B/.test(g) ? "B" : /^C/.test(g) ? "C" : "D";
+  const lines = {
+    A: [
+      `Scouts will talk about ${steals || "the"} steal${steals === 1 ? "" : "s"} — this class travels well.`,
+      `The room wanted noise; you signed ${picks} keepers with an A-grade ledger.`,
+    ],
+    B: [
+      reaches
+        ? `${reaches} reach${reaches === 1 ? "" : "es"}, but the balance sheet still works.`
+        : `Disciplined board work — ${steals} steal${steals === 1 ? "" : "s"} to point at.`,
+      `Good not great: ${picks} picks, ${steals} steal${steals === 1 ? "" : "s"}, scouts nodding.`,
+    ],
+    C: [
+      `Mixed reviews — ${reaches} reach${reaches === 1 ? "" : "es"} and ${steals} steal${steals === 1 ? "" : "s"}.`,
+      `The war room split on this ${picks}-pick class; value was hard to find.`,
+    ],
+    D: [
+      reaches && !steals
+        ? `${reaches} reach${reaches === 1 ? "" : "es"} and no steals. Scouts will remember this one.`
+        : `Below-average night — ${reaches} reach${reaches === 1 ? "" : "es"}, ${steals} steal${steals === 1 ? "" : "s"}.`,
+      `Three reaches and no steals. Scouts will remember this one.`,
+    ],
+  };
+  const pool = lines[band] || lines.D;
+  return pool[(picks + steals + reaches) % pool.length];
+}
+
+function selectFranchisePick(picks, bestId) {
+  if (!picks.length) return null;
+  const sorted = picks.slice().sort((a, b) => Number(a.overall_pick || 0) - Number(b.overall_pick || 0));
+  const roundOne = sorted.find((p) => Number(p.round) === 1 && Number(p.overall_pick) <= 32);
+  if (roundOne) return roundOne;
+  if (bestId) {
+    const best = picks.find((p) => String(p.prospect_id) === bestId);
+    if (best) return best;
+  }
+  return sorted[0];
+}
+
+function recapNumeric(val) {
+  if (val == null || val === "" || Number.isNaN(Number(val))) return null;
+  return Math.round(Number(val));
+}
+
+function recapLowConfidence(p) {
+  const point = getConfidence(p);
+  if (point != null && point < 40) return true;
+  const range = getConfidenceRange(p);
+  return Boolean(range && range[1] < 40);
+}
+
+function buildScoutNote(pick) {
+  const scouted = scoutedOvrLabel(pick);
+  const revealed = recapNumeric(revealedOvrValue(pick));
+  const conf = getConfidence(pick);
+  if (conf != null && conf < 40) {
+    return `Boom-or-bust: ${Math.round(conf)}% confidence`;
+  }
+  if (scouted && revealed != null) {
+    return `Scouted ${scouted}, landed at ${revealed}`;
+  }
+  if (scouted) return `Scouted ${scouted}`;
+  const pub = getPublicRankAtPick(pick);
+  if (pub != null && revealed != null) return `Board #${pub} · revealed ${revealed}`;
+  return null;
+}
+
+function bestValueInsight(picks) {
+  let best = null;
+  let bestD = -Infinity;
+  picks.forEach((p) => {
+    const d = pubDelta(p);
+    if (d != null && d > bestD) {
+      bestD = d;
+      best = p;
+    }
+  });
+  if (!best || bestD < 5) return null;
+  const rd = best.round != null ? `round ${best.round}` : `pick ${formatPick(best.overall_pick)}`;
+  return `Best value: ${rd} (${fmtSigned(bestD)})`;
+}
+
+function stillBoardRank(entry) {
+  const rank = entry?.projected_rank ?? entry?.final_rank ?? entry?.rank;
+  if (rank != null && rank !== "" && Number.isFinite(Number(rank))) return `Brd #${rank}`;
+  const projected = entry?.projected;
+  if (!projected || projected === "Unranked") return "";
+  const text = String(projected).trim();
+  if (!text) return "";
+  if (/^brd\b/i.test(text)) return text;
+  return `Brd ${text.startsWith("#") ? text : `#${text}`}`;
+}
+
+function stillBoardMeta(entry) {
+  const pos = entry?.position ? String(entry.position).trim() : "";
+  const projected = entry?.projected && entry.projected !== "Unranked" ? String(entry.projected).trim() : "";
+  const rank = stillBoardRank(entry);
+  return [pos, projected || rank, entry?.status].filter(Boolean).join(" · ");
+}
+
+function DlotTeamMark({ teamId, teamName, size = "md" }) {
+  const src = getTeamLogoSrc({ team_id: teamId, name: teamName });
+  const abbr = getTeamAbbreviation({ team_id: teamId, name: teamName }) || teamAbbrev(teamId, teamName) || "TM";
+  if (src) {
+    return (
+      <span className={`dlot-logo ${size}`}>
+        <img src={src} alt="" loading="lazy" />
+      </span>
+    );
+  }
+  return <span className="dlot-logo-fallback">{abbr}</span>;
+}
+
+function prefersReducedMotion() {
+  return typeof window !== "undefined"
+    && typeof window.matchMedia === "function"
+    && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+function useRecapReveal() {
+  const [step, setStep] = useState(0);
+  useEffect(() => {
+    if (prefersReducedMotion()) {
+      setStep(4);
+      return undefined;
+    }
+    const timers = [0, 180, 420, 680, 920].map((ms, i) => window.setTimeout(() => setStep(i), ms));
+    return () => timers.forEach(clearTimeout);
+  }, []);
+  return step;
+}
+
+function useCountUp(target, active) {
+  const [val, setVal] = useState(0);
+  useEffect(() => {
+    if (!active || target == null || Number.isNaN(Number(target))) {
+      setVal(target == null ? null : Number(target));
+      return undefined;
+    }
+    const end = Math.round(Number(target));
+    if (prefersReducedMotion()) {
+      setVal(end);
+      return undefined;
+    }
+    const start = performance.now();
+    const dur = 520;
+    let frame = 0;
+    const tick = (now) => {
+      const t = Math.min(1, (now - start) / dur);
+      setVal(Math.round(end * t));
+      if (t < 1) frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [target, active]);
+  return val;
+}
+
+function RecapLineupCard({ posBreakdown, needItems }) {
+  const slots = [
+    { key: "C", label: "C" },
+    { key: "LW", label: "LW" },
+    { key: "RW", label: "RW" },
+    { key: "D", label: "D" },
+    { key: "G", label: "G" },
+  ];
+  const needByPos = {};
+  needItems.forEach((n) => {
+    const cat = String(n.category || "").toUpperCase();
+    if (cat.includes("GOAL")) needByPos.G = n;
+    else if (cat.includes("DEF")) needByPos.D = n;
+    else if (cat.includes("WING")) needByPos.RW = n;
+    else needByPos.C = n;
+  });
   return (
-    <div className={`${PREFIX}-metric ${tone}`}>
-      <strong className={`${PREFIX}-tabular`}>{value}</strong>
-      <span>{label}</span>
+    <div className="wr-rink" aria-label="Class DNA lineup">
+      <div className="wr-rink__board">
+        <div className="wr-rink__zones">
+          {slots.map((slot) => {
+            const count = Number(posBreakdown[slot.key] || posBreakdown[slot.key === "RW" ? "W" : ""] || 0);
+            const need = needByPos[slot.key];
+            const tier = count >= 2 ? "is-tier-high" : count === 1 ? "is-tier-solid" : "is-tier-raw";
+            return (
+              <div key={slot.key} className={`wr-rink__cell ${tier}${count ? "" : " is-fog"}`}>
+                <strong>{count || "—"}</strong>
+                <span>{slot.label}</span>
+                {need ? (
+                  <em className={`cap-filter-pill${need.filled ? " is-active" : ""}`} title={need.detail || undefined}>
+                    {need.filled ? "Filled" : "Open"}
+                  </em>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      <p className="wr-rink__caption">Lineup DNA</p>
     </div>
   );
 }
 
-function StoryLine({ text }) {
-  const [open, setOpen] = useState(false);
+function RecapRankLadder({ rank }) {
+  if (!rank) return null;
   return (
-    <button type="button" className={`${PREFIX}-story${open ? " is-open" : ""}`} onClick={() => setOpen((o) => !o)}>
-      <i aria-hidden="true" />
-      <span>{text}</span>
-      <Icon name={open ? "up" : "down"} size={12} />
+    <div className="edraft-ondeck" aria-label={`Draft class rank ${rank} of 32`}>
+      <p className="edraft-ondeck-label">League position</p>
+      <div className="edraft-ondeck-track">
+        {Array.from({ length: 32 }, (_, i) => {
+          const n = i + 1;
+          const lit = n === rank;
+          return (
+            <span
+              key={n}
+              className={`edraft-slot${lit ? " is-user" : ""}${lit ? " is-next" : ""}`}
+              title={lit ? `${rank} of 32` : undefined}
+            >
+              <span className="edraft-slot-num">{lit ? rank : ""}</span>
+              <span className="edraft-slot-abbr">{lit ? "YOU" : ""}</span>
+            </span>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function RecapFranchiseCard({ pick, onOpen, animate }) {
+  const verdict = recapVerdict(pick);
+  const ovr = recapNumeric(revealedOvrValue(pick));
+  const pot = recapNumeric(potVal(pick));
+  const league = projectionLeagueLabel(pick);
+  const name = pick.prospect_name || getPlayerName(pick) || "";
+  const pos = pick.position || getPlayerPosition(pick) || "";
+  const pub = getPublicRankAtPick(pick);
+  const tone = verdict ? pickOvrPopTone(verdict.tone === "value" ? "value" : verdict.tone) : "cyan";
+  const onKey = (e) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      onOpen(pick);
+    }
+  };
+  return (
+    <div
+      className={`edraft-pick-spotlight tone-${tone}${animate ? " showcase-popup__panel--v2 motion-workspace-enter" : ""}`}
+      role="button"
+      tabIndex={0}
+      title={pub != null ? `Public rank #${pub}` : undefined}
+      onClick={() => onOpen(pick)}
+      onKeyDown={onKey}
+    >
+      <div className="edraft-pick-spotlight-pick">
+        <span>Pick</span>
+        <b className="edraft-tabular">{pick.overall_pick != null ? formatPick(pick.overall_pick) : "—"}</b>
+      </div>
+      <div className="edraft-pick-spotlight-main">
+        <p className="edraft-pick-spotlight-kicker">Franchise pick</p>
+        <p className="edraft-pick-spotlight-name">{name || <RecapDash />}</p>
+        <div className="edraft-pick-spotlight-meta">
+          {pos ? <span className="edraft-board-pos">{pos}</span> : null}
+          {league ? <span>{league}</span> : null}
+        </div>
+        <p className="edraft-muted">{buildScoutNote(pick) || <RecapDash />}</p>
+      </div>
+      <div className="edraft-pick-spotlight-side">
+        <span className={`edraft-haul-ovr edraft-tabular edraft-num-pop tone-${tone}`}>{ovr ?? "—"}</span>
+        {pot != null ? <span className="edraft-muted">POT {pot}</span> : null}
+        {verdict ? <PickBadge tag={verdict.text} tone={verdict.tone} className="edraft-pick-spotlight-tag" /> : null}
+      </div>
+    </div>
+  );
+}
+
+function RecapSlipRow({ pick, isBest, onOpen, animate }) {
+  const verdict = recapVerdict(pick);
+  const ovr = recapNumeric(revealedOvrValue(pick));
+  const pot = recapNumeric(potVal(pick));
+  const conf = getConfidence(pick);
+  const lowConf = recapLowConfidence(pick);
+  const name = pick.prospect_name || getPlayerName(pick) || "";
+  const pos = pick.position || getPlayerPosition(pick) || "";
+  const league = projectionLeagueLabel(pick);
+  const pub = getPublicRankAtPick(pick);
+  const tone = verdict ? verdict.tone : "expected";
+  const toneClass = verdict && verdict.tone !== "expected" ? ` tone-${verdict.tone}` : "";
+  const gap = ovr != null && pot != null ? pot - ovr : null;
+  const onKey = (e) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      onOpen(pick);
+    }
+  };
+  return (
+    <button
+      type="button"
+      className={`edraft-haul-pick ui-interactive${isBest ? " is-selected" : ""}${toneClass}${animate ? " motion-tabswap" : ""}`}
+      title={pub != null ? `Public rank #${pub}` : SCOUTED_NOTE}
+      onClick={() => onOpen(pick)}
+      onKeyDown={onKey}
+    >
+      <b className="edraft-tabular">{pick.overall_pick != null ? formatPick(pick.overall_pick) : "—"}</b>
+      <span>
+        <strong>
+          {pos ? <span className="edraft-board-pos">{pos} </span> : null}
+          {name || <RecapDash />}
+        </strong>
+        <em>{[league, buildScoutNote(pick)].filter(Boolean).join(" · ") || "—"}</em>
+        {lowConf ? <span className="cap-filter-pill is-active">Low confidence</span> : null}
+      </span>
+      <span>
+        <strong className={`edraft-num-pop tone-cyan${lowConf ? " tone-muted" : ""}`}>{ovr ?? "—"}</strong>
+        <ProjectionRange
+          low={ovr}
+          mid={ovr}
+          high={pot}
+          confidence={conf != null ? conf : 55}
+        />
+        {gap != null ? <em className="edraft-muted">+{gap} ceiling</em> : null}
+        {verdict ? <PickBadge tag={verdict.text} tone={verdict.tone} /> : null}
+        <span className="edraft-link">Open file</span>
+      </span>
     </button>
   );
 }
 
-function ValueRow({ pick, tone, onOpen }) {
+function RecapRailSpotlight({ pick, tone, isUser, onOpen }) {
   const d = pubDelta(pick);
+  const signed = fmtSigned(d);
+  const name = pick?.prospect_name || getPlayerName(pick) || "";
+  const pos = pick?.position || "";
   return (
-    <button type="button" className={`${PREFIX}-vrow`} onClick={onOpen}>
-      <span>
-        <b>{teamAbbrev(pick.team_id, pick.team_name)}</b> {formatPick(pick.overall_pick)} · {pick.prospect_name}
-      </span>
-      <span>
-        {pick.final_rank != null ? <span className={`${PREFIX}-muted`}>Brd #{pick.final_rank} </span> : null}
-        {d != null ? <span className={tone}>{fmtSigned(d)}</span> : null}
-      </span>
+    <button type="button" className={`dlot-card is-headline${isUser ? " is-user" : ""}`} onClick={() => onOpen(pick)}>
+      <DlotTeamMark teamId={pick.team_id} teamName={pick.team_name} size="lg" />
+      <div className="dlot-card-body">
+        <strong>{name || <RecapDash />}</strong>
+        <div className="dlot-card-details">
+          <span>{[pos, teamAbbrev(pick.team_id, pick.team_name)].filter(Boolean).join(" · ")}</span>
+          <RankChange rank={pick.final_rank} delta={d != null ? -d : null} />
+          <span>→ #{pick.overall_pick}</span>
+        </div>
+        {isUser ? <span className="dlot-card-you">Your pick</span> : null}
+        <StockTrajectory delta={d} direction={tone === "pos" ? "UP" : "DOWN"} />
+        {signed != null ? (
+          <span className={`dlot-chip tone-${tone === "pos" ? "up" : "down"}`}>{signed}</span>
+        ) : null}
+      </div>
     </button>
   );
 }
 
-function RecapShow({ draft, completed, userPicks, draftOrder, userTeamId }) {
-  const r = draft?.recap || {};
-  const [profilePick, setProfilePick] = useState(null);
-  const picks = safeArray(userPicks).slice().sort((a, b) => Number(a.overall_pick || 0) - Number(b.overall_pick || 0));
-
-  const teamId = picks[0]?.team_id ?? picks[0]?.team;
-  const teamName = picks[0]?.team_name;
-  const teamObj = { id: teamId, team_id: teamId, name: teamName, team_name: teamName };
-  const logo = getTeamLogoSrc(teamObj);
-  const accent = teamAccent(teamObj);
-
-  const grade = r.user_grade || draft?.user_draft_grade || buildDraftGrade(picks) || "—";
-  const summary = r.grade_summary ? clip15(r.grade_summary) : "";
-  const posBreakdown = r.user_position_breakdown || r.position_breakdown || {};
-  const steals = safeArray(r.best_steals || safeArray(completed).filter((p) => p.was_steal)).slice(0, 5);
-  const reaches = safeArray(r.biggest_reaches || safeArray(completed).filter((p) => p.was_reach)).slice(0, 5);
-  const headlines = safeArray(r.headlines).slice(0, 6);
-  const needsReport = safeArray(r.needs_report);
-  const stillOnBoard = safeArray(r.still_on_board);
-  const bestId = String(r.best_user_pick?.prospect_id ?? "");
-
-  const avgRaw = r.user_avg_value_delta != null
-    ? Number(r.user_avg_value_delta)
-    : (picks.length ? picks.reduce((s, p) => s + (pubDelta(p) || 0), 0) / picks.length : 0);
-
-  const dnaEntries = Object.entries(posBreakdown).filter(([, v]) => Number(v) > 0);
-  const dnaTotal = dnaEntries.reduce((s, [, v]) => s + Number(v || 0), 0);
-
+function RecapRailRow({ pick, tone, isUser, onOpen }) {
+  const d = pubDelta(pick);
+  const signed = fmtSigned(d);
+  const name = pick?.prospect_name || getPlayerName(pick) || "";
   return (
-    <div className={`${PREFIX}-recap`} style={{ "--rc-accent": accent }}>
-      <div className={`${PREFIX}-recap-top`}>
-        <div className={`${PREFIX}-grade`}>
-          {logo ? <img src={logo} alt={teamName || "Team"} /> : null}
-          <span className={`${PREFIX}-grade-kicker`}>Draft grade</span>
-          <strong className={`${PREFIX}-grade-letter`}>{grade}</strong>
-          <div className={`${PREFIX}-grade-meta`}>
-            {r.user_grade_score != null ? <span>{r.user_grade_score}/100</span> : null}
-            {r.user_class_rank ? <span>{r.user_class_rank}</span> : null}
-          </div>
-          {summary ? <p>{summary}</p> : null}
+    <button type="button" className={`dlot-card${isUser ? " is-user" : ""}`} onClick={() => onOpen(pick)}>
+      <DlotTeamMark teamId={pick.team_id} teamName={pick.team_name} size="sm" />
+      <div className="dlot-card-body">
+        <strong>{name || <RecapDash />}</strong>
+        <div className="dlot-card-details">
+          <RankChange rank={pick.final_rank} delta={d != null ? -d : null} />
+          <span>→ #{pick.overall_pick}</span>
+          {signed != null ? <span>{signed}</span> : null}
         </div>
-
-        <div>
-          <div className={`${PREFIX}-metrics`}>
-            <Metric label="Picks" value={r.user_pick_count ?? picks.length} />
-            <Metric label="Steals" value={r.user_steal_count ?? 0} tone="good" />
-            <Metric label="Reaches" value={r.user_reach_count ?? 0} tone="bad" />
-            <Metric label="Value adds" value={r.user_value_count ?? 0} tone="good" />
-            <Metric label="Needs filled" value={r.user_need_count ?? 0} />
-            <Metric label="Avg value" value={fmtSigned(avgRaw, 1) ?? "0.0"} tone={avgRaw >= 0 ? "good" : "bad"} />
-          </div>
-
-          <div className={`${PREFIX}-mid`}>
-            <div className={`${PREFIX}-card`}>
-              <div className={`${PREFIX}-card-head`}><h4>Class DNA</h4><span>{dnaTotal} picks</span></div>
-              {dnaTotal ? (
-                <>
-                  <div className={`${PREFIX}-dna-bar`}>
-                    {dnaEntries.map(([pos, v]) => {
-                      const w = (Number(v) / dnaTotal) * 100;
-                      return (
-                        <div
-                          key={pos}
-                          className={`${PREFIX}-dna-seg`}
-                          style={{ width: `${w}%`, background: RECAP_POS_COLORS[pos] || "#9cb2c4" }}
-                          title={`${pos}: ${v}`}
-                        >
-                          {w >= 12 ? `${pos} ${v}` : ""}
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <div className={`${PREFIX}-dna-legend`}>
-                    {dnaEntries.map(([pos, v]) => (
-                      <span key={pos}><i style={{ background: RECAP_POS_COLORS[pos] || "#9cb2c4" }} />{pos} {v}</span>
-                    ))}
-                  </div>
-                </>
-              ) : <p className={`${PREFIX}-empty`}>No positional data.</p>}
-            </div>
-
-            <div className={`${PREFIX}-card`}>
-              <div className={`${PREFIX}-card-head`}><h4>Needs report</h4><span>{needsReport.length} tracked</span></div>
-              {needsReport.length ? (
-                <ul className={`${PREFIX}-needs`}>
-                  {needsReport.slice(0, 5).map((n, i) => (
-                    <li key={i} className={n.filled ? "is-filled" : "is-open"} title={n.detail || n.category}>
-                      <Icon name={n.filled ? "check" : "minus"} size={12} />
-                      <span>{n.category}</span>
-                      <span>{n.filled ? "Addressed" : "Open"}</span>
-                    </li>
-                  ))}
-                </ul>
-              ) : <p className={`${PREFIX}-empty`}>No pressing needs — the depth chart holds.</p>}
-            </div>
-          </div>
-        </div>
+        {isUser ? <span className="dlot-card-you">Your pick</span> : null}
       </div>
+    </button>
+  );
+}
 
-      <div className={`${PREFIX}-card ${PREFIX}-recap-haul`}>
-        <div className={`${PREFIX}-card-head`}>
-          <h4>League class</h4>
-          <span>Teams across · players down</span>
-        </div>
-        <TeamHaulBoard
-          draftOrder={draftOrder}
-          completed={completed}
-          userTeamId={userTeamId}
-          selectedPick={profilePick}
-          onSelectPick={(p) => setProfilePick(enrichPickFromBoard(p, draft))}
-        />
+function RecapRailCard({ title, rows, tone, empty, userTeamId, onOpen }) {
+  const [expanded, setExpanded] = useState(false);
+  const cap = expanded ? 10 : 3;
+  const shown = rows.slice(0, cap);
+  const headline = shown[0];
+  const rest = shown.slice(1);
+  return (
+    <div className="nhlcal-card hub-office-rail__block">
+      <div className="nhlcal-card-header">
+        <p>{title}</p>
+        <span className="nhlcal-header-pill">{rows.length}</span>
       </div>
-
-      <InfoAllocationReport completed={completed} userPicks={picks} />
-
-      <div className={`${PREFIX}-card`}>
-        <div className={`${PREFIX}-card-head`}><h4>Your class</h4><span>Open a name for the full file</span></div>
-        <div className={`${PREFIX}-table`}>
-          <div className={`${PREFIX}-thead`}>
-            <span>Rd</span><span>Pick</span><span>Player</span><span>Pos</span><span>OVR</span><span>Pot</span><span>Projection</span><span>Value</span><span />
-          </div>
-          {picks.length ? picks.map((p, i) => {
-            const d = pubDelta(p);
-            const isBest = bestId && String(p.prospect_id) === bestId;
-            return (
-              <div
-                key={i}
-                className={`${PREFIX}-trow${isBest ? " is-best" : ""}`}
-                role="button"
-                tabIndex={0}
-                onClick={() => setProfilePick(enrichPickFromBoard(p, draft))}
-                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setProfilePick(enrichPickFromBoard(p, draft)); } }}
-              >
-                <span className={`${PREFIX}-tabular`}>{p.round}</span>
-                <span className={`${PREFIX}-tabular`}>{formatPick(p.overall_pick)}</span>
-                <span>{p.prospect_name}</span>
-                <span>{p.position || "—"}</span>
-                <span className={`${PREFIX}-tabular`}>{ovrVal(p)}</span>
-                <span className={`${PREFIX}-tabular`}>{potVal(p)}</span>
-                <span>{projVal(p)}</span>
-                <span className={d == null ? "" : d > 0 ? "pos" : d < 0 ? "neg" : ""}>{d == null ? "—" : fmtSigned(d)}</span>
-                <Icon name="next" size={12} />
-              </div>
-            );
-          }) : <p className={`${PREFIX}-empty`}>No selections were made.</p>}
-        </div>
+      <div className="dlot-rail">
+        {headline ? (
+          <RecapRailSpotlight
+            pick={headline}
+            tone={tone}
+            isUser={String(headline?.team_id) === String(userTeamId)}
+            onOpen={onOpen}
+          />
+        ) : null}
+        {rest.map((p, i) => (
+          <RecapRailRow
+            key={p?.pick_id || p?.overall_pick || p?.prospect_id || i}
+            pick={p}
+            tone={tone}
+            isUser={String(p?.team_id) === String(userTeamId)}
+            onOpen={onOpen}
+          />
+        ))}
+        {!shown.length ? <p className="edraft-muted">{empty}</p> : null}
       </div>
-
-      <div className={`${PREFIX}-bottom`}>
-        <div className={`${PREFIX}-card`}>
-          <div className={`${PREFIX}-card-head`}><h4>Best steals</h4></div>
-          {steals.length ? steals.map((p, i) => (
-            <ValueRow key={p?.pick_id || p?.overall_pick || p?.prospect_id || i} pick={p} tone="pos" onOpen={() => setProfilePick(enrichPickFromBoard(p, draft))} />
-          )) : <p className={`${PREFIX}-empty`}>The board stayed honest.</p>}
-        </div>
-
-        <div className={`${PREFIX}-card`}>
-          <div className={`${PREFIX}-card-head`}><h4>Biggest reaches</h4></div>
-          {reaches.length ? reaches.map((p, i) => (
-            <ValueRow key={p?.pick_id || p?.overall_pick || p?.prospect_id || i} pick={p} tone="neg" onOpen={() => setProfilePick(enrichPickFromBoard(p, draft))} />
-          )) : <p className={`${PREFIX}-empty`}>A disciplined night.</p>}
-        </div>
-
-        <div className={`${PREFIX}-card`}>
-          <div className={`${PREFIX}-card-head`}><h4>Class storylines</h4></div>
-          {headlines.length ? headlines.map((h, i) => <StoryLine key={i} text={h} />)
-            : <p className={`${PREFIX}-empty`}>A quiet draft night.</p>}
-        </div>
-
-        <div className={`${PREFIX}-card`}>
-          <div className={`${PREFIX}-card-head`}><h4>Still on the board</h4></div>
-          {stillOnBoard.length ? stillOnBoard.slice(0, 5).map((e, i) => (
-            <div key={i} className={`${PREFIX}-vrow`} style={{ cursor: "default" }}>
-              <span>{e.name}{e.position ? ` · ${e.position}` : ""}</span>
-              <span className={`${PREFIX}-muted`}>{e.projected} › {e.status}</span>
-            </div>
-          )) : <p className={`${PREFIX}-empty`}>The board cleared out.</p>}
-        </div>
-      </div>
-
-      {profilePick ? (
-        <CompletedDossier
-          pick={profilePick}
-          draft={draft}
-          onClose={() => setProfilePick(null)}
-        />
+      {rows.length > 3 ? (
+        <button type="button" className="nhlcal-advance-button-secondary" onClick={() => setExpanded((v) => !v)}>
+          {expanded ? "Show less" : "View all"} <Icon name={expanded ? "up" : "down"} size={12} />
+        </button>
       ) : null}
     </div>
   );
 }
 
-/* ------------------------------------------------------------------ */
+function RecapBoardRailCard({ rows, userTeamId }) {
+  const [expanded, setExpanded] = useState(false);
+  const cap = expanded ? 10 : 3;
+  const shown = rows.slice(0, cap);
+  return (
+    <div className="nhlcal-card hub-office-rail__block">
+      <div className="nhlcal-card-header">
+        <p>Still on the board</p>
+        <span className="nhlcal-header-pill">{rows.length}</span>
+      </div>
+      <div className="nhlcal-preview-lines">
+        {shown.length ? shown.map((entry, i) => {
+          const name = entry?.name || entry?.prospect_name || "";
+          const meta = stillBoardMeta(entry);
+          const passed = Boolean(entry?.user_passed || entry?.passed_by_user);
+          return (
+            <div key={entry?.key || entry?.prospect_id || name || i} className={passed ? "dlot-card is-user" : ""}>
+              <span>{name || <RecapDash />}</span>
+              <span className="edraft-muted">{meta || <RecapDash />}</span>
+              {passed ? <span className="dlot-card-you">You passed</span> : null}
+            </div>
+          );
+        }) : <p className="edraft-muted">The board cleared out.</p>}
+      </div>
+      {rows.length > 3 ? (
+        <button type="button" className="nhlcal-advance-button-secondary" onClick={() => setExpanded((v) => !v)}>
+          {expanded ? "Show less" : "View all"} <Icon name={expanded ? "up" : "down"} size={12} />
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function RecapShow({ draft, completed, userPicks, draftOrder, userTeamId, franchiseState, onContinue }) {
+  const r = draft?.recap || {};
+  const [profilePick, setProfilePick] = useState(null);
+  const [leagueOpen, setLeagueOpen] = useState(false);
+  const [focusedTeamId, setFocusedTeamId] = useState(null);
+  const reveal = useRecapReveal();
+  const picks = safeArray(userPicks).slice().sort((a, b) => Number(a.overall_pick || 0) - Number(b.overall_pick || 0));
+
+  const orderSlot = safeArray(draftOrder).find((s) => String(s.team_id) === String(userTeamId));
+  const teamId = picks[0]?.team_id ?? picks[0]?.team ?? userTeamId;
+  const teamName = picks[0]?.team_name || orderSlot?.team_name || "";
+
+  const grade = r.user_grade || draft?.user_draft_grade || buildDraftGrade(picks) || "—";
+  const capTone = recapCapTone(grade);
+  const posBreakdown = r.user_position_breakdown || r.position_breakdown || {};
+  const steals = Array.isArray(r.best_steals) ? r.best_steals : safeArray(completed).filter((p) => p.was_steal);
+  const reaches = Array.isArray(r.biggest_reaches) ? r.biggest_reaches : safeArray(completed).filter((p) => p.was_reach);
+  const headlines = safeArray(r.headlines);
+  const extraStory = headlines.find((line) => line && !isStealOrReachLine(line)) || "";
+  const needItems = safeArray(r.needs_report).filter((n) => n?.category);
+  const stillOnBoard = safeArray(r.still_on_board).filter((entry) => {
+    const name = entry?.name || entry?.prospect_name;
+    return Boolean(name) || Boolean(stillBoardRank(entry));
+  });
+  const bestId = String(r.best_user_pick?.prospect_id ?? "");
+  const leagueTeams = safeArray(draftOrder);
+  const valueInsight = bestValueInsight(picks);
+
+  const avgRaw = r.user_avg_value_delta != null
+    ? Number(r.user_avg_value_delta)
+    : (picks.length ? picks.reduce((s, p) => s + (pubDelta(p) || 0), 0) / picks.length : 0);
+  const avgText = Number.isFinite(avgRaw) ? (fmtSigned(avgRaw, 1) ?? "0.0") : null;
+  const gradeScoreRaw = r.user_grade_score != null && r.user_grade_score !== "" ? Number(r.user_grade_score) : null;
+  const countedScore = useCountUp(gradeScoreRaw, reveal >= 1);
+  const classRank = parseLeagueRank(r.user_class_rank);
+
+  const franchisePick = selectFranchisePick(picks, bestId);
+  const franchiseKey = franchisePick
+    ? String(franchisePick.pick_id || franchisePick.overall_pick || franchisePick.prospect_id)
+    : "";
+  const compactPicks = franchisePick
+    ? picks.filter((p) => String(p.pick_id || p.overall_pick || p.prospect_id) !== franchiseKey)
+    : picks;
+
+  const openPick = (p) => setProfilePick(enrichPickFromBoard(p, draft));
+  const rightsCount = picks.filter((p) => p?.prospect_file_complete).length;
+  const footerStatus = rightsCount > 0
+    ? `${rightsCount} pick${rightsCount === 1 ? "" : "s"} signed to rights`
+    : `${r.user_pick_count ?? picks.length} pick${(r.user_pick_count ?? picks.length) === 1 ? "" : "s"} on the card`;
+
+  const haulFilter = focusedTeamId
+    ? safeArray(draftOrder).filter((s) => String(s.team_id) === String(focusedTeamId))
+    : draftOrder;
+
+  return (
+    <div className="game-screen register-ops cap-office-edraft edraft-scroll-surface">
+      <div className="nhlcal-main">
+        <div className={`cap-report-primary-panel${reveal >= 3 ? " motion-department-enter" : ""}`}>
+          <section className={`cap-report-league-summary fcn-rail fcn-rail--gold${reveal >= 0 ? " motion-department-enter" : ""}`} aria-label="Draft grade">
+            <DlotTeamMark teamId={teamId} teamName={teamName} size="xl" />
+            <div className="cap-report-cap-display fcn-rail motion-select-confirm">
+              <strong className={`cap-num-pop tone-${capTone}`}>{grade}</strong>
+              <div>
+                {gradeScoreRaw != null ? (
+                  <span className={`cap-report-change-badge${avgRaw < 0 ? " is-danger" : avgRaw > 0 ? " is-positive" : " is-neutral"}`}>
+                    {countedScore != null ? `${countedScore}/100` : "—/100"}
+                  </span>
+                ) : null}
+              </div>
+            </div>
+            <RecapRankLadder rank={classRank} />
+            <p className="cap-report-reason">{buildGmHeadline(r, grade)}</p>
+            <div className="cap-report-space-block">
+              <span>Avg value</span>
+              <strong className={avgRaw < 0 ? "is-negative" : undefined}>{avgText || "—"}</strong>
+              <p>
+                <Icon name={avgRaw >= 0 ? "plus" : "minus"} size={11} />
+                {avgRaw >= 0 ? " Board beat" : " Board missed"}
+              </p>
+            </div>
+            <div className="cap-report-change-strip">
+              <div>
+                <span>Picks</span>
+                <strong>{r.user_pick_count ?? picks.length}</strong>
+              </div>
+              <div>
+                <span>Steals</span>
+                <strong>{r.user_steal_count ?? 0}</strong>
+              </div>
+              <div>
+                <span>Reaches</span>
+                <strong>{r.user_reach_count ?? 0}</strong>
+              </div>
+            </div>
+            <RecapLineupCard posBreakdown={posBreakdown} needItems={needItems} />
+
+            <div className="edraft-stage">
+              <div className="edraft-pane-head">
+                <h3>Your class</h3>
+                <em title={SCOUTED_NOTE}>{picks.length} picks</em>
+              </div>
+              <div className="edraft-scroll">
+                {picks.length ? (
+                  <>
+                    {franchisePick ? (
+                      <RecapFranchiseCard pick={franchisePick} onOpen={openPick} animate={reveal >= 2} />
+                    ) : null}
+                    {compactPicks.map((p, i) => (
+                      <RecapSlipRow
+                        key={p.pick_id || p.overall_pick || p.prospect_id || i}
+                        pick={p}
+                        isBest={bestId && String(p.prospect_id) === bestId}
+                        onOpen={openPick}
+                        animate={reveal >= 2 && i < 7}
+                      />
+                    ))}
+                  </>
+                ) : (
+                  <div className="nhlcal-empty-state">
+                    <h3>No picks on the card</h3>
+                    <p>The war room stayed quiet — you did not make a selection this draft.</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          </section>
+
+          <aside className={`cap-report-club-summary hub-office-rail${reveal >= 4 ? " motion-inspector-swap" : ""}`} aria-label="League recap">
+            {valueInsight ? <p className="hub-office-rail__p">{valueInsight}</p> : null}
+            <RecapRailCard title="Best steals" rows={steals} tone="pos" empty="The board stayed honest." userTeamId={userTeamId} onOpen={openPick} />
+            <RecapRailCard title="Biggest reaches" rows={reaches} tone="neg" empty="A disciplined night." userTeamId={userTeamId} onOpen={openPick} />
+            <RecapBoardRailCard rows={stillOnBoard} userTeamId={userTeamId} />
+            {extraStory ? <p className="edraft-report">{extraStory}</p> : null}
+          </aside>
+        </div>
+
+        {leagueTeams.length ? (
+          <section className="edraft-ondeck">
+            <button
+              type="button"
+              className="nhlcal-week-header ui-interactive"
+              aria-expanded={leagueOpen}
+              onClick={() => setLeagueOpen((v) => !v)}
+            >
+              <strong>League draft board</strong>
+              <span>{leagueTeams.length} teams · {leagueOpen ? "Collapse" : "Expand"}</span>
+              <Icon name={leagueOpen ? "down" : "next"} size={12} />
+            </button>
+            <div className="edraft-ondeck-track" role="list" aria-label="All teams">
+              {leagueTeams.map((slot) => {
+                const isUser = String(slot.team_id) === String(userTeamId);
+                const focused = String(slot.team_id) === String(focusedTeamId);
+                return (
+                  <button
+                    key={slot.team_id}
+                    type="button"
+                    role="listitem"
+                    className={`edraft-slot ui-interactive${isUser ? " is-user" : ""}${focused ? " is-next" : ""}`}
+                    onClick={() => {
+                      setLeagueOpen(true);
+                      setFocusedTeamId(slot.team_id);
+                    }}
+                  >
+                    <DlotTeamMark teamId={slot.team_id} teamName={slot.team_name} size="xs" />
+                    <span className="edraft-slot-abbr">{teamAbbrev(slot.team_id, slot.team_name)}</span>
+                  </button>
+                );
+              })}
+            </div>
+            {leagueOpen ? (
+              <div className="edraft-stage">
+                <TeamHaulBoard
+                  draftOrder={haulFilter}
+                  completed={completed}
+                  userTeamId={userTeamId}
+                  selectedPick={profilePick}
+                  onSelectPick={openPick}
+                  floor
+                />
+              </div>
+            ) : null}
+          </section>
+        ) : null}
+      </div>
+
+      <footer className="nhlcal-week-header">
+        <span className="edraft-muted">{footerStatus}</span>
+        <button type="button" className="nhlcal-advance-button" onClick={onContinue}>
+          <Icon name="next" size={12} /> Continue offseason
+        </button>
+      </footer>
+
+      {profilePick ? (
+        <CompletedDossier pick={profilePick} draft={draft} onClose={() => setProfilePick(null)} />
+      ) : null}
+    </div>
+  );
+}
 /* Root                                                                */
 /* ------------------------------------------------------------------ */
 
@@ -5423,22 +5686,15 @@ export default function EntryDraftMenu({ franchiseState = {}, eventData = {}, on
       ) : null}
 
       {stage === "recap" ? (
-        <>
-          <RecapShow
-            draft={draft}
-            completed={completed}
-            userPicks={userPicks}
-            draftOrder={draftOrder}
-            userTeamId={uid}
-          />
-          <div className={`${PREFIX}-dock ${PREFIX}-dock--root`}>
-            <div className={`${PREFIX}-dock-actions`}>
-              <button type="button" className={`nhlcal-advance-button`} onClick={onContinue}>
-                Continue offseason
-              </button>
-            </div>
-          </div>
-        </>
+        <RecapShow
+          draft={draft}
+          completed={completed}
+          userPicks={userPicks}
+          draftOrder={draftOrder}
+          userTeamId={uid}
+          franchiseState={franchiseState}
+          onContinue={onContinue}
+        />
       ) : null}
 
       {reportOpen && selectedAvailable ? (
