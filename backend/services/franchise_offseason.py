@@ -1054,6 +1054,7 @@ def complete_playoffs_from_live_result(session: FranchiseSession, live: Dict[str
     if isinstance(getattr(session, "playoff_live", None), dict):
         session.playoff_live["completed"] = True
         session.playoff_live["champion_id"] = champion
+    _legacy_stage(session, "cup")
 
     _enqueue_offseason_popup(session, "awards", "Awards Night", "Season hardware awaits")
     invalidate_session_payload_caches(session, "post_cup")
@@ -1209,7 +1210,6 @@ def complete_playoffs(session: FranchiseSession) -> Dict[str, Any]:
     session.notifications.append(f"Playoffs complete. Stanley Cup: {ch_disp}")
     session.timeline.append(f"POSTSEASON: Champion {ch_disp}")
     _playoff_lifecycle_log(session, "stanley_cup_winner", champion=session.champion_id)
-    _legacy_stage(session, "cup")
 
     payload_po = dict(getattr(session, "playoff_payload", None) or {})
     if playoff_result is not None:
@@ -1234,6 +1234,8 @@ def complete_playoffs(session: FranchiseSession) -> Dict[str, Any]:
         if conf:
             payload_po["conference_champions"] = list(conf.get("winners") or conf.get("full_results") or [])
     session.playoff_payload = payload_po
+    # After the finished bracket is in the payload; earlier it still held round one.
+    _legacy_stage(session, "cup")
     session.next_important_event = "awards"
     _enqueue_offseason_popup(session, "awards", "Awards Night", "Season hardware awaits")
     invalidate_session_payload_caches(session, "post_cup")

@@ -864,6 +864,7 @@ def _simulate_one_game(
                 "ot_periods": ot_periods,
                 "winner_id": winner_id,
                 "playoff_day": day,
+                "gid": po_gid,
             }
             entries_by_gid[po_gid] = entry
             try:

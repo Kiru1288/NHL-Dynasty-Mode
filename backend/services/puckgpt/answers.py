@@ -742,6 +742,14 @@ def champions(view: LiveView, slots: Dict[str, Any], ctx: Dict[str, Any]) -> Ans
 def awards(view: LiveView, slots: Dict[str, Any], ctx: Dict[str, Any]) -> Answer:
     published = int(getattr(view.session, "awards_published_through", 0) or 0)
     doc = archive(view.session)
+    try:
+        from services.legacy_hall import ensure_legacy
+
+        # A finished season's ceremony has happened even if the save predates the publish marker.
+        done = [int(k) for k, s in (ensure_legacy(view.session).get("seasons") or {}).items() if s.get("complete")]
+        published = max([published] + done)
+    except Exception:
+        pass
     rows = []
     for y, s in sorted((doc.get("seasons") or {}).items(), key=lambda kv: -int(kv[0])):
         if int(y) > published:

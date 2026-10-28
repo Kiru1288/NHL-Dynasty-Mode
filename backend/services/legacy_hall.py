@@ -36,7 +36,7 @@ log = logging.getLogger(__name__)
 
 LEGACY_VERSION = 1
 # Bump when a derived archive's mapping changes; ensure_legacy then runs repair_legacy once.
-LEGACY_SCHEMA = 2
+LEGACY_SCHEMA = 3
 
 # Known club colours (primary, secondary, accent, neutral). Colours only, no marks:
 # crests are built in the studio from original primitives.
@@ -196,9 +196,43 @@ def repair_legacy(session: Any, lg: Optional[Dict[str, Any]] = None) -> Dict[str
     lg["trades"] = {}
     _archive_trades(session, lg)
     redrafted = []
+    names = {}
+    for pid, pr in lg["players"].items():
+        if pr.get("name"):
+            names.setdefault(str(pr["name"]), pid)
     for k, row in lg["seasons"].items():
-        if row.get("source") != "simulated":
+        if row.get("source") == "backfill":
+            # Backfilled seasons kept award winners by name only and never credited the Cup.
+            for a in row.get("awards") or []:
+                pid = a.get("player_id") or names.get(str(a.get("player_name") or ""))
+                pr = lg["players"].get(pid or "")
+                if pr is None:
+                    continue
+                a["player_id"] = pid
+                if not any(x.get("season") == int(k) and x.get("award") == a.get("award") for x in pr.get("awards") or []):
+                    pr.setdefault("awards", []).append({"season": int(k), "award": a.get("award"), "place": 1})
+            _credit_championships(lg, int(k), row.get("champion_id"))
+            for h in list(getattr(session, "season_history", None) or []):
+                if not isinstance(h, dict) or _i(h.get("year")) != int(k):
+                    continue
+                for r in h.get("retirements") or []:
+                    pid = str((r or {}).get("player_id") or "")
+                    if not pid:
+                        continue
+                    pr = lg["players"].setdefault(pid, _blank_player(pid))
+                    pr["name"] = pr.get("name") or r.get("name")
+                    pr["position"] = pr.get("position") or r.get("position")
+                    if pr.get("retired_season") is None:
+                        pr["retired_season"] = int(k)
+                        pr["retirement"] = {"type": r.get("retirement_type"), "final_team": r.get("final_team"),
+                                            "age": r.get("age"), "overall": r.get("overall")}
+        elif row.get("source") != "simulated":
             continue
+        series = row.get("playoff_series") or []
+        if series and not any(x.get("winner_id") for x in series):
+            # Archived before the playoffs were played: no results, and the finalist was guessed from round one.
+            row["playoff_series"], row["finalist_id"], row["playoff_teams"] = [], None, []
+            row.setdefault("coverage", {})["playoffs"] = False
         picks = _draft_class(session, int(k))
         if picks and any(p.get("draft_year") for p in picks):
             row["draft"] = picks
@@ -428,6 +462,9 @@ def _stage_cup(session: Any, lg: Dict[str, Any], row: Dict[str, Any], sy: int) -
             f = final[0]
             ids = [str(f.get("team_high_id") or ""), str(f.get("team_low_id") or "")]
             finalist = next((t for t in ids if t and t != champ), None)
+    if not finalist:
+        fids = [str(x) for x in ((getattr(session, "playoff_payload", None) or {}).get("finalist_ids") or []) if x]
+        finalist = next((t for t in fids if t != champ), None)
     row["finalist_id"] = finalist
     row["playoff_series"] = series
     playoff_teams = sorted({t for s in series for t in (str(s.get("team_high_id") or ""), str(s.get("team_low_id") or "")) if t})
@@ -496,22 +533,55 @@ def _stage_rollover(session: Any, lg: Dict[str, Any], row: Dict[str, Any], sy: i
 
 
 def _playoff_series(session: Any) -> List[Dict[str, Any]]:
-    src: List[Any] = []
+    """The finished bracket. The live state and the payload can each hold a stale round-one
+    copy, so take whichever source has the most games decided."""
+    best: List[Any] = []
     for holder in (getattr(session, "playoff_live", None), getattr(session, "playoff_payload", None)):
-        if isinstance(holder, dict):
-            src = list(holder.get("series") or holder.get("series_list") or [])
-            if src:
-                break
-    out = []
-    for s in src:
-        if not isinstance(s, dict):
+        if not isinstance(holder, dict):
             continue
+        for key in ("series", "series_list"):
+            src = [s for s in list(holder.get(key) or []) if isinstance(s, dict)]
+            played = sum(_i(s.get("wins_high")) + _i(s.get("wins_low")) for s in src)
+            if played > sum(_i(s.get("wins_high")) + _i(s.get("wins_low")) for s in best):
+                best = src
+    book = ((getattr(session, "box_score_book", None) or {}).get("seasons") or {})
+    games_by_id: Dict[str, Any] = {}
+    for bucket in book.values():
+        if isinstance(bucket, dict) and isinstance(bucket.get("games"), dict):
+            games_by_id.update(bucket["games"])
+    out = []
+    for s in best:
         hi, lo = str(s.get("team_high_id") or ""), str(s.get("team_low_id") or "")
         if not hi or not lo:
             continue
+        wh, wl = _i(s.get("wins_high")), _i(s.get("wins_low"))
+        winner = str(s.get("winner_id") or "") or (hi if wh >= 4 and wh > wl else lo if wl >= 4 and wl > wh else "")
+        if not winner:
+            continue
+        games = []
+        for g in list(s.get("game_log") or []):
+            if not isinstance(g, dict):
+                continue
+            row = {"game": _i(g.get("game")), "home_id": str(g.get("home_id") or ""), "away_id": str(g.get("away_id") or ""),
+                   "home_score": _i(g.get("home_score")), "away_score": _i(g.get("away_score")),
+                   "ot_periods": _i(g.get("ot_periods")), "winner_id": str(g.get("winner_id") or "")}
+            box = games_by_id.get(str(g.get("gid") or ""))
+            if isinstance(box, dict):
+                # goal rows: [period, clock, team_id, scorer_id, assists, strength, ...]; the book can
+                # hold a game's list twice, so keep each side's first goals up to its final score.
+                left = {row["home_id"]: row["home_score"], row["away_id"]: row["away_score"]}
+                goals = []
+                for x in box.get("goals") or []:
+                    if isinstance(x, (list, tuple)) and len(x) > 3 and x[3] and left.get(str(x[2]), 0) > 0:
+                        left[str(x[2])] -= 1
+                        goals.append([str(x[2]), str(x[3]), _i(x[0])])
+                row["goals"] = goals
+                row["gwg"] = str(box.get("gwg") or "") or None
+            games.append(row)
+        games.sort(key=lambda r: r["game"])
         out.append({"round_index": _i(s.get("round_index")) or 1, "team_high_id": hi, "team_low_id": lo,
-                    "wins_high": _i(s.get("wins_high")), "wins_low": _i(s.get("wins_low")),
-                    "winner_id": str(s.get("winner_id") or "") or None, "conference": s.get("conference")})
+                    "wins_high": wh, "wins_low": wl, "winner_id": winner, "conference": s.get("conference"),
+                    "games": games})
     return out
 
 
@@ -623,6 +693,7 @@ def _archive_player_lines(session: Any, lg: Dict[str, Any], sy: int, scope: str 
     else:
         pss = getattr(session, "player_season_stats", None) or {}
     n = 0
+    idx = _player_index(session)
     for pid, r in pss.items():
         if not isinstance(r, dict) or _i(r.get("gp")) <= 0:
             continue
@@ -640,6 +711,20 @@ def _archive_player_lines(session: Any, lg: Dict[str, Any], sy: int, scope: str 
         pr = lg["players"].setdefault(pid, _blank_player(pid))
         pr["name"] = r.get("name") or pr.get("name")
         pr["position"] = pos or pr.get("position")
+        p = idx.get(pid)
+        if p is not None:
+            # Rating and age at season end, so careers can show rises and falls later.
+            try:
+                from services.puckgpt.data import p_ovr
+                ovr = p_ovr(p) or None
+            except Exception:
+                ovr = _rating(p, "overall", "ovr", "overall_rating")
+            age = getattr(getattr(p, "identity", None), "age", None) or getattr(p, "age", None)
+            for line in lines:
+                if ovr is not None:
+                    line["ovr"] = round(float(ovr), 1)
+                if age:
+                    line["age"] = _i(age)
         pr["seasons"] = [s for s in pr["seasons"] if not (
             s.get("season") == sy and s.get("source") == "simulated" and (s.get("scope") or "regular") == scope
         )]
@@ -831,7 +916,8 @@ def _archive_retirements(session: Any, lg: Dict[str, Any], sy: int) -> None:
         pr["position"] = pr.get("position") or r.get("position")
         if pr.get("retired_season") is None:
             pr["retired_season"] = sy
-            pr["retirement"] = {"type": r.get("retirement_type"), "final_team": r.get("final_team"), "age": r.get("age")}
+            pr["retirement"] = {"type": r.get("retirement_type"), "final_team": r.get("final_team"), "age": r.get("age"),
+                                "overall": r.get("overall")}
             _record_event(lg, "retirement", sy, (pid,), player_ids=[pid], team_ids=[str(r.get("team_id") or "")],
                           payload={"name": pr["name"], "final_team": r.get("final_team")})
         _evaluate_hof(lg, pid, sy)

@@ -537,8 +537,10 @@ def season_record(view: LiveView, slots: Dict[str, Any], ctx: Dict[str, Any]) ->
                 if slots.get("position") and not _pos_ok({"pos": str(ln.get("pos") or ""), "shoots": ""}, slots["position"]):
                     continue
                 best.append((int(ln.get(stat) or 0), ln.get("name"), y))
+    # In the offseason the live ledger is the season just archived, not a new one.
+    live = str(getattr(view.session, "season_phase", "") or "") != "offseason"
     for pid, (t, lv) in view.where.items():
-        if lv == "NHL":
+        if lv == "NHL" and live:
             r = view.row(pid)
             if slots.get("position") and not _pos_ok(r, slots["position"]):
                 continue

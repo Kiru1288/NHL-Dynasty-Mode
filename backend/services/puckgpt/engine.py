@@ -108,8 +108,23 @@ def ask(session: Any, query: str) -> Dict[str, Any]:
                 "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1)}
 
     it = interpret(q, view.world, ctx)
-    from . import answers3
+    from . import answers3, history
 
+    past = history.match(q)
+    if past:
+        try:
+            out = history.run(past, view, q, team=str((it.slots.get("teams") or [""])[0] or ""))
+        except Exception:
+            log.exception("puckgpt history %s failed", past.__name__)
+            out = {"answer": "That question hit a snag reading the save's history.", "analysis": ["Try rephrasing, or ask something narrower."]}
+        it.intent, it.confidence, it.band = f"history:{past.__name__}", 0.9, "high"
+        it.rewritten = " ".join(q.split())
+        focus = out.get("focus_ids") or []
+        if focus:
+            ctx["players"] = focus[:4]
+            ctx["history"] = ([p for p in ctx.get("history") or [] if p != focus[0]] + focus[:1])[-20:]
+        ctx["intent"] = it.intent
+        return _finish(out, it, q, t0)
     hit = answers3.match(q)
     if hit:
         action, arg = hit

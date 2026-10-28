@@ -229,7 +229,7 @@ def detail(view: LiveView, raw: str, it: Any, conv: Dict[str, Any]) -> Optional[
 
 def caveats(raw: str, intent: str) -> List[str]:
     """Parts of the question that the answer could not honour."""
-    if intent.startswith("teamq") or intent in ("last_n_games",):
+    if intent.startswith(("teamq", "history:")) or intent in ("last_n_games",):
         return []
     out = []
     for pattern, what in CAVEATS:

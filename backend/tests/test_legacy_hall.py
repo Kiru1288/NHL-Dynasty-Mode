@@ -166,3 +166,34 @@ def test_event_headlines_keep_the_name_of_their_time():
     heads = [e["headline"] for e in L.timeline(s, team_id="A")["events"]]
     assert any(h.startswith("Toronto Maple Leafs win the 2026-27") for h in heads)
     assert any(h.startswith("Toronto Lynx unveil") for h in heads)
+
+
+def test_cup_stage_keeps_the_finished_bracket_with_games():
+    s = _session()
+    # playoff_live still holds round one as drawn; the payload has the finished series and its games.
+    s.playoff_live = {"series": [{"round_index": 1, "team_high_id": "A", "team_low_id": "B", "wins_high": 0, "wins_low": 0}]}
+    games = [{"game": i, "home_id": "A", "away_id": "B", "home_score": 2, "away_score": 1 if i != 2 else 3,
+              "ot_periods": 2 if i == 7 else 0, "winner_id": "B" if i == 2 else "A", "gid": f"g{i}"} for i in range(1, 6)]
+    s.playoff_payload = {"series_list": [{"round_index": 1, "team_high_id": "A", "team_low_id": "B", "wins_high": 4, "wins_low": 1, "game_log": games}]}
+    # the box book can hold a game's goal list twice
+    goal = [0, "", "A", "p1", [], "EV", 0]
+    s.box_score_book = {"seasons": {"2026": {"games": {f"g{i}": {"goals": [goal, goal, goal], "gwg": "p1"} for i in range(1, 6)}}}}
+    row = L.archive_legacy_season(s, 2026)
+    ser = row["playoff_series"][0]
+    assert ser["winner_id"] == "A" and row["finalist_id"] == "B"
+    assert len(ser["games"]) == 5 and all(len(g["goals"]) == 2 for g in ser["games"] if g["winner_id"] == "A")
+
+
+def test_repair_backfilled_season_credits_awards_cups_and_retirements():
+    s = _session()
+    s.season_history = [
+        {"season_year": 2025, "champion_id": "A", "teams": {"A": {"w": 40, "l": 30, "otl": 12, "pts": 92}},
+         "awards": [{"name": "Hart Memorial Trophy", "winner_name": "Ace One"}]},
+        {"year": 2025, "retirements": [{"player_id": "old1", "name": "Old Timer", "age": 31, "overall": 88, "position": "D"}]},
+    ]
+    s.player_season_archive = {"2025": {"p1": {"name": "Ace One", "position": "C", "team_id": "A", "gp": 80, "pts": 70}}}
+    lg = L.ensure_legacy(s)
+    assert lg["seasons"]["2025"]["awards"][0]["player_id"] == "p1"
+    assert lg["players"]["p1"]["championships"] == [2025]
+    assert any(a["award"] == "Hart Memorial Trophy" for a in lg["players"]["p1"]["awards"])
+    assert lg["players"]["old1"]["retired_season"] == 2025 and lg["players"]["old1"]["retirement"]["overall"] == 88
