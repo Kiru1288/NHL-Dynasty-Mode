@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import logging
 import math
+import contextlib
+import contextvars
 import hashlib
 import random
 from typing import Any, Dict, List, Optional, Tuple
@@ -1255,8 +1257,53 @@ def _apply_contract_type_truth(c: Dict[str, Any]) -> None:
             c["contract_type"] = relabel
 
 
+_NORMALIZE_MEMO: "contextvars.ContextVar[Optional[Dict[int, Tuple[Any, Dict[str, Any]]]]]" = contextvars.ContextVar(
+    "contract_normalize_memo", default=None
+)
+
+
+@contextlib.contextmanager
+def contract_normalize_memo():
+    """Reuse normalized contracts inside a read-only pass (payload serialization).
+
+    Every accessor below re-normalizes the raw contract, and one serialized player row
+    calls a dozen of them: the roster browser spent over half its build time redoing
+    the same ~4,700 contracts. Only for code that does not change contracts meanwhile.
+    """
+    if _NORMALIZE_MEMO.get() is not None:
+        yield
+        return
+    token = _NORMALIZE_MEMO.set({})
+    try:
+        yield
+    finally:
+        _NORMALIZE_MEMO.reset(token)
+
+
+def _copy_normalized(c: Dict[str, Any]) -> Dict[str, Any]:
+    # Callers may edit the dict they get back; nested lists/dicts are copied one level down.
+    return {k: (list(v) if isinstance(v, list) else dict(v) if isinstance(v, dict) else v) for k, v in c.items()}
+
+
 def normalize_contract_payload(player_or_contract: Any) -> Dict[str, Any]:
     """Canonical read path for dict contracts and _GeneratedContract objects."""
+    if player_or_contract is None:
+        return {}
+    memo = _NORMALIZE_MEMO.get()
+    if memo is not None:
+        raw = _get(player_or_contract, "contract", None)
+        if raw is None:
+            raw = player_or_contract
+        hit = memo.get(id(raw))
+        if hit is not None and hit[0] is raw:
+            return _copy_normalized(hit[1])
+        out = _normalize_contract_payload_uncached(player_or_contract)
+        memo[id(raw)] = (raw, out)
+        return _copy_normalized(out)
+    return _normalize_contract_payload_uncached(player_or_contract)
+
+
+def _normalize_contract_payload_uncached(player_or_contract: Any) -> Dict[str, Any]:
     if player_or_contract is None:
         return {}
     if _get(player_or_contract, "contract", None) is not None:

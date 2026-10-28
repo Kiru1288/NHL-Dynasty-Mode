@@ -4,6 +4,7 @@ import './styles/game.css';
 
 import { applyFluidUiScale } from './utils/fluidUiScale';
 import { applyGraphicsQualityClass } from './utils/graphicsQuality';
+import { installScreenScopes } from './styles/screenScopes';
 import App from './App';
 import reportWebVitals from './reportWebVitals';
 
@@ -11,6 +12,7 @@ import reportWebVitals from './reportWebVitals';
 document.documentElement.classList.add("cartoon-ui");
 applyFluidUiScale();
 applyGraphicsQualityClass();
+installScreenScopes();
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(

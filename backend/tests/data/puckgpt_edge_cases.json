@@ -856,6 +856,90 @@
      ]
     }
    ]
+  },
+  {
+   "name": "Plain team questions",
+   "prime": [],
+   "cases": [
+    {
+     "q": "what's our record",
+     "expect": [
+      "teamq:record"
+     ]
+    },
+    {
+     "q": "whats the oilers record",
+     "expect": [
+      "teamq:record"
+     ]
+    },
+    {
+     "q": "what is the leafs record at home",
+     "expect": [
+      "teamq:split"
+     ]
+    },
+    {
+     "q": "what's our road record",
+     "expect": [
+      "teamq:split"
+     ]
+    },
+    {
+     "q": "what's our goal differential",
+     "expect": [
+      "teamq:goal_diff"
+     ]
+    },
+    {
+     "q": "how much cap space do we have",
+     "expect": [
+      "teamq:cap"
+     ]
+    },
+    {
+     "q": "how did we do last night",
+     "expect": [
+      "teamq:last_game"
+     ]
+    },
+    {
+     "q": "who scored last game",
+     "expect": [
+      "teamq:last_game"
+     ]
+    },
+    {
+     "q": "are we making the playoffs",
+     "expect": [
+      "teamq:playoffs"
+     ]
+    },
+    {
+     "q": "how are we doing lately",
+     "expect": [
+      "teamq:form"
+     ]
+    },
+    {
+     "q": "should I sign anyone",
+     "expect": [
+      "teamq:sign"
+     ]
+    },
+    {
+     "q": "who is our top scorer",
+     "expect": [
+      "rank_metric"
+     ]
+    },
+    {
+     "q": "who leads rookies in points",
+     "expect": [
+      "rank_metric"
+     ]
+    }
+   ]
   }
  ]
 }

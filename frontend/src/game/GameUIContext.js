@@ -1036,7 +1036,13 @@ export function GameUIProvider({ children }) {
         if (!getFranchiseSessionId()) {
           return;
         }
-        job = hydrateFranchiseHeavyState({ includeRosterBrowser: true });
+        // Roster browser only: the draft board (~6 MB, ~5 s to build) loads when the
+        // Draft Class screen opens, not before the hub can appear.
+        job = hydrateFranchiseHeavyState({
+          includeRosterBrowser: true,
+          includeDraftClassRankings: false,
+          includeDraftClassHud: false,
+        });
       }
 
       if (!job) {

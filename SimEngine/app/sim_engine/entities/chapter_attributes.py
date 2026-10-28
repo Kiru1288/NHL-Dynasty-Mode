@@ -702,6 +702,14 @@ def sync_legacy_ratings_from_profile(player: Any, *, overwrite: bool = True) -> 
     ratings = getattr(player, "ratings", None)
     if not isinstance(ratings, dict):
         return projected
+    # Potential is rated directly (ratings txt, draft, growth), not built from hidden
+    # parts: averaging ceiling with bust/breakout odds dragged every rated ceiling down.
+    chapter_pot = (profile.get("chapters") or {}).get("potential")
+    try:
+        if chapter_pot is not None and float(chapter_pot) > 0:
+            projected["dev_potential"] = float(_clamp_rating(float(chapter_pot)))
+    except (TypeError, ValueError):
+        pass
     for key, val in projected.items():
         if key not in ATTRIBUTE_KEYS:
             continue

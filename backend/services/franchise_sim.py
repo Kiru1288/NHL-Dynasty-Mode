@@ -26686,9 +26686,10 @@ def build_state_payload_safe(session: FranchiseSession, *, include_heavy: bool =
 
     with span("state.build_safe", heavy=bool(include_heavy)):
         try:
-            from services.prospect_potential_boost import boost_rights_prospect_potential
+            from services.prospect_potential_boost import boost_rights_prospect_potential, repair_rated_potential
 
-            if boost_rights_prospect_potential(session):
+            fixed = repair_rated_potential(session)
+            if boost_rights_prospect_potential(session) or fixed:
                 invalidate_session_payload_caches(session, reason="prospect_potential")
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
@@ -27338,7 +27339,10 @@ def get_cached_roster_browser(session: FranchiseSession, sim: Any, user_team_id:
         cached = getattr(session, "_cached_roster_browser_payload", None)
         if isinstance(cached, dict) and cached:
             return cached
-        payload = _build_roster_browser(sim, user_team_id, franchise_session=session)
+        from services.contract_economy import contract_normalize_memo
+
+        with contract_normalize_memo():
+            payload = _build_roster_browser(sim, user_team_id, franchise_session=session)
         session._cached_roster_browser_payload = payload
         return payload
 

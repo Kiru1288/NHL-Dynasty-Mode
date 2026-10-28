@@ -58,3 +58,39 @@ def boost_rights_prospect_potential(session: Any) -> int:
         except Exception:
             continue
     return n
+
+
+_REPAIR_FLAG = "_pot_chapter_repair_v1"
+
+
+def repair_rated_potential(session: Any) -> int:
+    """One-time fix for saves where a ratings-txt player's potential was rebuilt from hidden parts.
+
+    The legacy sync averaged ceiling with bust/breakout odds into ``dev_potential``, so
+    AHL kids and fringe players showed ceilings several points below the ratings file
+    while their potential chapter still held the rated value. Lift them back to it.
+    """
+    league = getattr(getattr(session, "sim", None), "league", None)
+    if league is None:
+        return 0
+    try:
+        from app.sim_engine.progression.potential import write_player_potential99
+    except Exception:
+        return 0
+    n = 0
+    for team in list(getattr(league, "teams", None) or []):
+        for attr in ("roster", "ahl_roster", "echl_roster", "prospect_pool", "injured_reserve"):
+            for p in list(getattr(team, attr, None) or []):
+                if getattr(p, _REPAIR_FLAG, False) or not getattr(p, "_dynasty_entry_key", None):
+                    continue
+                try:
+                    setattr(p, _REPAIR_FLAG, True)
+                    chapters = (getattr(p, "attribute_profile", None) or {}).get("chapters") or {}
+                    rated = float(chapters.get("potential") or 0)
+                    shown = float((getattr(p, "ratings", None) or {}).get("dev_potential") or 0)
+                    if rated > 0 and shown < rated - 0.5:
+                        write_player_potential99(p, rated)
+                        n += 1
+                except Exception:
+                    continue
+    return n

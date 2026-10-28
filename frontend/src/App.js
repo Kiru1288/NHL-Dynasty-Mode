@@ -163,6 +163,11 @@ function useSetupSoundtrack(screen) {
 
 function GameRoot() {
   const { screen, hydrateFranchiseHeavyState, franchiseState } = useGameUI();
+  const [hubKept, setHubKept] = React.useState(false);
+  useEffect(() => {
+    if (screen === SCREENS.HUB) setHubKept(true);
+    else if (screen === SCREENS.SETUP) setHubKept(false); // a new franchise starts a fresh hub
+  }, [screen]);
   useSetupSoundtrack(screen);
 
   useEffect(() => {
@@ -192,7 +197,17 @@ function GameRoot() {
             <SetupScreen />
           </Suspense>
         )}
-        {screen === SCREENS.HUB && <HubScreen />}
+        {(screen === SCREENS.HUB || hubKept) && (
+          // The hub stays mounted (hidden) once visited: coming back used to rebuild the
+          // WebGL context, scene, shaders and textures (~0.8 s of main-thread work).
+          <div
+            className="hub-keepalive"
+            data-keepalive-hidden={screen === SCREENS.HUB ? undefined : "true"}
+            style={{ display: screen === SCREENS.HUB ? "contents" : "none" }}
+          >
+            <HubScreen active={screen === SCREENS.HUB} />
+          </div>
+        )}
         {screen === SCREENS.ROSTER && <RosterScreen />}
         {screen === SCREENS.CALENDAR && <CalendarScreen />}
         {screen === SCREENS.STORYLINES && <StorylinesScreen />}

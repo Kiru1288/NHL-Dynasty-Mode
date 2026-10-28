@@ -6,6 +6,7 @@ Unofficial scrape of public HTML. Soft-fails per team so import still succeeds.
 
 from __future__ import annotations
 
+import functools
 import re
 import urllib.error
 import urllib.request
@@ -71,7 +72,14 @@ def _http_get_text(url: str, *, timeout: float = HTTP_TIMEOUT_S) -> str:
 
 
 def normalize_player_name(name: str) -> str:
-    text = str(name or "").lower().strip()
+    # Roster import compares every pair of names (~75k calls per league start); the
+    # result only depends on the string, so cache it.
+    return _normalize_player_name_cached(str(name or ""))
+
+
+@functools.lru_cache(maxsize=65536)
+def _normalize_player_name_cached(name: str) -> str:
+    text = name.lower().strip()
     text = (
         text.replace("á", "a")
         .replace("à", "a")

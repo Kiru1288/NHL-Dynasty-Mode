@@ -350,7 +350,15 @@ def _numbers(text: str) -> Dict[str, Any]:
         out["age_min"] = int(m.group(2)) + 1
     m = re.search(r"\b(over|above|at least|min)\s+(\d{2})\s*(overall)?\b(?!\s*(years|yrs))", text)
     if m and "age_min" not in out:
-        out["ovr_min"] = int(m.group(2))
+        # Ratings live in the 60s-90s; "over 30" with no "overall" is an age.
+        if int(m.group(2)) < 50 and not m.group(3):
+            out["age_min"] = int(m.group(2)) + (1 if m.group(1) in ("over", "above") else 0)
+        else:
+            out["ovr_min"] = int(m.group(2))
+    if re.search(r"\bleft[\s-]?(shot|shooting|handed)\b|\blefty\b|\bshoots left\b", text):
+        out["shoots"] = "L"
+    elif re.search(r"\bright[\s-]?(shot|shooting|handed)\b|\brighty\b|\bshoots right\b", text):
+        out["shoots"] = "R"
     m = re.search(r"\b(\d{2})\s*(\+|or older|and up|and older|plus)", text) or re.search(r"\bolder than\s+(\d{2})\b", text)
     if m:
         out["age_min"] = int(m.group(1)) + (1 if "older than" in m.group(0) else 0)

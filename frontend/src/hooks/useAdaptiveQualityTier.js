@@ -23,7 +23,12 @@ const BASE_COOLDOWN_MS = 30000;
 const MAX_COOLDOWN_MS = 10 * 60 * 1000;
 const MIN_FPS_HIGH = 40;
 
-export function useAdaptiveQualityTier({ enabled, initialTier = "high" }) {
+/**
+ * allowUpgrade=false keeps Auto on low once there: on integrated GPUs the low tier's idle
+ * frames read as "headroom" (only the 3D canvas is capped), and the upgrade to shadows,
+ * bloom and 1.5x resolution is what then dropped frames.
+ */
+export function useAdaptiveQualityTier({ enabled, initialTier = "high", allowUpgrade = true }) {
   const [state, setState] = useState({ tier: initialTier, reason: "initial" });
   const tierRef = useRef(state.tier);
 
@@ -117,7 +122,9 @@ export function useAdaptiveQualityTier({ enabled, initialTier = "high" }) {
           switchTo("low", "battery");
           return;
         }
-        const stressed = fps < MIN_FPS_HIGH || jank > 0.25 || cpuHot || longTaskShare > 0.3;
+        // Below 80% of the display's own rate counts as dropping frames (48 fps on 60 Hz).
+        const minFps = Math.max(MIN_FPS_HIGH, (1000 / vsyncMs) * 0.8);
+        const stressed = fps < minFps || jank > 0.15 || cpuHot || longTaskShare > 0.3;
         stressStreak = stressed ? stressStreak + 1 : 0;
         if (stressStreak >= DOWN_WINDOWS) {
           switchTo("low", cpuHot || longTaskShare > 0.3 ? "cpu-load" : "frame-rate");
@@ -131,7 +138,7 @@ export function useAdaptiveQualityTier({ enabled, initialTier = "high" }) {
       const roomy =
         fps >= refreshFps * 0.9 && jank < 0.02 && !cpuHot && longTaskShare < 0.1 && !lowBattery;
       headroomStreak = roomy ? headroomStreak + 1 : 0;
-      if (headroomStreak >= UP_WINDOWS && now >= nextUpgradeAt) switchTo("high", "headroom");
+      if (allowUpgrade && headroomStreak >= UP_WINDOWS && now >= nextUpgradeAt) switchTo("high", "headroom");
     };
 
     const loop = (t) => {
@@ -158,7 +165,7 @@ export function useAdaptiveQualityTier({ enabled, initialTier = "high" }) {
         /* already closed */
       }
     };
-  }, [enabled]);
+  }, [enabled, allowUpgrade]);
 
   return state;
 }

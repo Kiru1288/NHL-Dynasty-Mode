@@ -79,7 +79,19 @@ def _ranked(view: LiveView, ids: List[str], metric: str, low: bool, slots: Dict[
             continue
         if slots.get("age_min") and r["age"] < slots["age_min"]:
             continue
+        if slots.get("shoots") and r.get("shoots") != slots["shoots"]:
+            continue
+        if slots.get("ovr_min") and (r.get("ovr") or 0) < slots["ovr_min"]:
+            continue
         if slots.get("cap_max") and (r["contract"]["cap_hit_m"] or 0) > slots["cap_max"]:
+            continue
+        filters = slots.get("filters") or []
+        # No rookie flag in the save: 22 and under is the closest proxy.
+        if "rookie" in filters and not (0 < r["age"] <= 22):
+            continue
+        if "young" in filters and not (0 < r["age"] <= 24):
+            continue
+        if "veteran" in filters and r["age"] < 30:
             continue
         v = metric_value(view, pid, metric)
         if v is None:
@@ -113,6 +125,12 @@ def rank_metric(view: LiveView, slots: Dict[str, Any], ctx: Dict[str, Any]) -> A
         ids = [p for p in ids if view.row(p).get("ovr", 99) <= 87]
         where += ", outside the stars"
     rows = _ranked(view, ids, metric, low, slots)
+    if "rookie" in (slots.get("filters") or []):
+        where += " aged 22 and under (rookie age)"
+    elif "young" in (slots.get("filters") or []):
+        where += " aged 24 and under"
+    elif "veteran" in (slots.get("filters") or []):
+        where += " aged 30 and over"
     if not rows:
         return _answer(f"No one {where} has a {m['label'].lower()} on record yet.",
                        analysis=["Stats fill in as games are played; ratings are always there for rostered players."])

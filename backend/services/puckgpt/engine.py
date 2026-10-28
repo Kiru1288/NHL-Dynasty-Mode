@@ -75,6 +75,20 @@ def _ctx_for(session: Any) -> Dict[str, Any]:
         return _CTX.setdefault(sid, {})
 
 
+def _finish(out: Dict[str, Any], it: Any, q: str, t0: float) -> Dict[str, Any]:
+    """Stamp the interpretation, and say which parts of the question the answer couldn't honour."""
+    from .answers4 import caveats
+
+    notes = caveats(q.lower(), str(it.intent or ""))
+    if notes:
+        out.setdefault("analysis", [])[0:0] = notes
+        it.band = "medium"
+    out["interpretation"] = it.as_dict()
+    out["elapsed_ms"] = round((time.perf_counter() - t0) * 1000, 1)
+    out.pop("list_ids", None)
+    return out
+
+
 def ask(session: Any, query: str) -> Dict[str, Any]:
     t0 = time.perf_counter()
     q = str(query or "").strip()
@@ -114,10 +128,25 @@ def ask(session: Any, query: str) -> Dict[str, Any]:
         if out.get("list_ids"):
             ctx["list"] = out["list_ids"][:15]
         ctx["intent"] = it.intent
-        out["interpretation"] = it.as_dict()
-        out["elapsed_ms"] = round((time.perf_counter() - t0) * 1000, 1)
-        out.pop("list_ids", None)
-        return out
+        return _finish(out, it, q, t0)
+    from . import answers4
+
+    try:
+        found = answers4.detail(view, q.lower(), it, ctx)
+    except Exception:
+        log.exception("puckgpt detail layer failed")
+        found = None
+    if found:
+        it.intent, out = found
+        it.confidence, it.band = max(it.confidence, 0.8), "high"
+        focus = out.get("focus_ids") or []
+        if focus:
+            ctx["players"] = focus[:4]
+            ctx["history"] = ([p for p in ctx.get("history") or [] if p != focus[0]] + focus[:1])[-20:]
+        if out.get("list_ids"):
+            ctx["list"] = out["list_ids"][:15]
+        ctx["intent"] = it.intent
+        return _finish(out, it, q, t0)
     routed = route(it, view, ctx)
     if routed:
         it.intent, it.slots = routed
@@ -176,7 +205,4 @@ def ask(session: Any, query: str) -> Dict[str, Any]:
         if it.intent == "compare" and len(focus) >= 2:
             ctx["compare"] = focus[:4]
 
-    out["interpretation"] = it.as_dict()
-    out["elapsed_ms"] = round((time.perf_counter() - t0) * 1000, 1)
-    out.pop("list_ids", None)
-    return out
+    return _finish(out, it, q, t0)

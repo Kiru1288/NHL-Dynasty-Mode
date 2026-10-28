@@ -155,7 +155,8 @@ def best_on_team(view: LiveView, slots: Dict[str, Any], ctx: Dict[str, Any]) -> 
     tid = _team_id(view, slots)
     pos = slots.get("position")
     rows = [r for r in view.team_rows(tid) if _pos_ok(r, pos)]
-    if "young" in (slots.get("filters") or []) or slots.get("age_max"):
+    young = "young" in (slots.get("filters") or []) or bool(slots.get("age_max"))
+    if young:
         rows = [r for r in rows if r["age"] <= int(slots.get("age_max") or 24)]
     low = slots.get("direction") == "low"
     rows.sort(key=lambda r: r["ovr"] if low else -r["ovr"])
@@ -171,7 +172,7 @@ def best_on_team(view: LiveView, slots: Dict[str, Any], ctx: Dict[str, Any]) -> 
     best_prod = max(rows, key=lambda r: r.get("pts") or 0)
     if pos != "G" and best_prod is not top and (best_prod.get("pts") or 0) > (top.get("pts") or 0):
         analysis.append(f"By production this season it is {best_prod['name']} ({best_prod['pts']} pts in {best_prod['gp']}).")
-    return _answer(f"{owner} {'lowest-rated' if low else 'best'} {SINGULAR.get(label, label)}: {top['name']} ({top['ovr']:.0f} OVR).",
+    return _answer(f"{owner} {'lowest-rated' if low else 'best'}{' young' if young else ''} {SINGULAR.get(label, label)}: {top['name']} ({top['ovr']:.0f} OVR).",
                    analysis=analysis, rows=rows[:int(slots.get('limit') or 10)], extra=extra,
                    followups=[f"What about {top['name']}'s contract?", f"Best {label} in the league", "Who fits my second pair?"])
 
@@ -404,7 +405,7 @@ def player_card(view: LiveView, slots: Dict[str, Any], ctx: Dict[str, Any]) -> A
         return _answer("I couldn't find that player in this save. Try the last name or sweater number (#97).")
     r = rows[0]
     c = r["contract"]
-    line = (f"{r['w']} W, {r['sv_pct']:.3f} SV%" if r["pos"] == "G" and r.get("sv_pct") is not None
+    line = (f"{r['gp']} GP, {r['w']} W, {r['sv_pct']:.3f} SV%" if r["pos"] == "G" and r.get("sv_pct") is not None
             else f"{r['g']} G, {r['a']} A, {r['pts']} PTS, {r['plus_minus']:+d} in {r['gp']} GP")
     analysis = [f"{r['pos']} · {r['team'] or r['level']} · age {r['age']} · shoots {r['shoots'] or '?'}",
                 f"This season: {line}" + (f", {r['toi_pg']} min a night" if r.get("toi_pg") else ""),
@@ -659,6 +660,19 @@ def diagnose(view: LiveView, slots: Dict[str, Any], ctx: Dict[str, Any]) -> Answ
                    followups=["Best trade targets", "Who fits my second pair?", "Which goalie should start?"])
 
 
+def _playoff_line(me: Dict[str, Any], conf: List[Dict[str, Any]], pos: int) -> str:
+    """Where a club sits against the 8th/9th cut in its conference."""
+    head = f"You're {pos} in the {me.get('conference')} Conference"
+    if len(conf) < 9:
+        return head + "."
+    pts = int(me.get("pts") or 0)
+    if pos <= 8:
+        gap = pts - int(conf[8].get("pts") or 0)
+        return head + f", {gap} point{'s' if gap != 1 else ''} clear of 9th (in a playoff spot)."
+    gap = int(conf[7].get("pts") or 0) - pts
+    return head + f", {gap} point{'s' if gap != 1 else ''} behind 8th (outside the playoffs)."
+
+
 def standings(view: LiveView, slots: Dict[str, Any], ctx: Dict[str, Any]) -> Answer:
     rows = view.standings()
     if not rows:
@@ -698,9 +712,7 @@ def standings(view: LiveView, slots: Dict[str, Any], ctx: Dict[str, Any]) -> Ans
         conf = [r for r in rows if r.get("conference") == me.get("conference")]
         pos = next((i + 1 for i, r in enumerate(conf) if r.get("team_id") == me.get("team_id")), None)
         if pos:
-            line = conf[7] if len(conf) >= 8 else None
-            gap = (int(me.get("pts") or 0) - int(line.get("pts") or 0)) if line else 0
-            analysis.append(f"You're {pos} in the {me.get('conference')} Conference; the 8th spot is {'+' if gap >= 0 else ''}{gap} points away." if line else f"You're {pos} in your conference.")
+            analysis.append(_playoff_line(me, conf, pos))
     head = (f"Best team: the {rows[0].get('name')} ({rows[0].get('pts')} points)." if "best" in raw
             else f"{rows[0].get('name')} lead the league with {rows[0].get('pts')} points.")
     return _answer(head, analysis=analysis, table=table,

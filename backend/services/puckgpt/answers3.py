@@ -826,6 +826,17 @@ RULES3: List[Tuple[str, str, Any]] = [
     (r"\bluckiest\b", "player", ("luck", {}, False, "Goals above expected plus on-ice goal differential above expected, this season.")),
     (r"\bunluckiest\b", "player", ("luck", {}, True, "Goals below expected plus on-ice goal differential below expected, this season.")),
     (r"most nhl[- ]ready", "board_or_org", "ready"),
+    # plain team questions, after the specific analytics wording above
+    (r"\b(home|road|away)\s+record\b|\brecord (at home|on the road|away)\b|\b(at home|on the road)\b.*\brecord\b", "teamq", "split"),
+    (r"(?<!expected )\bgoal (diff|differential)\b|\bgoals? for and against\b|\bgoals against\b.*\bteam\b", "teamq", "goal_diff"),
+    (r"^(?!.*\b(free|clear|create|make)\b.*\bcap\b).*(?:\bcap (space|room)\b|\bunder the cap\b|\bover the cap\b)|\bhow much (money|cap)\b.*\b(left|spend|have)\b", "teamq", "cap"),
+    (r"\blast (game|night|match)\b|\byesterday\b|\bmost recent game\b|\bprevious game\b", "teamq", "last_game"),
+    (r"\blast (5|five|10|ten) games\b|\brecent form\b|\bhow are we (playing|doing) (lately|recently)\b|\bhow are we playing\b|\bhot or cold\b|\blately\b", "teamq", "form"),
+    (r"\b(make|making|made|miss|missing) the playoffs\b|\bin a playoff spot\b|\bplayoff (chances?|odds|picture|spot|position|race|line)\b|\bwild ?card\b", "teamq", "playoffs"),
+    (r"^(?!.*\b(franchise|all[- ]time|career|single[- ]season|league record|nhl record)\b)"
+     r".*(?:\b(what'?s|what is|whats|how'?s|show) (our|my|the [a-z ]+?) record\b|^(our|my) record\b|\brecord this season\b"
+     r"|\bhow many (wins|games) (do|have) (we|i)\b)", "teamq", "record"),
+    (r"\bshould (i|we) sign\b|\bwho (should|can|could) (i|we) sign\b|\bbest free agents?\b|\bfree agents? (available|out there|left)\b", "teamq", "sign"),
 ]
 
 
@@ -839,6 +850,8 @@ def match(raw_question: str) -> Optional[Tuple[str, Any]]:
 
 def run(action: str, arg: Any, view: LiveView, raw_question: str, slots: Dict[str, Any], conv: Dict[str, Any]) -> Answer:
     raw = " ".join(str(raw_question or "").lower().replace("’", "'").split())
+    if action == "teamq":
+        return team_question(view, arg, raw, slots, conv)
     if action == "not_tracked":
         return _answer(NOT_TRACKED[arg], analysis=["Ask about ratings, stats, contracts, standings, the draft board or this save's history instead."])
     if action == "history":
@@ -873,6 +886,140 @@ def run(action: str, arg: Any, view: LiveView, raw_question: str, slots: Dict[st
             "replacement": lambda: replacement(view, raw, slots), "never_separate": lambda: never_separate(view),
         }[arg]
         return fn()
+    return _answer("I couldn't work that one out.")
+
+
+# =========================================================================== team questions
+def _games_for(view: LiveView, tid: str) -> List[Dict[str, Any]]:
+    """This season's regular-season finals for one club, oldest first, from its side."""
+    out = []
+    for box in list(getattr(view.session, "game_results", None) or []):
+        if not isinstance(box, dict) or box.get("is_playoff"):
+            continue
+        h, a = str(box.get("home_id") or ""), str(box.get("away_id") or "")
+        if tid not in (h, a):
+            continue
+        hg = int(box.get("home_goals", box.get("home_score")) or 0)
+        ag = int(box.get("away_goals", box.get("away_score")) or 0)
+        home = tid == h
+        gf, ga = (hg, ag) if home else (ag, hg)
+        extra = bool(box.get("overtime") or box.get("ot") or box.get("shootout"))
+        out.append({"date": str(box.get("calendar_iso") or box.get("iso") or "")[:10], "home": home,
+                    "opp": a if home else h, "gf": gf, "ga": ga, "won": gf > ga, "extra": extra,
+                    "so": bool(box.get("shootout")), "box": box})
+    out.sort(key=lambda g: (g["date"], int(g["box"].get("day") or 0)))
+    return out
+
+
+def _wlo(games: List[Dict[str, Any]]) -> str:
+    w = sum(1 for g in games if g["won"])
+    otl = sum(1 for g in games if not g["won"] and g["extra"])
+    return f"{w}-{len(games) - w - otl}-{otl}"
+
+
+def _team_for(view: LiveView, raw: str, slots: Dict[str, Any], conv: Dict[str, Any]) -> str:
+    if re.search(r"\b(our|my|we|us)\b", raw) or slots.get("self"):
+        return view.user_tid
+    teams = slots.get("teams") or []
+    if teams:
+        return str(teams[0])
+    if re.search(r"\b(their|they)\b", raw) and conv.get("team"):
+        return str(conv["team"])
+    return view.user_tid
+
+
+def _scorers(view: LiveView, box: Dict[str, Any], tid: str) -> List[str]:
+    names: Dict[str, int] = {}
+    for ev in box.get("scoring_events") or []:
+        if not isinstance(ev, dict) or str(ev.get("for_team_id") or ev.get("team_id") or "") != tid:
+            continue
+        pid = str(ev.get("scorer_id") or ev.get("player_id") or "")
+        name = ev.get("scorer_name") or ev.get("scorer") or (view.row(pid).get("name") if pid in view.players else "")
+        if name and isinstance(name, str):
+            names[name] = names.get(name, 0) + 1
+    return [f"{n} ({c})" if c > 1 else n for n, c in names.items()]
+
+
+def team_question(view: LiveView, kind: str, raw: str, slots: Dict[str, Any], conv: Dict[str, Any]) -> Answer:
+    tid = _team_for(view, raw, slots, conv)
+    name = _team_label(view, tid)
+    you = tid == view.user_tid
+    st = _standing(view, tid) or {}
+    games = _games_for(view, tid)
+    conv["team"] = tid
+
+    if kind == "sign":
+        return BASE["find_players"](view, {**slots, "filters": list(set((slots.get("filters") or []) + ["free"]))},
+                                    {"raw": raw, "conv": conv})
+    if kind == "cap":
+        space = _cap_space(view, tid)
+        if space is None:
+            return _answer(f"I can't read the {name}' cap right now.")
+        rows = sorted(view.team_rows(tid), key=lambda r: -(r["contract"]["cap_hit_m"] or 0))
+        return _answer(f"{'You have' if you else f'The {name} have'} {_money(space)} in cap space.",
+                       analysis=[f"Biggest cap hits: " + ", ".join(f"{r['name']} {_money(r['contract']['cap_hit_m'])}" for r in rows[:3]) + "."] if rows else [],
+                       rows=rows[:8], extra=("cap",), followups=["Best contracts", "Who are our free agents next summer?"])
+    if not games and kind != "playoffs":
+        return _answer(f"The {name} haven't played a regular-season game yet.")
+
+    if kind == "record":
+        rec = f"{st.get('w', 0)}-{st.get('l', 0)}-{st.get('otl', 0)}" if st else _wlo(games)
+        gf, ga = sum(g["gf"] for g in games), sum(g["ga"] for g in games)
+        last10 = games[-10:]
+        return _answer(f"The {name} are {rec}" + (f", {st.get('pts')} points in {st.get('gp', len(games))} games." if st else "."),
+                       analysis=[f"Last {len(last10)}: {_wlo(last10)}.", f"Home {_wlo([g for g in games if g['home']])}, road {_wlo([g for g in games if not g['home']])}.",
+                                 f"Goals {gf} for, {ga} against ({gf - ga:+d})."],
+                       followups=["Are we making the playoffs?", "How did we do last game?", "Why are we losing?"])
+    if kind == "split":
+        home = [g for g in games if g["home"]]
+        road = [g for g in games if not g["home"]]
+        def gd(gs): return sum(g["gf"] - g["ga"] for g in gs)
+        want_road = bool(re.search(r"\b(road|away)\b", raw))
+        first, second = (("Road", road), ("Home", home)) if want_road else (("Home", home), ("Road", road))
+        return _answer(f"The {name} are {_wlo(first[1])} {'on the road' if want_road else 'at home'} ({gd(first[1]):+d} goal differential).",
+                       analysis=[f"{second[0]}: {_wlo(second[1])} ({gd(second[1]):+d}).", f"Overall: {_wlo(games)}."])
+    if kind == "goal_diff":
+        gf, ga = sum(g["gf"] for g in games), sum(g["ga"] for g in games)
+        n = len(games)
+        diffs = sorted(((r.get("gf") or 0) - (r.get("ga") or 0), r.get("team_id")) for r in view.standings())
+        rank = next((i + 1 for i, (_d, t) in enumerate(sorted(diffs, reverse=True)) if str(t) == str(tid)), None)
+        return _answer(f"The {name} are {gf - ga:+d}: {gf} goals for, {ga} against in {n} games.",
+                       analysis=[f"{gf / n:.2f} for and {ga / n:.2f} against per game."] + ([f"{rank} of {len(diffs)} in the league by goal differential."] if rank else []))
+    if kind == "last_game":
+        g = games[-1]
+        opp = _team_label(view, g["opp"])
+        res = "beat" if g["won"] else "lost to"
+        tag = " in a shootout" if g["so"] else (" in overtime" if g["extra"] else "")
+        scorers = _scorers(view, g["box"], tid)
+        analysis = [f"{'Home' if g['home'] else 'Road'} game on {g['date']}."]
+        analysis.append(f"Goals: {', '.join(scorers)}." if scorers else "No goal-by-goal detail was stored for this game.")
+        return _answer(f"The {name} {res} the {opp} {g['gf']}-{g['ga']}{tag}.", analysis=analysis,
+                       table={"cols": ["Date", "Opponent", "Where", "Score", "Result"],
+                              "rows": [[x["date"], _team_label(view, x["opp"]), "Home" if x["home"] else "Road", f"{x['gf']}-{x['ga']}",
+                                        "W" if x["won"] else ("OTL" if x["extra"] else "L")] for x in games[-5:][::-1]]})
+    if kind == "form":
+        last = games[-10:]
+        streak = 0
+        for g in reversed(games):
+            if g["won"] != games[-1]["won"]:
+                break
+            streak += 1
+        return _answer(f"The {name} are {_wlo(last)} in their last {len(last)}.",
+                       analysis=[f"Current streak: {streak} {'win' if games[-1]['won'] else 'loss'}{'s' if streak != 1 else ''}.",
+                                 f"Goals {sum(g['gf'] for g in last)}-{sum(g['ga'] for g in last)} over that stretch."])
+    if kind == "playoffs":
+        rows = sorted(view.standings(), key=lambda r: int(r.get("league_rank") or r.get("rank") or 99))
+        if not st or not rows:
+            return _answer("Standings aren't available yet.")
+        conf = [r for r in rows if r.get("conference") == st.get("conference")]
+        pos = next((i + 1 for i, r in enumerate(conf) if str(r.get("team_id")) == str(tid)), None)
+        from .answers import _playoff_line
+        line = _playoff_line(st, conf, pos or 0).replace("You're", f"The {name} are" if not you else "You're")
+        gp = int(st.get("gp") or 0)
+        verdict = ("Too early to call." if gp < 20 else
+                   "On track for the playoffs." if (pos or 99) <= 8 else "On the outside right now.")
+        return _answer(f"{verdict} {line}",
+                       table={"cols": ["#", "Team", "GP", "PTS"], "rows": [[i + 1, r.get("name"), r.get("gp"), r.get("pts")] for i, r in enumerate(conf[:12])]})
     return _answer("I couldn't work that one out.")
 
 

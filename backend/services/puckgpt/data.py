@@ -167,6 +167,8 @@ class LiveView:
             "sog": int(_num(st.get("sog"))), "hit": int(_num(st.get("hit"))), "blk": int(_num(st.get("blk"))),
             "toi_pg": round(_num(st.get("toi_sec")) / gp / 60.0, 1) if gp else 0.0,
             "w": int(_num(st.get("w"))), "so": int(_num(st.get("so"))),
+            "ppg": int(_num(st.get("ppg"))), "ppp": int(_num(st.get("ppg")) + _num(st.get("ppa"))),
+            "shg": int(_num(st.get("shg"))), "gwg": int(_num(st.get("gwg"))),
             "fo_total": int(_num(st.get("fow")) + _num(st.get("fol"))),
             "fo_pct": round(_num(st.get("fow")) / max(1.0, _num(st.get("fow")) + _num(st.get("fol"))), 3)
             if (_num(st.get("fow")) + _num(st.get("fol"))) > 0 else None,
@@ -177,6 +179,19 @@ class LiveView:
         }
         self._rows[pid] = r
         return r
+
+    def game_log(self, pid: str) -> Dict[str, Any]:
+        """This season's per-game lines from the box-score book (faceoffs and recent form live here)."""
+        cache = self.__dict__.setdefault("_game_logs", {})
+        if pid not in cache:
+            try:
+                from app.sim_engine.franchise.serialization import get_player_game_log_payload
+
+                cache[pid] = get_player_game_log_payload(self.session, pid) or {}
+            except Exception:
+                log.debug("game log read failed", exc_info=True)
+                cache[pid] = {}
+        return cache[pid]
 
     def rows(self, ids: Optional[Iterable[str]] = None) -> List[Dict[str, Any]]:
         return [self.row(pid) for pid in (ids if ids is not None else self.players.keys()) if pid in self.players]

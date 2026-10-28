@@ -78,7 +78,7 @@ SELF_TEAM = {"my", "mine", "our", "ours", "us", "we", "myteam", "ourteam"}
 
 # Words that point back at what the conversation just showed.
 PRONOUNS_ONE = {"he", "him", "his", "himself", "that guy", "this guy", "that player", "this player", "dude", "the guy"}
-PRONOUNS_LIST = {"them", "they", "those", "these", "which one", "one of them", "of them", "the list", "which of"}
+PRONOUNS_LIST = {"them", "they", "those", "these", "which one", "one of them", "of them", "the list", "which of them", "which of those", "which of these"}
 
 # Positions after expansion.
 POSITION_WORDS: Dict[str, str] = {

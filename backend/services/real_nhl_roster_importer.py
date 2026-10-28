@@ -82,14 +82,21 @@ class RealNhlImportError(Exception):
 _API_CACHE_TTL_S = 24 * 3600
 
 
+_API_CACHE_DIR: Optional[str] = None
+
+
 def _api_cache_path(url: str) -> str:
     import hashlib
     import os
     import tempfile
 
-    d = os.path.join(tempfile.gettempdir(), "nhl_dynasty_api_cache")
-    os.makedirs(d, exist_ok=True)
-    return os.path.join(d, hashlib.sha1(url.encode("utf-8")).hexdigest() + ".json")
+    global _API_CACHE_DIR
+    if _API_CACHE_DIR is None:
+        # Created once: makedirs on every lookup cost ~3 s across a league's landing fetches.
+        d = os.path.join(tempfile.gettempdir(), "nhl_dynasty_api_cache")
+        os.makedirs(d, exist_ok=True)
+        _API_CACHE_DIR = d
+    return os.path.join(_API_CACHE_DIR, hashlib.sha1(url.encode("utf-8")).hexdigest() + ".json")
 
 
 def cached_http_text(url: str, fetch: Any) -> str:

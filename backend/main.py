@@ -12,6 +12,7 @@ ensure_simengine_path()
 
 from fastapi import BackgroundTasks, Body, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -58,6 +59,8 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["X-API-Instance-Id", "X-API-Code-Revision"],
 )
+# State and roster payloads are megabytes of repetitive JSON; gzip cuts them ~10x.
+app.add_middleware(GZipMiddleware, minimum_size=2048, compresslevel=5)
 
 
 @app.middleware("http")

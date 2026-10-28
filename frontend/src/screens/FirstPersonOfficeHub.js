@@ -5,6 +5,7 @@ import React, {
     useRef,
     useState,
     useEffect,
+    useSyncExternalStore,
   } from "react";
   
   import { Canvas, useFrame, useLoader, useThree } from "@react-three/fiber";
@@ -975,6 +976,46 @@ import React, {
     return null;
   }
 
+
+  /**
+   * Compiles every material's shaders off the main thread (KHR_parallel_shader_compile)
+   * right after the scene mounts and after each quality switch. Without it the first frame
+   * compiled ~14 programs synchronously: a 0.6 s freeze on integrated GPUs.
+   */
+  function ShaderWarmup({ token }) {
+    const gl = useThree((s) => s.gl);
+    const scene = useThree((s) => s.scene);
+    const camera = useThree((s) => s.camera);
+    const invalidate = useThree((s) => s.invalidate);
+    useEffect(() => {
+      if (typeof gl.compileAsync !== "function") return undefined;
+      let live = true;
+      gl.compileAsync(scene, camera)
+        .then(() => live && invalidate())
+        .catch(() => {});
+      return () => {
+        live = false;
+      };
+    }, [gl, scene, camera, invalidate, token]);
+    return null;
+  }
+
+  /**
+   * Redraws when the kept-alive hub is shown again. It sat display:none behind another
+   * screen with an on-demand frame loop, so nothing asked for a frame and the room came
+   * back blank (and the Html stations kept stale placements) until the mouse moved.
+   */
+  function RedrawOnShow({ active }) {
+    const invalidate = useThree((s) => s.invalidate);
+    useEffect(() => {
+      if (!active) return undefined;
+      invalidate();
+      // Once more after layout settles, so Html stations re-place against the real size.
+      const raf = requestAnimationFrame(() => invalidate());
+      return () => cancelAnimationFrame(raf);
+    }, [active, invalidate]);
+    return null;
+  }
 
   function detectWebGLSupport() {
     try {
@@ -2394,7 +2435,7 @@ import React, {
       let destTarget = baseTarget;
 
       if (!snap && !activePanel) {
-        const hoverTarget = hoveredId === "leagueCentral" ? 1 : 0;
+        const hoverTarget = hoverStore.get() === "leagueCentral" ? 1 : 0;
         hoverBlendRef.current +=
           (hoverTarget - hoverBlendRef.current) * (hoverTarget ? 0.07 : 0.11);
 
@@ -2521,6 +2562,47 @@ import React, {
     );
   }
 
+  /*
+   * Hovered station, outside React state. As useState in the hub root, every hover
+   * re-rendered the whole hub (HUD, panels, all ~20 stations and their Html roots).
+   * Now only the stations whose hovered flag flips re-render; the camera reads it per frame.
+   */
+  const hoverStore = (() => {
+    let current = null;
+    const subs = new Set();
+    return {
+      get: () => current,
+      set: (id) => {
+        const next = id ?? null;
+        if (next === current) return;
+        current = next;
+        subs.forEach((fn) => fn());
+      },
+      subscribe: (fn) => {
+        subs.add(fn);
+        return () => subs.delete(fn);
+      },
+    };
+  })();
+
+  /*
+   * Pointer cursor over a station. The class used to go on <body>, and game.css styles
+   * ".office-cursor-active *": every hover in/out restyled the whole document (40-60 ms
+   * each on a laptop). On the canvas it restyles one element.
+   */
+  function setOfficeCursor(on) {
+    const canvas = document.querySelector(".office-canvas canvas");
+    if (canvas) canvas.classList.toggle("office-cursor-active", Boolean(on));
+  }
+
+  function useIsHovered(id) {
+    return useSyncExternalStore(hoverStore.subscribe, () => hoverStore.get() === id, () => false);
+  }
+
+  function HoverFlag({ id, children }) {
+    return children(useIsHovered(id));
+  }
+
   function InteractiveGroup({
     id,
     label,
@@ -2551,7 +2633,7 @@ import React, {
   }) {
     const groupRef = useRef();
     const scaleVec = useRef(new THREE.Vector3(1, 1, 1));
-    const isHovered = hoveredId === id;
+    const isHovered = useIsHovered(id);
     const effectiveHoverScale = lowPowerMode ? 1.004 : hoverScale;
     const effectiveHoverLift = lowPowerMode ? 0.0006 : hoverLift;
 
@@ -2587,12 +2669,12 @@ import React, {
         onPointerOver={(e) => {
           e.stopPropagation();
           setHoveredId(id);
-          document.body.classList.add("office-cursor-active");
+          setOfficeCursor(true);
         }}
         onPointerOut={(e) => {
           e.stopPropagation();
           setHoveredId(null);
-          document.body.classList.remove("office-cursor-active");
+          setOfficeCursor(false);
         }}
         onPointerDown={
           activateOnPointerDown
@@ -4280,8 +4362,11 @@ import React, {
       hoverT.current += (target - hoverT.current) * step * 4.2;
       const ease = hoverT.current * hoverT.current * (3 - 2 * hoverT.current);
 
-      if (iconRef.current) {
-        iconRef.current.style.setProperty("--league-ops-hover", String(ease));
+      // Write only when it moves: a CSS variable set every frame re-dirties the tile's styles.
+      const v = ease.toFixed(3);
+      if (iconRef.current && iconRef.current.__hoverV !== v) {
+        iconRef.current.__hoverV = v;
+        iconRef.current.style.setProperty("--league-ops-hover", v);
       }
     });
 
@@ -4663,8 +4748,10 @@ import React, {
       hoverT.current += ((hovered ? 1 : 0) - hoverT.current) * step * 4.2;
       const ease =
         hoverT.current * hoverT.current * (3 - 2 * hoverT.current);
-      if (rootRef.current) {
-        rootRef.current.style.setProperty("--menu-hover", ease.toFixed(3));
+      const v = ease.toFixed(3);
+      if (rootRef.current && rootRef.current.__hoverV !== v) {
+        rootRef.current.__hoverV = v;
+        rootRef.current.style.setProperty("--menu-hover", v);
       }
     });
 
@@ -4759,8 +4846,10 @@ import React, {
       hoverT.current += ((hovered ? 1 : 0) - hoverT.current) * step * 4.2;
       const ease =
         hoverT.current * hoverT.current * (3 - 2 * hoverT.current);
-      if (rootRef.current) {
-        rootRef.current.style.setProperty("--menu-hover", ease.toFixed(3));
+      const v = ease.toFixed(3);
+      if (rootRef.current && rootRef.current.__hoverV !== v) {
+        rootRef.current.__hoverV = v;
+        rootRef.current.style.setProperty("--menu-hover", v);
       }
     });
 
@@ -6145,13 +6234,17 @@ import React, {
           ))}
           {plaque("messages", 1, 0, (hovered) => <TradeHubDiorama hovered={hovered} prefersReducedMotion={prefersReducedMotion} />, { lowPowerMode })}
           {plaque("roster", 2, 0, (hovered) => <RosterDiorama hovered={hovered} prefersReducedMotion={prefersReducedMotion} />)}
-          <WallHeroLogo
-            teamLogo={teamLogo}
-            teamName={teamName}
-            hovered={hoveredId === "teamIdentity"}
-            position={[crest.position[0], crest.position[1] + 0.1, crest.position[2] + 0.22]}
-            scale={1.12}
-          />
+          <HoverFlag id="teamIdentity">
+            {(hovered) => (
+              <WallHeroLogo
+                teamLogo={teamLogo}
+                teamName={teamName}
+                hovered={hovered}
+                position={[crest.position[0], crest.position[1] + 0.1, crest.position[2] + 0.22]}
+                scale={1.12}
+              />
+            )}
+          </HoverFlag>
           {plaque("lines", 4, 0, (hovered) => <StrategyDiorama hovered={hovered} prefersReducedMotion={prefersReducedMotion} />)}
           {plaque("stats", 5, 0, (hovered) => <StatsDiorama hovered={hovered} prefersReducedMotion={prefersReducedMotion} record={record} />)}
           {plaque("leagueCentral", 6, 0, (hovered) => <LeagueOpsDiorama hovered={hovered} prefersReducedMotion={prefersReducedMotion} />, {
@@ -6287,12 +6380,12 @@ import React, {
 
           {/* Desk dressing — the interactive Trade Hub lives on the wall */}
           <group position={[-1.52, 0.885, 0.62]}>
-            <PhoneObject
-              hovered={hoveredId === "messages"}
+            <HoverFlag id="messages">{(hovered) => <PhoneObject
+              hovered={hovered}
               unreadMessages={unreadMessages}
               hasTradeActivity={tradeActivity}
               callerLabel="TRADE DESK"
-            />
+            />}</HoverFlag>
           </group>
 
           <InteractiveGroup
@@ -6333,11 +6426,11 @@ import React, {
 
           {/* Desk dressing — the interactive Storylines wall carries the panel */}
           <group position={[-0.72, 0.885, 0.78]}>
-            <NewspaperObject
-              hovered={hoveredId === "news"}
+            <HoverFlag id="news">{(hovered) => <NewspaperObject
+              hovered={hovered}
               activeStorylines={activeStorylines}
               lifeHeadline={lifeHeadline}
-            />
+            />}</HoverFlag>
           </group>
 
           {mood.isTradeDeadline || mood.isDraftWeek ? <DeskClutter /> : null}
@@ -7307,8 +7400,18 @@ import React, {
     onSimNextGame,
     simDisabled = false,
     players = [],
+    active = true,
   }) {
-    const [hoveredId, setHoveredId] = useState(null);
+    const setHoveredId = hoverStore.set;
+    const hubSectionRef = useRef(null);
+    // data-hovered drives CSS on the hub; written directly so a hover re-renders nothing.
+    useEffect(() => {
+      const write = () => {
+        if (hubSectionRef.current) hubSectionRef.current.dataset.hovered = hoverStore.get() || "none";
+      };
+      write();
+      return hoverStore.subscribe(write);
+    }, []);
     const [activePanel, setActivePanel] = useState(null);
     const [showQuickMenu, setShowQuickMenu] = useState(false);
     const [resetToken, setResetToken] = useState(0);
@@ -7563,10 +7666,12 @@ import React, {
     }, []);
   
     useEffect(() => {
-      return () => document.body.classList.remove("office-cursor-active");
+      return () => setOfficeCursor(false);
     }, []);
   
     useEffect(() => {
+      // Hidden behind another screen: its M/R/Escape shortcuts must not fire there.
+      if (!active) return undefined;
       const onKeyDown = (e) => {
         const key = e.key.toLowerCase();
   
@@ -7590,12 +7695,13 @@ import React, {
   
       window.addEventListener("keydown", onKeyDown);
       return () => window.removeEventListener("keydown", onKeyDown);
-    }, [showQuickMenu]);
+    }, [showQuickMenu, active]);
   
     const showFallback = !webglSupported;
     const autoQuality = useAdaptiveQualityTier({
-      enabled: qualityMode === "auto" && !prefersReducedMotion && webglSupported,
+      enabled: active && qualityMode === "auto" && !prefersReducedMotion && webglSupported,
       initialTier: initialAutoTier,
+      allowUpgrade: initialAutoTier === "high",
     });
     const effectiveLowPower =
       prefersReducedMotion ||
@@ -7622,6 +7728,10 @@ import React, {
     // its last frame, so nothing changes on screen.
     const [hubCovered, setHubCovered] = useState(false);
     useEffect(() => {
+      if (!active) {
+        setHubCovered(true);
+        return undefined;
+      }
       const check = () => {
         const host = canvasHostRef.current;
         if (!host || document.hidden) {
@@ -7645,7 +7755,7 @@ import React, {
         window.clearInterval(id);
         document.removeEventListener("visibilitychange", check);
       };
-    }, []);
+    }, [active]);
 
     // Once the camera has settled on an open station panel the room is effectively static.
     const [panelSettled, setPanelSettled] = useState(false);
@@ -7703,7 +7813,7 @@ import React, {
       <section
         className={`office-hub register-office ${effectiveLowPower ? "office-hub--low-power" : ""}`}
         data-register="office"
-        data-hovered={hoveredId || "none"}
+        ref={hubSectionRef}
         data-office-mode={officeMood.officeMode}
         data-season-phase={officeMood.seasonPhase}
         data-pressure={officeMood.pressureLevel}
@@ -7741,14 +7851,19 @@ import React, {
                 fov: OFFICE_CAMERA.fov,
               }}
               gl={{
-                antialias: !effectiveLowPower,
+                // The effect composer does the anti-aliasing (multisampling) in high; a
+                // multisampled default framebuffer underneath it was paid for twice.
+                antialias: false,
                 powerPreference: effectiveLowPower ? "default" : "high-performance",
               }}
               onPointerMissed={() => {
                 setHoveredId(null);
-                document.body.classList.remove("office-cursor-active");
+                setOfficeCursor(false);
               }}
-              onCreated={({ gl }) => {
+              onCreated={(state) => {
+                const { gl } = state;
+                // Dev only: lets the console (and perf checks) read the renderer and scene.
+                if (process.env.NODE_ENV === "development") window.__officeR3F = state;
                 gl.toneMapping = THREE.ACESFilmicToneMapping;
                 gl.toneMappingExposure = 1.14;
                 gl.outputColorSpace = THREE.SRGBColorSpace;
@@ -7768,7 +7883,6 @@ import React, {
                   unreadMessages={unreadMessages}
                   pendingTasks={pendingTasks}
                   activeStorylines={activeStorylines}
-                  hoveredId={hoveredId}
                   setHoveredId={setHoveredId}
                   handleOpenPanel={handleOpenPanel}
                   resetToken={resetToken}
@@ -7782,6 +7896,8 @@ import React, {
                   officeWeather={officeWeather}
                   lifeHeadline={lockerPulse.lifeStories[0]?.headline || ""}
                 />
+                <ShaderWarmup token={effectiveLowPower ? "low" : "high"} />
+                <RedrawOnShow active={active} />
   
                 {!effectiveLowPower ? (
                   <EffectComposer enableNormalPass={false} multisampling={2}>
@@ -7792,11 +7908,7 @@ import React, {
                     />
                     <Vignette eskil={false} offset={0.42} darkness={0.18} />
                   </EffectComposer>
-                ) : (
-                  <EffectComposer multisampling={0}>
-                    <Vignette eskil={false} offset={0.42} darkness={0.14} />
-                  </EffectComposer>
-                )}
+                ) : null /* low: .office-vignette (CSS) already darkens the edges; no extra full-screen pass */}
               </Suspense>
             </Canvas>
             ) : null}

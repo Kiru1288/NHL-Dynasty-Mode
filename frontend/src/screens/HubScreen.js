@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { startTransition, useCallback, useEffect, useMemo, useState } from "react";
 import { useGameUI } from "../game/GameUIContext";
 import { HUB_MENU, SCREENS } from "../game/constants";
 import { GameFooter } from "../components/game/GameFooter";
@@ -433,7 +433,19 @@ function collectHubRosterPlayers(franchiseState) {
 }
 
 
-export function HubScreen() {
+/**
+ * While the kept-alive hub is hidden behind another screen, skip re-rendering it: context
+ * updates from that screen would otherwise re-render the whole 3D hub for nothing. It
+ * renders once with active=false (to pause its loops) and again when it comes back.
+ */
+const HiddenFreeze = React.memo(
+  function HiddenFreeze({ children }) {
+    return children;
+  },
+  (prev, next) => !prev.active && !next.active
+);
+
+export function HubScreen({ active = true }) {
   const {
     franchiseState,
     sessionBootstrapping,
@@ -591,14 +603,18 @@ export function HubScreen() {
         return;
       }
 
-      navigateFranchiseCommand(target, {
-        setScreen,
-        setHubMenuIndex,
-        setCapLedgerTab,
-        setStatsCentralTab,
-        openCommandPlaceholder,
-        openFranchiseEvent,
-        onReopenOffseasonStage,
+      // A transition: the press paints at once and the destination screen renders in
+      // interruptible chunks, instead of the whole screen rendering inside the pointer event.
+      startTransition(() => {
+        navigateFranchiseCommand(target, {
+          setScreen,
+          setHubMenuIndex,
+          setCapLedgerTab,
+          setStatsCentralTab,
+          openCommandPlaceholder,
+          openFranchiseEvent,
+          onReopenOffseasonStage,
+        });
       });
     },
     [
@@ -672,27 +688,30 @@ export function HubScreen() {
           ) : null}
         </div>
       ) : null}
-      <FirstPersonOfficeHub
-        teamName={teamName}
-        teamLogo={teamLogo}
-        seasonYear={seasonYear}
-        currentDate={currentDate || "Today"}
-        record={rec || "0-0-0"}
-        capSpace={fmtMoney(capSpace)}
-        capSpaceMillions={Number.isFinite(capSpace) ? capSpace : null}
-        nextGame={nextGame || "No game listed"}
-        standingsRank={standingsLine || "Standings"}
-        unreadMessages={unreadMessages}
-        pendingTasks={pendingTasks}
-        activeStorylines={activeStorylines}
-        franchiseState={hubOfficeSnapshot}
-        team={team}
-        players={rosterPlayers}
-        onOpenPanel={handleOpenPanel}
-        onNavigate={handleNavigate}
-        onSimNextGame={() => handleNavigate("sim-next-game")}
-        simDisabled={blockBulkSim || advancing}
-      />
+      <HiddenFreeze active={active}>
+        <FirstPersonOfficeHub
+        active={active}
+          teamName={teamName}
+          teamLogo={teamLogo}
+          seasonYear={seasonYear}
+          currentDate={currentDate || "Today"}
+          record={rec || "0-0-0"}
+          capSpace={fmtMoney(capSpace)}
+          capSpaceMillions={Number.isFinite(capSpace) ? capSpace : null}
+          nextGame={nextGame || "No game listed"}
+          standingsRank={standingsLine || "Standings"}
+          unreadMessages={unreadMessages}
+          pendingTasks={pendingTasks}
+          activeStorylines={activeStorylines}
+          franchiseState={hubOfficeSnapshot}
+          team={team}
+          players={rosterPlayers}
+          onOpenPanel={handleOpenPanel}
+          onNavigate={handleNavigate}
+          onSimNextGame={() => handleNavigate("sim-next-game")}
+          simDisabled={blockBulkSim || advancing}
+        />
+      </HiddenFreeze>
 
       {error ? (
         <div className="hub-error" role="alert">
