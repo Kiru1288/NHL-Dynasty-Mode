@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import PlayerHeadshot from "../../components/PlayerHeadshot";
 import { pickHeadshotIdentityFields } from "../../utils/playerHeadshots";
 import FanReactionFeed from "../../components/franchise/social/FanReactionFeed";
-import "./awardsNight.dd.css";
 // Theme + fonts: paste the same style imports EntryDraft.jsx has at its top here
 // (the files that define --ops-*, --font-broadcast-display, --font-ops-ui, --font-mono-data).
 import {

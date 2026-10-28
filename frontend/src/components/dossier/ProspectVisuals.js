@@ -565,107 +565,10 @@ export function SnapshotDials({ items }) {
 /* ------------------------------------------------------------------ */
 
 export function ProspectVisualStyles() {
-  return <style>{PV_CSS}</style>;
+  return null;
 }
 
-const PV_CSS = `
-.pv-tier{
-  display:inline-block;padding:0;background:none;border:0;border-radius:0;
-  font-family:var(--ed-head, inherit);font-size:11px;font-weight:800;letter-spacing:.08em;
-  text-transform:uppercase;color:var(--tier);white-space:nowrap;line-height:1.1;
-}
-.pv-tier.is-small{font-size:11px;letter-spacing:.06em;}
-.pv-tier--world-class,.pv-tier--franchise,.pv-tier--generational,.pv-tier--transcendent{text-shadow:0 0 8px color-mix(in srgb, var(--tier) 45%, transparent);}
-.pv-class{display:grid;gap:10px;margin:10px 0;padding:10px 12px;border-top:1px solid rgba(128,150,168,.22);border-bottom:1px solid rgba(128,150,168,.22);}
-.pv-class__head{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 14px;}
-.pv-class__head strong{font-size:12px;letter-spacing:.08em;color:#e2edf6;}
-.pv-class__head span{font-size:11px;color:#8096a8;}
-.pv-class__line{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12px;color:#c9d6e2;font-variant-numeric:tabular-nums;}
-.pv-class__line b{color:#8096a8;font-weight:600;margin-right:3px;font-size:11px;letter-spacing:.08em;}
-.pv-class__pcts{display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:6px 12px;}
-.pv-class__pct{display:grid;grid-template-columns:1fr auto;gap:2px 6px;font-size:11px;color:#8096a8;letter-spacing:.06em;text-transform:uppercase;}
-.pv-class__pct strong{color:#e2edf6;font-variant-numeric:tabular-nums;}
-.pv-class__pct i{grid-column:1 / -1;height:3px;background:rgba(128,150,168,.18);position:relative;}
-.pv-class__pct i::after{content:"";position:absolute;left:0;top:0;bottom:0;width:var(--w);background:var(--c);}
-.pv-tier--awful,.pv-tier--bad{font-style:italic;}
-.pv-tier--unknown{--tier:#607789;color:#8096a8;}
-@keyframes pv-shimmer{0%,100%{filter:brightness(1)}50%{filter:brightness(1.35)}}
 
-.pv-ring{position:relative;display:inline-grid;place-items:center;flex:none;}
-.pv-ring svg{display:block;}
-.pv-ring__label{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;line-height:1;}
-.pv-ring__label strong{font-family: var(--dd-font-ui, Nunito, sans-serif);font-size:19px;font-weight:800;color:#e9f7fb;}
-.pv-ring__label small{margin-top:2px;font-size:11px;font-weight:800;letter-spacing:.06em;color:#8096a8;max-width:90%;}
-
-.pv-gauge-pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;}
-.pv-gauge{border:1px solid rgba(156,218,236,.14);border-radius:8px;padding:10px 12px;background:rgba(13, 37, 85, .62);box-shadow:inset 0 1px 0 rgba(255,255,255,.04);min-width:0;}
-.pv-gauge__head{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;}
-.pv-gauge__head span{font-size:11px;font-weight:900;letter-spacing:.14em;text-transform:uppercase;color:#8096a8;}
-.pv-gauge__head strong{font-family: var(--dd-font-ui, Nunito, sans-serif);font-size:30px;line-height:1;font-weight:800;letter-spacing:.02em;}
-.pv-gauge__body{display:flex;align-items:center;gap:12px;margin-top:6px;}
-.pv-gauge__track{position:relative;flex:1;height:12px;border-radius:6px;background:rgba(148,185,205,.10);margin:10px 0 14px;}
-.pv-gauge__tick{position:absolute;top:-3px;bottom:-3px;width:1px;background:rgba(148,185,205,.18);}
-.pv-gauge__tick b{position:absolute;top:18px;left:-10px;width:22px;text-align:center;font-size:11px;font-weight:700;color:#607789;font-style:normal;}
-.pv-gauge__fog{position:absolute;top:0;bottom:0;border-radius:6px;
-  background:repeating-linear-gradient(135deg,rgba(246,196,83,.20) 0 4px,rgba(246,196,83,.06) 4px 8px);
-  border:1px dashed rgba(246,196,83,.45);}
-.pv-gauge__fog.is-full{left:0;right:0;background:repeating-linear-gradient(135deg,rgba(96,119,137,.25) 0 4px,transparent 4px 8px);border-color:rgba(96,119,137,.4);}
-.pv-gauge__band{position:absolute;top:2px;bottom:2px;border-radius:5px;opacity:.9;box-shadow:0 0 10px rgba(46, 230, 214, .35);}
-.pv-gauge--gold .pv-gauge__band{box-shadow:0 0 10px rgba(246,196,83,.4);}
-.pv-gauge__dot{position:absolute;top:50%;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;border:2px solid #0c214d;}
-.pv-gauge__foot{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:11.5px;color:#8096a8;}
-.pv-certainty{font-weight:1000;letter-spacing:.14em;font-size:11px;}
-
-.pv-card{border:1px solid rgba(156,218,236,.14);border-radius:8px;padding:10px 12px;background:rgba(13, 37, 85, .62);box-shadow:inset 0 1px 0 rgba(255,255,255,.04);min-width:0;}
-.pv-card__head{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:8px;}
-.pv-card__head h4{margin:0;font-family: var(--dd-font-ui, Nunito, sans-serif);font-size:15px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#e9f7fb;}
-.pv-card__head span{font-size:11px;color:#8096a8;letter-spacing:.06em;text-transform:uppercase;font-weight:800;display:inline-flex;align-items:center;gap:4px;}
-.pv-key{display:inline-block;width:10px;height:3px;border-radius:2px;}
-.pv-key.is-avg{background:rgba(148,185,205,.6);}
-
-.pv-bars{display:flex;flex-direction:column;gap:8px;}
-.pv-bar{display:grid;grid-template-columns:110px minmax(0,1fr) minmax(64px,max-content) max-content max-content;gap:8px;align-items:center;}
-.pv-bar__label{font-size:14px;font-weight:800;color:#c9dce6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.pv-bar__track{position:relative;height:9px;border-radius:5px;background:rgba(148,185,205,.10);overflow:visible;}
-.pv-bar__track i{position:absolute;left:0;top:0;bottom:0;border-radius:5px;transition:width .6s ease;}
-.pv-bar__track i.is-range{background-image:repeating-linear-gradient(135deg, rgba(255,255,255,.35) 0 3px, transparent 3px 6px);}
-.pv-bar__track b{position:absolute;top:-3px;bottom:-3px;width:2px;margin-left:-1px;background:rgba(233,247,251,.7);}
-.pv-bar__value{font-family: var(--dd-font-ui, Nunito, sans-serif);font-size:14px;font-weight:800;text-align:right;color:#e9f7fb;white-space:nowrap;font-variant-numeric:tabular-nums;min-width:64px;}
-.pv-bar__pct{font-size:11px;font-weight:800;letter-spacing:.04em;color:#9eb4c6;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums;}
-.pv-bar.is-soft .pv-bar__value{color:#f6c453;}
-.pv-bar.is-locked .pv-bar__label{color:#607789;}
-
-.pv-radar svg{display:block;margin:0 auto;min-height:220px;}
-.pv-radar__label{font-size:11px;font-weight:800;letter-spacing:.04em;fill:#c9dce6;text-transform:uppercase;}
-
-.pv-donut__body{display:flex;align-items:center;gap:16px;flex-wrap:wrap;justify-content:flex-start;}
-.pv-legend{list-style:none;margin:0;padding:0;display:grid;gap:6px;flex:0 1 auto;min-width:0;}
-.pv-legend li{display:flex;align-items:center;justify-content:flex-start;gap:8px;font-size:14px;color:#c9dce6;}
-.pv-legend i{width:10px;height:10px;border-radius:3px;flex:none;}
-.pv-legend span{white-space:nowrap;}
-.pv-legend b{font-family: var(--dd-font-ui, Nunito, sans-serif);font-size:14px;font-variant-numeric:tabular-nums;}
-
-.pv-dials{display:grid;grid-template-columns:repeat(auto-fit,minmax(92px,1fr));gap:8px;}
-.pv-dial{display:flex;flex-direction:column;align-items:center;gap:4px;border:1px solid rgba(156,218,236,.14);border-radius:8px;padding:8px 4px;background:rgba(13, 37, 85, .62);}
-.pv-dial > span{font-size:11px;font-weight:900;letter-spacing:.12em;text-transform:uppercase;color:#8096a8;text-align:center;}
-
-.pv-visual-grid{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(200px,1fr);gap:10px;align-items:start;}
-.pv-stack{display:flex;flex-direction:column;gap:10px;min-width:0;}
-
-/* Board certainty chip */
-.pv-cert-chip{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:1000;letter-spacing:.1em;white-space:nowrap;}
-.pv-cert-chip i{display:inline-block;width:26px;height:5px;border-radius:3px;background:rgba(148,185,205,.15);position:relative;overflow:hidden;}
-.pv-cert-chip i::after{content:"";position:absolute;left:0;top:0;bottom:0;width:var(--w);background:var(--c);}
-
-@media (max-width: 760px){
-  .pv-gauge-pair,.pv-visual-grid{grid-template-columns:1fr;}
-  .pv-bar{grid-template-columns:92px minmax(0,1fr) max-content;}
-  .pv-bar__pct{display:none;}
-}
-@media (prefers-reduced-motion: reduce){
-  .pv-tier--generational{animation:none;}
-}
-`;
 
 /** Compact certainty chip for board rows. */
 export function CertaintyChip({ certainty }) {

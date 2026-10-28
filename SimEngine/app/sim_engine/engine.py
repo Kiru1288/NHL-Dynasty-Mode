@@ -235,10 +235,10 @@ from app.sim_engine.league.game_rules import (  # noqa: E402  (Board of Governor
     rules_for as _board_rules_for,
 )
 # Bulk/light game scores: talent gap should move standings, not single-game dice.
-_GM_STRENGTH_MATCHUP_GOAL_K = 1.85
+_GM_STRENGTH_MATCHUP_GOAL_K = 1.05
 _GM_STRENGTH_GAME_GOAL_SIGMA = 1.26
 _GM_STRENGTH_MATCHUP_SIGMA_DAMP = 0.52
-_GM_STRENGTH_TIEBREAK_SKILL_K = 0.48
+_GM_STRENGTH_TIEBREAK_SKILL_K = 0.22
 # Starting tier of each franchise in Generated Players mode (edit freely). Offsets are
 # added to every generated player's target OVR (0-1 scale), so a contender is deeper
 # top to bottom, not just one star richer.
@@ -14233,6 +14233,9 @@ class SimEngine:
         away_strength_scale: float = 1.0,
         chem_h: float = 1.0,
         chem_a: float = 1.0,
+        form_h: float = 0.0,
+        form_a: float = 0.0,
+        tilt: float = 0.0,
     ) -> Tuple[int, int]:
         """
         Zero-sum regulation attempt budget from team talent gap.
@@ -14262,19 +14265,23 @@ class SimEngine:
         edge *= float(home_strength_scale) / max(0.85, float(away_strength_scale))
         edge += (float(chem_h) - float(chem_a)) * 0.12
 
-        home_share = 0.50 + edge * 0.95
-        home_share += rng.uniform(-0.045, 0.045)
-        # NHL team CF% over a 15-game sample almost never lives at 30/70.
-        # Keep talent edge, but don't invent historically impossible shares.
-        home_share = max(0.34, min(0.66, home_share))
+        # Talent sets the season-long tilt; it saturates so the best club lands
+        # near 57-58% CF, not pinned at the clamp every night.
+        talent_share = 0.115 * math.tanh((edge * 0.95) / 0.115)
+        # One night: form (legs, puck luck, a bad change) swings the share hard.
+        # tilt: z-score for "one side took this game over". 2σ ≈ 67/33, 3σ ≈ 75/25.
+        night = float(tilt) * 0.068 + (float(form_h) - float(form_a)) * 0.026 + rng.gauss(0.0, 0.02)
+        home_share = 0.50 + talent_share + night
+        # A single game can be a 30/70 rout; seasons stay sane through the talent cap.
+        home_share = max(0.20, min(0.80, home_share))
 
-        # ~58–62 attempts per team. On-goal rate ~0.51 then lands team SOG near 30.
+        # ~58–62 attempts per team on average; some nights are track meets, some are trench wars.
         pace = 118.0 + 8.0 * ((home_off + away_off) * 0.5 - 0.5)
-        pace += rng.uniform(-4.0, 4.0)
-        total_attempts = int(round(max(104.0, min(132.0, pace))))
+        pace += rng.gauss(0.0, 7.0) + (abs(float(form_h)) + abs(float(form_a))) * 2.0
+        total_attempts = int(round(max(96.0, min(142.0, pace))))
 
-        h_attempts = max(26, int(round(total_attempts * home_share)))
-        a_attempts = max(26, total_attempts - h_attempts)
+        h_attempts = max(20, int(round(total_attempts * home_share)))
+        a_attempts = max(20, total_attempts - h_attempts)
         return h_attempts, a_attempts
 
     def _gm_pick_weighted(
@@ -14820,6 +14827,7 @@ class SimEngine:
 
         # Per-game chance mix: attacker's system x what the defender's system concedes.
         _mix_cache: Dict[Tuple[int, int, str], Dict[str, float]] = {}
+        _game_form: Dict[int, float] = {}
 
         def _game_chance_mix(atk: Any, dfn: Any, st: str) -> Dict[str, float]:
             key = (id(atk), id(dfn), st)
@@ -15255,8 +15263,14 @@ class SimEngine:
                 # Offence and suppression are separate forces — a team that concedes
                 # volume but only from the perimeter should not read as "good defence"
                 # cancelling attack, so each moves the chance on its own terms.
-                raw_xg *= max(0.88, min(1.14, 0.99 + (atk_off - 0.55) * 0.30))
-                raw_xg *= max(0.86, min(1.06, 1.0 - (def_sup - 0.07) * 0.90))
+                raw_xg *= max(0.84, min(1.20, 0.99 + (atk_off - 0.55) * 0.42))
+                raw_xg *= max(0.82, min(1.08, 1.0 - (def_sup - 0.07) * 1.10))
+                # Sharp night up front / sloppy night in the D-zone.
+                _fa = float(_game_form.get(id(atk_team), 0.0))
+                _fd = float(_game_form.get(id(def_team), 0.0))
+                # The side being caved in only gets the perimeter; the side in control
+                # gets the slot. Quality moves with volume, so xG can be 4.5 vs 0.6.
+                raw_xg *= max(0.45, min(1.75, math.exp(0.15 * _fa - 0.09 * _fd - 0.039)))
                 # Staff (league_operations.refresh_staff_team_effects): PP coach of the
                 # attackers vs PK coach of the defenders nudge special-teams chances.
                 if strength == "PP":
@@ -15583,12 +15597,24 @@ class SimEngine:
                     }
             return sudden_death and reg_home != reg_away
 
+        # Nightly form per club (z-score). It moves shot share AND chance quality,
+        # so xG itself can say a team was outplayed, not only the scoreboard.
+        _form_h = max(-2.4, min(2.4, rng.gauss(0.0, 1.0)))
+        _form_a = max(-2.4, min(2.4, rng.gauss(0.0, 1.0)))
+        # Fat-tailed: most nights are close, a few are one-way traffic.
+        _tilt = rng.gauss(0.0, 1.0) * (1.6 if rng.random() < 0.18 else 1.0)
+        _tilt = max(-3.2, min(3.2, _tilt))
+        _game_form[id(home)] = _form_h + 0.9 * _tilt
+        _game_form[id(away)] = _form_a - 0.9 * _tilt
         h_attempts, a_attempts = self._gm_regulation_attempt_split(
             rng, home, away,
             home_strength_scale=home_strength_scale,
             away_strength_scale=away_strength_scale,
             chem_h=chem_h,
             chem_a=chem_a,
+            form_h=_form_h,
+            form_a=_form_a,
+            tilt=_tilt,
         )
         ev_active_budget = _REGULATION_GAME_SECONDS * 0.91
         ev_mean_delay = (ev_active_budget / max(1.0, float(h_attempts + a_attempts))) * 1.12
@@ -17179,8 +17205,8 @@ class SimEngine:
                 home_cf_n = max(40, total - away_cf_n)
         else:
             def _cf_from_lambda(mu: float) -> int:
-                noise = rng.uniform(0.94, 1.06)
-                return int(round(max(48.0, min(72.0, float(mu) / (0.51 * 0.098) * noise))))
+                noise = rng.uniform(0.90, 1.10)
+                return int(round(max(24.0, min(92.0, float(mu) / (0.51 * 0.098) * noise))))
 
             home_cf_n = _cf_from_lambda(_mu[0])
             away_cf_n = _cf_from_lambda(_mu[1])
@@ -17190,21 +17216,23 @@ class SimEngine:
                 total_att = max(1, int(home_cf_n) + int(away_cf_n))
                 lam_share = float(home_cf_n) / float(total_att)
                 poss_share = max(0.30, min(0.70, 0.50 + 0.85 * (poss_h - poss_a)))
-                share = max(0.28, min(0.72, 0.55 * lam_share + 0.45 * poss_share))
-                home_cf_n = max(40, int(round(total_att * share)))
-                away_cf_n = max(40, total_att - home_cf_n)
+                # Tonight's xG gap leads; talent possession only shades it.
+                share = max(0.20, min(0.80, 0.80 * lam_share + 0.20 * poss_share))
+                home_cf_n = max(24, int(round(total_att * share)))
+                away_cf_n = max(24, total_att - home_cf_n)
             except Exception:
                 _swallowed_log.debug("suppressed exception", exc_info=True)
         gd = float(hg - ag)
         if gd != 0.0:
-            nudge = int(round(gd * 2.2))
+            # Score effects: the club chasing the game shoots more (from further out).
+            nudge = int(round(-max(-3.0, min(3.0, gd)) * 1.6))
             home_cf_n += nudge
             away_cf_n -= nudge
         total_cf = max(1, int(home_cf_n) + int(away_cf_n))
         home_share_n = float(home_cf_n) / float(total_cf)
-        home_share_n = max(0.34, min(0.66, home_share_n))
-        home_cf_n = max(36, int(round(total_cf * home_share_n)))
-        away_cf_n = max(36, total_cf - home_cf_n)
+        home_share_n = max(0.20, min(0.80, home_share_n))
+        home_cf_n = max(24, int(round(total_cf * home_share_n)))
+        away_cf_n = max(24, total_cf - home_cf_n)
         if getattr(home, "_tactics", None) is not None or getattr(away, "_tactics", None) is not None:
             try:
                 from app.sim_engine.economy.coaching_ai import game_tactic_mods
@@ -18392,10 +18420,9 @@ class SimEngine:
         aid = str(getattr(away, "team_id", getattr(away, "id", "A")))
         s_home = max(0.15, min(0.92, float(strength_map.get(hid, 0.5)) * float(home_strength_scale)))
         s_away = max(0.15, min(0.92, float(strength_map.get(aid, 0.5)) * float(away_strength_scale)))
-        win_delta = float(getattr(self, "_franchise_home_win_prob_delta", 0) or 0)
-        if win_delta:
-            s_home = max(0.12, min(0.94, s_home + win_delta * 1.15))
-            s_away = max(0.12, min(0.94, s_away - win_delta * 1.15))
+        # Locker-room matchup context already moved home/away_strength_scale
+        # (storyline_coverage.apply_matchup_to_scales). Applying its win delta
+        # here and again in OT counted the same storyline three times.
 
         _rules = self._board_game_rules()
         base = 3.08 * _GM_LEAGUE_SCORING_PACE_MULT * _board_light_goal_rate_mult(_rules)
@@ -18415,21 +18442,25 @@ class SimEngine:
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
 
-        home_mu -= max(0.0, (0.52 - self._team_strength(home)) * 1.35)
-        away_mu -= max(0.0, (0.52 - self._team_strength(away)) * 1.35)
+        home_mu -= max(0.0, (0.52 - self._team_strength(home)) * 0.55)
+        away_mu -= max(0.0, (0.52 - self._team_strength(away)) * 0.55)
         _tac = self._tactic_game_goal_mults(home, away, home_b2b=home_b2b, away_b2b=away_b2b)
-        if _tac is not None:
-            home_mu *= _tac[0]
-            away_mu *= _tac[1]
         try:
-            home_mu *= math.exp(1.70 * (float(s_home) - 0.56))
-            away_mu *= math.exp(1.70 * (float(s_away) - 0.56))
+            # Was 1.70 on top of the matchup term: a 0.20 strength gap became a
+            # ~1.6 goal-per-game edge, so contenders won ~85% and standings split in two.
+            home_mu *= math.exp(0.60 * (float(s_home) - 0.56))
+            away_mu *= math.exp(0.60 * (float(s_away) - 0.56))
             home_mu *= self._gm_star_scoring_mult(home)
             away_mu *= self._gm_star_scoring_mult(away)
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
         home_mu = max(1.85, min(3.70, home_mu))
         away_mu = max(1.75, min(3.55, away_mu))
+        # Coaching tactics and back-to-backs act on top of the talent cap; before,
+        # a capped contender's tactics and fatigue changed nothing.
+        if _tac is not None:
+            home_mu *= _tac[0]
+            away_mu *= _tac[1]
         # Starter vs best healthy goalie. A rested or lesser starter lets in more.
         def _starter_adj(starter: Any, team: Any) -> float:
             healthy = [g for g in self._gm_goalies(team) if not self._injury_sidelined(g)] or list(self._gm_goalies(team) or [])
@@ -18454,11 +18485,44 @@ class SimEngine:
         sg = max(0.72, min(1.62, float(noise_scale)))
         nh = self._narrative_team_goal_sigma_multiplier(home)
         na = self._narrative_team_goal_sigma_multiplier(away)
-        gap = abs(float(diff))
-        sigma_damp = 1.0 - _GM_STRENGTH_MATCHUP_SIGMA_DAMP * min(1.0, gap / 0.32)
-        sigma_base = _GM_STRENGTH_GAME_GOAL_SIGMA * max(0.70, sigma_damp)
-        home_goals = max(0, int(round(rng.gauss(home_mu, sigma_base * sg * nh))))
-        away_goals = max(0, int(round(rng.gauss(away_mu, sigma_base * sg * na))))
+        # Process layer: how well each club actually played tonight. A shared tilt
+        # (one side drove play) plus each side's own night. This is the game's xG.
+        # Zero-sum on share: the game's total chance volume moves a little, but who
+        # owns it swings hard. Fat tail = the nights one club caves the other in
+        # (4.6 vs 0.6). Total stays put, so league scoring pace doesn't drift.
+        _total = (home_mu + away_mu) * math.exp(rng.gauss(0.0, 0.13) - 0.0085)
+        _logit = math.log(max(0.05, home_mu) / max(0.05, away_mu))
+        _logit += rng.gauss(0.0, 0.62) * (1.5 if rng.random() < 0.20 else 1.0) * max(0.8, min(1.3, float(sg)))
+        _hs = 1.0 / (1.0 + math.exp(-_logit))
+        home_mu = max(0.25, min(6.8, _total * _hs))
+        away_mu = max(0.25, min(6.8, _total * (1.0 - _hs)))
+        # Finishing / goaltending layer: goals scatter around xG roughly like a
+        # Poisson count. Mismatches no longer get *less* noise than coin flips.
+        # Goals are a count of rare events: Poisson around tonight's xG. The old
+        # rounded Gaussian (sd ~1.1-1.3, and *less* in mismatches) piled results
+        # into 4-2 / 5-3 / 3-2 and almost never produced a 7-1 or a 1-0.
+        def _poisson(lam: float) -> int:
+            lam = max(0.05, float(lam))
+            limit = math.exp(-lam)
+            k, prod = 0, rng.random()
+            while prod > limit and k < 15:
+                k += 1
+                prod *= rng.random()
+            return k
+
+        # Hot/cold goalie and finishing nights (narrative variance) stretch the count.
+        _h_rate = home_mu * math.exp(rng.gauss(0.0, 0.10 * max(0.7, float(nh))))
+        _a_rate = away_mu * math.exp(rng.gauss(0.0, 0.10 * max(0.7, float(na))))
+        # Played in six 10-minute chunks with score effects: the leader sits back,
+        # the trailing club pushes. Ties and comebacks happen; routs still do too.
+        home_goals = 0
+        away_goals = 0
+        for _seg in range(6):
+            _d = max(-2, min(2, home_goals - away_goals))
+            _hr = _h_rate / 6.0 * ((1.0 - 0.15 * _d) if _d > 0 else (1.0 + 0.12 * -_d))
+            _ar = _a_rate / 6.0 * ((1.0 - 0.15 * -_d) if _d < 0 else (1.0 + 0.12 * _d))
+            home_goals += _poisson(_hr)
+            away_goals += _poisson(_ar)
 
         overtime = False
         en_home = 0
@@ -18481,7 +18545,6 @@ class SimEngine:
 
         if home_goals == away_goals:
             home_p = 0.52 + float(diff) * _GM_STRENGTH_TIEBREAK_SKILL_K
-            home_p += float(getattr(self, "_franchise_home_win_prob_delta", 0) or 0)
             home_p = max(0.28, min(0.72, home_p))
             overtime = True
             ot_len = int(round(60.0 * float((_rules or {}).get("ot_minutes", 5) or 5)))

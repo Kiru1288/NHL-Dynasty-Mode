@@ -4021,6 +4021,9 @@ def _franchise_resolve_game_score(
         kw["light_mode"] = True
         out = sim._simulate_game(r2, home, away, smap, **kw)
         if isinstance(out, ScoreResult):
+            if first_failed:
+                session._score_fallback_count = int(getattr(session, "_score_fallback_count", 0) or 0) + 1
+                log.warning("Full sim failed for %s @ %s day %s; used fast sim (fallback #%s)", aid, hid, calendar_day, session._score_fallback_count)
             if first_failed and is_user_game:
                 _franchise_enqueue_critical_notice(
                     session,
@@ -5685,9 +5688,8 @@ def _repair_on_ice_share_to_team_box(session: FranchiseSession) -> bool:
         total = float(h) + float(a)
         if total <= 0:
             return h, a
-        share = h / total
-        if 0.40 <= share <= 0.60:
-            return h, a
+        # Real games go 30/70 and beyond; keep the box as simulated.
+        return h, a
         target = 0.50 + max(-0.10, min(0.10, gd * 0.018))
         blended = 0.50 * max(0.40, min(0.60, share)) + 0.50 * target
         blended = max(0.40, min(0.60, blended))
@@ -6244,6 +6246,13 @@ def _build_team_analytics_rows(session: FranchiseSession) -> List[Dict[str, Any]
             "pp_games": 0.0,
             "light_games": 0.0,
             "full_event_games": 0.0,
+            "score_xgf": 0.0,
+            "score_xga": 0.0,
+            "flurry_xgf": 0.0,
+            "flurry_xga": 0.0,
+            "flurry_score_xgf": 0.0,
+            "flurry_score_xga": 0.0,
+            "adj_games": 0.0,
         }
     )
     team_situations: Dict[str, Dict[str, int]] = defaultdict(lambda: {key: 0 for key in _SITUATION_KEYS})
@@ -6332,6 +6341,27 @@ def _build_team_analytics_rows(session: FranchiseSession) -> List[Dict[str, Any]
         hg = sum(h_periods) + hot
         ag = sum(a_periods) + aot
         ot_flag = (hot + aot) > 0
+        # Game-by-game adjusted xG (was a flat season multiplier, so Flurry/Score
+        # columns were just xG x 0.99). Score: a club that led spent the night
+        # sitting back, so its chances count for more and the chaser's for less.
+        # Flurry: rebound chains in a pile-on night are discounted.
+        if h_xgf > 0 or a_xgf > 0:
+            _m = max(-3, min(3, hg - ag))
+            _wh = 1.0 + 0.055 * _m
+            _wa = 1.0 - 0.055 * _m
+            _fh = 1.0 - 0.10 * min(1.4, h_xgf / 3.2)
+            _fa = 1.0 - 0.10 * min(1.4, a_xgf / 3.2)
+            for _t, _xf, _xa, _wf, _wa2, _ff, _fa2 in (
+                (ht, h_xgf, a_xgf, _wh, _wa, _fh, _fa),
+                (at, a_xgf, h_xgf, _wa, _wh, _fa, _fh),
+            ):
+                _t["score_xgf"] += _xf * _wf
+                _t["score_xga"] += _xa * _wa2
+                _t["flurry_xgf"] += _xf * _ff
+                _t["flurry_xga"] += _xa * _fa2
+                _t["flurry_score_xgf"] += _xf * _ff * _wf
+                _t["flurry_score_xga"] += _xa * _fa2 * _wa2
+                _t["adj_games"] += 1.0
         first_id = str(game.get("first_goal_team_id") or "")
         h_en = a_en = 0
         for ev in list(game.get("scoring_events") or []) or list(game.get("light_goals") or []):
@@ -6572,7 +6602,17 @@ def _build_team_analytics_rows(session: FranchiseSession) -> List[Dict[str, Any]
         road_gp = int(situation.get("road_wins", 0) or 0) + int(situation.get("road_losses", 0) or 0) + int(situation.get("road_otl", 0) or 0)
         merged["home_point_pct"] = round(int(situation.get("home_points", 0) or 0) / float(home_gp * 2), 4) if home_gp else None
         merged["road_point_pct"] = round(int(situation.get("road_points", 0) or 0) / float(road_gp * 2), 4) if road_gp else None
-        out.append(enrich_team_game_result_row(merged))
+        enriched = enrich_team_game_result_row(merged)
+        if poss_coverage_ok and float(event_totals.get("adj_games", 0) or 0) > 0:
+            def _pct2(f: float, a: float) -> Optional[float]:
+                return round(f / (f + a), 4) if (f + a) > 0 else None
+            for key in ("flurry", "score", "flurry_score"):
+                f = float(event_totals.get(f"{key}_xgf", 0) or 0)
+                a = float(event_totals.get(f"{key}_xga", 0) or 0)
+                enriched[f"{key}_xgf"] = round(f, 3)
+                enriched[f"{key}_xga"] = round(a, 3)
+                enriched[f"{key}_xgf_pct"] = _pct2(f, a)
+        out.append(enriched)
     return out
 
 
@@ -8312,6 +8352,87 @@ def _nhl_calendar_strip(session: FranchiseSession, *, before: int = 10, after: i
     return out
 
 
+def _display_play_role(p: Any) -> Optional[str]:
+    """Role label from how the player actually rates, for lineup screens.
+
+    `archetype` on generated / imported players is a random draw by position
+    (assign_skater_archetype), so it can't describe how a player plays.
+    Real players carry chapter ratings from the dynasty file (offence, defence,
+    transition, physical); those name the standout part of his game. Legacy
+    shooting vs passing averages split offence into sniper vs playmaker.
+    Display only: archetype (and its OVR weighting) is left untouched.
+    """
+    ident = getattr(p, "identity", None)
+    pos = str(getattr(getattr(ident, "position", None), "value", getattr(ident, "position", "")) or "").upper()
+    if pos == "G":
+        return None
+    defense_pos = pos in ("D", "LD", "RD")
+    ratings = getattr(p, "ratings", None)
+    ratings = ratings if isinstance(ratings, dict) else {}
+
+    def _avg(keys: List[str]) -> Optional[float]:
+        vals = [float(ratings[k]) for k in keys if isinstance(ratings.get(k), (int, float))]
+        return sum(vals) / len(vals) if vals else None
+
+    try:
+        from app.sim_engine.entities.player import (
+            DEFENSE_ATTRS, OFFENSE_ATTRS, PHYSICAL_ATTRS, PLAYMAKING_ATTRS, SKATING_ATTRS,
+        )
+        shoot, passing = _avg(OFFENSE_ATTRS), _avg(PLAYMAKING_ATTRS)
+        leg_def, leg_phy, leg_sk = _avg(DEFENSE_ATTRS), _avg(PHYSICAL_ATTRS), _avg(SKATING_ATTRS)
+    except Exception:
+        shoot = passing = leg_def = leg_phy = leg_sk = None
+
+    chapters: Dict[str, float] = {}
+    profile = getattr(p, "attribute_profile", None)
+    if isinstance(profile, dict) and isinstance(profile.get("chapters"), dict):
+        for key in ("offence", "defence", "transition", "physical"):
+            val = profile["chapters"].get(key)
+            if isinstance(val, (int, float)):
+                chapters[key] = float(val)
+    if len(chapters) < 4:
+        # Generated players without a chapter profile: legacy category averages.
+        if None in (shoot, passing, leg_def, leg_phy):
+            return None
+        chapters = {
+            "offence": (shoot + passing) / 2.0,
+            "defence": leg_def,
+            "transition": leg_sk if leg_sk is not None else (shoot + passing) / 2.0,
+            "physical": leg_phy,
+        }
+
+    mean = sum(chapters.values()) / len(chapters)
+    ranked = sorted(chapters.items(), key=lambda kv: kv[1], reverse=True)
+    (top_key, top), (second_key, second) = ranked[0], ranked[1]
+    dev = {k: v - mean for k, v in chapters.items()}
+    # Nothing stands out, or offence and defence are level: a genuine two-way player.
+    if (
+        top - mean < 1.5
+        or top - second < 1.0
+        or ({top_key, second_key} == {"offence", "defence"} and top - second < 2.0)
+    ):
+        return "Two-way D" if defense_pos else "Two-way F"
+
+    if defense_pos:
+        if top_key == "offence":
+            return "Offensive D"
+        if top_key == "transition":
+            return "Puck mover"
+        if top_key == "defence":
+            return "Shutdown D"
+        return "Physical D"
+
+    if top_key == "offence":
+        if dev["physical"] >= 2.0:
+            return "Power forward"
+        # Offence well clear of transition = finisher; close together = creator.
+        return "Sniper" if chapters["offence"] - chapters["transition"] >= 3.0 else "Playmaker"
+    if top_key == "transition":
+        return "Playmaker" if pos == "C" else "Speed winger"
+    if top_key == "defence":
+        return "Defensive F"
+    return "Power forward" if dev["offence"] >= 0 else "Grinder"
+
 def _serialize_player_row(
     p: Any,
     *,
@@ -8386,6 +8507,7 @@ def _serialize_player_row(
         "weight_kg": wkg,
         "weight": round(wkg * 2.20462) if wkg > 0 else 0,
         "archetype": str(getattr(p, "archetype", "") or ""),
+        "play_role_label": _display_play_role(p),
         "contract": {
             "salary": cap_hit_m,
             "cap_hit": cap_hit_m,
@@ -13071,6 +13193,9 @@ def _rubber_band_strength_map(raw: Dict[str, Any], league: Any, user_team_id: st
     except Exception:
         dom = 0.0
     utid = str(user_team_id or "")
+    # Hidden difficulty: off unless the save explicitly opts in (rubber_band_user).
+    if not bool(getattr(league, "_rubber_band_user", False)):
+        dom = 0.0
     if dom > 0.2 and utid in out:
         pull = 0.32 * min(1.0, (dom - 0.2) / 0.8)
         out[utid] = out[utid] + (mean - out[utid]) * pull
@@ -13165,6 +13290,15 @@ def _franchise_daily_league_tick(session: FranchiseSession, calendar_idx: int) -
         last_elite = int(getattr(session, "_scoring_elite_refresh_idx", -99) or -99)
         # Negative gap = stamp from last season's calendar (cursor resets to 0 each year).
         strength_rev = int(getattr(session, "_roster_revision", 0) or 0)
+        try:
+            _inj = 0
+            for _tm in list(getattr(getattr(getattr(session, "sim", None), "league", None), "teams", None) or []):
+                for _p in list(getattr(_tm, "roster", None) or []):
+                    if int(getattr(_p, "_world_injury_games_remaining", 0) or 0) > 0:
+                        _inj += 1
+            strength_rev = (strength_rev, _inj)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         if (
             int(calendar_idx) - last_elite >= 14
             or int(calendar_idx) < last_elite
@@ -13804,8 +13938,8 @@ def _simulate_franchise_slot(session: FranchiseSession, slot: Any) -> Tuple[Opti
             _swallowed_log.debug("suppressed exception", exc_info=True)
 
         base_noise = 1.0 + 0.22 * (session.chaos_index - 0.5)
-        nh = world_chemistry.chemistry_chaos_dampen(home, base_noise)
-        na = world_chemistry.chemistry_chaos_dampen(away, base_noise)
+        nh = base_noise
+        na = base_noise
         _, ih = sim._identity_runner_strength_noise_factors(home)
         _, ia = sim._identity_runner_strength_noise_factors(away)
         noise_scale = 0.5 * (nh + na) * (0.5 * (ih + ia))
@@ -25960,6 +26094,8 @@ def _build_lean_calendar_section(session: FranchiseSession) -> Dict[str, Any]:
     return {
         "nhl_today": _nhl_today_payload(session),
         "nhl_calendar_strip": _nhl_calendar_strip(session),
+        # One shared answer to "is this the whole season?" for every client check.
+        "nhl_calendar_full_complete": False,
         "nhl_calendar_full": nhl_calendar_full,
     }
 
@@ -26311,6 +26447,7 @@ def _build_state_payload_impl(session: FranchiseSession, *, include_heavy: bool 
         ),
         "scouting_as_of_iso": _scouting_calendar_iso(session),
         "nhl_calendar_strip": nhl_strip,
+        "nhl_calendar_full_complete": bool(include_heavy and not postseason_lean),
         "nhl_calendar_full": nhl_calendar_full,
         "season_anchor_events": season_anchor_event_markers(int(session.season_calendar_year)),
         "team": {
@@ -27798,6 +27935,40 @@ def generate_franchise_next_season(session):
 def advance_season_phase(session, target=None):
     from services.franchise_offseason import advance_season_phase as _fn
     return _fn(session, target)
+
+
+def preview_franchise_chemistry(session: FranchiseSession, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Chemistry report for an unsaved lineup, scored by the same model as a save.
+
+    Swaps the lines in only for the length of the report build and restores
+    them after: nothing is persisted, no storyline / promise hooks run, and the
+    cached saved-lineup report is put back untouched.
+    """
+    from app.sim_engine.systems.chemistry import build_public_chemistry_report
+
+    if not isinstance(payload, dict):
+        raise ValueError("Preview payload must be an object")
+    lines = payload.get("lines")
+    if not isinstance(lines, (dict, list)):
+        raise ValueError("Preview payload missing 'lines'")
+    unit_type = str(payload.get("unit_type") or "even_strength")
+    original = session.lines
+    cached = getattr(session, "_cached_chemistry_report", None)
+    preview = dict(original) if isinstance(original, dict) else {}
+    unit = dict(preview.get(unit_type) or {})
+    unit["lines"] = lines
+    preview[unit_type] = unit
+    try:
+        session.lines = preview
+        session._cached_chemistry_report = None
+        report = build_public_chemistry_report(session)
+        if isinstance(report, dict):
+            report = dict(report)
+            report["preview"] = True
+        return report
+    finally:
+        session.lines = original
+        session._cached_chemistry_report = cached
 
 
 def get_franchise_chemistry_report(session: FranchiseSession) -> Dict[str, Any]:

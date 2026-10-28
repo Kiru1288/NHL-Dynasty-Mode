@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { buildCinematicCss } from "./eventHelpers";
 
+const STATIC_SHELL_PREFIXES = new Set(["evt", "cleanup", "comingnight", "draft", "draftreview", "fa", "nextseason", "prospectrights", "resign"]);
+
 /**
  * Shared cinematic layout matching PlayoffStartMenu design language.
  */
@@ -49,7 +51,9 @@ export default function CinematicEventShell({
 
   const skipCeremony = Number(revealDelayMs) <= 0;
   const [introDone, setIntroDone] = useState(() => skipCeremony || readPersisted());
-  const css = buildCinematicCss(prefix);
+  // Shell CSS for these prefixes lives in game.css; only an unknown prefix
+  // still gets its sheet generated at runtime.
+  const css = STATIC_SHELL_PREFIXES.has(prefix) ? "" : buildCinematicCss(prefix);
   const p = prefix;
   const revealId = revealKey ?? title;
 
@@ -92,7 +96,7 @@ export default function CinematicEventShell({
 
   return (
     <section className={rootClasses} data-register={register}>
-      <style>{css}</style>
+      {css ? <style>{css}</style> : null}
       <div className={`${p}-bg`}>
         <div className={`${p}-bg-scrim`} />
         <div className={`${p}-bg-noise`} />

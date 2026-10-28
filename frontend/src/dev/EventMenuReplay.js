@@ -63,46 +63,7 @@ function advanceIndexForNextRefresh(current) {
   writeIndex((current + 1) % REPLAY_KEYS.length);
 }
 
-const HUD_CSS = `
-.emr-hud {
-  position: fixed;
-  top: 12px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 99999;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 14px;
-  border-radius: 999px;
-  background: rgba(2, 6, 23, 0.92);
-  border: 1px solid rgba(148, 163, 184, 0.35);
-  color: #e2e8f0;
-  font: 600 12px/1 Inter, system-ui, sans-serif;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
-  pointer-events: auto;
-}
-.emr-hud kbd {
-  padding: 2px 6px;
-  border-radius: 4px;
-  background: rgba(30, 41, 59, 0.9);
-  border: 1px solid rgba(148, 163, 184, 0.25);
-  font-size: 11px;
-}
-.emr-hud button {
-  cursor: pointer;
-  border: 1px solid rgba(148, 163, 184, 0.3);
-  background: rgba(30, 41, 59, 0.85);
-  color: #f8fafc;
-  border-radius: 999px;
-  padding: 4px 10px;
-  font-weight: 700;
-  font-size: 11px;
-}
-.emr-hud button:hover { border-color: rgba(147, 197, 253, 0.5); }
-.emr-hud .emr-title { color: #93c5fd; font-weight: 800; letter-spacing: 0.06em; }
-.emr-hud .emr-count { color: #94a3b8; }
-`;
+
 
 export default function EventMenuReplay() {
   const [index, setIndex] = useState(readStartIndex);
@@ -158,7 +119,7 @@ export default function EventMenuReplay() {
 
   return (
     <>
-      <style>{HUD_CSS}</style>
+      {null}
       <div className="emr-hud" role="toolbar" aria-label="Event menu replay controls">
         <span className="emr-title">REPLAY QA</span>
         <span className="emr-count">

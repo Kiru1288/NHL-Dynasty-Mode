@@ -12,7 +12,6 @@ export const FRANCHISE_LIFECYCLE = [
   { id: "draft_lottery", label: "Draft Lottery", folder: "draftLottery", backendStage: "draft_lottery", status: "active" },
   { id: "draft_combine", label: "Draft Combine", folder: "draftCombine", backendStage: "draft_combine", status: "active" },
   { id: "draft", label: "NHL Draft", folder: "nhlDraft", backendStage: "draft", status: "active" },
-  { id: "draft_review", label: "Draft Review", folder: "nhlDraft", backendStage: "draft_review", status: "active" },
   { id: "prospect_rights", label: "Prospect Rights", folder: "prospectDevelopment", backendStage: "prospect_rights", status: "active" },
   { id: "re_sign", label: "Re-Sign", folder: "reSign", backendStage: "re_sign", status: "active" },
   { id: "free_agency", label: "Free Agency", folder: "freeAgency", backendStage: "free_agency", status: "active" },
@@ -29,6 +28,9 @@ export function resolveTimelineIndex(franchiseState) {
   if (phase === "post_cup" || stage === "awards") {
     return FRANCHISE_LIFECYCLE.findIndex((s) => s.id === "awards");
   }
+
+  // Old saves parked on the retired Draft Review stage sit on the NHL Draft step.
+  if (stage === "draft_review") return FRANCHISE_LIFECYCLE.findIndex((s) => s.id === "draft");
 
   const byStage = FRANCHISE_LIFECYCLE.findIndex((s) => s.backendStage === stage);
   if (byStage >= 0) return byStage;

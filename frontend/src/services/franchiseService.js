@@ -549,6 +549,12 @@ export async function advanceContractNegotiationDay(days = 1) {
   return data;
 }
 
+/** Chemistry for an unsaved lineup, scored by the backend model. Nothing is saved. */
+export async function previewFranchiseChemistry(lines, unitType = "even_strength") {
+  const { data } = await api.post("/api/franchise/chemistry/preview", { unit_type: unitType, lines });
+  return data;
+}
+
 export async function getFranchiseChemistry() {
   const { data } = await api.get("/api/franchise/chemistry");
   return data;

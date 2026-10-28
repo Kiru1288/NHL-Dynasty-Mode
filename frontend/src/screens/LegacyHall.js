@@ -8,7 +8,6 @@ import { useGameUI } from "../game/GameUIContext";
 import { SCREENS } from "../game/constants";
 import { loadTeamIdentities } from "../components/teamIdentity/teamIdentityStore";
 import { apiError, legacyApi, seasonLabel, takeLegacyFocus } from "../components/legacy/legacyApi";
-import "../components/legacy/legacy.css";
 
 const SECTIONS = [
   { id: "franchise", label: "Franchise Hall" },

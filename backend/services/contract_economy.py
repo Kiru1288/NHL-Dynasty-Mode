@@ -5283,10 +5283,17 @@ def player_destination_factors(
         elif better >= _ROLE_DEPTH_SLOTS.get(bucket, 4):
             _add("role", "Blocked on the depth chart: limited role", -6.0 if ovr >= 78 else -3.5)
 
+    # Fans were +40 on top of a clamped fit and maxed every offer's fit bonus on
+    # their own. They now count like any other factor (about -2.5 .. +10) and the
+    # whole read shares one clamp, so contender / role / hometown / taxes matter.
+    fan_eff = fan_pts * 0.25
+    for f in factors:
+        if f.get("key") == "fans":
+            f["effect"] = round(fan_eff, 1)
     fit = sum(f["effect"] for f in factors if f.get("key") != "fans")
-    score = max(-18.0, min(14.0, fit)) + fan_pts
+    score = max(-20.0, min(20.0, fit + fan_eff))
     factors.sort(key=lambda f: -abs(f["effect"]))
-    if score >= 20:
+    if score >= 14:
         label = "Dying to play here"
     elif score >= 5:
         label = "Wants to sign here"
@@ -5601,9 +5608,13 @@ def evaluate_contract_offer(
     # A city he doesn't want costs a premium over his ask (about 1.2% per point,
     # 15%+ when he won't play in that market at all).
     fit_premium = max(0.0, -dest_score) * 0.012
+    _days_mkt = int(offer.get("days_on_market") or getattr(player, "days_on_market", 0) or 0)
+    _hard_no = bool(destination.get("dealbreaker")) and not destination.get("own_club") and _days_mkt < 20
     if destination.get("dealbreaker"):
         fit_premium = max(fit_premium, 0.15)
     fit_ask = want_aav * (1.0 + fit_premium)
+    if _hard_no:
+        accepted = False
     # Fringe players take any NHL job; real players hold out for the premium
     # when the fit is clearly bad.
     if (
@@ -5615,7 +5626,8 @@ def evaluate_contract_offer(
     ):
         accepted = False
     if (
-        aav_m >= fit_ask - 0.005
+        not _hard_no
+        and aav_m >= fit_ask - 0.005
         and _clause_ok
         and _term_ok
         and not bonus_short
@@ -7006,6 +7018,10 @@ def sign_player_to_team(
         # salary bounds still apply: CPU clubs were handing out $25M AAVs.
         _hi = league_max_salary_m(league)
         _lo = league_minimum_aav(league)
+        try:
+            years = min(int(years), int(cba_max_term(league, own_team=_ctx not in ("ufa", "free_agent", "fa"))))
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         if aav_m > _hi:
             aav_m = _hi
         elif aav_m < _lo and category not in ("elc", "entry_level"):

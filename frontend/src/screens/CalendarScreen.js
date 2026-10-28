@@ -1266,11 +1266,17 @@ function CalendarScreen(props = {}) {
     hydrateFranchiseNarrative?.();
   }, [hydrateFranchiseNarrative]);
 
+  const fullCalendarKeyRef = useRef("");
   useEffect(() => {
     if (typeof hydrateFranchiseHeavyState !== "function") return undefined;
     const leanCalendar = franchiseState?.nhl_calendar_full;
-    const hasLeanCalendarWindow = Array.isArray(leanCalendar) && leanCalendar.length > 0;
-    if (hasLeanCalendarWindow) return undefined;
+    // The advance payload only carries a near-today window (21 days back, 14 ahead).
+    // That is not the season: fetch the full calendar once per day/session.
+    const hasFullSeason = franchiseState?.nhl_calendar_full_complete === true && Array.isArray(leanCalendar) && leanCalendar.length > 0;
+    if (hasFullSeason) return undefined;
+    const key = `${franchiseState?.session_id || ""}:${franchiseState?.calendar_cursor ?? ""}`;
+    if (fullCalendarKeyRef.current === key) return undefined;
+    fullCalendarKeyRef.current = key;
     let cancelled = false;
     (async () => {
       try {
@@ -1552,6 +1558,57 @@ function CalendarScreen(props = {}) {
 
     return out;
   }, [gamesByDate, activeTeam]);
+
+  // Road trips / homestands as runs, back-to-backs, and the month's record.
+  const teamSchedule = useMemo(() => {
+    const dates = [...userTeamGameByDate.keys()].sort();
+    const byIso = new Map();
+    const dayMs = 86400000;
+    const toTime = (iso) => new Date(`${iso}T12:00:00`).getTime();
+    let runStart = 0;
+    for (let i = 0; i <= dates.length; i += 1) {
+      const type = i < dates.length ? (isHomeGame(userTeamGameByDate.get(dates[i]), activeTeam) ? "home" : "away") : null;
+      const prevType = i > 0 ? (isHomeGame(userTeamGameByDate.get(dates[i - 1]), activeTeam) ? "home" : "away") : null;
+      if (i === dates.length || (i > 0 && type !== prevType)) {
+        const length = i - runStart;
+        for (let k = runStart; k < i; k += 1) {
+          byIso.set(dates[k], { ...(byIso.get(dates[k]) || {}), type: prevType, runStart: k === runStart, runLength: length });
+        }
+        runStart = i;
+      }
+      if (i < dates.length && i > 0 && Math.round((toTime(dates[i]) - toTime(dates[i - 1])) / dayMs) === 1) {
+        byIso.set(dates[i], { ...(byIso.get(dates[i]) || {}), b2b: true });
+      }
+    }
+    const monthPrefix = `${viewDate.getFullYear()}-${String(viewDate.getMonth() + 1).padStart(2, "0")}`;
+    const rec = { W: 0, L: 0, OTL: 0 };
+    const monthResults = [];
+    let played = 0;
+    dates.forEach((iso) => {
+      const game = userTeamGameByDate.get(iso);
+      if (!isCompletedGame(game)) return;
+      played += 1;
+      if (!iso.startsWith(monthPrefix)) return;
+      const r = String(getGameResult(game, activeTeam) || "").toUpperCase();
+      const key = r.startsWith("W") ? "W" : r.startsWith("OT") || r.startsWith("SO") ? "OTL" : "L";
+      rec[key] += 1;
+      monthResults.push(key);
+    });
+    let streak = "";
+    if (monthResults.length) {
+      const last = monthResults[monthResults.length - 1];
+      let n = 0;
+      for (let i = monthResults.length - 1; i >= 0 && monthResults[i] === last; i -= 1) n += 1;
+      streak = `${last === "OTL" ? "OT" : last}${n}`;
+    }
+    return {
+      byIso,
+      monthRecord: monthResults.length ? `${rec.W}-${rec.L}-${rec.OTL}` : "",
+      streak,
+      played,
+      remaining: Math.max(0, dates.length - played),
+    };
+  }, [userTeamGameByDate, activeTeam, viewDate]);
 
   const selectedDayGamesRaw = useMemo(() => {
     return gamesByDate.get(selectedDateISO) || EMPTY_ARRAY;
@@ -2218,7 +2275,7 @@ function CalendarScreen(props = {}) {
   }, [goPreviousMonth, goNextMonth]);
 
   return (
-    <div className="nhlcal-root" ref={calendarRootRef}>
+    <div className="nhlcal-root nhlcal-dd" ref={calendarRootRef}>
       <CalendarStyles />
       <aside className="nhlcal-sidebar">
         <button
@@ -2301,6 +2358,13 @@ function CalendarScreen(props = {}) {
               <div className="nhlcal-month-title-block">
                 <span className="nhlcal-month-year">{viewDate.getFullYear()}</span>
                 <h2>{MONTH_NAMES[viewDate.getMonth()]}</h2>
+                {teamSchedule.monthRecord || teamSchedule.played ? (
+                  <span className="nhlcal-month-context">
+                    {teamSchedule.monthRecord ? <b>{teamSchedule.monthRecord}</b> : null}
+                    {teamSchedule.streak ? <em className={`is-${teamSchedule.streak.charAt(0).toLowerCase()}`}>{teamSchedule.streak}</em> : null}
+                    <span>{teamSchedule.played} GP · {teamSchedule.remaining} left</span>
+                  </span>
+                ) : null}
               </div>
               <button type="button" onClick={goNextMonth} aria-label="Next month">
                 ›
@@ -2513,7 +2577,7 @@ function CalendarScreen(props = {}) {
               ))}
             </div>
 
-            <div className={`nhlcal-month-grid nhlcal-scroll-surface ${denseMode ? "is-dense" : ""}`}>
+            <div className={`nhlcal-month-grid nhlcal-scroll-surface ${denseMode ? "is-dense" : ""}`} style={{ "--weeks": Math.max(4, Math.round(monthGrid.length / 7)) }}>
               {monthGrid.map((dayCell) => {
                 const iso = toISODate(dayCell.date);
                 const dayGamesRaw = gamesByDate.get(iso) || EMPTY_ARRAY;
@@ -2543,6 +2607,7 @@ function CalendarScreen(props = {}) {
                   : dayGamesRaw;
 
                 const teamGame = dayGamesRaw.find((game) => isTeamGame(game, activeTeam));
+                const runInfo = teamGame ? teamSchedule.byIso.get(iso) : null;
                 const isSelected = iso === selectedDateISO;
                 const isToday = iso === toISODate(currentDate || new Date());
                 const isOtherMonth = dayCell.outsideMonth;
@@ -2605,6 +2670,8 @@ function CalendarScreen(props = {}) {
                       hasGames ? "has-games" : "",
                       hasRawGames ? "has-raw-games" : "",
                       teamGame ? "has-team-game" : "",
+                      runInfo?.type ? `run-${runInfo.type}` : "",
+                      runInfo?.b2b ? "is-b2b" : "",
                       hasSpecialEvents ? "has-special-events" : "",
                       hasCriticalEvent ? "has-critical-event" : "",
                       hasHighEvent ? "has-high-event" : "",
@@ -2618,6 +2685,12 @@ function CalendarScreen(props = {}) {
                   >
                     <div className="nhlcal-day-number-row">
                       <span className="nhlcal-day-number">{dayCell.date.getDate()}</span>
+                      {runInfo?.b2b ? <span className="nhlcal-b2b-tag" title="Second night of a back-to-back">B2B</span> : null}
+                      {runInfo?.runStart && runInfo.runLength >= 3 ? (
+                        <span className={`nhlcal-run-tag is-${runInfo.type}`}>
+                          {runInfo.type === "away" ? "Road trip" : "Homestand"} · {runInfo.runLength}
+                        </span>
+                      ) : null}
 
                       <span className="nhlcal-day-marker-row">
                       {hasSpecialEvents ? (
@@ -3705,7 +3778,14 @@ function UpcomingStretchCard({ games, activeTeam, allTeams, onViewSchedule }) {
 
       <div className="nhlcal-stretch-list">
         {games.length ? (
-          games.map((game, index) => {
+          games
+            .filter((game, index, list) => {
+              const opp = getOpponentFromGame(game, activeTeam, allTeams);
+              const abbr = getTeamAbbreviation(opp);
+              if (!opp || !abbr || abbr === "TBD") return false;
+              return list.findIndex((g) => String(g.date) === String(game.date)) === index;
+            })
+            .map((game, index) => {
             const opponent = getOpponentFromGame(game, activeTeam, allTeams);
             const isHome = isHomeGame(game, activeTeam);
 
@@ -3715,6 +3795,7 @@ function UpcomingStretchCard({ games, activeTeam, allTeams, onViewSchedule }) {
                 <TeamIdentityBadge team={opponent} size="mini" />
                 <strong>
                   {isHome ? "vs" : "@"} {getTeamAbbreviation(opponent)}
+                  {opponent?.record || opponent?.record_display ? <small>{opponent.record || opponent.record_display}</small> : null}
                 </strong>
                 <em className={isHome ? "home" : "away"}>{isHome ? "Home" : "Away"}</em>
               </div>
@@ -5153,8 +5234,10 @@ function buildMonthGrid(viewDate) {
   const gridStart = new Date(year, month, 1 - startDay);
 
   const cells = [];
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const total = Math.ceil((startDay + daysInMonth) / 7) * 7;
 
-  for (let index = 0; index < 42; index += 1) {
+  for (let index = 0; index < total; index += 1) {
     const date = new Date(gridStart);
     date.setDate(gridStart.getDate() + index);
 
@@ -5588,10 +5671,10 @@ function buildGamePreview(
     ? getProjectedGoalie(game, userOpponent, "opponent")
     : getProjectedGoalie(game, awayTeam, "opponent");
 
-  const lastMeeting =
-    userInGame && previousTeamGame
-      ? getLastMeetingLabel(previousTeamGame, activeTeam, userOpponent)
-      : "No recent meeting";
+  const meetingGame = userInGame ? findLastMeeting(options.games || [], game, activeTeam, userOpponent, allTeams) : null;
+  const lastMeeting = meetingGame
+    ? getLastMeetingLabel(meetingGame, activeTeam, userOpponent)
+    : "No recent meeting";
   const series = userInGame
     ? getSeasonSeriesLabel(game, activeTeam, userOpponent)
     : getSeasonSeriesLabel(game, homeTeam, awayTeam);
@@ -6090,6 +6173,24 @@ function formatGoalieValue(goalie) {
 
   if (savePct !== null) return `${name} · ${formatSavePct(savePct)}`;
   return name;
+}
+
+function findLastMeeting(games, game, activeTeam, opponent, allTeams = []) {
+  if (!opponent || !activeTeam || !Array.isArray(games)) return null;
+  const gameTime = startOfDay(toDateObject(game?.date) || new Date()).getTime();
+  const gameKey = game?.id || game?.game_id || null;
+  return (
+    games
+      .filter((g) => {
+        if (!g || !isTeamGame(g, activeTeam) || !isCompletedGame(g)) return false;
+        if (gameKey && (g.id || g.game_id) === gameKey) return false;
+        const d = toDateObject(g.date);
+        if (!d || startOfDay(d).getTime() >= gameTime) return false;
+        return isSameTeam(getOpponentFromGame(g, activeTeam, allTeams), opponent);
+      })
+      .sort(sortGamesByDate)
+      .reverse()[0] || null
+  );
 }
 
 function getLastMeetingLabel(previousTeamGame, activeTeam, opponent) {

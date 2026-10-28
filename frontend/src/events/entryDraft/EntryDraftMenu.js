@@ -880,1426 +880,7 @@ function potVal(p) {
 /* Stylesheet                                                          */
 /* ------------------------------------------------------------------ */
 
-const SHEET = `
-.edraft-root{
-  --bg:#0c214d;
-  --bg-2:#0d2555;
-  --panel:rgba(14, 40, 88, .94);
-  --panel-2:rgba(12,35,52,.94);
-  --panel-3:rgba(15,46,66,.78);
-  --line:rgba(156,218,236,.14);
-  --line-soft:rgba(156,218,236,.08);
-  --line-2:rgba(115,229,241,.25);
-  --line-strong:rgba(46, 230, 214, .5);
-  --text:#e9f7fb;
-  --muted:#8096a8;
-  --muted-2:#607789;
-  --cyan:#2ee6d6;
-  --cyan-soft:rgba(46, 230, 214, .13);
-  --gold:#e9a83c;
-  --gold-soft:rgba(233,168,60,.14);
-  --green:#52df94;
-  --green-soft:rgba(82,223,148,.13);
-  --red:#ff606d;
-  --red-soft:rgba(255,96,109,.13);
-  --orange:#ff8a4c;
-  --orange-soft:rgba(255,138,76,.13);
-  --blue:#8ab4ff;
-  --blue-soft:rgba(138,180,255,.13);
-  --purple:#8ab4ff;
-  --purple-soft:rgba(138,180,255,.14);
-  --shadow:0 24px 70px rgba(0,0,0,.42);
-  --depth-registered:inset 0 1px 0 rgba(255,255,255,.04);
-  --ed-bg:#0b1d45;
-  --ed-panel:var(--panel);
-  --ed-panel-2:var(--panel-2);
-  --ed-raise:var(--panel-3);
-  --ed-line:var(--line);
-  --ed-line-strong:var(--line-strong);
-  --ed-line-soft:rgba(156,218,236,.08);
-  --ed-ink:var(--text);
-  --ed-ink-2:var(--muted);
-  --ed-ink-3:var(--muted-2);
-  --ed-gold:var(--gold);
-  --ed-cyan:var(--cyan);
-  --ed-good:var(--green);
-  --ed-bad:var(--red);
-  --ed-warn:var(--gold);
-  --ed-purple:var(--blue);
-  --ed-cyan-soft:var(--cyan-soft);
-  --ed-gold-soft:var(--gold-soft);
-  --ed-green-soft:var(--green-soft);
-  --ed-red-soft:var(--red-soft);
-  --ed-blue-soft:var(--blue-soft);
-  --ed-head: var(--dd-font-ui, Nunito, sans-serif);
-  --ed-number:var(--ed-head);
-  --ed-mono:var(--font-mono-data, "IBM Plex Mono", Consolas, "Courier New", monospace);
-  --ed-body:var(--font-ops-ui, Inter, ui-sans-serif, system-ui, "Segoe UI", sans-serif);
-  position:relative;
-  display:flex;
-  flex-direction:column;
-  min-height:100dvh;
-  height:100%;
-  max-height:100dvh;
-  background:
-    radial-gradient(circle at 24% 0%, rgba(46, 230, 214, .12), transparent 30%),
-    radial-gradient(circle at 92% 18%, rgba(233,168,60,.08), transparent 26%),
-    linear-gradient(180deg,#0d2352 0%,#0b1d45 100%);
-  color:var(--text);
-  font-family:var(--ed-body);
-  font-size:14px;
-  letter-spacing:.01em;
-  overflow:hidden;
-}
-.edraft-root *{box-sizing:border-box;}
-.edraft-root h1,.edraft-root h2,.edraft-root h3,.edraft-root h4{
-  font-family:var(--ed-head);
-  letter-spacing:.04em;
-}
-.edraft-root button{font-family:inherit;}
-.edraft-action-icon{
-  display:inline-flex;width:1.1em;justify-content:center;align-items:center;
-  line-height:1;flex:none;font-weight:1000;opacity:1;
-}
-.edraft-action-icon.tone-neutral{color:var(--text);}
-.edraft-action-icon.tone-cyan{color:var(--cyan);}
-.edraft-action-icon.tone-gold{color:var(--gold);}
-.edraft-action-icon.tone-blue{color:var(--blue);}
-.edraft-action-icon.tone-green{color:var(--green);}
-.edraft-action-icon.tone-danger{color:var(--red);}
-.nhlcal-advance-button .edraft-action-icon,
-.nhlcal-advance-button-secondary .edraft-action-icon{color:inherit;}
-.edraft-icon-well{
-  width:28px;height:28px;display:grid;place-items:center;flex:none;
-  border-radius:8px;background:rgba(148,185,205,.12);
-  border:1px solid rgba(148,185,205,.14);color:var(--text);
-  font-weight:1000;line-height:1;
-  box-shadow:var(--depth-registered);
-}
-.edraft-icon-well.tone-cyan{color:var(--cyan);background:var(--cyan-soft);border-color:rgba(46, 230, 214, .32);box-shadow:0 0 8px rgba(46, 230, 214, .28);}
-.edraft-icon-well.tone-gold{color:var(--gold);background:var(--gold-soft);border-color:rgba(233,168,60,.32);box-shadow:0 0 8px rgba(233,168,60,.24);}
-.edraft-icon-well.tone-blue{color:var(--blue);background:var(--blue-soft);border-color:rgba(138,180,255,.32);box-shadow:0 0 8px rgba(138,180,255,.22);}
-.edraft-icon-well.tone-green{color:var(--green);background:var(--green-soft);border-color:rgba(82,223,148,.32);box-shadow:0 0 8px rgba(82,223,148,.22);}
-.edraft-icon-well.tone-danger{color:var(--red);background:var(--red-soft);border-color:rgba(255,96,109,.32);box-shadow:0 0 8px rgba(255,96,109,.22);}
-.edraft-icon-well.tone-neutral{color:var(--text);background:rgba(148,185,205,.12);border-color:rgba(148,185,205,.18);}
-.edraft-tabular{font-family:var(--ed-mono);font-variant-numeric:tabular-nums;letter-spacing:.02em;}
-.edraft-muted{color:var(--muted);font-size:12.5px;}
 
-/* Scrollbars match Calendar nhlcal-scroll-surface; hide OS scrollbar arrows. */
-.edraft-root *,
-.edraft-scrim *,
-.edraft-scroll-surface{
-  scrollbar-width:thin;
-  scrollbar-color:rgba(110,173,191,.35) rgba(12, 33, 77, .72);
-}
-.edraft-root *::-webkit-scrollbar,
-.edraft-scrim *::-webkit-scrollbar,
-.edraft-scroll-surface::-webkit-scrollbar{width:8px;height:8px;}
-.edraft-root *::-webkit-scrollbar-track,
-.edraft-scrim *::-webkit-scrollbar-track,
-.edraft-scroll-surface::-webkit-scrollbar-track{
-  background:rgba(12, 33, 77, .72);border-radius:999px;
-}
-.edraft-root *::-webkit-scrollbar-thumb,
-.edraft-scrim *::-webkit-scrollbar-thumb,
-.edraft-scroll-surface::-webkit-scrollbar-thumb{
-  background:linear-gradient(180deg,rgba(46, 230, 214, .34),rgba(110,173,191,.28));
-  border-radius:999px;border:2px solid rgba(12, 33, 77, .72);
-}
-.edraft-root *::-webkit-scrollbar-thumb:hover,
-.edraft-scrim *::-webkit-scrollbar-thumb:hover,
-.edraft-scroll-surface::-webkit-scrollbar-thumb:hover{
-  background:linear-gradient(180deg,rgba(46, 230, 214, .52),rgba(110,173,191,.42));
-}
-.edraft-root *::-webkit-scrollbar-button,
-.edraft-scrim *::-webkit-scrollbar-button,
-.edraft-scroll-surface::-webkit-scrollbar-button,
-.edraft-root *::-webkit-scrollbar-corner,
-.edraft-scrim *::-webkit-scrollbar-corner,
-.edraft-scroll-surface::-webkit-scrollbar-corner{
-  display:none;width:0;height:0;background:transparent;
-}
-
-/* ---------- command bar ---------- */
-.edraft-command{
-  position:relative;z-index:3;
-  display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:14px;
-  padding:12px;
-  background:
-    radial-gradient(circle at 0% 0%, rgba(46, 230, 214, .08), transparent 42%),
-    var(--panel);
-  border-bottom:1px solid var(--line);
-  box-shadow:var(--depth-registered);
-}
-.edraft-command-left{display:flex;align-items:center;gap:12px;min-width:0;}
-.edraft-titles h1{
-  margin:0;font-family:var(--ed-head);font-weight:900;
-  font-size:20px;line-height:1;letter-spacing:.05em;text-transform:uppercase;color:var(--text);
-}
-.edraft-titles p{margin:2px 0 0;font-size:11px;color:var(--muted);letter-spacing:.12em;text-transform:uppercase;font-weight:800;}
-.edraft-command-mid{display:flex;align-items:center;justify-content:center;min-width:0;}
-.edraft-phase{
-  margin:0;font-size:12px;font-weight:1000;letter-spacing:.14em;text-transform:uppercase;color:var(--gold);
-  text-shadow:0 0 18px rgba(233,168,60,.28);
-}
-.edraft-phase.is-cpu{color:var(--cyan);text-shadow:0 0 18px rgba(46, 230, 214, .28);}
-.edraft-command-right{display:flex;align-items:center;gap:8px;}
-.edraft-root .nhlcal-quick-link{
-  border:1px solid var(--line);border-radius:4px;background:rgba(12,31,47,.72);
-  color:var(--text);padding:9px 14px;font-size:11px;font-weight:900;
-  letter-spacing:.06em;text-transform:uppercase;transition:border-color .2s ease,background .2s ease,transform .2s ease;
-}
-.edraft-root .nhlcal-quick-link:hover{
-  border-color:var(--line-strong);background:rgba(46, 230, 214, .12);color:var(--cyan);transform:translateY(-1px);
-}
-.edraft-root .nhlcal-advance-button,
-.edraft-root .nhlcal-advance-button-secondary{
-  height:40px;min-width:108px;border-radius:0;
-  clip-path:polygon(0 0,calc(100% - 12px) 0,100% 12px,100% 100%,0 100%);
-  text-transform:uppercase;letter-spacing:.1em;font-size:11px;font-weight:1000;
-  display:inline-flex;align-items:center;justify-content:center;gap:8px;
-  cursor:pointer;transition:border-color .18s ease,background .18s ease,filter .18s ease;
-}
-.edraft-root .nhlcal-advance-button{
-  border:0;background:var(--gold);color:#182138;
-}
-.edraft-root .nhlcal-advance-button:hover:not(:disabled){background:#f0b44a;filter:brightness(1.02);}
-.edraft-root .nhlcal-advance-button-secondary{
-  border:1px solid rgba(46, 230, 214, .32);background:rgba(14, 37, 86, .92);color:var(--text);
-}
-.edraft-root .nhlcal-advance-button-secondary:hover:not(:disabled){
-  border-color:rgba(46, 230, 214, .55);background:rgba(46, 230, 214, .12);color:var(--cyan);
-}
-.edraft-root .nhlcal-advance-button .edraft-action-icon,
-.edraft-root .nhlcal-advance-button-secondary .edraft-action-icon{
-  width:22px;height:22px;border-radius:6px;flex:none;
-  background:rgba(24, 33, 56, .14);border:1px solid rgba(24, 33, 56, .22);
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.1);
-}
-.edraft-root .nhlcal-advance-button-secondary .edraft-action-icon{
-  background:rgba(46, 230, 214, .1);border-color:rgba(46, 230, 214, .3);
-  box-shadow:0 0 8px rgba(46, 230, 214, .14);
-}
-.edraft-root .nhlcal-advance-button-secondary.edraft-btn--danger{
-  border-color:rgba(255,96,109,.42);color:#ffd0d4;background:rgba(24, 29, 67, .94);
-}
-.edraft-root .nhlcal-advance-button-secondary.edraft-btn--danger:hover:not(:disabled){
-  border-color:rgba(255,96,109,.62);background:var(--red-soft);color:#fff;
-}
-.edraft-root .nhlcal-advance-button-secondary.edraft-btn--danger .edraft-action-icon{
-  background:rgba(255,96,109,.14);border-color:rgba(255,96,109,.35);
-  box-shadow:0 0 8px rgba(255,96,109,.18);
-}
-
-/* Shared nhlcal buttons — compact variants inside draft surfaces */
-.edraft-dock-actions .nhlcal-advance-button,
-.edraft-dock-actions .nhlcal-advance-button-secondary,
-.edraft-onclock .nhlcal-advance-button,
-.edraft-dossier-actions .nhlcal-advance-button,
-.edraft-sheet-foot .nhlcal-advance-button,
-.edraft-sheet-foot .nhlcal-advance-button-secondary{
-  height:40px;min-width:108px;font-size:11px;letter-spacing:.08em;
-  display:inline-flex;align-items:center;justify-content:center;gap:8px;
-}
-.edraft-dossier-actions .nhlcal-advance-button.edraft-btn--draft{
-  flex:1;min-height:46px;min-width:0;height:46px;font-size:12px;
-}
-.edraft-board-draft-btn{
-  height:32px;min-width:0;width:100%;padding:0 6px;font-size:10px;letter-spacing:.08em;
-  display:inline-flex;align-items:center;justify-content:center;gap:4px;
-  box-shadow:none;
-}
-.edraft-btn--danger{color:var(--red)!important;}
-.edraft-link{
-  background:none;border:0;padding:0;color:var(--cyan);cursor:pointer;
-  font:inherit;font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;font-weight:900;
-}
-.edraft-link:hover{color:var(--text);}
-
-/* ---------- on-deck rail ---------- */
-.edraft-ondeck{
-  display:flex;align-items:stretch;gap:0;
-  border-bottom:1px solid var(--line);
-  background:
-    radial-gradient(circle at 100% 14%, rgba(46, 230, 214, .14), transparent 34%),
-    linear-gradient(180deg,rgba(12, 33, 77, .98),rgba(12, 29, 69, .98));
-}
-.edraft-ondeck-label{
-  display:flex;align-items:center;gap:6px;padding:0 14px;flex:none;
-  font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--cyan);font-weight:1000;
-  border-right:1px solid var(--line);
-}
-.edraft-ondeck-track{display:flex;gap:0;overflow-x:auto;}
-.edraft-slot{
-  display:flex;align-items:center;gap:7px;padding:8px 13px;flex:none;
-  border-right:1px solid var(--line-soft);
-  transition:background .18s ease,box-shadow .18s ease;
-}
-.edraft-slot-num{font-family:var(--ed-number);font-size:14px;font-weight:700;color:var(--muted);}
-.edraft-slot-abbr{font-size:12px;font-weight:800;letter-spacing:.05em;color:var(--text);}
-.edraft-slot-via{display:block;font-size:9.5px;color:var(--muted);letter-spacing:.06em;}
-.edraft-slot.is-next{
-  background:
-    radial-gradient(circle at 0% 0%, rgba(233,168,60,.18), transparent 56%),
-    var(--gold-soft);
-  box-shadow:inset 2px 0 0 var(--gold),0 0 10px rgba(233,168,60,.18);
-}
-.edraft-slot.is-user{
-  background:
-    radial-gradient(circle at 0% 0%, rgba(46, 230, 214, .16), transparent 56%),
-    var(--cyan-soft);
-  box-shadow:inset 2px 0 0 var(--cyan),0 0 10px rgba(46, 230, 214, .22);
-}
-.edraft-slot.is-user .edraft-slot-abbr{color:var(--cyan);}
-.edraft-slot.is-next .edraft-slot-abbr{color:var(--gold);}
-
-/* ---------- floor layout ---------- */
-.edraft-floor{
-  flex:1;min-height:0;position:relative;z-index:2;
-  display:grid;grid-template-columns:minmax(200px,16vw) minmax(0,1fr);gap:8px;
-  padding:12px;background:transparent;
-}
-.edraft-stage{
-  background:
-    radial-gradient(circle at 0% 0%, rgba(138,180,255,.08), transparent 40%),
-    rgba(13, 37, 85, .82);
-  border:1px solid var(--line);border-radius:8px;
-  box-shadow:var(--depth-registered);
-  display:flex;flex-direction:column;min-height:0;overflow:hidden;
-}
-.edraft-stage .edraft-scroll{flex:1;min-height:0;display:flex;flex-direction:column;}
-.edraft-pane{
-  background:rgba(13, 37, 85, .82);
-  border:1px solid var(--line);border-radius:8px;
-  box-shadow:var(--depth-registered);
-  display:flex;flex-direction:column;min-height:0;min-width:0;overflow:hidden;
-}
-.edraft-pane-head{
-  display:flex;align-items:center;justify-content:space-between;gap:8px;
-  padding:10px 12px;border-bottom:1px solid var(--line);flex:none;
-  background:rgba(12, 34, 78, .72);
-}
-.edraft-pane-head h3{
-  margin:0;font-family:var(--ed-head);font-weight:800;font-size:.92rem;
-  letter-spacing:.1em;text-transform:uppercase;color:var(--cyan);
-}
-.edraft-pane-head em{font-style:normal;font-size:11px;color:var(--cyan);font-weight:900;opacity:.85;}
-.edraft-scroll{flex:1;min-height:0;overflow-y:auto;}
-
-/* ---------- tabs ---------- */
-.edraft-tabs{display:flex;border-bottom:1px solid var(--ed-line-soft);flex:none;}
-.edraft-tabs button{
-  flex:1;padding:8px 4px;background:none;border:0;border-bottom:2px solid transparent;
-  color:var(--ed-ink-3);font:inherit;font-size:11px;font-weight:600;
-  letter-spacing:.14em;text-transform:uppercase;cursor:pointer;
-}
-.edraft-tabs button:hover{color:var(--cyan);}
-.edraft-tabs button.is-active{
-  color:var(--cyan);border-bottom-color:var(--cyan);
-  background:var(--cyan-soft);font-weight:1000;
-  box-shadow:inset 0 -2px 0 var(--cyan);
-}
-
-/* ---------- segmented + inputs ---------- */
-.edraft-seg{display:flex;width:100%;border:1px solid var(--line);}
-.edraft-seg button{
-  flex:1;padding:4px 9px;background:rgba(14,35,50,.9);border:0;color:var(--muted);
-  font:inherit;font-size:10.5px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;cursor:pointer;
-}
-.edraft-seg button + button{border-left:1px solid var(--line);}
-.edraft-seg button.is-active{background:var(--cyan-soft);color:var(--cyan);font-weight:1000;border-color:var(--line-strong);}
-.edraft-field{
-  display:flex;align-items:center;gap:6px;padding:0 9px;width:100%;
-  background:rgba(14,35,50,.9);border:1px solid var(--line);
-}
-.edraft-field .edraft-action-icon,.edraft-field .edraft-icon-well{color:var(--cyan);}
-.edraft-input{
-  width:100%;padding:6px 0;background:none;border:0;color:var(--text);
-  font:inherit;font-size:12.5px;outline:none;
-}
-.edraft-input::placeholder{color:var(--muted-2);}
-.edraft-select{
-  width:100%;padding:5px 7px;background:rgba(14,35,50,.9);border:1px solid var(--line);
-  color:var(--text);font:inherit;font-size:11.5px;outline:none;
-}
-.edraft-board-tools-row{width:100%;}
-
-/* ---------- draft log ---------- */
-.edraft-log-tools{display:flex;flex-direction:column;gap:7px;padding:9px 12px;border-bottom:1px solid var(--ed-line-soft);flex:none;}
-.edraft-log-round{
-  padding:6px 12px;font-family:var(--ed-head);font-size:12px;letter-spacing:.2em;
-  text-transform:uppercase;color:var(--ed-ink-3);background:rgba(255,255,255,.028);
-  border-block:1px solid var(--ed-line-soft);position:sticky;top:0;z-index:1;backdrop-filter:blur(4px);
-}
-.edraft-log-hint{
-  margin:0;padding:6px 12px 0;font-size:11px;color:var(--ed-ink-3);letter-spacing:.04em;
-}
-.edraft-log-row{
-  display:grid;grid-template-columns:34px 22px minmax(0,1fr) auto auto auto;align-items:center;gap:8px;
-  width:100%;padding:8px 12px;background:none;border:0;border-bottom:1px solid var(--ed-line-soft);
-  text-align:left;color:inherit;font:inherit;cursor:pointer;
-}
-.edraft-log-row:hover{background:rgba(46, 230, 214, .06);}
-.edraft-log-row.is-selected{
-  background:var(--cyan-soft);
-  box-shadow:inset 0 0 0 2px rgba(46, 230, 214, .55);
-}
-.edraft-log-row.is-user{box-shadow:inset 2px 0 0 var(--gold);}
-.edraft-log-view{
-  font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--ed-cyan);opacity:.72;
-}
-.edraft-log-row.is-selected .edraft-log-view{opacity:1;font-weight:600;}
-.edraft-log-num{font-family:var(--ed-number);font-size:16px;font-weight:700;color:var(--ed-ink-3);}
-.edraft-log-body{min-width:0;}
-.edraft-log-body strong{display:block;font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.edraft-log-body span{display:block;font-size:11.5px;color:var(--ed-ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.edraft-log-ovr{
-  display:inline-flex;align-items:baseline;gap:5px;flex:none;padding:0;border:0;background:none;
-}
-.edraft-log-ovr b{font-size:15px;line-height:1;}
-.edraft-log-ovr i{font-style:normal;font-size:10.5px;line-height:1;}
-.edraft-empty{padding:22px 14px;color:var(--ed-ink-3);font-size:12.5px;text-align:center;}
-
-/* ---------- gradient labels (no chip boxes) ---------- */
-.edraft-text-pop{
-  display:inline-flex;align-items:center;flex:none;
-  font-size:9.5px;font-weight:900;letter-spacing:.12em;text-transform:uppercase;
-  filter:drop-shadow(0 1px 2px rgba(0,0,0,.72)) drop-shadow(0 0 10px rgba(46, 230, 214, .22));
-}
-.edraft-num-pop{
-  display:inline-block;font-family:var(--ed-number);font-weight:800;line-height:1;
-  filter:drop-shadow(0 1px 3px rgba(0,0,0,.75)) drop-shadow(0 0 12px rgba(46, 230, 214, .28));
-}
-.edraft-text-pop.tone-cyan,.edraft-num-pop.tone-cyan{
-  background:linear-gradient(180deg,#f4feff 0%,#3ae9f5 45%,#0d8f9c 100%);
-  -webkit-background-clip:text;background-clip:text;color:transparent;
-}
-.edraft-text-pop.tone-gold,.edraft-num-pop.tone-gold{
-  background:linear-gradient(180deg,#fff4d6 0%,#f0b44a 48%,#b87412 100%);
-  -webkit-background-clip:text;background-clip:text;color:transparent;
-  filter:drop-shadow(0 1px 3px rgba(0,0,0,.75)) drop-shadow(0 0 12px rgba(233,168,60,.32));
-}
-.edraft-text-pop.tone-green,.edraft-num-pop.tone-green{
-  background:linear-gradient(180deg,#e8fff2 0%,#52df94 48%,#1f9a5c 100%);
-  -webkit-background-clip:text;background-clip:text;color:transparent;
-  filter:drop-shadow(0 1px 2px rgba(0,0,0,.72)) drop-shadow(0 0 10px rgba(82,223,148,.28));
-}
-.edraft-text-pop.tone-orange,.edraft-num-pop.tone-orange{
-  background:linear-gradient(180deg,#fff0e6 0%,#ff8a4c 48%,#c44e12 100%);
-  -webkit-background-clip:text;background-clip:text;color:transparent;
-  filter:drop-shadow(0 1px 2px rgba(0,0,0,.72)) drop-shadow(0 0 10px rgba(255,138,76,.28));
-}
-.edraft-text-pop.tone-blue,.edraft-num-pop.tone-blue{
-  background:linear-gradient(180deg,#eef4ff 0%,#8ab4ff 48%,#3d6fbf 100%);
-  -webkit-background-clip:text;background-clip:text;color:transparent;
-  filter:drop-shadow(0 1px 2px rgba(0,0,0,.72)) drop-shadow(0 0 10px rgba(138,180,255,.24));
-}
-.edraft-text-pop.tone-danger,.edraft-num-pop.tone-danger,.edraft-text-pop.tone-offboard,.edraft-num-pop.tone-offboard,.edraft-text-pop.tone-goalie{
-  background:linear-gradient(180deg,#ffe8ea 0%,#ff606d 48%,#b81e2c 100%);
-  -webkit-background-clip:text;background-clip:text;color:transparent;
-  filter:drop-shadow(0 1px 2px rgba(0,0,0,.72)) drop-shadow(0 0 10px rgba(255,96,109,.26));
-}
-.edraft-text-pop.tone-default,.edraft-text-pop.tone-early,.edraft-num-pop.tone-muted{
-  background:linear-gradient(180deg,#f0f6fa 0%,#9eb4c4 48%,#5a7080 100%);
-  -webkit-background-clip:text;background-clip:text;color:transparent;
-  filter:drop-shadow(0 1px 2px rgba(0,0,0,.65));
-}
-@supports not ((-webkit-background-clip:text) or (background-clip:text)){
-  .edraft-text-pop,.edraft-num-pop{background:none!important;color:var(--cyan);}
-  .edraft-text-pop.tone-gold,.edraft-num-pop.tone-gold{color:var(--gold);}
-  .edraft-text-pop.tone-green,.edraft-num-pop.tone-green{color:var(--green);}
-  .edraft-text-pop.tone-orange,.edraft-num-pop.tone-orange{color:var(--orange);}
-  .edraft-text-pop.tone-blue,.edraft-num-pop.tone-blue{color:var(--blue);}
-  .edraft-text-pop.tone-danger,.edraft-text-pop.tone-offboard,.edraft-text-pop.tone-goalie{color:var(--red);}
-  .edraft-text-pop.tone-default,.edraft-text-pop.tone-early,.edraft-num-pop.tone-muted{color:var(--muted);}
-}
-
-/* ---------- pick-tag tones (alias .edraft-text-pop) ---------- */
-.edraft-text-pop.tone-steal,.edraft-text-pop.tone-value,.edraft-text-pop.tone-safe,
-.edraft-num-pop.tone-steal,.edraft-num-pop.tone-value{
-  background:linear-gradient(180deg,#e8fff2 0%,#52df94 48%,#1f9a5c 100%);
-  -webkit-background-clip:text;background-clip:text;color:transparent;
-  filter:drop-shadow(0 1px 2px rgba(0,0,0,.72)) drop-shadow(0 0 10px rgba(82,223,148,.28));
-}
-.edraft-text-pop.tone-reach,.edraft-num-pop.tone-reach,.edraft-num-pop.tone-early{
-  background:linear-gradient(180deg,#fff0e6 0%,#ff8a4c 48%,#c44e12 100%);
-  -webkit-background-clip:text;background-clip:text;color:transparent;
-  filter:drop-shadow(0 1px 2px rgba(0,0,0,.72)) drop-shadow(0 0 10px rgba(255,138,76,.28));
-}
-.edraft-text-pop.tone-expected,.edraft-text-pop.tone-bpa,.edraft-num-pop.tone-expected,.edraft-num-pop.tone-bpa{
-  background:linear-gradient(180deg,#f4feff 0%,#3ae9f5 45%,#0d8f9c 100%);
-  -webkit-background-clip:text;background-clip:text;color:transparent;
-}
-.edraft-text-pop.tone-need{
-  background:linear-gradient(180deg,#eef4ff 0%,#8ab4ff 48%,#3d6fbf 100%);
-  -webkit-background-clip:text;background-clip:text;color:transparent;
-  filter:drop-shadow(0 1px 2px rgba(0,0,0,.72)) drop-shadow(0 0 10px rgba(138,180,255,.24));
-}
-
-/* ---------- centre stage ---------- */
-.edraft-clockband{
-  display:grid;grid-template-columns:auto auto 1fr auto;align-items:center;gap:12px;
-  padding:10px 12px;flex:none;
-  background:linear-gradient(180deg,rgba(11,31,45,.72),rgba(14, 37, 85, .72));
-  border-bottom:1px solid var(--line);
-}
-.edraft-clockband.is-user{
-  border-bottom-color:rgba(233,168,60,.42);
-  background:
-    radial-gradient(circle at 0% 0%, rgba(233,168,60,.18), transparent 56%),
-    linear-gradient(180deg,rgba(31, 42, 72, .78),rgba(19, 36, 79, .74));
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.04);
-}
-.edraft-clockband .edraft-logo.lg{width:58px;height:58px;}
-.edraft-onclock-num{font-family:var(--ed-number);font-size:1.85rem;line-height:1;font-weight:800;color:var(--gold);text-shadow:0 0 16px rgba(233,168,60,.32);}
-.edraft-onclock-num small{display:block;font-family:var(--ed-body);font-size:.56rem;letter-spacing:.18em;color:var(--muted);font-weight:700;text-transform:uppercase;}
-.edraft-onclock-team h2{margin:0;font-family:var(--ed-head);font-size:clamp(1.05rem,1.5vw,1.28rem);font-weight:800;letter-spacing:.04em;line-height:1.1;text-transform:uppercase;color:var(--text);}
-.edraft-onclock-state{
-  display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:1000;
-  letter-spacing:.16em;text-transform:uppercase;color:var(--cyan);
-}
-.edraft-onclock-state.is-user{color:var(--gold);}
-.edraft-onclock-meta{display:flex;flex-wrap:wrap;gap:5px;margin-top:4px;}
-.edraft-chip{
-  display:inline-flex;align-items:center;gap:6px;padding:2px 8px;
-  font-size:10px;letter-spacing:.06em;color:var(--text);
-  background:rgba(255,255,255,.04);border:1px solid var(--line);
-}
-.edraft-chip .edraft-icon-well{width:18px;height:18px;border-radius:6px;font-size:10px;}
-.edraft-chip.is-need{color:var(--blue);border-color:rgba(138,180,255,.32);background:var(--blue-soft);}
-.edraft-pick-timer-wrap{
-  display:flex;align-items:center;gap:12px;flex:none;
-}
-.edraft-pick-timer{
-  display:flex;flex-direction:column;align-items:flex-end;justify-content:center;
-  font-family:var(--ed-number);font-weight:800;letter-spacing:.04em;
-  padding:10px 22px;min-width:148px;text-align:right;
-  border:1px solid var(--line);background:rgba(12, 34, 78, .72);
-  box-shadow:0 0 24px rgba(46, 230, 214, .08);
-}
-.edraft-pick-timer-label{
-  font-family:var(--ed-body);font-size:10px;font-weight:1000;letter-spacing:.22em;
-  text-transform:uppercase;color:var(--muted);margin-bottom:6px;
-}
-.edraft-pick-timer-time{
-  font-size:clamp(2.35rem, 4.2vw, 3.6rem);line-height:1;color:var(--gold);
-  text-shadow:0 0 28px rgba(233,168,60,.35);
-  font-variant-numeric:tabular-nums;
-}
-.edraft-pick-timer.is-user .edraft-pick-timer-time{color:var(--gold);}
-.edraft-pick-timer.is-cpu .edraft-pick-timer-label{color:var(--cyan);}
-.edraft-pick-timer.is-cpu .edraft-pick-timer-time{color:var(--cyan);text-shadow:0 0 20px rgba(46, 230, 214, .28);}
-.edraft-pick-timer.is-urgent .edraft-pick-timer-time{
-  color:var(--red);text-shadow:0 0 32px rgba(255,96,109,.45);
-  animation:edraft-timer-urgent 1.1s ease-in-out infinite;
-}
-.edraft-pick-timeout{
-  height:44px;padding:0 14px;font-size:10px;font-weight:1000;letter-spacing:.12em;
-  text-transform:uppercase;white-space:nowrap;
-}
-.edraft-pick-timeout:disabled{opacity:.45;cursor:not-allowed;}
-@keyframes edraft-timer-urgent{
-  0%,100%{box-shadow:0 0 0 rgba(255,96,109,0);}
-  50%{box-shadow:0 0 18px rgba(255,96,109,.32);}
-}
-.edraft-onclock-via{
-  font-size:10px;color:var(--muted);letter-spacing:.08em;text-transform:uppercase;font-weight:800;
-}
-.edraft-clock{font-family:var(--ed-number);font-size:1.25rem;font-weight:800;color:var(--cyan);text-shadow:0 0 12px rgba(46, 230, 214, .28);}
-.edraft-batch-banner{
-  display:flex;align-items:center;gap:12px;flex-wrap:wrap;
-  padding:8px 12px;font-size:12px;color:rgba(255,239,211,.96);
-  background:
-    radial-gradient(circle at 0% 0%, rgba(233,168,60,.18), transparent 56%),
-    var(--gold-soft);
-  border-bottom:1px solid rgba(233,168,60,.32);
-}
-.edraft-batch-banner strong{color:var(--gold);}
-
-/* ---------- dossier ---------- */
-.edraft-dossier{
-  flex:1;min-height:0;padding:14px 12px 12px;display:flex;flex-direction:column;gap:12px;
-  justify-content:flex-start;
-}
-.edraft-dossier-blank{
-  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;
-  flex:1;min-height:280px;color:var(--ed-ink-3);text-align:center;padding:24px;
-}
-.edraft-dossier-blank strong{
-  font-family:var(--ed-head);font-size:1rem;letter-spacing:.08em;text-transform:uppercase;
-  font-weight:700;color:var(--ed-ink-2);
-}
-.edraft-idband{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:12px;}
-.edraft-idcopy{min-width:0;}
-.edraft-idflag{width:40px;height:28px;object-fit:cover;border:1px solid var(--ed-line);}
-.edraft-idband h2{
-  margin:0;font-family:var(--ed-head);font-size:clamp(1.05rem,1.5vw,1.35rem);font-weight:700;
-  line-height:1.1;letter-spacing:.04em;text-transform:uppercase;color:#f6d78a;
-  text-shadow:0 0 22px rgba(244,198,110,.28);
-}
-.edraft-idband p{
-  margin:4px 0 0;font-family:var(--ed-body);font-size:.72rem;font-weight:800;
-  letter-spacing:.14em;text-transform:uppercase;color:var(--cyan);
-}
-.edraft-idband p.edraft-muted{
-  font-size:.6875rem;font-weight:500;letter-spacing:.04em;text-transform:none;color:#9db8cc;
-}
-.edraft-bio{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:1px;background:var(--line);}
-.edraft-bio .edraft-fact{padding:8px 10px;}
-@media (max-width: 720px){
-  .edraft-bio{grid-template-columns:repeat(3,minmax(0,1fr));}
-}
-
-.edraft-arc{
-  display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:14px;
-  padding:12px 16px;
-  background:
-    radial-gradient(circle at 0% 0%, rgba(46, 230, 214, .1), transparent 50%),
-    radial-gradient(circle at 100% 0%, rgba(233,168,60,.1), transparent 50%),
-    rgba(13, 37, 85, .72);
-  border:1px solid var(--line);border-radius:8px;
-  box-shadow:var(--depth-registered);
-}
-.edraft-arc-node{display:flex;flex-direction:column;gap:2px;}
-.edraft-arc-node span{
-  font-family:var(--ed-body);font-size:.56rem;letter-spacing:.24em;text-transform:uppercase;
-  color:#7fa3bd;font-weight:700;white-space:nowrap;
-}
-.edraft-arc-node strong{
-  font-family:var(--ed-number);font-size:1.55rem;font-weight:700;line-height:1;color:var(--text);
-}
-.edraft-arc-node.is-peak strong{color:var(--gold);text-shadow:0 0 12px rgba(233,168,60,.35);}
-.edraft-arc-node.is-right{text-align:right;align-items:flex-end;}
-.edraft-arc-mid{display:flex;flex-direction:column;align-items:center;gap:4px;color:var(--muted);}
-.edraft-arc-mid i{display:block;width:64px;height:1px;background:var(--line);}
-.edraft-arc-mid em{
-  font-style:normal;font-family:var(--ed-mono);font-size:.68rem;color:#6cf7a6;
-  font-weight:500;letter-spacing:.02em;
-}
-
-.edraft-dossier-grid{
-  flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr);gap:12px;align-items:stretch;
-}
-.edraft-dossier-main,.edraft-dossier-side{display:flex;flex-direction:column;gap:14px;min-height:0;height:100%;}
-.edraft-dossier-main .edraft-sec:last-child{flex:1;display:flex;flex-direction:column;min-height:0;}
-.edraft-dossier-side .edraft-facts--stack{
-  display:flex;flex-direction:column;gap:1px;background:var(--ed-line-soft);flex:1;min-height:0;
-}
-.edraft-dossier-side .edraft-fact{flex:1;display:flex;flex-direction:column;justify-content:center;padding:12px 14px;}
-.edraft-fact.tone-good strong{color:var(--green);}
-.edraft-fact.tone-warn strong{color:var(--orange);}
-.edraft-sheet--dossier .edraft-sheet-body{max-height:min(82vh,920px);overflow:auto;}
-.edraft-sheet--dossier .edraft-dossier{padding-top:4px;}
-.edraft-dossier > .edraft-idband{display:none;}
-/* Prospect file: editorial pass. Spacing and type separate sections; borders only where they explain a relationship. */
-.edraft-scrim .edraft-sheet--dossier{background:var(--dd-stage-deep,#050c2c);border:1px solid rgba(158,180,198,.16);}
-.edraft-sheet--dossier .edraft-sheet-head{background:transparent;border-bottom:0;padding:14px 24px 0;}
-.edraft-sheet--dossier .edraft-sheet-head h2{font-family:var(--dd-font-ui);font-size:13px;font-weight:700;letter-spacing:0;text-transform:none;color:#9eb4c6;}
-.edraft-sheet--dossier .edraft-sheet-head p{font-size:12px;font-weight:600;letter-spacing:0;text-transform:none;color:#9eb4c6;}
-.edraft-sheet--dossier .edraft-sheet-body{padding:0 24px 28px;scrollbar-color:rgba(158,180,198,.25) transparent;}
-.edraft-scrim .edraft-sheet--dossier *::-webkit-scrollbar-thumb{background:rgba(158,180,198,.25)!important;border:0!important;box-shadow:none!important;}
-.edraft-scrim .edraft-sheet--dossier *::-webkit-scrollbar-track{background:transparent!important;}
-.edraft-dossier .edraft-dossier-main,.edraft-dossier .dd-skills{gap:28px;}
-.edraft-dossier .edraft-sec{gap:10px;}
-.edraft-dossier .edraft-sec-head{border-bottom:0;padding:0;}
-.edraft-dossier .edraft-sec-head .edraft-action-icon{display:none;}
-.edraft-dossier .edraft-sec-head h4,.edraft-dossier .dd-h h3{font-family:var(--dd-font-ui);font-size:15px;font-weight:800;letter-spacing:0;text-transform:none;color:#fff;}
-.edraft-dossier .edraft-sec-head em,.edraft-dossier .edraft-sec-meta,.edraft-dossier .dd-h span{font-size:12px;letter-spacing:0;text-transform:none;color:#9eb4c6;}
-.edraft-dossier .dd-card{background:transparent;border:0;padding:0;}
-.edraft-dossier .dd-notes li{font-size:15px;}
-.edraft-dossier .dd-split-notes .dd-h h3{font-size:13px;color:#9eb4c6;}
-.edraft-dossier .edraft-report{border:0;background:transparent;padding:0;font-size:15px;line-height:1.55;color:var(--dd-cream,#ffe7c4);}
-.edraft-dossier .edraft-facts{background:transparent;gap:14px 24px;}
-.edraft-dossier .edraft-fact{background:transparent;padding:0;}
-.edraft-dossier .edraft-fact span,.edraft-dossier .edraft-fact-label{font-size:12px;letter-spacing:0;text-transform:none;font-weight:600;color:#9eb4c6;}
-.edraft-dossier .edraft-fact strong,.edraft-dossier .edraft-fact-value,.edraft-dossier .edraft-fact-value.edraft-text-pop{font-size:15px;letter-spacing:0;text-transform:none;color:#fff;text-shadow:none;}
-.edraft-dossier .edraft-prod-strip{gap:24px;}
-.edraft-dossier .edraft-prod-cell{border:0;background:transparent;padding:0;text-align:left;align-items:flex-start;}
-.edraft-dossier .edraft-prod-cell span,.edraft-dossier .edraft-prod-cell > span{font-size:12px;letter-spacing:0;text-transform:none;color:#9eb4c6;}
-.edraft-dossier .edraft-prod-cell strong,.edraft-dossier .edraft-num-pop{font-family:var(--dd-font-ui);font-size:24px;font-weight:800;color:#fff!important;text-shadow:none!important;}
-.edraft-sheet--dossier .edraft-sheet-foot{background:var(--dd-stage-deep,#050c2c);border-top:1px solid rgba(158,180,198,.16);padding:12px 24px;}
-.edraft-scrim .edraft-sheet--dossier .edraft-sheet-foot .nhlcal-advance-button:not(.nhlcal-advance-button-secondary){background:var(--dd-gold-hi,#f8d58a)!important;color:#1a0d05!important;border:0!important;border-radius:6px!important;box-shadow:none!important;text-shadow:none!important;font-family:var(--dd-font-ui)!important;font-weight:800!important;font-size:14px!important;letter-spacing:0!important;text-transform:none!important;padding:10px 20px!important;clip-path:none!important;}
-.edraft-scrim .edraft-sheet--dossier .edraft-sheet-foot .nhlcal-advance-button:not(.nhlcal-advance-button-secondary) *{color:inherit!important;}
-.edraft-scrim .edraft-sheet--dossier,.edraft-scrim .edraft-sheet--dossier *{scrollbar-color:rgba(158,180,198,.3) transparent!important;}
-.edraft-dossier .pv-card,.edraft-dossier .pv-donut{background:transparent!important;border:0!important;box-shadow:none!important;padding:0!important;}
-.edraft-dossier .pv-card__head h4{font-family:var(--dd-font-ui);font-size:15px;font-weight:800;letter-spacing:0;text-transform:none;color:#fff;}
-.edraft-dossier .pv-ring span,.edraft-dossier .pv-ring small{text-transform:none;letter-spacing:0;}
-.edraft-dossier .pv-bar__track i{background:var(--dd-cream,#ffe7c4)!important;opacity:.85;}
-.edraft-dossier .pv-bar.is-soft .pv-bar__track i{opacity:.45;}
-.edraft-dossier .pv-bar__label{font-size:14px;letter-spacing:0;text-transform:none;color:#fff;}
-.edraft-dossier .pv-tier{background:transparent!important;border:0!important;padding:0!important;font-size:12px!important;letter-spacing:0!important;text-transform:lowercase!important;display:inline-block;}
-.edraft-dossier .pv-tier::first-letter{text-transform:uppercase;}
-.edraft-dossier .pv-bar__pct{font-size:12px;color:#9eb4c6;}
-.edraft-dossier .edraft-fact-value.edraft-text-pop,.edraft-dossier .edraft-fact strong{text-transform:none!important;}
-.edraft-dossier .edraft-prod-cell span{text-transform:none;}
-
-.edraft-sheet--dossier .edraft-dossier > .edraft-idband,
-.edraft-sheet--dossier-body .edraft-dossier > .edraft-idband{display:none;}
-.edraft-dossier-main .edraft-sec:last-child{flex:0;}
-
-/* Dossier: one visual language — labels + gradient values, no stat boxes */
-.edraft-dossier .edraft-bio{
-  display:flex;flex-wrap:wrap;align-items:stretch;gap:0;
-  background:none;border-bottom:1px solid var(--line-soft);padding-bottom:10px;margin-bottom:2px;
-}
-.edraft-dossier .edraft-bio .edraft-fact{
-  flex:1 1 0;min-width:92px;padding:0 14px 0 0;margin:0;background:none;border:0;
-}
-.edraft-dossier .edraft-bio .edraft-fact + .edraft-fact{
-  border-left:1px solid var(--line-soft);padding-left:14px;
-}
-.edraft-dossier .edraft-facts{
-  display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));
-  gap:12px 16px;background:none;
-}
-.edraft-dossier .edraft-fact{
-  gap:4px;padding:0;background:none;border:0;
-}
-.edraft-dossier .edraft-fact-label{
-  font-family:var(--ed-body);font-size:.62rem;letter-spacing:.1em;text-transform:uppercase;
-  color:#6d8ba3;font-weight:700;
-}
-.edraft-dossier .edraft-fact-value{
-  display:block;font-size:.92rem;font-weight:700;line-height:1.25;color:#eaf3f7;
-}
-.edraft-dossier .edraft-fact-value.edraft-text-pop{font-size:.82rem;letter-spacing:.06em;text-transform:capitalize;}
-.edraft-dossier .edraft-fact.tone-good .edraft-fact-value{color:inherit;}
-.edraft-dossier .edraft-fact.tone-warn .edraft-fact-value{color:inherit;}
-.edraft-dossier .edraft-prod-strip{
-  grid-template-columns:repeat(auto-fit,minmax(64px,1fr));gap:12px 18px;
-}
-.edraft-dossier .edraft-prod-cell{
-  padding:0;background:none;border:0;text-align:left;justify-content:flex-start;height:auto;
-}
-.edraft-dossier .edraft-prod-cell > span{
-  font-size:.62rem;letter-spacing:.1em;text-transform:uppercase;color:#6d8ba3;font-weight:700;
-}
-.edraft-dossier .edraft-prod-cell strong{font-size:1.42rem;line-height:1.05;}
-.edraft-dossier-side .edraft-facts--stack{
-  display:flex;flex-direction:column;gap:0;background:none;
-}
-.edraft-dossier-side .edraft-fact{
-  flex-direction:row;align-items:baseline;justify-content:space-between;gap:12px;
-  padding:7px 0;border-bottom:1px solid var(--line-soft);background:none;
-}
-.edraft-dossier-side .edraft-fact:last-child{border-bottom:0;}
-.edraft-dossier-side .edraft-fact-label{flex:1;min-width:0;}
-.edraft-dossier-side .edraft-fact-value{text-align:right;flex-shrink:0;max-width:58%;}
-.edraft-dossier .edraft-callout{
-  border:0;border-left:2px solid rgba(138,180,255,.55);
-  background:rgba(138,180,255,.06);border-radius:0;padding:8px 12px;
-}
-.edraft-dossier .edraft-callout.is-warn{
-  border-left-color:rgba(255,96,109,.65);background:rgba(255,96,109,.08);
-}
-.edraft-dossier .edraft-arc{
-  border:0;border-radius:0;
-  background:
-    linear-gradient(90deg,transparent,rgba(46, 230, 214, .08) 18%,rgba(233,168,60,.08) 82%,transparent);
-  box-shadow:none;padding:10px 4px;
-}
-.edraft-sec-head .edraft-sec-meta{
-  font-style:normal;font-family:var(--ed-body);font-size:.56rem;
-  letter-spacing:.1em;text-transform:uppercase;color:var(--muted);
-}
-.edraft-root .edraft-sheet-head .edraft-sheet-close{
-  height:36px;min-width:104px;padding:0 14px;font-size:10px;letter-spacing:.1em;
-}
-.edraft-dossier-actions{
-  display:flex;flex-wrap:wrap;gap:8px;padding-top:4px;margin-top:auto;flex-shrink:0;
-  border-top:1px solid var(--ed-line-soft);
-}
-
-.edraft-sec{display:flex;flex-direction:column;gap:8px;}
-.edraft-sec-head{
-  display:flex;align-items:center;gap:8px;padding-bottom:6px;border-bottom:1px solid var(--line);
-}
-.edraft-sec-head h4{
-  margin:0;flex:1;font-family:var(--ed-body);font-size:.62rem;font-weight:700;
-  letter-spacing:.14em;text-transform:uppercase;color:var(--cyan);
-}
-.edraft-sec-head em{font-style:normal;font-family:var(--ed-body);font-size:.56rem;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;}
-.edraft-dna{display:flex;flex-direction:column;gap:7px;}
-.edraft-dna-row{
-  display:grid;grid-template-columns:minmax(80px,1fr) minmax(0,2fr) 36px;align-items:center;gap:10px;
-}
-.edraft-dna-row span{
-  font-family:var(--ed-body);font-size:.6875rem;letter-spacing:.1em;text-transform:uppercase;
-  color:var(--muted);font-weight:700;
-}
-.edraft-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:1px;background:var(--line);}
-.edraft-fact{
-  display:flex;flex-direction:column;gap:3px;padding:10px 12px;background:rgba(13, 37, 85, .82);
-}
-.edraft-fact span{
-  font-family:var(--ed-body);font-size:.62rem;letter-spacing:.1em;text-transform:uppercase;
-  color:#6d8ba3;font-weight:700;
-}
-.edraft-fact strong{font-family:var(--ed-body);font-size:.9rem;color:#dbeafe;font-weight:600;line-height:1.3;}
-
-.edraft-prod-strip{
-  flex:1;display:grid;grid-template-columns:repeat(auto-fit,minmax(72px,1fr));gap:8px;align-items:stretch;
-}
-.edraft-prod-cell{
-  display:flex;flex-direction:column;justify-content:center;gap:2px;padding:6px 10px;
-  background:rgba(12, 30, 74, .55);border:1px solid rgba(118,200,245,.28);text-align:center;border-radius:0;height:100%;
-}
-.edraft-prod-cell strong{font-family:var(--ed-number);font-size:1.55rem;font-weight:700;line-height:1;color:var(--text);}
-.edraft-prod-cell span{
-  font-family:var(--ed-body);font-size:.55rem;letter-spacing:.12em;text-transform:uppercase;
-  color:#7fa3bd;font-weight:700;
-}
-.edraft-dna-track{height:6px;background:rgba(255,255,255,.07);border-radius:999px;overflow:hidden;}
-.edraft-dna-track i{
-  display:block;height:100%;background:var(--cyan);opacity:1;
-  box-shadow:0 0 8px rgba(46, 230, 214, .45);
-}
-.edraft-dna-row.is-goalie .edraft-dna-track i{background:var(--red);box-shadow:0 0 8px rgba(255,96,109,.35);}
-.edraft-dna-row strong{font-family:var(--ed-number);font-size:.88rem;text-align:right;color:var(--cyan);font-weight:700;}
-.edraft-dock{
-  flex:none;display:flex;align-items:center;justify-content:flex-end;gap:8px;
-  padding:10px 12px;
-  background:
-    radial-gradient(circle at 100% 100%, rgba(46, 230, 214, .08), transparent 40%),
-    var(--panel);
-  border-top:1px solid var(--line);
-  box-shadow:var(--depth-registered);
-}
-.edraft-btn--danger:hover{background:var(--red-soft)!important;}
-
-.edraft-split{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
-.edraft-list{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:5px;}
-.edraft-list li{
-  position:relative;padding-left:13px;font-family:var(--ed-body);font-size:.78rem;line-height:1.4;color:#d5e7f4;
-}
-.edraft-list li::before{content:"";position:absolute;left:0;top:7px;width:5px;height:5px;background:var(--ed-good);}
-.edraft-list.is-risk li::before{background:var(--ed-bad);}
-.edraft-list li b{display:block;color:var(--ed-ink);font-weight:600;}
-
-.edraft-report{
-  padding:10px 13px;font-family:var(--ed-body);font-size:.82rem;line-height:1.5;color:#9eb8cc;
-  background:rgba(13, 37, 85, .72);border-left:2px solid var(--gold);
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.04);
-}
-.edraft-report cite{display:block;margin-top:5px;font-style:normal;font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted-2);}
-
-.edraft-path{display:flex;align-items:center;gap:7px;flex-wrap:wrap;}
-.edraft-path-node{
-  padding:4px 11px;font-size:11.5px;letter-spacing:.09em;text-transform:uppercase;
-  background:rgba(255,255,255,.04);border:1px solid var(--line);color:var(--muted);
-}
-.edraft-path-node.is-end{border-color:rgba(233,168,60,.42);color:var(--gold);box-shadow:0 0 8px rgba(233,168,60,.16);}
-.edraft-path-sep{color:var(--muted-2);}
-
-.edraft-meter{display:grid;grid-template-columns:110px 1fr 42px;align-items:center;gap:9px;}
-.edraft-meter span{font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--muted-2);}
-.edraft-meter-track{height:5px;background:rgba(255,255,255,.07);border-radius:999px;overflow:hidden;}
-.edraft-meter-track i{display:block;height:100%;background:var(--cyan);box-shadow:0 0 8px rgba(46, 230, 214, .45);}
-.edraft-meter.is-risk .edraft-meter-track i{background:var(--red);box-shadow:0 0 8px rgba(255,96,109,.35);}
-.edraft-meter strong{font-size:12px;text-align:right;color:var(--text);}
-
-.edraft-callout{
-  padding:9px 12px;font-size:12.2px;line-height:1.45;color:var(--muted);
-  background:var(--blue-soft);border:1px solid rgba(138,180,255,.28);
-}
-.edraft-callout.is-warn{background:var(--red-soft);border-color:rgba(255,96,109,.28);color:var(--text);}
-
-/* ---------- action dock ---------- */
-.edraft-dock--root{position:relative;z-index:6;flex-shrink:0;}
-.edraft-dock-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;}
-.edraft-error{
-  margin:0;padding:6px 16px;color:var(--red);font-size:12px;
-  background:var(--red-soft);border-top:1px solid rgba(255,96,109,.28);
-}
-.edraft-confirm-dialog{
-  width:min(420px,100%);padding:18px 20px;
-  background:
-    radial-gradient(circle at 0% 0%, rgba(46, 230, 214, .08), transparent 42%),
-    var(--panel);
-  border:1px solid var(--line);box-shadow:var(--shadow);
-}
-.edraft-confirm-dialog h3{
-  margin:0 0 8px;font-family:var(--ed-head);font-size:1.15rem;font-weight:800;
-  letter-spacing:.04em;text-transform:uppercase;color:var(--text);
-}
-.edraft-confirm-dialog p{margin:0 0 14px;font-size:13px;line-height:1.45;color:var(--ed-ink-2);}
-.edraft-confirm-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;}
-
-/* ---------- board ---------- */
-.edraft-board-tools{display:flex;flex-direction:column;gap:7px;padding:9px 12px;border-bottom:1px solid var(--ed-line-soft);flex:none;}
-.edraft-board-tools-row{display:flex;align-items:center;gap:6px;justify-content:space-between;}
-.edraft-need-line{display:flex;flex-wrap:wrap;gap:4px;}
-.edraft-board-cols{
-  display:grid;grid-template-columns:32px minmax(0,1fr) 28px 72px 44px;gap:6px;
-  padding:6px 12px;font-size:10px;letter-spacing:.12em;text-transform:uppercase;
-  color:var(--ed-ink-3);border-bottom:1px solid var(--ed-line-soft);flex:none;
-}
-.edraft-board-cols.is-rich{
-  grid-template-columns:36px minmax(200px,1.55fr) 32px 34px 40px 76px 52px 46px 40px;
-  padding:8px 14px;font-size:9.5px;letter-spacing:.14em;
-}
-.edraft-board-row{
-  display:grid;grid-template-columns:32px minmax(0,1fr) 28px 72px 44px;gap:6px;align-items:center;
-  width:100%;padding:8px 12px;border-bottom:1px solid var(--ed-line-soft);
-  text-align:left;color:inherit;font:inherit;background:none;border-left:0;border-right:0;border-top:0;cursor:pointer;
-}
-.edraft-board-row.is-rich{
-  grid-template-columns:36px minmax(200px,1.55fr) 32px 34px 40px 76px 52px 46px 40px;
-  align-items:center;padding:11px 14px;min-height:56px;
-}
-.edraft-board-name-cell{display:flex;align-items:flex-start;gap:8px;min-width:0;}
-.edraft-board-name-cell .edraft-flag{flex:none;margin-top:2px;}
-.edraft-board-sub{font-size:10.5px;color:var(--muted);line-height:1.35;margin-top:3px;
-  overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;}
-.edraft-board-age,.edraft-board-you{font-size:12px;color:var(--ed-ink-2);font-variant-numeric:tabular-nums;}
-.edraft-board-you{color:var(--blue);}
-.edraft-board-risk{font-size:11px;color:var(--muted);text-transform:capitalize;}
-.edraft-board-risk.is-high{color:var(--red);}
-.edraft-board-row:hover{background:rgba(46, 230, 214, .06);}
-.edraft-board-row.is-selected{
-  background:var(--gold-soft);
-  box-shadow:inset 0 0 0 2px rgba(233,168,60,.55);
-}
-.edraft-board-row:focus-visible{outline:2px solid var(--gold);outline-offset:-2px;box-shadow:0 0 8px rgba(233,168,60,.24);}
-.edraft-board-rank{font-family:var(--ed-number);font-size:15px;font-weight:700;color:var(--muted);}
-.edraft-board-name strong{display:block;font-size:14px;font-weight:700;line-height:1.2;color:var(--text);}
-.edraft-board-row.is-rich .edraft-board-name strong{
-  font-size:18px;font-weight:800;line-height:1.22;letter-spacing:.012em;color:var(--text);
-}
-.edraft-board-name em{display:block;font-size:11px;color:var(--muted);font-style:normal;margin-top:2px;}
-.edraft-board-pos{font-size:13px;font-weight:900;color:var(--cyan);}
-.edraft-board-band{font-size:13px;color:var(--text);font-weight:1000;}
-.edraft-board-stock{font-size:12px;color:var(--muted);}
-.edraft-board-stock.is-soft{color:var(--muted);}
-.edraft-board-stock.up{color:var(--green);font-weight:1000;}
-.edraft-board-stock.down{color:var(--red);font-weight:1000;}
-.edraft-board-cols.is-user-pick{grid-template-columns:32px minmax(0,1fr) 28px 72px 44px 36px;}
-.edraft-board-cols.is-user-pick.is-rich{
-  grid-template-columns:36px minmax(200px,1.55fr) 32px 34px 40px 76px 52px 46px 40px 44px;
-}
-.edraft-board-row-wrap.is-rich{
-  grid-template-columns:minmax(0,1fr) 46px;
-}
-.edraft-board-row-wrap.is-rich .edraft-board-row.is-rich{border-bottom:0;}
-.edraft-board-row-wrap{
-  display:grid;grid-template-columns:minmax(0,1fr) 40px;align-items:stretch;
-  border-bottom:1px solid var(--ed-line-soft);
-}
-.edraft-board-row-wrap.is-selected .edraft-board-row{
-  background:var(--gold-soft);
-  box-shadow:inset 0 0 0 2px rgba(233,168,60,.55);
-}
-.edraft-board-row-wrap .edraft-board-row{border-bottom:0;}
-.edraft-board-row-wrap .edraft-board-draft-btn{
-  align-self:center;margin-right:6px;
-  border:1px solid rgba(46, 230, 214, .35);background:rgba(46, 230, 214, .08);color:var(--cyan);
-  border-radius:4px;cursor:pointer;
-}
-.edraft-board-row-wrap .edraft-board-draft-btn:hover{background:rgba(46, 230, 214, .18);}
-.edraft-dossier-actions--draft{margin-top:8px;padding-top:10px;}
-.edraft-drafted-banner{
-  display:flex;align-items:center;justify-content:space-between;gap:12px;
-  padding:8px 14px;margin:0 12px;
-  background:
-    radial-gradient(circle at 0% 0%, rgba(46, 230, 214, .14), transparent 56%),
-    var(--cyan-soft);
-  border:1px solid rgba(46, 230, 214, .28);
-  font-size:12px;color:var(--muted);
-}
-.edraft-drafted-banner strong{color:var(--cyan);}
-.edraft-chip{opacity:1;}
-.edraft-board-name{min-width:0;}
-
-/* ---------- feed (flat rows, no bubbles) ---------- */
-.edraft-feed{padding:0;}
-.edraft-feed .edraft-feed-row{
-  display:grid;grid-template-columns:26px minmax(0,1fr);gap:9px;
-  padding:9px 12px;border-bottom:1px solid var(--ed-line-soft);
-}
-.edraft-feed-av{
-  width:26px;height:26px;display:flex;align-items:center;justify-content:center;
-  background:rgba(255,255,255,.06);border:1px solid var(--ed-line-soft);
-  font-size:10px;font-weight:700;letter-spacing:.04em;color:var(--ed-ink-2);
-}
-.edraft-feed-meta{display:flex;gap:6px;align-items:baseline;font-size:10.5px;color:var(--ed-ink-3);}
-.edraft-feed-meta b{color:var(--ed-ink);font-size:11.5px;}
-.edraft-feed-row p{margin:3px 0 0;font-size:12.3px;line-height:1.45;color:var(--ed-ink-2);}
-
-.edraft-buzz{display:flex;flex-direction:column;}
-.edraft-buzz-pick{
-  border-bottom:1px solid var(--ed-line);
-  background:rgba(12, 34, 78, .35);
-}
-.edraft-buzz-pick + .edraft-buzz-pick{margin-top:0;}
-.edraft-buzz-pick.is-user{box-shadow:inset 3px 0 0 var(--gold);}
-.edraft-buzz-head{
-  display:grid;grid-template-columns:44px 22px minmax(0,1fr) auto;align-items:center;gap:8px;
-  width:100%;padding:8px 12px;text-align:left;cursor:pointer;font:inherit;color:inherit;
-  background:rgba(46, 230, 214, .07);border:0;border-bottom:1px solid var(--ed-line-soft);
-}
-.edraft-buzz-head:hover{background:rgba(46, 230, 214, .12);}
-.edraft-buzz-num{
-  font-family:var(--ed-number);font-size:15px;font-weight:800;letter-spacing:.04em;color:var(--cyan);
-}
-.edraft-buzz-who{min-width:0;}
-.edraft-buzz-who strong{
-  display:block;font-size:13px;font-weight:700;color:var(--text);
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-}
-.edraft-buzz-who span{
-  display:block;font-size:10px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-}
-.edraft-buzz-pick .edraft-feed-row{padding:8px 12px 9px;border-bottom:1px solid var(--ed-line-soft);}
-.edraft-buzz-pick .edraft-feed-row:last-child{border-bottom:0;}
-
-/* ---------- trade down desk ---------- */
-.edraft-trade-stack{display:flex;flex-direction:column;gap:12px;padding:4px 0 8px;}
-.edraft-trade-card{
-  border:1px solid var(--line);border-radius:8px;overflow:hidden;
-  background:
-    radial-gradient(circle at 100% 0%, rgba(46, 230, 214, .08), transparent 42%),
-    rgba(13, 37, 85, .92);
-  box-shadow:var(--depth-registered);
-}
-.edraft-trade-card.is-desperate{border-color:rgba(233,168,60,.42);}
-.edraft-trade-card.is-pay_up{border-color:rgba(138,180,255,.38);}
-.edraft-trade-head{
-  display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;
-  width:100%;padding:10px 12px;text-align:left;border:0;background:rgba(12, 34, 78, .75);
-  color:inherit;font:inherit;cursor:pointer;
-}
-.edraft-trade-head:hover{background:rgba(46, 230, 214, .08);}
-.edraft-trade-head-main{min-width:0;}
-.edraft-trade-head-main strong{
-  display:block;font-family:var(--ed-head);font-size:13px;letter-spacing:.06em;text-transform:uppercase;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-}
-.edraft-trade-head-main span{display:block;font-size:10px;color:var(--muted);letter-spacing:.12em;text-transform:uppercase;margin-top:2px;}
-.edraft-trade-badges{display:flex;flex-wrap:wrap;gap:5px;justify-content:flex-end;}
-.edraft-trade-body{padding:0 12px 12px;display:flex;flex-direction:column;gap:10px;}
-.edraft-trade-meter{display:grid;gap:6px;}
-.edraft-trade-meter__labels{
-  display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:center;
-  font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);
-}
-.edraft-trade-meter__labels em{font-style:normal;color:var(--cyan);font-size:9px;letter-spacing:.14em;}
-.edraft-trade-meter__labels span:last-child{text-align:right;}
-.edraft-trade-meter__track{
-  display:flex;height:8px;border-radius:999px;overflow:hidden;
-  border:1px solid rgba(148,185,205,.18);background:rgba(12, 33, 77, .85);
-}
-.edraft-trade-meter__recv{
-  background:linear-gradient(90deg,rgba(82,223,148,.35),rgba(82,223,148,.75));
-}
-.edraft-trade-meter__send{
-  background:linear-gradient(90deg,rgba(255,96,109,.55),rgba(233,168,60,.65));
-}
-.edraft-trade-split{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
-.edraft-trade-intel{
-  margin:0;padding:8px 10px;font-size:11.5px;line-height:1.45;color:var(--ed-ink-2);
-  border:1px solid rgba(46, 230, 214, .22);background:rgba(46, 230, 214, .06);
-}
-.edraft-trade-intel ul{margin:6px 0 0;padding-left:16px;}
-.edraft-trade-intel li{margin:2px 0;}
-.edraft-trade-targets{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;}
-.edraft-trade-target{
-  padding:7px 8px;border:1px solid var(--line-soft);background:rgba(255,255,255,.03);
-  font-size:10.5px;line-height:1.35;
-}
-.edraft-trade-target strong{display:block;font-size:11.5px;color:var(--text);margin-bottom:2px;}
-.edraft-trade-target em{display:block;font-style:normal;font-size:9.5px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;}
-.edraft-trade-target.is-fit{border-color:rgba(138,180,255,.35);background:var(--blue-soft);}
-.edraft-trade-actions{padding-top:4px;}
-
-/* ---------- overlays ---------- */
-.edraft-scrim{
-  position:fixed;inset:0;z-index:14000;display:flex;align-items:center;justify-content:center;
-  padding:24px;
-  background:
-    radial-gradient(circle at 50% 40%, rgba(46, 230, 214, .08), transparent 50%),
-    rgba(12, 26, 63, .82);
-  backdrop-filter:blur(3px);
-}
-.edraft-scrim.is-stack{z-index:15000;}
-/* Prospect file docks to the right so the board, the clock and our pick stay in view. */
-.edraft-scrim.is-dock{justify-content:flex-end;align-items:stretch;padding:0;background:linear-gradient(90deg,rgba(5,12,44,0) 0%,rgba(5,12,44,.35) 38%);backdrop-filter:none;}
-.edraft-scrim.is-dock .edraft-sheet--dossier{width:min(74vw,1120px);max-width:100%;max-height:none;height:100%;border-width:0 0 0 3px;border-style:solid;border-color:#ff8a1f;box-shadow:-24px 0 48px rgba(0,0,0,.45);}
-.edraft-scrim.is-dock .edraft-sheet--dossier .edraft-sheet-body{max-height:none;}
-@media (max-width:820px){.edraft-scrim.is-dock .edraft-sheet--dossier{width:100%;border-left-width:0;}}
-.edraft-sheet{
-  width:min(1080px,100%);max-height:88vh;display:flex;flex-direction:column;
-  background:
-    radial-gradient(circle at 0% 0%, rgba(46, 230, 214, .08), transparent 42%),
-    var(--panel);
-  border:1px solid var(--line);box-shadow:var(--shadow);
-}
-.edraft-sheet-head{
-  display:flex;align-items:center;justify-content:space-between;gap:12px;
-  padding:12px 16px;border-bottom:1px solid var(--line);flex:none;
-  background:
-    radial-gradient(circle at 100% 0%, rgba(233,168,60,.08), transparent 40%),
-    var(--panel-2);
-}
-.edraft-sheet-head h2,.edraft-sheet-head h3{
-  margin:0;font-family:var(--ed-head);font-weight:700;font-size:clamp(1.05rem,1.5vw,1.35rem);
-  letter-spacing:.04em;text-transform:uppercase;color:#f6d78a;
-}
-.edraft-sheet-head p{
-  margin:2px 0 0;font-family:var(--ed-body);font-size:.72rem;font-weight:800;
-  letter-spacing:.14em;text-transform:uppercase;color:var(--cyan);
-}
-.edraft-sheet-body{flex:1;min-height:0;overflow-y:auto;}
-.edraft-sheet-foot{
-  display:flex;align-items:center;justify-content:flex-end;gap:7px;flex-wrap:wrap;
-  padding:11px 16px;border-top:1px solid var(--ed-line);flex:none;background:rgba(14, 32, 72, .9);
-}
-.edraft-confirm{margin-right:auto;font-size:12px;letter-spacing:.09em;text-transform:uppercase;color:var(--ed-gold);}
-
-.edraft-pick-modal{display:grid;grid-template-columns:300px minmax(0,1fr);flex:1;min-height:0;}
-.edraft-pick-list{border-right:1px solid var(--ed-line-soft);display:flex;flex-direction:column;min-height:0;}
-.edraft-pick-detail{display:flex;flex-direction:column;min-height:0;overflow-y:auto;}
-.edraft-pick-row{
-  display:grid;grid-template-columns:20px 34px minmax(0,1fr) 26px auto;gap:7px;align-items:center;
-  width:100%;padding:8px 12px;background:none;border:0;border-bottom:1px solid var(--ed-line-soft);
-  text-align:left;font:inherit;color:inherit;cursor:pointer;
-}
-.edraft-pick-row:hover{background:rgba(46, 230, 214, .06);}
-.edraft-pick-row.is-selected{
-  background:var(--gold-soft);
-  box-shadow:inset 0 0 0 2px rgba(233,168,60,.55);
-}
-.edraft-pick-row strong{font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.edraft-flag{width:18px;height:13px;object-fit:cover;border:1px solid var(--ed-line-soft);}
-
-/* ---------- last pick spotlight (live floor) ---------- */
-.edraft-pick-spotlight{
-  flex:none;margin:0 12px;padding:14px 16px 16px;
-  display:grid;grid-template-columns:auto 1fr auto;gap:14px 18px;align-items:center;
-  border:1px solid var(--line);border-radius:10px;cursor:pointer;text-align:left;
-  background:
-    radial-gradient(ellipse 120% 80% at 0% 0%, rgba(46, 230, 214, .12), transparent 55%),
-    radial-gradient(ellipse 90% 70% at 100% 100%, rgba(233,168,60,.08), transparent 50%),
-    rgba(12, 34, 78, .88);
-  box-shadow:var(--depth-registered), inset 0 1px 0 rgba(255,255,255,.04);
-  transition:box-shadow .2s ease, border-color .2s ease, transform .2s ease;
-}
-.edraft-pick-spotlight:hover{
-  border-color:rgba(46, 230, 214, .45);
-  box-shadow:var(--depth-registered), 0 0 28px rgba(46, 230, 214, .12);
-}
-.edraft-pick-spotlight:focus-visible{outline:2px solid var(--cyan);outline-offset:2px;}
-.edraft-pick-spotlight.tone-steal,.edraft-pick-spotlight.tone-value,.edraft-pick-spotlight.tone-safe{
-  border-color:rgba(82,223,148,.42);
-  background:
-    radial-gradient(ellipse 100% 90% at 0% 50%, rgba(82,223,148,.22), transparent 58%),
-    radial-gradient(ellipse 80% 60% at 100% 0%, rgba(31,154,92,.12), transparent 50%),
-    rgba(12, 37, 68, .92);
-  box-shadow:inset 3px 0 0 rgba(82,223,148,.75), 0 0 32px rgba(82,223,148,.14);
-}
-.edraft-pick-spotlight.tone-reach,.edraft-pick-spotlight.tone-early{
-  border-color:rgba(255,138,76,.45);
-  background:
-    radial-gradient(ellipse 100% 90% at 100% 40%, rgba(255,138,76,.2), transparent 55%),
-    radial-gradient(ellipse 70% 50% at 0% 100%, rgba(196,78,18,.14), transparent 50%),
-    rgba(24, 32, 61, .9);
-  box-shadow:inset 3px 0 0 rgba(255,138,76,.7), 0 0 28px rgba(255,138,76,.12);
-}
-.edraft-pick-spotlight.tone-expected,.edraft-pick-spotlight.tone-bpa{
-  border-color:rgba(58,233,245,.38);
-  background:
-    radial-gradient(ellipse 90% 80% at 50% 0%, rgba(58,233,245,.16), transparent 60%),
-    rgba(13, 37, 85, .92);
-  box-shadow:inset 3px 0 0 rgba(58,233,245,.55), 0 0 24px rgba(46, 230, 214, .1);
-}
-.edraft-pick-spotlight.tone-need{
-  border-color:rgba(138,180,255,.4);
-  background:
-    radial-gradient(ellipse 90% 70% at 0% 0%, rgba(138,180,255,.18), transparent 55%),
-    rgba(14, 33, 83, .9);
-  box-shadow:inset 3px 0 0 rgba(138,180,255,.6), 0 0 22px rgba(138,180,255,.1);
-}
-.edraft-pick-spotlight.tone-offboard{
-  border-color:rgba(255,96,109,.42);
-  background:
-    radial-gradient(ellipse 90% 70% at 100% 50%, rgba(255,96,109,.18), transparent 55%),
-    rgba(21, 28, 65, .9);
-  box-shadow:inset 3px 0 0 rgba(255,96,109,.65), 0 0 24px rgba(255,96,109,.1);
-}
-.edraft-pick-spotlight-pick{
-  display:flex;flex-direction:column;align-items:center;gap:4px;min-width:52px;
-}
-.edraft-pick-spotlight-pick b{
-  font-family:var(--ed-number);font-size:1.65rem;font-weight:800;line-height:1;color:var(--gold);
-  text-shadow:0 0 18px rgba(233,168,60,.35);
-}
-.edraft-pick-spotlight-pick span{
-  font-size:.58rem;letter-spacing:.2em;text-transform:uppercase;color:var(--muted);font-weight:800;
-}
-.edraft-pick-spotlight-main{min-width:0;display:flex;flex-direction:column;gap:6px;}
-.edraft-pick-spotlight-kicker{
-  margin:0;font-size:.62rem;letter-spacing:.22em;text-transform:uppercase;color:var(--muted);font-weight:800;
-}
-.edraft-pick-spotlight-team{
-  display:flex;align-items:center;gap:10px;min-width:0;
-}
-.edraft-pick-spotlight-team h3{
-  margin:0;font-family:var(--ed-head);font-size:clamp(.95rem,1.4vw,1.15rem);
-  font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--text);
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-}
-.edraft-pick-spotlight-name{
-  margin:0;font-family:var(--ed-head);font-size:clamp(1.35rem,2.4vw,1.85rem);
-  font-weight:700;line-height:1.05;letter-spacing:.03em;color:#f6d78a;
-  text-shadow:0 0 24px rgba(244,198,110,.22);
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-}
-.edraft-pick-spotlight-meta{
-  display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;
-  font-size:.72rem;letter-spacing:.08em;color:#9db8cc;
-}
-.edraft-pick-spotlight-side{
-  display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex-shrink:0;
-}
-.edraft-pick-spotlight-ovr{
-  font-size:clamp(1.75rem,2.8vw,2.35rem)!important;line-height:1;
-}
-.edraft-pick-spotlight-tag{
-  font-size:11px!important;letter-spacing:.14em;
-}
-
-/* ---------- cpu reveal ---------- */
-.edraft-reveal{
-  position:absolute;inset:0;z-index:40;display:flex;flex-direction:column;
-  align-items:center;justify-content:center;gap:10px;text-align:center;padding:24px;
-  background:
-    radial-gradient(ellipse 90% 70% at 50% 38%, rgba(20,34,48,.97), rgba(12, 28, 66, .99));
-}
-.edraft-reveal-card{
-  display:flex;flex-direction:column;align-items:center;gap:10px;max-width:min(720px,92%);
-  padding:28px 32px 26px;border-radius:12px;border:1px solid var(--line);
-  background:
-    radial-gradient(ellipse 120% 80% at 50% 0%, rgba(46, 230, 214, .1), transparent 55%),
-    rgba(13, 37, 85, .94);
-  box-shadow:0 24px 64px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.05);
-}
-.edraft-reveal.tone-steal .edraft-reveal-card,.edraft-reveal.tone-value .edraft-reveal-card{
-  border-color:rgba(82,223,148,.45);
-  background:
-    radial-gradient(ellipse 100% 90% at 50% 0%, rgba(82,223,148,.24), transparent 58%),
-    rgba(12, 37, 68, .95);
-  box-shadow:0 24px 64px rgba(0,0,0,.5), inset 0 0 80px rgba(82,223,148,.08);
-}
-.edraft-reveal.tone-reach .edraft-reveal-card,.edraft-reveal.tone-early .edraft-reveal-card{
-  border-color:rgba(255,138,76,.48);
-  background:
-    radial-gradient(ellipse 100% 85% at 50% 0%, rgba(255,138,76,.22), transparent 55%),
-    rgba(24, 32, 61, .95);
-  box-shadow:0 24px 64px rgba(0,0,0,.5), inset 0 0 70px rgba(255,138,76,.08);
-}
-.edraft-reveal.tone-expected .edraft-reveal-card,.edraft-reveal.tone-bpa .edraft-reveal-card{
-  border-color:rgba(58,233,245,.4);
-  background:
-    radial-gradient(ellipse 90% 80% at 50% 0%, rgba(58,233,245,.18), transparent 55%),
-    rgba(13, 37, 85, .95);
-}
-.edraft-reveal.tone-need .edraft-reveal-card{
-  border-color:rgba(138,180,255,.42);
-  background:
-    radial-gradient(ellipse 90% 75% at 50% 0%, rgba(138,180,255,.2), transparent 55%),
-    rgba(14, 33, 83, .95);
-}
-.edraft-reveal p{margin:0;font-size:11px;letter-spacing:.24em;text-transform:uppercase;color:var(--ed-ink-3);}
-.edraft-reveal h2{margin:2px 0;font-family:var(--ed-head);font-size:clamp(1.25rem,2.5vw,1.65rem);font-weight:700;letter-spacing:.06em;}
-.edraft-reveal h1{
-  margin:4px 0 2px;font-family:var(--ed-head);font-size:clamp(2.2rem,5vw,3.35rem);
-  font-weight:700;line-height:1.02;color:#f6d78a;
-  text-shadow:0 0 32px rgba(244,198,110,.28);
-}
-.edraft-reveal-tag{font-size:13px!important;letter-spacing:.16em;margin-top:4px;}
-.edraft-reveal-meta{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:8px;}
-.edraft-reveal-meta .edraft-text-pop{font-size:11px;}
-
-/* ---------- logos ---------- */
-.edraft-logo{display:inline-flex;align-items:center;justify-content:center;flex:none;}
-.edraft-logo img{width:100%;height:100%;object-fit:contain;filter:drop-shadow(0 0 6px rgba(46, 230, 214, .28));}
-.edraft-logo.xs{width:15px;height:15px;}
-.edraft-logo.sm{width:21px;height:21px;}
-.edraft-logo.md{width:31px;height:31px;}
-.edraft-logo.lg{width:52px;height:52px;}
-.edraft-logo-fb{
-  font-family:var(--ed-head);font-size:11px;letter-spacing:.05em;color:var(--ed-ink-3);
-  background:rgba(255,255,255,.05);border:1px solid var(--ed-line-soft);
-}
-
-/* ---------- intro ---------- */
-.edraft-intro{
-  flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;
-  gap:13px;padding:40px 24px;text-align:center;position:relative;z-index:2;
-}
-.edraft-seal{
-  width:112px;height:112px;display:flex;align-items:center;justify-content:center;
-  font-family:var(--ed-head);font-size:29px;letter-spacing:.05em;color:var(--gold);
-  border:1px solid rgba(233,168,60,.42);
-  background:
-    radial-gradient(circle at 50% 30%, rgba(233,168,60,.18), transparent 70%),
-    rgba(13, 37, 85, .82);
-  box-shadow:0 0 18px rgba(233,168,60,.22);
-  clip-path:polygon(50% 0,93% 25%,93% 75%,50% 100%,7% 75%,7% 25%);
-}
-.edraft-intro h1{margin:0;font-family:var(--ed-head);font-size:58px;font-weight:500;line-height:1;letter-spacing:.05em;text-transform:uppercase;}
-.edraft-intro p{margin:0;color:var(--ed-ink-2);font-size:13.5px;letter-spacing:.09em;}
-.edraft-intro-lines{display:flex;flex-direction:column;gap:5px;max-width:620px;margin-top:6px;}
-.edraft-intro-lines span{
-  font-size:12.5px;color:var(--muted);padding:6px 12px;
-  background:rgba(13, 37, 85, .72);border-left:2px solid var(--gold);
-  text-align:left;box-shadow:inset 0 1px 0 rgba(255,255,255,.04);
-}
-
-.edraft-overlay-msg{
-  position:absolute;inset:0;z-index:35;display:flex;align-items:center;justify-content:center;
-  background:rgba(12, 28, 67, .72);font-family:var(--ed-head);font-size:20px;letter-spacing:.14em;
-  text-transform:uppercase;color:var(--ed-ink-2);
-}
-
-.edraft-haul{
-  flex:1;min-height:0;display:flex;gap:8px;align-items:stretch;
-  overflow-x:auto;overflow-y:hidden;padding:10px 12px 12px;
-}
-.edraft-haul--floor{
-  padding:8px 12px 14px;gap:10px;
-  background:
-    linear-gradient(180deg, rgba(12, 34, 78, .35), transparent 28%),
-    radial-gradient(ellipse 80% 50% at 50% 100%, rgba(46, 230, 214, .06), transparent 70%);
-}
-.edraft-haul--floor .edraft-haul-col{
-  flex:0 0 188px;min-width:176px;
-}
-.edraft-haul--floor .edraft-haul-head{padding:10px 11px;}
-.edraft-haul--floor .edraft-haul-head strong{font-size:13px;}
-.edraft-haul--floor .edraft-haul-pick{
-  grid-template-columns:32px minmax(0,1fr) auto;gap:8px;padding:9px 10px;
-}
-.edraft-haul--floor .edraft-haul-pick b{font-size:.92rem;}
-.edraft-haul--floor .edraft-haul-pick strong{font-size:.95rem;}
-.edraft-haul--floor .edraft-haul-pick em{font-size:10.5px;}
-.edraft-haul--floor .edraft-haul-ovr{font-size:1rem;}
-.edraft-haul-col{
-  flex:0 0 156px;min-width:148px;min-height:0;display:flex;flex-direction:column;
-  background:rgba(13, 37, 85, .78);border:1px solid var(--line);border-radius:8px;overflow:hidden;
-}
-.edraft-haul-col.is-user{
-  border-color:rgba(46, 230, 214, .55);
-  box-shadow:inset 0 0 0 1px rgba(46, 230, 214, .28),0 0 18px rgba(46, 230, 214, .12);
-}
-.edraft-haul-col.is-clock{
-  border-color:rgba(233,168,60,.55);
-  box-shadow:inset 0 0 0 1px rgba(233,168,60,.22),0 0 16px rgba(233,168,60,.12);
-}
-.edraft-haul-head{
-  display:flex;align-items:center;gap:8px;padding:8px 9px;flex:none;
-  border-bottom:1px solid var(--line);background:rgba(12, 34, 78, .82);
-}
-.edraft-haul-head strong{
-  display:block;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--text);
-}
-.edraft-haul-head span{display:block;font-size:10px;color:var(--muted);letter-spacing:.08em;}
-.edraft-haul-list{flex:1;min-height:0;overflow-y:auto;}
-.edraft-haul-empty{padding:14px 10px;color:var(--muted);font-size:11px;text-align:center;}
-.edraft-haul-pick{
-  display:grid;grid-template-columns:28px minmax(0,1fr) auto;gap:6px;align-items:center;
-  width:100%;padding:7px 8px;background:none;border:0;border-bottom:1px solid var(--line-soft);
-  text-align:left;color:inherit;font:inherit;cursor:pointer;
-}
-.edraft-haul-pick:hover{background:rgba(46, 230, 214, .08);}
-.edraft-haul-pick.is-selected{
-  background:var(--cyan-soft);box-shadow:inset 0 0 0 1px rgba(46, 230, 214, .45);
-}
-.edraft-haul-pick.is-latest{
-  background:rgba(255,255,255,.04);
-  box-shadow:inset 0 0 0 1px rgba(255,255,255,.08);
-}
-.edraft-haul-pick.tone-steal,.edraft-haul-pick.tone-value{
-  background:linear-gradient(90deg,rgba(82,223,148,.14),transparent 72%);
-  box-shadow:inset 3px 0 0 rgba(82,223,148,.65);
-}
-.edraft-haul-pick.tone-reach,.edraft-haul-pick.tone-early{
-  background:linear-gradient(90deg,rgba(255,138,76,.16),transparent 72%);
-  box-shadow:inset 3px 0 0 rgba(255,138,76,.65);
-}
-.edraft-haul-pick.tone-expected,.edraft-haul-pick.tone-bpa{
-  background:linear-gradient(90deg,rgba(58,233,245,.12),transparent 72%);
-  box-shadow:inset 3px 0 0 rgba(58,233,245,.5);
-}
-.edraft-haul-pick.tone-need{
-  background:linear-gradient(90deg,rgba(138,180,255,.14),transparent 72%);
-  box-shadow:inset 3px 0 0 rgba(138,180,255,.55);
-}
-.edraft-haul-pick.tone-offboard{
-  background:linear-gradient(90deg,rgba(255,96,109,.14),transparent 72%);
-  box-shadow:inset 3px 0 0 rgba(255,96,109,.55);
-}
-.edraft-haul-pick.is-selected.tone-steal,.edraft-haul-pick.is-selected.tone-value,
-.edraft-haul-pick.is-selected.tone-reach,.edraft-haul-pick.is-selected.tone-early,
-.edraft-haul-pick.is-selected.tone-expected,.edraft-haul-pick.is-selected.tone-bpa,
-.edraft-haul-pick.is-selected.tone-need,.edraft-haul-pick.is-selected.tone-offboard{
-  box-shadow:inset 0 0 0 2px rgba(46, 230, 214, .45), inset 3px 0 0 currentColor;
-}
-.edraft-haul-pick-tag{
-  display:block;margin-top:3px;font-size:9px!important;letter-spacing:.1em;
-}
-.edraft-haul-pick b{font-family:var(--ed-number);font-size:.78rem;font-weight:700;color:var(--muted);}
-.edraft-haul-pick strong{
-  display:block;font-family:var(--ed-head);font-size:.82rem;font-weight:700;letter-spacing:.03em;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-}
-.edraft-haul-pick em{
-  display:block;font-style:normal;font-size:10px;color:var(--muted);letter-spacing:.04em;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-}
-.edraft-haul-ovr{font-size:.82rem;}
-.edraft-sheet--board{
-  width:min(1180px,96vw);height:min(92vh,980px);max-height:92vh;
-  display:flex;flex-direction:column;
-}
-.edraft-sheet--board .edraft-sheet-head{flex:none;}
-.edraft-sheet--board .edraft-pane{
-  border:0;border-radius:0;background:transparent;box-shadow:none;flex:1;min-height:0;
-  display:flex;flex-direction:column;
-}
-.edraft-board-summary{
-  display:flex;flex-wrap:wrap;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line-soft);
-  background:rgba(12, 34, 78, .55);flex:none;
-}
-.edraft-board-summary span{
-  font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);
-  padding:4px 10px;border:1px solid var(--line-soft);background:rgba(255,255,255,.03);
-}
-.edraft-board-summary strong{color:var(--cyan);font-weight:900;}
-.edraft-board-tools.is-rich{
-  flex-direction:row;flex-wrap:wrap;align-items:center;justify-content:space-between;
-  padding:10px 14px;
-}
-.edraft-board-tools.is-rich .edraft-field{flex:1;min-width:200px;max-width:320px;}
-.edraft-board-tools.is-rich .edraft-seg{flex:none;}
-.edraft-board-tools.is-rich .edraft-board-tools-row{flex:none;}
-.edraft-sheet--dossier{width:min(920px,100%);}
-
-@media (max-width:1400px){
-  .edraft-floor{grid-template-columns:220px minmax(0,1fr);}
-}
-@media (max-width:1180px){
-  .edraft-floor{grid-template-columns:minmax(0,1fr);}
-  .edraft-pane--log{display:none;}
-}
-
-/* Visual dossier additions */
-.edraft-tool-badges{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px;}
-.edraft-tool-badge{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 10px;border:1px solid var(--line);border-radius:6px;background:rgba(13, 37, 85, .62);}
-.edraft-tool-badge > span:first-child{font-size:11.5px;font-weight:800;color:var(--text);}
-.edraft-dossier .pv-gauge-pair,.edraft-dossier .pv-dials,.edraft-dossier .pv-visual-grid,.edraft-dossier .pv-donut{margin:10px 0;}
-.edraft-board-band.is-soft{color:var(--gold)!important;opacity:.85;}
-`;
 
 /* ------------------------------------------------------------------ */
 /* Small presentational pieces                                         */
@@ -4318,17 +2899,17 @@ function RoundRecapPanel({ recap, onContinue }) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Recap — war-room composition (spliced into EntryDraftMenu.js) */
+/* Recap — draft-night broadcast (drx-*). Styles: EntryDraftRecap.css. */
 
 function RecapDash() {
-  return <span className="edraft-muted">—</span>;
+  return <span className="drx-dash">—</span>;
 }
 
 function recapCapTone(grade) {
   const g = String(grade || "").trim().toUpperCase();
-  if (/^A|^B/.test(g)) return "green";
-  if (/^D|^F/.test(g) || g === "—") return "danger";
-  return "gold";
+  if (/^[AB]/.test(g)) return "good";
+  if (/^[DF]/.test(g) || g === "—") return "bad";
+  return "mid";
 }
 
 function parseLeagueRank(rankStr) {
@@ -4337,35 +2918,42 @@ function parseLeagueRank(rankStr) {
   return Number.isFinite(n) && n >= 1 && n <= 32 ? n : null;
 }
 
+function recapOrdinal(n) {
+  const s = ["th", "st", "nd", "rd"];
+  const v = n % 100;
+  return `${n}${s[(v - 20) % 10] || s[v] || s[0]}`;
+}
+
 function buildGmHeadline(r, grade) {
   const steals = Number(r.user_steal_count) || 0;
   const reaches = Number(r.user_reach_count) || 0;
   const picks = Number(r.user_pick_count) || 0;
+  const pl = (n, w, wp = `${w}s`) => `${n} ${n === 1 ? w : wp}`;
   const g = String(grade || "").trim().toUpperCase();
   const band = /^A/.test(g) ? "A" : /^B/.test(g) ? "B" : /^C/.test(g) ? "C" : "D";
   const lines = {
     A: [
-      `Scouts will talk about ${steals || "the"} steal${steals === 1 ? "" : "s"} — this class travels well.`,
-      `The room wanted noise; you signed ${picks} keepers with an A-grade ledger.`,
+      `${pl(steals, "steal")} and a board that broke your way. This class travels.`,
+      `The room wanted noise. You walked out with ${pl(picks, "keeper")}.`,
     ],
     B: [
       reaches
-        ? `${reaches} reach${reaches === 1 ? "" : "es"}, but the balance sheet still works.`
-        : `Disciplined board work — ${steals} steal${steals === 1 ? "" : "s"} to point at.`,
-      `Good not great: ${picks} picks, ${steals} steal${steals === 1 ? "" : "s"}, scouts nodding.`,
+        ? `${pl(reaches, "reach", "reaches")}, but the ledger still balances.`
+        : `Disciplined night. ${pl(steals, "steal")} to point at.`,
+      `${pl(picks, "pick")} in, ${pl(steals, "steal")} banked. The ceiling decides the grade from here.`,
     ],
     C: [
-      `Mixed reviews — ${reaches} reach${reaches === 1 ? "" : "es"} and ${steals} steal${steals === 1 ? "" : "s"}.`,
-      `The war room split on this ${picks}-pick class; value was hard to find.`,
+      `Mixed reviews: ${pl(reaches, "reach", "reaches")}, ${pl(steals, "steal")}.`,
+      `The war room split on this ${picks}-pick class. Development has to carry it.`,
     ],
     D: [
       reaches && !steals
-        ? `${reaches} reach${reaches === 1 ? "" : "es"} and no steals. Scouts will remember this one.`
-        : `Below-average night — ${reaches} reach${reaches === 1 ? "" : "es"}, ${steals} steal${steals === 1 ? "" : "s"}.`,
-      `Three reaches and no steals. Scouts will remember this one.`,
+        ? `${pl(reaches, "reach", "reaches")}, zero steals. Scouts will remember this one.`
+        : `Rough night: ${pl(reaches, "reach", "reaches")}, ${pl(steals, "steal")}.`,
+      `${pl(picks, "pick")} and the board won most of them.`,
     ],
   };
-  const pool = lines[band] || lines.D;
+  const pool = lines[band];
   return pool[(picks + steals + reaches) % pool.length];
 }
 
@@ -4397,12 +2985,8 @@ function buildScoutNote(pick) {
   const scouted = scoutedOvrLabel(pick);
   const revealed = recapNumeric(revealedOvrValue(pick));
   const conf = getConfidence(pick);
-  if (conf != null && conf < 40) {
-    return `Boom-or-bust: ${Math.round(conf)}% confidence`;
-  }
-  if (scouted && revealed != null) {
-    return `Scouted ${scouted}, landed at ${revealed}`;
-  }
+  if (conf != null && conf < 40) return `Boom-or-bust: ${Math.round(conf)}% confidence`;
+  if (scouted && revealed != null) return `Scouted ${scouted}, landed at ${revealed}`;
   if (scouted) return `Scouted ${scouted}`;
   const pub = getPublicRankAtPick(pick);
   if (pub != null && revealed != null) return `Board #${pub} · revealed ${revealed}`;
@@ -4420,58 +3004,25 @@ function bestValueInsight(picks) {
     }
   });
   if (!best || bestD < 5) return null;
-  const rd = best.round != null ? `round ${best.round}` : `pick ${formatPick(best.overall_pick)}`;
+  const rd = best.round != null ? `Round ${best.round}` : `Pick ${formatPick(best.overall_pick)}`;
   return `Best value: ${rd} (${fmtSigned(bestD)})`;
 }
 
 function stillBoardRank(entry) {
   const rank = entry?.projected_rank ?? entry?.final_rank ?? entry?.rank;
-  if (rank != null && rank !== "" && Number.isFinite(Number(rank))) return `Brd #${rank}`;
+  if (rank != null && rank !== "" && Number.isFinite(Number(rank))) return `#${rank}`;
   const projected = entry?.projected;
   if (!projected || projected === "Unranked") return "";
   const text = String(projected).trim();
   if (!text) return "";
-  if (/^brd\b/i.test(text)) return text;
-  return `Brd ${text.startsWith("#") ? text : `#${text}`}`;
-}
-
-function stillBoardMeta(entry) {
-  const pos = entry?.position ? String(entry.position).trim() : "";
-  const projected = entry?.projected && entry.projected !== "Unranked" ? String(entry.projected).trim() : "";
-  const rank = stillBoardRank(entry);
-  return [pos, projected || rank, entry?.status].filter(Boolean).join(" · ");
-}
-
-function DlotTeamMark({ teamId, teamName, size = "md" }) {
-  const src = getTeamLogoSrc({ team_id: teamId, name: teamName });
-  const abbr = getTeamAbbreviation({ team_id: teamId, name: teamName }) || teamAbbrev(teamId, teamName) || "TM";
-  if (src) {
-    return (
-      <span className={`dlot-logo ${size}`}>
-        <img src={src} alt="" loading="lazy" />
-      </span>
-    );
-  }
-  return <span className="dlot-logo-fallback">{abbr}</span>;
+  if (/^brd\b/i.test(text)) return text.replace(/^brd\s*/i, "");
+  return text.startsWith("#") ? text : `#${text}`;
 }
 
 function prefersReducedMotion() {
   return typeof window !== "undefined"
     && typeof window.matchMedia === "function"
     && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-}
-
-function useRecapReveal() {
-  const [step, setStep] = useState(0);
-  useEffect(() => {
-    if (prefersReducedMotion()) {
-      setStep(4);
-      return undefined;
-    }
-    const timers = [0, 180, 420, 680, 920].map((ms, i) => window.setTimeout(() => setStep(i), ms));
-    return () => timers.forEach(clearTimeout);
-  }, []);
-  return step;
 }
 
 function useCountUp(target, active) {
@@ -4482,16 +3033,16 @@ function useCountUp(target, active) {
       return undefined;
     }
     const end = Math.round(Number(target));
-    if (prefersReducedMotion()) {
+    if (prefersReducedMotion() || typeof requestAnimationFrame !== "function") {
       setVal(end);
       return undefined;
     }
     const start = performance.now();
-    const dur = 520;
+    const dur = 700;
     let frame = 0;
     const tick = (now) => {
       const t = Math.min(1, (now - start) / dur);
-      setVal(Math.round(end * t));
+      setVal(Math.round(end * (1 - (1 - t) ** 3)));
       if (t < 1) frame = requestAnimationFrame(tick);
     };
     frame = requestAnimationFrame(tick);
@@ -4500,13 +3051,48 @@ function useCountUp(target, active) {
   return val;
 }
 
-function RecapLineupCard({ posBreakdown, needItems }) {
-  const slots = [
-    { key: "C", label: "C" },
-    { key: "LW", label: "LW" },
-    { key: "RW", label: "RW" },
-    { key: "D", label: "D" },
-    { key: "G", label: "G" },
+function DrxLogo({ teamId, teamName, size = "md" }) {
+  const src = getTeamLogoSrc({ team_id: teamId, name: teamName });
+  const abbr = getTeamAbbreviation({ team_id: teamId, name: teamName }) || teamAbbrev(teamId, teamName) || "TM";
+  return (
+    <span className={`drx-logo drx-logo--${size}`} title={teamName || abbr}>
+      {src ? <img src={src} alt="" loading="lazy" /> : <b>{abbr}</b>}
+    </span>
+  );
+}
+
+function DrxRankLadder({ rank }) {
+  if (!rank) return null;
+  return (
+    <div className="drx-ladder-wrap" aria-label={`Class ranked ${recapOrdinal(rank)} of 32`}>
+      <div className="drx-ladder">
+        {Array.from({ length: 32 }, (_, i) => {
+          const n = i + 1;
+          const cls = [n <= 8 ? "is-top" : "", n >= 25 ? "is-bottom" : "", n === rank ? "is-you" : ""]
+            .filter(Boolean)
+            .join(" ");
+          return <i key={n} className={cls || undefined} />;
+        })}
+      </div>
+      <div className="drx-ladder-label">
+        <span>1st</span>
+        <b>{recapOrdinal(rank)} of 32 classes</b>
+        <span>32nd</span>
+      </div>
+    </div>
+  );
+}
+
+function DrxRink({ posBreakdown, needItems }) {
+  const count = (k) => Number(posBreakdown?.[k] || 0);
+  const lw = count("LW");
+  const rw = count("RW") || (lw ? 0 : count("W"));
+  const spots = [
+    { key: "LW", n: lw },
+    { key: "C", n: count("C") },
+    { key: "RW", n: rw },
+    { key: "D", n: count("D") },
+    { key: "G", n: count("G") },
   ];
   const needByPos = {};
   needItems.forEach((n) => {
@@ -4514,426 +3100,562 @@ function RecapLineupCard({ posBreakdown, needItems }) {
     if (cat.includes("GOAL")) needByPos.G = n;
     else if (cat.includes("DEF")) needByPos.D = n;
     else if (cat.includes("WING")) needByPos.RW = n;
-    else needByPos.C = n;
+    else if (cat.includes("CENT")) needByPos.C = n;
   });
   return (
-    <div className="wr-rink" aria-label="Class DNA lineup">
-      <div className="wr-rink__board">
-        <div className="wr-rink__zones">
-          {slots.map((slot) => {
-            const count = Number(posBreakdown[slot.key] || posBreakdown[slot.key === "RW" ? "W" : ""] || 0);
-            const need = needByPos[slot.key];
-            const tier = count >= 2 ? "is-tier-high" : count === 1 ? "is-tier-solid" : "is-tier-raw";
-            return (
-              <div key={slot.key} className={`wr-rink__cell ${tier}${count ? "" : " is-fog"}`}>
-                <strong>{count || "—"}</strong>
-                <span>{slot.label}</span>
-                {need ? (
-                  <em className={`cap-filter-pill${need.filled ? " is-active" : ""}`} title={need.detail || undefined}>
-                    {need.filled ? "Filled" : "Open"}
-                  </em>
-                ) : null}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-      <p className="wr-rink__caption">Lineup DNA</p>
-    </div>
-  );
-}
-
-function RecapRankLadder({ rank }) {
-  if (!rank) return null;
-  return (
-    <div className="edraft-ondeck" aria-label={`Draft class rank ${rank} of 32`}>
-      <p className="edraft-ondeck-label">League position</p>
-      <div className="edraft-ondeck-track">
-        {Array.from({ length: 32 }, (_, i) => {
-          const n = i + 1;
-          const lit = n === rank;
+    <div className="drx-rink-wrap">
+      <div className="drx-rink" aria-label="Class DNA by position">
+        {spots.map((s) => {
+          const need = needByPos[s.key];
           return (
-            <span
-              key={n}
-              className={`edraft-slot${lit ? " is-user" : ""}${lit ? " is-next" : ""}`}
-              title={lit ? `${rank} of 32` : undefined}
+            <div
+              key={s.key}
+              className={`drx-spot drx-spot--${s.key.toLowerCase()}${s.n ? " has" : ""}${need && !need.filled ? " is-need" : ""}`}
+              title={need ? needLabel(need) : undefined}
             >
-              <span className="edraft-slot-num">{lit ? rank : ""}</span>
-              <span className="edraft-slot-abbr">{lit ? "YOU" : ""}</span>
-            </span>
+              <b>{s.n || "–"}</b>
+              <small>{s.key}</small>
+            </div>
           );
         })}
       </div>
-    </div>
-  );
-}
-
-function RecapFranchiseCard({ pick, onOpen, animate }) {
-  const verdict = recapVerdict(pick);
-  const ovr = recapNumeric(revealedOvrValue(pick));
-  const pot = recapNumeric(potVal(pick));
-  const league = projectionLeagueLabel(pick);
-  const name = pick.prospect_name || getPlayerName(pick) || "";
-  const pos = pick.position || getPlayerPosition(pick) || "";
-  const pub = getPublicRankAtPick(pick);
-  const tone = verdict ? pickOvrPopTone(verdict.tone === "value" ? "value" : verdict.tone) : "cyan";
-  const onKey = (e) => {
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      onOpen(pick);
-    }
-  };
-  return (
-    <div
-      className={`edraft-pick-spotlight tone-${tone}${animate ? " showcase-popup__panel--v2 motion-workspace-enter" : ""}`}
-      role="button"
-      tabIndex={0}
-      title={pub != null ? `Public rank #${pub}` : undefined}
-      onClick={() => onOpen(pick)}
-      onKeyDown={onKey}
-    >
-      <div className="edraft-pick-spotlight-pick">
-        <span>Pick</span>
-        <b className="edraft-tabular">{pick.overall_pick != null ? formatPick(pick.overall_pick) : "—"}</b>
-      </div>
-      <div className="edraft-pick-spotlight-main">
-        <p className="edraft-pick-spotlight-kicker">Franchise pick</p>
-        <p className="edraft-pick-spotlight-name">{name || <RecapDash />}</p>
-        <div className="edraft-pick-spotlight-meta">
-          {pos ? <span className="edraft-board-pos">{pos}</span> : null}
-          {league ? <span>{league}</span> : null}
-        </div>
-        <p className="edraft-muted">{buildScoutNote(pick) || <RecapDash />}</p>
-      </div>
-      <div className="edraft-pick-spotlight-side">
-        <span className={`edraft-haul-ovr edraft-tabular edraft-num-pop tone-${tone}`}>{ovr ?? "—"}</span>
-        {pot != null ? <span className="edraft-muted">POT {pot}</span> : null}
-        {verdict ? <PickBadge tag={verdict.text} tone={verdict.tone} className="edraft-pick-spotlight-tag" /> : null}
+      <div className="drx-rink-cap">
+        <span className="drx-kicker">Class DNA</span>
+        {needItems.map((n, i) => (
+          <em key={n.category || i} className={n.filled ? "is-filled" : "is-open"}>
+            {needLabel(n)} · {n.filled ? "filled" : "open"}
+          </em>
+        ))}
       </div>
     </div>
   );
 }
 
-function RecapSlipRow({ pick, isBest, onOpen, animate }) {
-  const verdict = recapVerdict(pick);
-  const ovr = recapNumeric(revealedOvrValue(pick));
-  const pot = recapNumeric(potVal(pick));
-  const conf = getConfidence(pick);
-  const lowConf = recapLowConfidence(pick);
-  const name = pick.prospect_name || getPlayerName(pick) || "";
-  const pos = pick.position || getPlayerPosition(pick) || "";
-  const league = projectionLeagueLabel(pick);
-  const pub = getPublicRankAtPick(pick);
-  const tone = verdict ? verdict.tone : "expected";
-  const toneClass = verdict && verdict.tone !== "expected" ? ` tone-${verdict.tone}` : "";
-  const gap = ovr != null && pot != null ? pot - ovr : null;
-  const onKey = (e) => {
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      onOpen(pick);
-    }
-  };
+function potTier(pot, pos) {
+  if (pot == null) return null;
+  const P = String(pos || "").toUpperCase();
+  const grp = P.includes("G") ? "G" : /^(LD|RD|D)$/.test(P) || P.startsWith("D") ? "D" : "F";
+  const names = {
+    F: ["First-line ceiling", "Top-six ceiling", "Middle-six ceiling", "Depth ceiling"],
+    D: ["Top-pair ceiling", "Top-four ceiling", "Third-pair ceiling", "Depth ceiling"],
+    G: ["Franchise starter", "Starter ceiling", "Backup ceiling", "Depth ceiling"],
+  }[grp];
+  if (pot >= 88) return { key: "elite", label: names[0] };
+  if (pot >= 84) return { key: "high", label: names[1] };
+  if (pot >= 79) return { key: "mid", label: names[2] };
+  return { key: "low", label: names[3] };
+}
+
+const LANE_MIN = 60;
+const LANE_MAX = 95;
+function lanePct(v) {
+  return Math.max(0, Math.min(100, ((Number(v) - LANE_MIN) / (LANE_MAX - LANE_MIN)) * 100));
+}
+function laneZones(pos) {
+  const P = String(pos || "").toUpperCase();
+  const grp = P.includes("G") ? "G" : P.startsWith("D") || /^(LD|RD)$/.test(P) ? "D" : "F";
+  const names = {
+    F: ["Depth", "Middle six", "Top six", "First line"],
+    D: ["Depth", "Third pair", "Top four", "Top pair"],
+    G: ["Depth", "Backup", "Starter", "Franchise"],
+  }[grp];
+  const cuts = [LANE_MIN, 79, 84, 88, LANE_MAX];
+  return names.map((label, i) => ({
+    label,
+    key: ["low", "mid", "high", "elite"][i],
+    left: lanePct(cuts[i]),
+    width: lanePct(cuts[i + 1]) - lanePct(cuts[i]),
+  }));
+}
+
+/* Development lane: the lineup roles laid out left to right; a dot for where
+   he is now, a marker for where he can get to. Hockey roles, not a gauge. */
+function DrxLane({ ovr, pot, pos, labels = false }) {
+  const tier = potTier(pot, pos);
+  const zones = laneZones(pos);
+  const now = ovr != null ? lanePct(ovr) : null;
+  const cap = pot != null ? lanePct(Math.max(pot, ovr ?? pot)) : null;
   return (
-    <button
-      type="button"
-      className={`edraft-haul-pick ui-interactive${isBest ? " is-selected" : ""}${toneClass}${animate ? " motion-tabswap" : ""}`}
-      title={pub != null ? `Public rank #${pub}` : SCOUTED_NOTE}
-      onClick={() => onOpen(pick)}
-      onKeyDown={onKey}
-    >
-      <b className="edraft-tabular">{pick.overall_pick != null ? formatPick(pick.overall_pick) : "—"}</b>
-      <span>
-        <strong>
-          {pos ? <span className="edraft-board-pos">{pos} </span> : null}
-          {name || <RecapDash />}
-        </strong>
-        <em>{[league, buildScoutNote(pick)].filter(Boolean).join(" · ") || "—"}</em>
-        {lowConf ? <span className="cap-filter-pill is-active">Low confidence</span> : null}
+    <span className={`drx-lane tier-${tier ? tier.key : "none"}${labels ? " has-labels" : ""}`}>
+      <span className="drx-lane__track">
+        {zones.map((z) => (
+          <span
+            key={z.key}
+            className={`drx-lane__zone is-${z.key}${tier && tier.key === z.key ? " is-target" : ""}`}
+            style={{ left: `${z.left}%`, width: `${z.width}%` }}
+          >
+            {labels ? <em>{z.label}</em> : null}
+          </span>
+        ))}
+        {now != null && cap != null ? (
+          <span className="drx-lane__climb" style={{ left: `${now}%`, width: `${Math.max(0, cap - now)}%` }} />
+        ) : null}
+        {now != null ? <span className="drx-lane__now" style={{ left: `${now}%` }} title={`Now ${ovr}`} /> : null}
+        {cap != null ? <span className="drx-lane__cap" style={{ left: `${cap}%` }} title={`Potential ${pot}`} /> : null}
       </span>
-      <span>
-        <strong className={`edraft-num-pop tone-cyan${lowConf ? " tone-muted" : ""}`}>{ovr ?? "—"}</strong>
-        <ProjectionRange
-          low={ovr}
-          mid={ovr}
-          high={pot}
-          confidence={conf != null ? conf : 55}
-        />
-        {gap != null ? <em className="edraft-muted">+{gap} ceiling</em> : null}
-        {verdict ? <PickBadge tag={verdict.text} tone={verdict.tone} /> : null}
-        <span className="edraft-link">Open file</span>
+    </span>
+  );
+}
+
+function DrxPot({ ovr, pot, pos, big = false }) {
+  const tier = potTier(pot, pos);
+  return (
+    <span className={`drx-pot tier-${tier ? tier.key : "none"}${big ? " is-big" : ""}`}>
+      <strong>{pot ?? "—"}</strong>
+      <small>{ovr != null ? `Potential · now ${ovr}` : "Potential"}</small>
+    </span>
+  );
+}
+
+function DrxTier({ pot, pos, big = false }) {
+  const tier = potTier(pot, pos);
+  if (!tier) return null;
+  return <span className={`drx-tier tier-${tier.key}${big ? " is-big" : ""}`}>{tier.label}</span>;
+}
+
+function verdictDisplay(verdict) {
+  if (!verdict) return "";
+  return verdict.text.replace(/^[A-Z]+/, (w) => w.charAt(0) + w.slice(1).toLowerCase());
+}
+
+function DrxStamp({ verdict, big = false, pub = null }) {
+  if (!verdict) return null;
+  return (
+    <span className={`drx-stamp drx-stamp--${verdict.tone}${big ? " is-big" : ""}`}>
+      <b>{verdictDisplay(verdict)}</b>
+      {pub != null ? <small>Board rank #{pub}</small> : null}
+    </span>
+  );
+}
+
+function pickNationality(pick) {
+  return pick.nationality || pick.country || pick.dossier?.nationality || null;
+}
+
+function pickParts(pick) {
+  return {
+    verdict: recapVerdict(pick),
+    ovr: recapNumeric(revealedOvrValue(pick)),
+    pot: recapNumeric(potVal(pick)),
+    league: projectionLeagueLabel(pick),
+    name: pick.prospect_name || getPlayerName(pick) || "",
+    pos: pick.position || getPlayerPosition(pick) || "",
+    pub: getPublicRankAtPick(pick),
+    low: recapLowConfidence(pick),
+    nat: pickNationality(pick),
+  };
+}
+
+function DrxFranchiseCard({ pick, onOpen, teamName, draftYear }) {
+  const { verdict, ovr, pot, league, name, pos, pub, low, nat } = pickParts(pick);
+  const tier = potTier(pot, pos);
+  const conf = getConfidence(pick);
+  const pickOrd = pick.overall_pick != null ? recapOrdinal(Number(pick.overall_pick)) : null;
+  return (
+    <button type="button" className={`drx-fcard tier-${tier ? tier.key : "none"}`} onClick={() => onOpen(pick)}>
+      <span className="drx-fcard__call">
+        {pickOrd ? `With the ${pickOrd} pick${draftYear ? ` in the ${draftYear} draft` : ""}, ` : ""}
+        {teamName ? `the ${teamName} select` : "you selected"}
+      </span>
+      <span className="drx-fcard__name">
+        {nat ? <ProspectFlag country={nat} width={30} /> : null}
+        <span>{name || <RecapDash />}</span>
+      </span>
+      <span className="drx-fcard__meta">
+        {[pos, league, buildScoutNote(pick)].filter(Boolean).join(" · ")}
+      </span>
+      <span className="drx-fcard__grid">
+        <DrxPot ovr={ovr} pot={pot} pos={pos} big />
+        <span className="drx-fcard__lane">
+          {tier ? <span className={`drx-tier tier-${tier.key} is-big`}>{tier.label}</span> : null}
+          <DrxLane ovr={ovr} pot={pot} pos={pos} labels />
+        </span>
+        <span className="drx-fcard__facts">
+          <DrxStamp verdict={verdict} pub={pub} big />
+          {conf != null ? (
+            <span className={`drx-fact${low ? " is-low" : ""}`}><b>{Math.round(conf)}%</b> scouting confidence</span>
+          ) : null}
+          <span className="drx-open">Open his file</span>
+        </span>
       </span>
     </button>
   );
 }
 
-function RecapRailSpotlight({ pick, tone, isUser, onOpen }) {
+function DrxSlip({ pick, index, isBest, onOpen }) {
+  const { verdict, ovr, pot, league, name, pos, pub, low, nat } = pickParts(pick);
+  const tier = potTier(pot, pos);
+  return (
+    <button
+      type="button"
+      className={`drx-slip${isBest ? " is-best" : ""}`}
+      style={{ "--i": index }}
+      title={buildScoutNote(pick) || SCOUTED_NOTE}
+      onClick={() => onOpen(pick)}
+    >
+      <span className="drx-slip__stub">
+        <b>{pick.overall_pick ?? "—"}</b>
+        <small>Round {pick.round ?? "—"}</small>
+      </span>
+      <span className="drx-slip__id">
+        <span className="drx-slip__name">
+          {nat ? <ProspectFlag country={nat} width={20} /> : null}
+          <span>{name || <RecapDash />}</span>
+        </span>
+        <span className="drx-slip__sub">
+          <span className="drx-slip__pos">{pos}</span>
+          {tier ? <span className={`drx-tier tier-${tier.key}`}>{tier.label}</span> : null}
+          {league ? <em>{league}</em> : null}
+          {low ? <span className="drx-lowconf">{buildScoutNote(pick) || "Low confidence"}</span> : null}
+        </span>
+      </span>
+      <DrxLane ovr={ovr} pot={pot} pos={pos} />
+      <DrxPot ovr={ovr} pot={pot} pos={pos} />
+      <DrxStamp verdict={verdict} pub={pub} />
+    </button>
+  );
+}
+
+function DrxTeamBoard({ teamId, teamName, completed, onOpen, onClose }) {
+  const rows = safeArray(completed)
+    .filter((p) => String(p.team_id) === String(teamId))
+    .sort((a, b) => Number(a.overall_pick || 0) - Number(b.overall_pick || 0));
+  return (
+    <div className="drx-teamboard">
+      <div className="drx-teamboard__head">
+        <DrxLogo teamId={teamId} teamName={teamName} size="md" />
+        <h4>{teamName || teamAbbrev(teamId, teamName)}</h4>
+        <span>{rows.length} pick{rows.length === 1 ? "" : "s"}</span>
+        <button type="button" className="drx-card__more" onClick={onClose}>Close</button>
+      </div>
+      {rows.length ? (
+        <div className="drx-slips">
+          {rows.map((p, i) => (
+            <DrxSlip key={p.pick_id || p.overall_pick || p.prospect_id || i} pick={p} index={i} onOpen={onOpen} />
+          ))}
+        </div>
+      ) : (
+        <p className="drx-empty">No picks for this team.</p>
+      )}
+    </div>
+  );
+}
+
+function DrxCeilingMap({ picks }) {
+  const counts = { elite: 0, high: 0, mid: 0, low: 0 };
+  const labels = {};
+  picks.forEach((p) => {
+    const pos = p.position || getPlayerPosition(p) || "";
+    const t = potTier(recapNumeric(potVal(p)), pos);
+    if (!t) return;
+    counts[t.key] += 1;
+    if (!labels[t.key]) labels[t.key] = t.key === "elite" ? "Elite" : t.key === "high" ? "High" : t.key === "mid" ? "Middle" : "Depth";
+  });
+  const total = counts.elite + counts.high + counts.mid + counts.low;
+  if (!total) return null;
+  return (
+    <div className="drx-ceilmap" aria-label="Class ceiling">
+      <span className="drx-kicker">Class ceiling</span>
+      <div className="drx-ceilmap__bar">
+        {["elite", "high", "mid", "low"].map((k) => (counts[k] ? (
+          <i key={k} className={`tier-${k}`} style={{ flexGrow: counts[k] }} title={`${counts[k]} ${labels[k]}`} />
+        ) : null))}
+      </div>
+      <div className="drx-ceilmap__legend">
+        {["elite", "high", "mid", "low"].map((k) => (counts[k] ? (
+          <span key={k} className={`tier-${k}`}><b>{counts[k]}</b> {labels[k].toLowerCase()}</span>
+        ) : null))}
+      </div>
+    </div>
+  );
+}
+
+function moverBoardRank(p) {
+  const b = getPublicRankAtPick(p);
+  return b != null ? b : num(p?.final_rank);
+}
+
+function DrxMover({ pick, tone, lead, isUser, onOpen }) {
   const d = pubDelta(pick);
   const signed = fmtSigned(d);
   const name = pick?.prospect_name || getPlayerName(pick) || "";
   const pos = pick?.position || "";
+  const abbr = teamAbbrev(pick?.team_id, pick?.team_name);
+  const board = moverBoardRank(pick);
+  const spots = d != null ? Math.abs(d) : null;
+  const travel = spots != null ? Math.min(100, Math.max(12, (spots / 150) * 100)) : 40;
   return (
-    <button type="button" className={`dlot-card is-headline${isUser ? " is-user" : ""}`} onClick={() => onOpen(pick)}>
-      <DlotTeamMark teamId={pick.team_id} teamName={pick.team_name} size="lg" />
-      <div className="dlot-card-body">
+    <button
+      type="button"
+      className={`drx-mover tone-${tone}${lead ? " is-lead" : ""}${isUser ? " is-user" : ""}`}
+      onClick={() => onOpen(pick)}
+    >
+      <DrxLogo teamId={pick?.team_id} teamName={pick?.team_name} size={lead ? "lg" : "sm"} />
+      <span className="drx-mover__body">
         <strong>{name || <RecapDash />}</strong>
-        <div className="dlot-card-details">
-          <span>{[pos, teamAbbrev(pick.team_id, pick.team_name)].filter(Boolean).join(" · ")}</span>
-          <RankChange rank={pick.final_rank} delta={d != null ? -d : null} />
-          <span>→ #{pick.overall_pick}</span>
-        </div>
-        {isUser ? <span className="dlot-card-you">Your pick</span> : null}
-        <StockTrajectory delta={d} direction={tone === "pos" ? "UP" : "DOWN"} />
-        {signed != null ? (
-          <span className={`dlot-chip tone-${tone === "pos" ? "up" : "down"}`}>{signed}</span>
+        <small>
+          {[pos, abbr].filter(Boolean).join(" · ")}
+          {!lead && board != null ? ` · #${board} → #${pick?.overall_pick ?? "—"}` : ""}
+          {isUser ? <em className="drx-you">Your pick</em> : null}
+        </small>
+        {lead ? (
+          <span className="drx-move-track">
+            <span>Board #{board ?? "—"}</span>
+            <i aria-hidden="true"><b style={{ width: `${travel}%` }} /></i>
+            <span>Pick #{pick?.overall_pick ?? "—"}</span>
+          </span>
         ) : null}
-      </div>
+        {lead && spots != null ? (
+          <small className="drx-mover__move">{tone === "pos" ? `Slid ${spots} spots` : `Jumped ${spots} spots`}</small>
+        ) : null}
+      </span>
+      <span className="drx-mover__delta">{signed ?? "—"}</span>
     </button>
   );
 }
 
-function RecapRailRow({ pick, tone, isUser, onOpen }) {
-  const d = pubDelta(pick);
-  const signed = fmtSigned(d);
-  const name = pick?.prospect_name || getPlayerName(pick) || "";
-  return (
-    <button type="button" className={`dlot-card${isUser ? " is-user" : ""}`} onClick={() => onOpen(pick)}>
-      <DlotTeamMark teamId={pick.team_id} teamName={pick.team_name} size="sm" />
-      <div className="dlot-card-body">
-        <strong>{name || <RecapDash />}</strong>
-        <div className="dlot-card-details">
-          <RankChange rank={pick.final_rank} delta={d != null ? -d : null} />
-          <span>→ #{pick.overall_pick}</span>
-          {signed != null ? <span>{signed}</span> : null}
-        </div>
-        {isUser ? <span className="dlot-card-you">Your pick</span> : null}
-      </div>
-    </button>
-  );
-}
-
-function RecapRailCard({ title, rows, tone, empty, userTeamId, onOpen }) {
+function DrxMoverCard({ title, kind, rows, tone, empty, userTeamId, onOpen }) {
   const [expanded, setExpanded] = useState(false);
-  const cap = expanded ? 10 : 3;
-  const shown = rows.slice(0, cap);
-  const headline = shown[0];
-  const rest = shown.slice(1);
+  const shown = rows.slice(0, expanded ? 10 : 3);
   return (
-    <div className="nhlcal-card hub-office-rail__block">
-      <div className="nhlcal-card-header">
-        <p>{title}</p>
-        <span className="nhlcal-header-pill">{rows.length}</span>
-      </div>
-      <div className="dlot-rail">
-        {headline ? (
-          <RecapRailSpotlight
-            pick={headline}
-            tone={tone}
-            isUser={String(headline?.team_id) === String(userTeamId)}
-            onOpen={onOpen}
-          />
-        ) : null}
-        {rest.map((p, i) => (
-          <RecapRailRow
+    <section className={`drx-card drx-card--${kind}`}>
+      <header className="drx-card__head">
+        <h4>{title}</h4>
+        <span className="drx-count">{rows.length}</span>
+      </header>
+      <div className={`drx-card__list${expanded ? " is-expanded" : ""}`}>
+        {shown.map((p, i) => (
+          <DrxMover
             key={p?.pick_id || p?.overall_pick || p?.prospect_id || i}
             pick={p}
             tone={tone}
+            lead={i === 0}
             isUser={String(p?.team_id) === String(userTeamId)}
             onOpen={onOpen}
           />
         ))}
-        {!shown.length ? <p className="edraft-muted">{empty}</p> : null}
+        {!shown.length ? <p className="drx-empty">{empty}</p> : null}
       </div>
       {rows.length > 3 ? (
-        <button type="button" className="nhlcal-advance-button-secondary" onClick={() => setExpanded((v) => !v)}>
-          {expanded ? "Show less" : "View all"} <Icon name={expanded ? "up" : "down"} size={12} />
+        <button type="button" className="drx-card__more" onClick={() => setExpanded((v) => !v)}>
+          {expanded ? "Show less" : `View all ${rows.length}`} <Icon name={expanded ? "up" : "down"} size={11} />
         </button>
       ) : null}
-    </div>
+    </section>
   );
 }
 
-function RecapBoardRailCard({ rows, userTeamId }) {
+function DrxBoardCard({ rows }) {
   const [expanded, setExpanded] = useState(false);
-  const cap = expanded ? 10 : 3;
-  const shown = rows.slice(0, cap);
+  const shown = rows.slice(0, expanded ? 10 : 3);
   return (
-    <div className="nhlcal-card hub-office-rail__block">
-      <div className="nhlcal-card-header">
-        <p>Still on the board</p>
-        <span className="nhlcal-header-pill">{rows.length}</span>
-      </div>
-      <div className="nhlcal-preview-lines">
+    <section className="drx-card drx-card--board">
+      <header className="drx-card__head">
+        <h4>Still on the board</h4>
+        <span className="drx-count">{rows.length}</span>
+      </header>
+      <div className={`drx-card__list${expanded ? " is-expanded" : ""}`}>
         {shown.length ? shown.map((entry, i) => {
           const name = entry?.name || entry?.prospect_name || "";
-          const meta = stillBoardMeta(entry);
+          const pos = entry?.position ? String(entry.position).trim() : "";
+          const league = entry?.league || entry?.current_league || "";
           const passed = Boolean(entry?.user_passed || entry?.passed_by_user);
           return (
-            <div key={entry?.key || entry?.prospect_id || name || i} className={passed ? "dlot-card is-user" : ""}>
-              <span>{name || <RecapDash />}</span>
-              <span className="edraft-muted">{meta || <RecapDash />}</span>
-              {passed ? <span className="dlot-card-you">You passed</span> : null}
+            <div key={entry?.key || entry?.prospect_id || name || i} className={`drx-avail${passed ? " is-user" : ""}`}>
+              <span className="drx-avail__id">
+                <strong>
+                  {pos ? <span className="drx-pos">{pos}</span> : null}
+                  <span>{name || <RecapDash />}</span>
+                </strong>
+                <small>
+                  {[league, entry?.status].filter(Boolean).join(" · ") || "Undrafted"}
+                  {passed ? <em className="drx-you">You passed</em> : null}
+                </small>
+              </span>
+              <span className="drx-avail__rank">
+                <small>Board</small>
+                <b>{stillBoardRank(entry) || "—"}</b>
+              </span>
             </div>
           );
-        }) : <p className="edraft-muted">The board cleared out.</p>}
+        }) : <p className="drx-empty">The board cleared out.</p>}
       </div>
       {rows.length > 3 ? (
-        <button type="button" className="nhlcal-advance-button-secondary" onClick={() => setExpanded((v) => !v)}>
-          {expanded ? "Show less" : "View all"} <Icon name={expanded ? "up" : "down"} size={12} />
+        <button type="button" className="drx-card__more" onClick={() => setExpanded((v) => !v)}>
+          {expanded ? "Show less" : `View all ${rows.length}`} <Icon name={expanded ? "up" : "down"} size={11} />
         </button>
       ) : null}
-    </div>
+    </section>
   );
 }
 
 function RecapShow({ draft, completed, userPicks, draftOrder, userTeamId, franchiseState, onContinue }) {
   const r = draft?.recap || {};
   const [profilePick, setProfilePick] = useState(null);
-  const [leagueOpen, setLeagueOpen] = useState(false);
   const [focusedTeamId, setFocusedTeamId] = useState(null);
-  const reveal = useRecapReveal();
+  const [sortBy, setSortBy] = useState("pick");
   const picks = safeArray(userPicks).slice().sort((a, b) => Number(a.overall_pick || 0) - Number(b.overall_pick || 0));
 
   const orderSlot = safeArray(draftOrder).find((s) => String(s.team_id) === String(userTeamId));
   const teamId = picks[0]?.team_id ?? picks[0]?.team ?? userTeamId;
   const teamName = picks[0]?.team_name || orderSlot?.team_name || "";
+  const teamLogo = getTeamLogoSrc({ team_id: teamId, name: teamName });
 
   const grade = r.user_grade || draft?.user_draft_grade || buildDraftGrade(picks) || "—";
   const capTone = recapCapTone(grade);
   const posBreakdown = r.user_position_breakdown || r.position_breakdown || {};
   const steals = Array.isArray(r.best_steals) ? r.best_steals : safeArray(completed).filter((p) => p.was_steal);
   const reaches = Array.isArray(r.biggest_reaches) ? r.biggest_reaches : safeArray(completed).filter((p) => p.was_reach);
-  const headlines = safeArray(r.headlines);
-  const extraStory = headlines.find((line) => line && !isStealOrReachLine(line)) || "";
+  const extraStory = safeArray(r.headlines).find((line) => line && !isStealOrReachLine(line) && !/best value/i.test(line)) || "";
   const needItems = safeArray(r.needs_report).filter((n) => n?.category);
   const stillOnBoard = safeArray(r.still_on_board).filter((entry) => {
     const name = entry?.name || entry?.prospect_name;
     return Boolean(name) || Boolean(stillBoardRank(entry));
   });
   const bestId = String(r.best_user_pick?.prospect_id ?? "");
-  const leagueTeams = safeArray(draftOrder);
   const valueInsight = bestValueInsight(picks);
+
+  const leagueTeams = [];
+  const seenTeams = new Set();
+  safeArray(draftOrder).forEach((slot) => {
+    const key = String(slot?.team_id ?? "");
+    if (!key || seenTeams.has(key)) return;
+    seenTeams.add(key);
+    leagueTeams.push(slot);
+  });
 
   const avgRaw = r.user_avg_value_delta != null
     ? Number(r.user_avg_value_delta)
     : (picks.length ? picks.reduce((s, p) => s + (pubDelta(p) || 0), 0) / picks.length : 0);
   const avgText = Number.isFinite(avgRaw) ? (fmtSigned(avgRaw, 1) ?? "0.0") : null;
+  const avgTone = avgRaw > 0 ? "pos" : avgRaw < 0 ? "neg" : "flat";
   const gradeScoreRaw = r.user_grade_score != null && r.user_grade_score !== "" ? Number(r.user_grade_score) : null;
-  const countedScore = useCountUp(gradeScoreRaw, reveal >= 1);
+  const scoreShown = useCountUp(gradeScoreRaw, true);
   const classRank = parseLeagueRank(r.user_class_rank);
+  const pickCount = r.user_pick_count ?? picks.length;
+  const stealCount = Number(r.user_steal_count ?? 0);
+  const reachCount = Number(r.user_reach_count ?? 0);
 
   const franchisePick = selectFranchisePick(picks, bestId);
   const franchiseKey = franchisePick
     ? String(franchisePick.pick_id || franchisePick.overall_pick || franchisePick.prospect_id)
     : "";
-  const compactPicks = franchisePick
+  const restPicks = franchisePick
     ? picks.filter((p) => String(p.pick_id || p.overall_pick || p.prospect_id) !== franchiseKey)
     : picks;
+  const compactPicks = sortBy === "pot"
+    ? restPicks.slice().sort((a, b) => (recapNumeric(potVal(b)) ?? 0) - (recapNumeric(potVal(a)) ?? 0))
+    : restPicks;
 
   const openPick = (p) => setProfilePick(enrichPickFromBoard(p, draft));
   const rightsCount = picks.filter((p) => p?.prospect_file_complete).length;
   const footerStatus = rightsCount > 0
     ? `${rightsCount} pick${rightsCount === 1 ? "" : "s"} signed to rights`
-    : `${r.user_pick_count ?? picks.length} pick${(r.user_pick_count ?? picks.length) === 1 ? "" : "s"} on the card`;
+    : `${pickCount} pick${pickCount === 1 ? "" : "s"} on the card`;
 
-  const haulFilter = focusedTeamId
-    ? safeArray(draftOrder).filter((s) => String(s.team_id) === String(focusedTeamId))
-    : draftOrder;
 
   return (
-    <div className="game-screen register-ops cap-office-edraft edraft-scroll-surface">
-      <div className="nhlcal-main">
-        <div className={`cap-report-primary-panel${reveal >= 3 ? " motion-department-enter" : ""}`}>
-          <section className={`cap-report-league-summary fcn-rail fcn-rail--gold${reveal >= 0 ? " motion-department-enter" : ""}`} aria-label="Draft grade">
-            <DlotTeamMark teamId={teamId} teamName={teamName} size="xl" />
-            <div className="cap-report-cap-display fcn-rail motion-select-confirm">
-              <strong className={`cap-num-pop tone-${capTone}`}>{grade}</strong>
-              <div>
-                {gradeScoreRaw != null ? (
-                  <span className={`cap-report-change-badge${avgRaw < 0 ? " is-danger" : avgRaw > 0 ? " is-positive" : " is-neutral"}`}>
-                    {countedScore != null ? `${countedScore}/100` : "—/100"}
-                  </span>
-                ) : null}
-              </div>
-            </div>
-            <RecapRankLadder rank={classRank} />
-            <p className="cap-report-reason">{buildGmHeadline(r, grade)}</p>
-            <div className="cap-report-space-block">
-              <span>Avg value</span>
-              <strong className={avgRaw < 0 ? "is-negative" : undefined}>{avgText || "—"}</strong>
-              <p>
-                <Icon name={avgRaw >= 0 ? "plus" : "minus"} size={11} />
-                {avgRaw >= 0 ? " Board beat" : " Board missed"}
-              </p>
-            </div>
-            <div className="cap-report-change-strip">
-              <div>
-                <span>Picks</span>
-                <strong>{r.user_pick_count ?? picks.length}</strong>
-              </div>
-              <div>
-                <span>Steals</span>
-                <strong>{r.user_steal_count ?? 0}</strong>
-              </div>
-              <div>
-                <span>Reaches</span>
-                <strong>{r.user_reach_count ?? 0}</strong>
-              </div>
-            </div>
-            <RecapLineupCard posBreakdown={posBreakdown} needItems={needItems} />
-
-            <div className="edraft-stage">
-              <div className="edraft-pane-head">
-                <h3>Your class</h3>
-                <em title={SCOUTED_NOTE}>{picks.length} picks</em>
-              </div>
-              <div className="edraft-scroll">
-                {picks.length ? (
-                  <>
-                    {franchisePick ? (
-                      <RecapFranchiseCard pick={franchisePick} onOpen={openPick} animate={reveal >= 2} />
-                    ) : null}
-                    {compactPicks.map((p, i) => (
-                      <RecapSlipRow
-                        key={p.pick_id || p.overall_pick || p.prospect_id || i}
-                        pick={p}
-                        isBest={bestId && String(p.prospect_id) === bestId}
-                        onOpen={openPick}
-                        animate={reveal >= 2 && i < 7}
-                      />
-                    ))}
-                  </>
-                ) : (
-                  <div className="nhlcal-empty-state">
-                    <h3>No picks on the card</h3>
-                    <p>The war room stayed quiet — you did not make a selection this draft.</p>
-                  </div>
-                )}
-              </div>
-            </div>
-          </section>
-
-          <aside className={`cap-report-club-summary hub-office-rail${reveal >= 4 ? " motion-inspector-swap" : ""}`} aria-label="League recap">
-            {valueInsight ? <p className="hub-office-rail__p">{valueInsight}</p> : null}
-            <RecapRailCard title="Best steals" rows={steals} tone="pos" empty="The board stayed honest." userTeamId={userTeamId} onOpen={openPick} />
-            <RecapRailCard title="Biggest reaches" rows={reaches} tone="neg" empty="A disciplined night." userTeamId={userTeamId} onOpen={openPick} />
-            <RecapBoardRailCard rows={stillOnBoard} userTeamId={userTeamId} />
-            {extraStory ? <p className="edraft-report">{extraStory}</p> : null}
-          </aside>
+    <div className={`drx tone-${capTone}`}>
+      <header className="drx-hero">
+        {teamLogo ? (
+          <span className="drx-hero__mark" aria-hidden="true"><img src={teamLogo} alt="" /></span>
+        ) : null}
+        <div className="drx-grade-col">
+          <div className="drx-grade" aria-label={`Draft grade ${grade}`}>
+            <strong>{grade}</strong>
+          </div>
+          {gradeScoreRaw != null ? (
+            <span className="drx-grade__score">{scoreShown != null ? `${scoreShown}/100` : "—/100"}</span>
+          ) : null}
         </div>
 
-        {leagueTeams.length ? (
-          <section className="edraft-ondeck">
-            <button
-              type="button"
-              className="nhlcal-week-header ui-interactive"
-              aria-expanded={leagueOpen}
-              onClick={() => setLeagueOpen((v) => !v)}
-            >
-              <strong>League draft board</strong>
-              <span>{leagueTeams.length} teams · {leagueOpen ? "Collapse" : "Expand"}</span>
-              <Icon name={leagueOpen ? "down" : "next"} size={12} />
-            </button>
-            <div className="edraft-ondeck-track" role="list" aria-label="All teams">
+        <div className="drx-hero__story">
+          <p className="drx-kicker drx-kicker--team">
+            <DrxLogo teamId={teamId} teamName={teamName} size="xs" />
+            <span>{teamName || teamAbbrev(teamId, teamName)} · {seasonLabel(franchiseState)} Entry Draft · Final</span>
+          </p>
+          <h2 className="drx-headline">{buildGmHeadline(r, grade)}</h2>
+          <DrxRankLadder rank={classRank} />
+          <DrxCeilingMap picks={picks} />
+        </div>
+
+        <div className="drx-board">
+          <div className={`drx-board__main tone-${avgTone}`}>
+            <span>Avg value</span>
+            <strong>{avgText || "—"}</strong>
+            <em>{avgRaw >= 0 ? "Beat the board" : "Missed the board"}</em>
+          </div>
+          <div className="drx-board__row">
+            <div>
+              <strong>{pickCount}</strong>
+              <span>Picks</span>
+            </div>
+            <div className={stealCount ? "tone-pos" : undefined}>
+              <strong>{stealCount}</strong>
+              <span>Steals</span>
+            </div>
+            <div className={reachCount ? "tone-neg" : undefined}>
+              <strong>{reachCount}</strong>
+              <span>Reaches</span>
+            </div>
+          </div>
+        </div>
+
+        <DrxRink posBreakdown={posBreakdown} needItems={needItems} />
+      </header>
+
+      <div className="drx-body">
+        <section className="drx-class" aria-label="Your class">
+          <div className="drx-head">
+            <h3>Your class</h3>
+            <span title={SCOUTED_NOTE}>{picks.length} picks</span>
+            {picks.length > 2 ? (
+              <div className="drx-sort" role="tablist" aria-label="Sort your class">
+                <button type="button" role="tab" aria-selected={sortBy === "pick"} className={sortBy === "pick" ? "is-on" : undefined} onClick={() => setSortBy("pick")}>By pick</button>
+                <button type="button" role="tab" aria-selected={sortBy === "pot"} className={sortBy === "pot" ? "is-on" : undefined} onClick={() => setSortBy("pot")}>By potential</button>
+              </div>
+            ) : null}
+          </div>
+          {picks.length ? (
+            <>
+              {franchisePick ? (
+                <DrxFranchiseCard pick={franchisePick} onOpen={openPick} teamName={teamName} draftYear={draftYearLabel(draft)} />
+              ) : null}
+              <div className="drx-slips">
+                {compactPicks.map((p, i) => (
+                  <DrxSlip
+                    key={p.pick_id || p.overall_pick || p.prospect_id || i}
+                    pick={p}
+                    index={i}
+                    isBest={Boolean(bestId) && String(p.prospect_id) === bestId}
+                    onOpen={openPick}
+                  />
+                ))}
+              </div>
+            </>
+          ) : (
+            <div className="drx-empty-state">
+              <h4>No picks on the card</h4>
+              <p>The war room stayed quiet. You did not make a selection this draft.</p>
+            </div>
+          )}
+        </section>
+
+        <aside className="drx-rail" aria-label="League recap">
+          {valueInsight ? <p className="drx-insight">{valueInsight}</p> : null}
+          <DrxMoverCard title="Best steals" kind="steal" rows={steals} tone="pos" empty="The board stayed honest." userTeamId={userTeamId} onOpen={openPick} />
+          <DrxMoverCard title="Biggest reaches" kind="reach" rows={reaches} tone="neg" empty="A disciplined night across the league." userTeamId={userTeamId} onOpen={openPick} />
+          <DrxBoardCard rows={stillOnBoard} />
+          {extraStory ? <p className="drx-insight is-story">{extraStory}</p> : null}
+        </aside>
+      </div>
+
+      {leagueTeams.length ? (
+        <section className="drx-league">
+          <div className="drx-league__bar">
+            <h4>Around the league</h4>
+            <span className="drx-league__hint">{focusedTeamId ? "" : "Pick a team to see its class"}</span>
+            <div className="drx-league__logos" role="tablist" aria-label="Teams">
               {leagueTeams.map((slot) => {
                 const isUser = String(slot.team_id) === String(userTeamId);
                 const focused = String(slot.team_id) === String(focusedTeamId);
@@ -4941,39 +3663,37 @@ function RecapShow({ draft, completed, userPicks, draftOrder, userTeamId, franch
                   <button
                     key={slot.team_id}
                     type="button"
-                    role="listitem"
-                    className={`edraft-slot ui-interactive${isUser ? " is-user" : ""}${focused ? " is-next" : ""}`}
-                    onClick={() => {
-                      setLeagueOpen(true);
-                      setFocusedTeamId(slot.team_id);
-                    }}
+                    role="tab"
+                    aria-selected={focused}
+                    className={`drx-league__team${isUser ? " is-user" : ""}${focused ? " is-focused" : ""}`}
+                    title={slot.team_name || teamAbbrev(slot.team_id, slot.team_name)}
+                    onClick={() => setFocusedTeamId(focused ? null : slot.team_id)}
                   >
-                    <DlotTeamMark teamId={slot.team_id} teamName={slot.team_name} size="xs" />
-                    <span className="edraft-slot-abbr">{teamAbbrev(slot.team_id, slot.team_name)}</span>
+                    <DrxLogo teamId={slot.team_id} teamName={slot.team_name} size="sm" />
                   </button>
                 );
               })}
             </div>
-            {leagueOpen ? (
-              <div className="edraft-stage">
-                <TeamHaulBoard
-                  draftOrder={haulFilter}
-                  completed={completed}
-                  userTeamId={userTeamId}
-                  selectedPick={profilePick}
-                  onSelectPick={openPick}
-                  floor
-                />
-              </div>
-            ) : null}
-          </section>
-        ) : null}
-      </div>
+          </div>
+          {focusedTeamId ? (
+            <DrxTeamBoard
+              teamId={focusedTeamId}
+              teamName={(leagueTeams.find((t) => String(t.team_id) === String(focusedTeamId)) || {}).team_name}
+              completed={completed}
+              onOpen={openPick}
+              onClose={() => setFocusedTeamId(null)}
+            />
+          ) : null}
+        </section>
+      ) : null}
 
-      <footer className="nhlcal-week-header">
-        <span className="edraft-muted">{footerStatus}</span>
-        <button type="button" className="nhlcal-advance-button" onClick={onContinue}>
-          <Icon name="next" size={12} /> Continue offseason
+      <footer className="drx-footer">
+        <span className="drx-footer__status">
+          <DrxLogo teamId={teamId} teamName={teamName} size="xs" />
+          {footerStatus}
+        </span>
+        <button type="button" className="nhlcal-advance-button drx-continue" onClick={onContinue}>
+          Continue offseason <Icon name="next" size={12} />
         </button>
       </footer>
 
@@ -4983,6 +3703,7 @@ function RecapShow({ draft, completed, userPicks, draftOrder, userTeamId, franch
     </div>
   );
 }
+
 /* Root                                                                */
 /* ------------------------------------------------------------------ */
 
@@ -5508,7 +4229,7 @@ export default function EntryDraftMenu({ franchiseState = {}, eventData = {}, on
   return (
     <ProspectClassContext.Provider value={classPool}>
     <section className={`${PREFIX}-root`}>
-      <style>{SHEET}</style>
+      {null}
       <ProspectVisualStyles />
 
       <CommandBar

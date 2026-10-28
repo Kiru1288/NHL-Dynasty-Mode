@@ -3,6 +3,7 @@ import { useFranchiseState, useGameUI } from "../game/GameUIContext";
 import { SCREENS } from "../game/constants";
 import { askPuckGpt } from "../services/franchiseService";
 import { PlayerProfileModal, normalizeRosterBrowserPlayer } from "./RosterScreen";
+import { Pucky } from "../components/game/PuckBuddy";
 
 const STARTERS = [
   "Why are we losing?",
@@ -98,7 +99,7 @@ function Turn({ turn, onAsk, onOpenPlayer }) {
     <article className="puckgpt-turn">
       <p className="puckgpt-q">{turn.query}</p>
       {turn.error ? <p className="puckgpt-error" role="alert">{turn.error}</p> : null}
-      {!res && !turn.error ? <p className="puckgpt-thinking">{turn.first ? "Indexing this save…" : "Reading the save…"}</p> : null}
+      {!res && !turn.error ? <p className="puckgpt-thinking"><Pucky size="sm" talking bobbing />{turn.first ? "Indexing this save…" : "Reading the save…"}</p> : null}
       {res ? (
         <div className="puckgpt-reply">
           <ReadAs interp={res.interpretation} />
@@ -204,7 +205,7 @@ export default function PuckGptScreen() {
     <div className="game-screen puckgpt-screen" data-register="shell">
       <header className="puckgpt-bar">
         <div>
-          <div className="puckgpt-mark">PUCKGPT</div>
+          <div className="puckgpt-mark"><Pucky size="md" title="Pucky" />PUCKGPT</div>
           <p>Ask anything about this save. Typos, slang, shorthand and other languages are fine.</p>
         </div>
         <div className="puckgpt-bar__actions">
@@ -222,6 +223,7 @@ export default function PuckGptScreen() {
       <section className="puckgpt-thread" aria-live="polite">
         {empty ? (
           <div className="puckgpt-empty">
+            <div className="puckgpt-hello"><Pucky bobbing title="Pucky" /><p>Hey boss! What do you wanna know?</p></div>
             <h2>What do you want to know?</h2>
             <div className="puckgpt-chips">
               {STARTERS.map((item) => (

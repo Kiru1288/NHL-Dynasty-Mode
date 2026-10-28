@@ -871,7 +871,7 @@ export function GameUIProvider({ children }) {
           );
           skipDraft = revMatch && isoMatch && cursorMatch && hudMatch && !boardEmpty;
         }
-        if (includeNhlCalendarFull && Array.isArray(prev?.nhl_calendar_full) && prev.nhl_calendar_full.length > 120) {
+        if (includeNhlCalendarFull && prev?.nhl_calendar_full_complete === true && Array.isArray(prev?.nhl_calendar_full) && prev.nhl_calendar_full.length > 0) {
           skipCalendar = true;
         }
         return prev;

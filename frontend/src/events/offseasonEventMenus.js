@@ -16,6 +16,7 @@ import { useGameUI } from "../game/GameUIContext";
 import { projectNegotiationCap } from "../utils/contractNegotiation";
 import { formatMoney, formatPick, getPlayerName, getPlayerOverall, getPlayerPosition, pickFranchiseData, safeArray } from "./shared/eventHelpers";
 import { getOverallModifierBadge } from "../utils/playerOverall";
+import { flagApiUrl, resolveCountryCode } from "../utils/countryFlags";
 
 function computeOfferCapHitM(aav, years, signingBonus = 0) {
   const y = Math.max(1, Number(years) || 1);
@@ -3707,6 +3708,98 @@ function buildDecisionPackages(focus) {
   return packages;
 }
 
+/* ── Rights Desk helpers (dossier-style layout) ── */
+const PR_LEAGUE_ACRONYMS = /\b(ncaa|chl|ohl|whl|qmjhl|ushl|ahl|echl|shl|khl|nhl|vhl|mhl|bchl|ajhl|nll|u18|u20)\b/gi;
+function prLeagueName(raw) {
+  const s = String(raw || "").replace(/^CHL_/, "").replace(/_/g, " ").trim();
+  if (!s) return "";
+  return s
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+    .replace(PR_LEAGUE_ACRONYMS, (m) => m.toUpperCase())
+    .replace(/\bNCAA College\b/, "NCAA");
+}
+function prLeague(p) {
+  const raw = p?.current_league || p?.returning_to || p?.league || p?.season_stats?.league || "";
+  return prLeagueName(raw);
+}
+function prPositionName(pos) {
+  const P = String(pos || "").toUpperCase();
+  return { C: "Center", LW: "Left wing", RW: "Right wing", D: "Defense", LD: "Defense", RD: "Defense", G: "Goalie" }[P] || P;
+}
+function prDraftLine(p) {
+  const bits = [];
+  if (p?.draft_year) bits.push(`Drafted ${p.draft_year}`);
+  if (p?.draft_round) bits.push(`Round ${p.draft_round}`);
+  const pick = p?.draft_overall_pick ?? p?.draft_pick;
+  if (pick) bits.push(`#${pick} overall`);
+  const ys = Number(p?.years_since_drafted);
+  if (Number.isFinite(ys) && ys >= 1) bits.push(`${ys} year${ys === 1 ? "" : "s"} in the system`);
+  return bits.join(" · ") || "Unsigned prospect";
+}
+function prTierKey(pot) {
+  const n = Number(pot);
+  if (!Number.isFinite(n)) return "none";
+  return n >= 88 ? "elite" : n >= 84 ? "high" : n >= 79 ? "mid" : "low";
+}
+function prTier(pot, pos) {
+  const n = Number(pot);
+  if (!Number.isFinite(n)) return null;
+  const P = String(pos || "").toUpperCase();
+  const grp = P.includes("G") ? "G" : P.startsWith("D") || P === "LD" || P === "RD" ? "D" : "F";
+  const names = {
+    F: ["First-line ceiling", "Top-six ceiling", "Middle-six ceiling", "Depth ceiling"],
+    D: ["Top-pair ceiling", "Top-four ceiling", "Third-pair ceiling", "Depth ceiling"],
+    G: ["Franchise starter", "Starter ceiling", "Backup ceiling", "Depth ceiling"],
+  }[grp];
+  return names[n >= 88 ? 0 : n >= 84 ? 1 : n >= 79 ? 2 : 3];
+}
+function prDeadlineYear(p) {
+  const d = String(p?.rights_signing_deadline || p?.rights_through || p?.rights_expiry_year || "");
+  const m = d.match(/(\d{4})/);
+  return m ? Number(m[1]) : null;
+}
+function prDeadlineUrgent(p, seasonYear) {
+  const y = prDeadlineYear(p);
+  return y != null && seasonYear != null && y <= Number(seasonYear) + 1;
+}
+function prDate(raw) {
+  const m = String(raw || "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return String(raw || "—");
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return `${months[Number(m[2]) - 1]} ${Number(m[3])}, ${m[1]}`;
+}
+const PR_PATH_BLURBS = {
+  keep_unsigned: "Hold his rights. No contract, no slot used.",
+  delay: "Come back to him before this offseason ends.",
+  allow_expire: "Let his rights lapse. He becomes a free agent.",
+};
+function prPathBlurb(pkg) {
+  return PR_PATH_BLURBS[pkg?.actionId] || pkg?.blurb || "";
+}
+function prMeterTone(pct) {
+  const n = Number(pct);
+  if (!Number.isFinite(n)) return "none";
+  return n >= 75 ? "good" : n >= 50 ? "mid" : "bad";
+}
+function prMoneyM(display) {
+  const m = String(display || "").replace(/,/g, "").match(/\$?\s*([\d.]+)\s*([KkMm])?/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  if (!Number.isFinite(n)) return null;
+  const unit = (m[2] || "").toUpperCase();
+  return unit === "M" ? n : unit === "K" ? n / 1000 : n / 1e6;
+}
+function prMoneyLabel(m) {
+  const n = Number(m) || 0;
+  return n >= 1 ? `$${n.toFixed(2)}M` : `$${Math.round(n * 1000)}K`;
+}
+function PrFlag({ country }) {
+  const iso = resolveCountryCode(country);
+  const src = iso ? `https://flagcdn.com/w80/${iso.toLowerCase()}.png` : flagApiUrl(country, 32);
+  if (!src) return null;
+  return <img src={src} alt="" onError={(e) => { e.currentTarget.style.display = "none"; }} />;
+}
+
 export function ProspectRightsEventMenu({ franchiseState = {}, eventData = {}, onContinue, onBack }) {
   const prefix = "prospectrights";
   const initial =
@@ -3852,6 +3945,9 @@ export function ProspectRightsEventMenu({ franchiseState = {}, eventData = {}, o
           ? focus.pot
           : null;
 
+  const sbMax = Number(elcLegal.max_signing_bonus_total_m || 0.285) * (Number(offer?.term_years || 3) / 3);
+  const saMax = Number(elcLegal.max_schedule_a_m || 0.2125);
+
   const onRailKeyDown = (e, id) => {
     if (!sortedProspects.length) return;
     const ids = sortedProspects.map((p) => String(p.player_id));
@@ -3989,251 +4085,280 @@ export function ProspectRightsEventMenu({ franchiseState = {}, eventData = {}, o
       footerAlign="split"
       onContinue={handleLeave}
       onBack={onBack}
-      railTitle="Unsigned Prospects"
+      railTitle="Unsigned prospects"
       railHint={prospects.length ? "↑↓ switch" : null}
+      rootClassName="pr-desk"
+      hideTicker
       heroContent={
         focus ? (
-          <div className={`${prefix}-workspace pr`}>
-            {warnings[0] ? <p className="pr-alert" role="status">{warnings[0]}</p> : null}
-            <div className="nd nd2 nd2--rights">
-              <header className="nd2-hero">
-                <span aria-hidden="true" />
-                <div className="nd2-face">
-                  <PlayerHeadshot player={{ ...focus, id: focus.player_id }} size="md" showFlag={false} />
-                </div>
-                <div className="nd2-who">
-                  <h3>{focus.name || getPlayerName(focus)}</h3>
-                  <p>
-                    {[
-                      focus.position || getPlayerPosition(focus),
-                      ovr != null ? `${ovr} OVR` : null,
-                      pot != null ? `${Math.round(Number(pot))} POT` : null,
-                      focus.age != null ? `Age ${focus.age}` : null,
-                    ].filter(Boolean).join(" · ")}
-                  </p>
-                  <p className="nd2-agent">
-                    {[
-                      focus.draft_year
-                        ? `Draft ${focus.draft_year}${focus.draft_round ? ` R${focus.draft_round}` : ""}${focus.draft_overall_pick ? ` #${focus.draft_overall_pick}` : ""}`
-                        : null,
-                      focus.years_since_drafted != null ? `${focus.years_since_drafted}y since draft` : null,
-                      (focus.rights_expiry_date || focus.rights_through)
-                        ? `Rights through ${focus.rights_expiry_date || focus.rights_through}`
-                        : null,
-                    ].filter(Boolean).join(" · ")}
-                  </p>
-                </div>
-                <div className="nd2-gap" aria-label="Rights window">
-                  <div>
-                    <span>Rights through</span>
-                    <strong>{focus.rights_through ?? "—"}</strong>
-                    <em>{humanizeLabel(focus.rights_type) || humanizeLabel(focus.rights_status) || "Exclusive rights"}</em>
-                  </div>
-                  {focus.rights_signing_deadline ? (
-                    <div className="is-you">
-                      <span>Sign by</span>
-                      <strong>{focus.rights_signing_deadline}</strong>
-                      <em>or lose him</em>
-                    </div>
-                  ) : null}
-                </div>
-              </header>
+          <div className={`${prefix}-workspace pr pr2`}>
+            {warnings[0] ? <p className="pr2-alert" role="status">{warnings[0]}</p> : null}
 
-              {isSigning ? (
-                <section
-                  className={`nd2-gauge tone-${(acceptance?.acceptance_pct ?? 0) >= 75 ? "good" : (acceptance?.acceptance_pct ?? 0) >= 50 ? "mid" : "bad"}${(acceptance?.acceptance_pct ?? 0) >= 75 ? " will-accept" : ""}`}
-                  aria-label="Acceptance chance"
-                >
-                  <strong>{acceptance?.acceptance_pct != null ? `${acceptance.acceptance_pct}%` : "—"}</strong>
-                  <div className="nd2-gauge__body">
-                    <span>{acceptance?.outlook_label || "Chance he signs this offer"}</span>
-                    <div className="nd2-gauge__track">
-                      <i className="nd2-gauge__fill" style={{ width: `${Math.max(4, Number(acceptance?.acceptance_pct) || 4)}%` }} />
-                    </div>
-                    <small>Chance he signs this offer</small>
-                  </div>
-                </section>
-              ) : null}
-
-              <div className="nd2-body">
-                <section className="nd2-offer" aria-label="Your decision">
-                  {["sign", "development", "rights"].map((section) => {
-                    const rows = sectionPackages(section);
-                    if (!rows.length) return null;
-                    return (
-                      <div key={section} className="pr-group">
-                        <span className="nd2-market__label">
-                          {section === "sign" ? "Sign an entry-level contract" : section === "development" ? "Or set his path without signing" : "Or hold the rights"}
-                        </span>
-                        <div className="pr-options" role="radiogroup">
-                          {rows.map((pkg) => {
-                            const on = selectedPackage && pkg.packageId === selectedPackage.packageId;
-                            return (
-                              <button
-                                key={pkg.packageId}
-                                type="button"
-                                role="radio"
-                                aria-checked={Boolean(on)}
-                                disabled={Boolean(pkg.disabled) || busy}
-                                className={`pr-option${on ? " is-active" : ""}${pkg.recommended ? " is-recommended" : ""}`}
-                                title={pkg.disabled ? pkg.action?.blocked_reason || pkg.blurb : pkg.blurb}
-                                onClick={() => {
-                                  if (pkg.disabled) return;
-                                  setSelectedPackageId(pkg.packageId);
-                                  setError("");
-                                  setFeedback("");
-                                }}
-                              >
-                                <i aria-hidden="true">{on ? "●" : "○"}</i>
-                                <span>
-                                  <strong>
-                                    {pkg.title}
-                                    {pkg.recommended ? <em>recommended</em> : null}
-                                  </strong>
-                                  <small>
-                                    {pkg.kind === "elc"
-                                      ? [
-                                          pkg.termYears != null ? `${pkg.termYears} years` : null,
-                                          pkg.aavDisplay,
-                                          pkg.signingBonusDisplay ? `bonus ${pkg.signingBonusDisplay}` : null,
-                                        ].filter(Boolean).join(" · ")
-                                      : pkg.disabled
-                                        ? pkg.action?.blocked_reason || pkg.blurb
-                                        : pkg.blurb}
-                                  </small>
-                                </span>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    );
-                  })}
-
-                  {isSigning ? (
-                    <div className="pr-terms">
-                      {assignmentOptions.length ? (
-                        <div className="nd2-field nd2-field--row">
-                          <span>Assignment</span>
-                          <select
-                            className="pr-select"
-                            value={effectiveAssignmentPlan || ""}
-                            onChange={(e) => setAssignmentPlanOverride(e.target.value)}
-                            disabled={busy}
-                          >
-                            {assignmentOptions.map((opt) => (
-                              <option key={opt.id} value={opt.id} disabled={!opt.enabled}>
-                                {opt.label}
-                                {!opt.enabled && opt.blocked_reason ? ` (${opt.blocked_reason})` : ""}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      ) : null}
-                      <div className="nd2-field">
-                        <div className="nd2-field__head">
-                          <span>Signing bonus</span>
-                          <strong>{offer?.signing_bonus_display || selectedPackage?.signingBonusDisplay || "$0"}</strong>
-                        </div>
-                        <div className="nd-range">
-                          <input
-                            type="range"
-                            min={0}
-                            max={Number(elcLegal.max_signing_bonus_total_m || 0.285) * (Number(offer?.term_years || 3) / 3)}
-                            step={0.005}
-                            value={Number(elcBonus.sb ?? offer?.signing_bonus_total_m ?? 0)}
-                            onChange={(e) => setElcBonus((b) => ({ ...b, sb: Number(e.target.value) }))}
-                            disabled={busy}
-                            aria-label="Signing bonus"
-                          />
-                        </div>
-                      </div>
-                      <div className="nd2-field">
-                        <div className="nd2-field__head">
-                          <span>Performance bonuses (Schedule A)</span>
-                          <strong>{offer?.schedule_a_display || selectedPackage?.scheduleA || "$0"}</strong>
-                        </div>
-                        <div className="nd-range">
-                          <input
-                            type="range"
-                            min={0}
-                            max={Number(elcLegal.max_schedule_a_m || 0.2125)}
-                            step={0.005}
-                            value={Number(elcBonus.sa ?? offer?.schedule_a_bonus_m ?? 0)}
-                            onChange={(e) => setElcBonus((b) => ({ ...b, sa: Number(e.target.value) }))}
-                            disabled={busy}
-                            aria-label="Schedule A bonuses"
-                          />
-                        </div>
-                        <p className="nd2-note">
-                          Bonuses raise his chance of signing; they count against the cap only if earned.
-                          {preview?.cap_preview?.bonus_exposure_m != null
-                            ? ` Up to +$${Math.round(Number(preview.cap_preview.bonus_exposure_m) * 1000)}K this season.`
-                            : ""}
-                        </p>
-                      </div>
-                    </div>
-                  ) : null}
-                </section>
-
-                <section className="nd2-talk" aria-label="Prospect line">
-                  {isSigning && signingResult ? (
-                    <dl className="pr-result">
-                      <div><dt>Cap hit</dt><dd>{offer?.aav_display || signingResult.cap_impact_display}</dd></div>
-                      <div><dt>Assigned to</dt><dd>{humanizeLabel(signingResult.assignment)}</dd></div>
-                    </dl>
-                  ) : null}
-                  {focus.season_stats || focus.key_stats ? (
-                    <p className="nd2-note">
-                      {focus.season_stats
-                        ? `This season${focus.season_stats.league ? ` in the ${String(focus.season_stats.league).replace(/^CHL_/, "")}` : ""}: ${
-                            focus.season_stats.save_pct != null && focus.position === "G"
-                              ? `${focus.season_stats.gp} GP, ${focus.season_stats.wins ?? 0} W, ${Number(focus.season_stats.save_pct).toFixed(3)} save %`
-                              : `${focus.season_stats.gp} GP, ${focus.season_stats.goals ?? 0}G ${focus.season_stats.assists ?? 0}A ${focus.season_stats.points ?? 0}P`
-                          }`
-                        : `Season line: ${focus.key_stats.gp ?? 0} GP, ${focus.key_stats.goals ?? 0}G ${focus.key_stats.assists ?? 0}A ${focus.key_stats.points ?? 0}P`}
-                    </p>
-                  ) : null}
-                </section>
+            {/* ── who he is: dossier paper card ── */}
+            <header className="pr2-card">
+              <div className="pr2-face">
+                <PlayerHeadshot player={{ ...focus, id: focus.player_id }} size="lg" showFlag={false} />
               </div>
+              <div className="pr2-who">
+                <span className="pr2-tag">{prDraftLine(focus)}</span>
+                <h3 className="pr2-name">
+                  {focus.nationality || focus.country ? (
+                    <span className="pr2-flag">
+                      <PrFlag country={focus.nationality || focus.country} />
+                    </span>
+                  ) : null}
+                  {focus.name || getPlayerName(focus)}
+                </h3>
+                <p className="pr2-line">
+                  {[
+                    prPositionName(focus.position || getPlayerPosition(focus)),
+                    focus.age != null ? `Age ${focus.age}` : null,
+                    prLeague(focus),
+                  ].filter(Boolean).join(" · ")}
+                </p>
+                {prTier(pot, focus.position || getPlayerPosition(focus)) ? (
+                  <span className="pr2-stamp">{prTier(pot, focus.position || getPlayerPosition(focus))}</span>
+                ) : null}
+              </div>
+              <div className="pr2-pot" aria-label="Current and ceiling">
+                <div>
+                  <small>Now</small>
+                  <strong>{ovr ?? "—"}</strong>
+                </div>
+                <i aria-hidden="true" />
+                <div className="is-ceiling">
+                  <small>Ceiling</small>
+                  <strong>{pot != null ? Math.round(Number(pot)) : "—"}</strong>
+                </div>
+              </div>
+              <div className={`pr2-rights${prDeadlineUrgent(focus, seasonYear) ? " is-urgent" : ""}`}>
+                <div>
+                  <small>Rights held through</small>
+                  <strong>{focus.rights_through ?? "—"}</strong>
+                </div>
+                {focus.rights_signing_deadline ? (
+                  <div>
+                    <small>Sign by</small>
+                    <strong>{prDate(focus.rights_signing_deadline)}</strong>
+                    <em>{prDeadlineUrgent(focus, seasonYear) ? "or lose him" : "no rush yet"}</em>
+                  </div>
+                ) : null}
+              </div>
+            </header>
 
-              <footer className="nd2-foot">
-                <dl className="nd2-cap">
+            <div className="pr2-body">
+              {/* ── the choice ── */}
+              <section className="pr2-choose" aria-label="Your decision">
+                {sectionPackages("sign").length ? (
+                  <>
+                    <h4 className="pr2-h">Sign him to an entry-level deal</h4>
+                    <div className="pr2-elcs" role="radiogroup" aria-label="Entry-level contracts">
+                      {sectionPackages("sign").map((pkg) => {
+                        const on = selectedPackage && pkg.packageId === selectedPackage.packageId;
+                        return (
+                          <button
+                            key={pkg.packageId}
+                            type="button"
+                            role="radio"
+                            aria-checked={Boolean(on)}
+                            disabled={Boolean(pkg.disabled) || busy}
+                            className={`pr2-elc${on ? " is-on" : ""}${pkg.recommended ? " is-rec" : ""}`}
+                            title={pkg.disabled ? pkg.action?.blocked_reason || pkg.blurb : pkg.blurb}
+                            onClick={() => {
+                              if (pkg.disabled) return;
+                              setSelectedPackageId(pkg.packageId);
+                              setError("");
+                              setFeedback("");
+                            }}
+                          >
+                            {pkg.recommended ? <span className="pr2-elc__rec">Recommended</span> : null}
+                            <strong className="pr2-elc__name">{pkg.title}</strong>
+                            <span className="pr2-elc__bonus">
+                              <small>Signing bonus</small>
+                              <b>{pkg.signingBonusDisplay || "$0"}</b>
+                            </span>
+                            <span className="pr2-elc__terms">
+                              {[pkg.termYears != null ? `${pkg.termYears} years` : null, pkg.aavDisplay ? `${pkg.aavDisplay} cap hit` : null]
+                                .filter(Boolean)
+                                .join(" · ")}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </>
+                ) : null}
+
+                {sectionPackages("development").length || sectionPackages("rights").length ? (
+                  <>
+                    <h4 className="pr2-h">Or don't sign him yet</h4>
+                    <div className="pr2-paths" role="radiogroup" aria-label="Other decisions">
+                      {[...sectionPackages("development"), ...sectionPackages("rights")].map((pkg) => {
+                        const on = selectedPackage && pkg.packageId === selectedPackage.packageId;
+                        return (
+                          <button
+                            key={pkg.packageId}
+                            type="button"
+                            role="radio"
+                            aria-checked={Boolean(on)}
+                            disabled={Boolean(pkg.disabled) || busy}
+                            className={`pr2-path${on ? " is-on" : ""}${pkg.actionId === "allow_expire" ? " is-danger" : ""}`}
+                            onClick={() => {
+                              if (pkg.disabled) return;
+                              setSelectedPackageId(pkg.packageId);
+                              setError("");
+                              setFeedback("");
+                            }}
+                          >
+                            <strong>{pkg.title}</strong>
+                            <small>{pkg.disabled ? pkg.action?.blocked_reason || pkg.blurb : prPathBlurb(pkg)}</small>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </>
+                ) : null}
+
+                {focus.season_stats || focus.key_stats ? (
+                  <p className="pr2-stats">
+                    {focus.season_stats
+                      ? `This season${focus.season_stats.league ? ` in the ${prLeagueName(focus.season_stats.league)}` : ""}: ${
+                          focus.season_stats.save_pct != null && focus.position === "G"
+                            ? `${focus.season_stats.gp} GP, ${focus.season_stats.wins ?? 0} W, ${Number(focus.season_stats.save_pct).toFixed(3)} save %`
+                            : `${focus.season_stats.gp} GP · ${focus.season_stats.goals ?? 0} G · ${focus.season_stats.assists ?? 0} A · ${focus.season_stats.points ?? 0} P`
+                        }`
+                      : `Season line: ${focus.key_stats.gp ?? 0} GP · ${focus.key_stats.goals ?? 0} G · ${focus.key_stats.assists ?? 0} A · ${focus.key_stats.points ?? 0} P`}
+                  </p>
+                ) : null}
+              </section>
+
+              {/* ── the offer: meter sits on top of the controls that move it ── */}
+              <aside className="pr2-offer" aria-label="Offer">
+                {isSigning ? (
+                  <>
+                    <div className={`pr2-meter tone-${prMeterTone(acceptance?.acceptance_pct)}`} aria-label="Chance he signs">
+                      <div className="pr2-meter__top">
+                        <strong>{acceptance?.acceptance_pct != null ? `${Math.round(acceptance.acceptance_pct)}%` : "—"}</strong>
+                        <span>
+                          <b>Chance he signs</b>
+                          <small>{acceptance?.outlook_label || "Bonus money and a clear path raise it"}</small>
+                        </span>
+                      </div>
+                      <div className="pr2-meter__track">
+                        <i style={{ width: `${Math.max(3, Math.min(100, Number(acceptance?.acceptance_pct) || 0))}%` }} />
+                        <span style={{ left: "50%" }} aria-hidden="true" />
+                        <span style={{ left: "75%" }} aria-hidden="true" />
+                      </div>
+                    </div>
+
+                    <div className="pr2-field">
+                      <div className="pr2-field__head">
+                        <span>Signing bonus</span>
+                        <strong>{offer?.signing_bonus_display || selectedPackage?.signingBonusDisplay || "$0"}</strong>
+                      </div>
+                      <input
+                        type="range"
+                        min={0}
+                        max={sbMax}
+                        step={0.005}
+                        value={Math.min(sbMax, Number(elcBonus.sb ?? offer?.signing_bonus_total_m ?? prMoneyM(selectedPackage?.signingBonusDisplay) ?? 0))}
+                        onChange={(e) => setElcBonus((b) => ({ ...b, sb: Number(e.target.value) }))}
+                        disabled={busy}
+                        aria-label="Signing bonus"
+                      />
+                      <div className="pr2-field__scale"><span>$0</span><span>{prMoneyLabel(sbMax)} max</span></div>
+                    </div>
+                    <div className="pr2-field">
+                      <div className="pr2-field__head">
+                        <span>Performance bonuses</span>
+                        <strong>{offer?.schedule_a_display || selectedPackage?.scheduleA || "$0"}</strong>
+                      </div>
+                      <input
+                        type="range"
+                        min={0}
+                        max={saMax}
+                        step={0.005}
+                        value={Math.min(saMax, Number(elcBonus.sa ?? offer?.schedule_a_bonus_m ?? prMoneyM(selectedPackage?.scheduleA) ?? 0))}
+                        onChange={(e) => setElcBonus((b) => ({ ...b, sa: Number(e.target.value) }))}
+                        disabled={busy}
+                        aria-label="Performance bonuses"
+                      />
+                      <div className="pr2-field__scale"><span>$0</span><span>{prMoneyLabel(saMax)} max</span></div>
+                    </div>
+                    <p className="pr2-hint">
+                      More bonus money raises his chance of signing. Performance bonuses only count against the cap if he earns them
+                      {preview?.cap_preview?.bonus_exposure_m != null
+                        ? ` (up to $${Math.round(Number(preview.cap_preview.bonus_exposure_m) * 1000)}K this season).`
+                        : "."}
+                    </p>
+
+                    {assignmentOptions.length ? (
+                      <label className="pr2-assign">
+                        <span>Where he plays</span>
+                        <select
+                          value={effectiveAssignmentPlan || ""}
+                          onChange={(e) => setAssignmentPlanOverride(e.target.value)}
+                          disabled={busy}
+                        >
+                          {assignmentOptions.map((opt) => (
+                            <option key={opt.id} value={opt.id} disabled={!opt.enabled}>
+                              {prLeague({ current_league: opt.label }) || opt.label}
+                              {!opt.enabled && opt.blocked_reason ? ` (${opt.blocked_reason})` : ""}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : null}
+                  </>
+                ) : (
+                  <div className="pr2-decision">
+                    <small>Your decision</small>
+                    <strong>{selectedPackage?.title || "Pick an option"}</strong>
+                    <p>{selectedPackage ? prPathBlurb(selectedPackage) : ""}</p>
+                  </div>
+                )}
+
+                <dl className="pr2-sum">
+                  <div>
+                    <dt>Cap hit</dt>
+                    <dd>{isSigning ? preview?.signing_result?.cap_impact_display || offer?.aav_display || "—" : "No change"}</dd>
+                  </div>
                   <div>
                     <dt>Contracts</dt>
                     <dd>
                       {slotPreview
                         ? isSigning
-                          ? `${slotPreview.contract_slots_used} → ${slotPreview.after_signing} of ${slotPreview.contract_slots_limit}`
-                          : `${slotPreview.contract_slots_used} of ${slotPreview.contract_slots_limit}`
+                          ? `${slotPreview.contract_slots_used} → ${slotPreview.after_signing} / ${slotPreview.contract_slots_limit}`
+                          : `${slotPreview.contract_slots_used} / ${slotPreview.contract_slots_limit}`
                         : slots.used != null
-                          ? `${slots.used} of ${slots.limit}`
+                          ? `${slots.used} / ${slots.limit}`
                           : payload?.contracts || "—"}
                     </dd>
                   </div>
-                  <div>
-                    <dt>Cap</dt>
-                    <dd>{isSigning ? preview?.signing_result?.cap_impact_display || offer?.aav_display || "—" : "No change"}</dd>
-                  </div>
+                  {isSigning && signingResult ? (
+                    <div>
+                      <dt>Plays in</dt>
+                      <dd>{prLeague({ current_league: humanizeLabel(signingResult.assignment) }) || humanizeLabel(signingResult.assignment)}</dd>
+                    </div>
+                  ) : null}
                 </dl>
-                {error ? <p className="nd2-error" role="alert">{error}</p> : null}
-                {feedback ? <p className="nd2-note pr-ok">{feedback}</p> : null}
-                <div className="nd2-actions">
-                  <button
-                    type="button"
-                    className="nd-btn nd-btn--primary nd2-primary"
-                    disabled={busy || !selectedPackage || selectedPackage.disabled}
-                    onClick={applyDecision}
-                  >
-                    {applyLabel}
-                  </button>
-                </div>
-              </footer>
+
+                {error ? <p className="pr2-error" role="alert">{error}</p> : null}
+                {feedback ? <p className="pr2-ok">{feedback}</p> : null}
+                <button
+                  type="button"
+                  className="nhlcal-advance-button pr2-primary"
+                  disabled={busy || !selectedPackage || selectedPackage.disabled}
+                  onClick={applyDecision}
+                >
+                  {applyLabel}
+                </button>
+              </aside>
             </div>
           </div>
         ) : (
-          <div className={`${prefix}-workspace`}>
-            <p className={`${prefix}-empty`}>No unsigned org prospects on file</p>
+          <div className={`${prefix}-workspace pr2`}>
+            <p className="pr2-empty">No unsigned prospects on file. Continue to Re-Sign.</p>
           </div>
         )
       }
@@ -4243,11 +4368,13 @@ export function ProspectRightsEventMenu({ franchiseState = {}, eventData = {}, o
             const id = String(p.player_id || i);
             const active = String(p.player_id || "") === String(selectedId);
             const rowOvr = p.overall != null ? p.overall : null;
+            const rowPos = p.position || getPlayerPosition(p) || "—";
+            const urgent = prDeadlineUrgent(p, seasonYear);
             return (
               <button
                 key={id}
                 type="button"
-                className={`${prefix}-rail-btn`}
+                className={`pr2-row${active ? " is-active" : ""}${urgent ? " is-urgent" : ""}`}
                 ref={(node) => {
                   if (p.player_id != null) railItemRefs.current[String(p.player_id)] = node;
                 }}
@@ -4255,35 +4382,25 @@ export function ProspectRightsEventMenu({ franchiseState = {}, eventData = {}, o
                 onKeyDown={(e) => onRailKeyDown(e, p.player_id)}
                 aria-pressed={active}
               >
-                <article className={`${prefix}-haul-card${active ? " is-active" : ""}`}>
-                  <div className={`${prefix}-haul-rank`}>
-                    {p.position || getPlayerPosition(p) || "—"}
-                  </div>
-                  <div className={`${prefix}-haul-body`}>
-                    <strong>{p.name || getPlayerName(p)}</strong>
-                    <div className={`${prefix}-card-details`}>
-                      <span>
-                        {[
-                          rowOvr != null ? `${rowOvr} OVR` : null,
-                          p.potential != null ? `${p.potential} POT` : null,
-                          p.age != null ? `Age ${p.age}` : null,
-                          p.draft_year ? `${p.draft_year}` : null,
-                          (p.rights_through || p.rights_expiry_year)
-                            ? `Rights ${p.rights_through || p.rights_expiry_year}`
-                            : null,
-                          p.key_stats?.points != null ? `${p.key_stats.points} P` : null,
-                        ]
-                          .filter(Boolean)
-                          .join(" · ")}
-                      </span>
-                    </div>
-                  </div>
-                </article>
+                <span className="pr2-row__pos">{rowPos}</span>
+                <span className="pr2-row__who">
+                  <strong>{p.name || getPlayerName(p)}</strong>
+                  <small>
+                    {[p.age != null ? `Age ${p.age}` : null, (p.rights_through || p.rights_expiry_year) ? `Rights ${p.rights_through || p.rights_expiry_year}` : null]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </small>
+                </span>
+                <span className="pr2-row__nums">
+                  <b>{rowOvr ?? "—"}</b>
+                  <i>→</i>
+                  <b className={`is-pot tier-${prTierKey(p.potential)}`}>{p.potential ?? "—"}</b>
+                </span>
               </button>
             );
           })
         ) : (
-          <p className={`${prefix}-empty`}>No unsigned org prospects</p>
+          <p className="pr2-empty">No unsigned prospects</p>
         )
       }
     />

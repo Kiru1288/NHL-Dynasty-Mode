@@ -2272,106 +2272,11 @@ export function OfficeScreen() {
       </div>
 
       <GameFooter />
-      <style>{OFFICE_SCREEN_CSS}</style>
+      {null}
     </div>
   );
 }
 
-const OFFICE_SCREEN_CSS = `
-.office-screen.register-office {
-  background:
-    radial-gradient(circle at 18% 0%, rgba(201, 168, 106, 0.06), transparent 32%),
-    linear-gradient(180deg, var(--office-bg, #101218), var(--office-bg-deep, #0c0e14));
-  color: var(--office-text, #ece8e0);
-}
 
-.office-screen.register-office .hub-franchise-shell {
-  background: transparent;
-}
-
-.office-screen.register-office .hub-sidebar,
-.office-screen.register-office .office-screen__header,
-.office-screen.register-office .office-screen__body,
-.office-screen.register-office .hub-action-bar,
-.office-screen.register-office .hub-glass,
-.office-screen.register-office .hub-glass--inner {
-  border-color: var(--office-line, rgba(255, 255, 255, 0.08)) !important;
-  border-radius: var(--radius-hud, 4px) !important;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 24%),
-    var(--office-desk, rgba(14, 16, 22, 0.9)) !important;
-  box-shadow: var(--depth-hud, 0 18px 42px rgba(0, 0, 0, 0.48)) !important;
-  backdrop-filter: blur(14px);
-}
-
-.office-screen.register-office .hub-sidebar__link.is-selected {
-  background: rgba(248, 213, 138, 0.12) !important;
-  color: var(--office-brass, #f8d58a) !important;
-  box-shadow: inset 3px 0 0 rgba(248, 213, 138, 0.55);
-}
-
-.office-screen.register-office .hub-live-status__chip {
-  border-radius: var(--radius-ops, 2px) !important;
-  background: rgba(248, 213, 138, 0.08) !important;
-  color: var(--office-brass, #f8d58a) !important;
-  border: 1px solid rgba(248, 213, 138, 0.22);
-}
-
-.office-screen.register-office .office-screen__kicker {
-  font-family: var(--font-mono-data, "IBM Plex Mono", monospace);
-  font-size: 11px;
-  letter-spacing: 0.16em;
-  color: var(--office-brass, #f8d58a);
-}
-
-.office-screen.register-office .office-screen__title {
-  font-family: var(--font-office-display, "Archivo Black", sans-serif);
-  letter-spacing: 0.05em;
-  color: var(--office-text, #ece8e0);
-}
-
-.office-screen.register-office .office-screen__sub,
-.office-screen.register-office .hub-office-rail__p {
-  font-family: var(--font-ops-ui, Inter, sans-serif);
-  color: var(--office-text-secondary, rgba(220, 216, 208, 0.58));
-}
-
-.office-screen.register-office .hub-office-rail__h {
-  font-family: var(--font-office-display, "Archivo Black", sans-serif);
-  font-size: 0.82rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--office-text, #ece8e0);
-}
-
-.office-screen.register-office .hub-progress__fill {
-  background: linear-gradient(90deg, rgba(248, 213, 138, 0.45), var(--office-brass, #f8d58a)) !important;
-}
-
-.office-screen.register-office .hub-progress__fill--gold {
-  background: linear-gradient(90deg, rgba(248, 213, 138, 0.55), var(--office-brass, #f8d58a)) !important;
-}
-
-.office-screen.register-office .game-btn--primary {
-  border-color: rgba(248, 213, 138, 0.45) !important;
-  background: rgba(248, 213, 138, 0.14) !important;
-  color: var(--office-text, #ece8e0) !important;
-}
-
-.office-screen.register-office .game-btn--secondary {
-  border-color: var(--office-line, rgba(255, 255, 255, 0.08)) !important;
-  color: var(--office-text-secondary, rgba(220, 216, 208, 0.72)) !important;
-}
-
-.office-screen.register-office .hub-reward-tile__v {
-  color: var(--office-brass, #f8d58a) !important;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .office-screen.register-office * {
-    transition-duration: 0.01ms !important;
-  }
-}
-`;
 
 export default OfficeScreen;

@@ -495,6 +495,7 @@ def get_franchise_state_heavy(
         )
     if include_nhl_calendar_full:
         out["nhl_calendar_full"] = franchise_sim._get_cached_nhl_calendar_full(s, full=True)
+        out["nhl_calendar_full_complete"] = True
     return out
 
 
@@ -1269,6 +1270,19 @@ def get_franchise_box_records(x_franchise_session: Optional[str] = Header(defaul
     """Single-game record books kept from stored box scores."""
     s = _session_or_404(x_franchise_session)
     return {"records": dict(getattr(s, "box_score_records", None) or {})}
+
+
+@app.post("/api/franchise/chemistry/preview")
+def post_franchise_chemistry_preview(
+    body: dict[str, Any] = Body(...),
+    x_franchise_session: Optional[str] = Header(default=None),
+) -> dict[str, Any]:
+    """Score an unsaved lineup with the real chemistry model (nothing is saved)."""
+    s = _session_or_404(x_franchise_session)
+    try:
+        return franchise_sim.preview_franchise_chemistry(s, body or {})
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
 
 @app.get("/api/franchise/chemistry")

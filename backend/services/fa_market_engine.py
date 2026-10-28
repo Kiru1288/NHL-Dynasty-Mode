@@ -459,6 +459,35 @@ def _user_pending_offer_years(session: Any, pid: str) -> int:
         return 1
 
 
+def _fa_preferred_years(player: Any) -> int:
+    """Term he is after: young non-stars want a bridge, prime players want long
+    money, veterans want whatever security they can still get."""
+    age = _fa_age(player)
+    try:
+        ovr = float(_player_ovr(player) or 70)
+    except (TypeError, ValueError):
+        ovr = 70.0
+    if age <= 23:
+        return 6 if ovr >= 82 else 2
+    if age <= 29:
+        return 7 if ovr >= 84 else (5 if ovr >= 76 else 3)
+    if age <= 32:
+        return 4 if ovr >= 80 else 2
+    return 2 if ovr >= 80 else 1
+
+
+def _fa_term_value(player: Any, years: int) -> float:
+    """Value multiplier for term: +2%/yr up to what he wants; past it, veterans
+    still like security (+1%/yr) while young players dislike being locked in (-2%/yr)."""
+    want = _fa_preferred_years(player)
+    years = max(1, int(years or 1))
+    base = 1.0 + 0.02 * (min(years, want) - 1)
+    extra = max(0, years - want)
+    if extra:
+        base += (0.01 if _fa_age(player) >= 31 else -0.02) * extra
+    return max(0.85, base)
+
+
 def fa_offer_value(
     session: Any,
     player: Any,
@@ -483,17 +512,29 @@ def fa_offer_value(
             team = t
             break
     pts = 0.0
+    dest: Dict[str, Any] = {}
     if team is not None:
         try:
             from services.contract_economy import player_destination_factors
 
-            pts = float(player_destination_factors(player, team, league).get("score") or 0.0)
+            dest = player_destination_factors(player, team, league) or {}
+            pts = float(dest.get("score") or 0.0)
         except Exception:
             pts = 0.0
-    val = float(aav_m or 0) * (1.0 + max(-0.15, min(0.20, pts * 0.01)))
-    val *= 1.0 + 0.02 * min(6, max(0, int(years or 1) - 1))
+    val = float(aav_m or 0) * (1.0 + max(-0.20, min(0.20, pts * 0.01)))
+    val *= _fa_term_value(player, int(years or 1))
+    if dest.get("dealbreaker") and not dest.get("own_club"):
+        # "Won't sign in Canada" is a no early on; late in a cold market it's a price.
+        days = 0
+        try:
+            _e = ((getattr(session, "fa_market_book", None) or {}).get("entries") or {}).get(str(_player_id(player))) or {}
+            days = int(_e.get("days_on_market") or 0)
+        except Exception:
+            days = 0
+        val *= 0.0 if days < 20 else 0.85
     user_tid = str(getattr(session, "user_team_id", "") or "")
-    if tid and tid == user_tid:
+    # Hidden "you're winning too much" FA penalty only when the save opts in.
+    if tid and tid == user_tid and bool(getattr(league, "_rubber_band_user", False)):
         if user_dom is None:
             try:
                 from app.sim_engine.trades.trade_market_adaptive import user_dominance
@@ -523,8 +564,11 @@ def cpu_fa_rival_offers(session: Any, player: Any, *, league: Any = None) -> Lis
         if aav <= 0:
             continue
         yrs = max(1, int(o.get("years") or 1))
+        if entry.get("prefer_short_term"):
+            yrs = min(yrs, 2 if _live_entry_ovr(entry) < 82 else 3)
         rows.append({
             **o,
+            "years": yrs,
             "value": fa_offer_value(session, player, str(o.get("team_id")), aav, yrs, league=league),
         })
     rows.sort(key=lambda r: -float(r["value"]))
@@ -928,7 +972,7 @@ def _collect_cpu_offers(
     return new_offers
 
 
-def _update_player_decision(entry: Dict[str, Any], book: Dict[str, Any], *, day: int) -> None:
+def _update_player_decision(entry: Dict[str, Any], book: Dict[str, Any], *, day: int, league: Any = None) -> None:
     """Advance one FA's decision state from offers / patience / peers."""
     if entry.get("state") == STATE_SIGNED:
         return
@@ -938,6 +982,9 @@ def _update_player_decision(entry: Dict[str, Any], book: Dict[str, Any], *, day:
     offers = list(entry.get("offers") or [])
     offer_count = len(offers)
     best = float(entry.get("best_offer_m") or 0)
+    # A great-fit club at 95% of his ask is a close offer; a bad fit at 100% isn't.
+    if entry.get("best_offer_fit_m") is not None:
+        best = float(entry.get("best_offer_fit_m") or 0)
     ask = float(entry.get("ask_aav_m") or LEAGUE_MINIMUM_AAV_M)
     fair = float(entry.get("fair_aav_m") or ask)
     tier = str(entry.get("tier") or "mid")
@@ -964,7 +1011,7 @@ def _update_player_decision(entry: Dict[str, Any], book: Dict[str, Any], *, day:
         try:
             entry["ask_aav_m"] = _ask_for_player(
                 player_ref,
-                None,
+                league,
                 days_on_market=days,
                 offer_count=offer_count,
             )
@@ -1124,23 +1171,18 @@ def _try_sign_leaning_players(
         if user_bid > 0 and fa_offer_value(
             session, player, user_tid, user_bid, _user_pending_offer_years(session, _pid_e), league=league
         ) >= float(offers[0]["value"]) - 1e-6:
-            entry["state"] = STATE_EVALUATING
-            entry["reason"] = "Leaning toward your offer"
-            continue
-
-        ovr_now = _live_entry_ovr(entry)
-        if ovr_now >= 82:
-            # Leave a shoppable class on the board. CPU clubs can thin it later in the summer.
-            quality_left = 0
-            for p in fa_pool:
-                try:
-                    if float(_player_ovr(p) or 0) >= 82:
-                        quality_left += 1
-                except (TypeError, ValueError):
-                    continue
-            floor = 10 if day < 10 else (6 if day < 18 else 3)
-            if quality_left <= floor:
+            since = int(entry.setdefault("user_wait_since_day", day) or day)
+            if day - since < 3:
+                entry["state"] = STATE_EVALUATING
+                entry["reason"] = "Leaning toward your offer"
                 continue
+            # Three days without an answer: he stops waiting and takes the best firm deal.
+            entry["reason"] = "Stopped waiting on your offer"
+        else:
+            entry.pop("user_wait_since_day", None)
+
+        # (Removed: CPU clubs were barred from 82+ UFAs while few remained, a
+        # protection the user never faced.)
 
         signed = False
         # Late-market stars: try a wider board — first suitor often can't clear clauses/cap.
@@ -1157,13 +1199,12 @@ def _try_sign_leaning_players(
             spendable = float(ctx.get("spendable_cap_space_m", space) or 0)
             if _live_entry_ovr(entry) >= 86:
                 spendable = max(spendable, space)
-            if spendable < offer_aav * 0.5 and space < offer_aav * 0.5:
+            # Was "half the AAV in room" -> CPU clubs signed past the cap.
+            if max(space, spendable) + 1e-6 < offer_aav:
                 continue
             if _live_entry_ovr(entry) >= STAR_FA_OVR and _team_at_star_cap(book, tid, max(space, spendable)):
                 continue
-            years = int(offer.get("years") or 1)
-            if entry.get("prefer_short_term"):
-                years = min(years, 2 if _live_entry_ovr(entry) < 82 else 3)
+            years = int(offer.get("years") or 1)  # already the term he valued
             try:
                 setattr(player, "days_on_market", int(entry.get("days_on_market") or 0))
                 setattr(player, "fa_offer_count", int(entry.get("offer_count") or 0))
@@ -1490,8 +1531,21 @@ def tick_free_agency_market(
         new_offers = _collect_cpu_offers(session, max_new_offers=offers_cap)
         all_offers.extend(new_offers)
 
+        _lg = getattr(getattr(session, "sim", None), "league", None)
         for entry in book["entries"].values():
-            _update_player_decision(entry, book, day=day)
+            # Fit-adjusted best offer (salary x fit, no term) for the hold/lean read.
+            try:
+                _pl = entry.get("player_ref")
+                _offs = [o for o in list(entry.get("offers") or []) if isinstance(o, dict) and float(o.get("aav_m") or 0) > 0]
+                if _pl is not None and _offs and entry.get("state") != STATE_SIGNED:
+                    _bv = 0.0
+                    for o in _offs:
+                        _v = fa_offer_value(session, _pl, str(o.get("team_id")), float(o.get("aav_m") or 0), 1, league=_lg)
+                        _bv = max(_bv, _v / max(0.85, _fa_term_value(_pl, 1)))
+                    entry["best_offer_fit_m"] = round(_bv, 3)
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+            _update_player_decision(entry, book, day=day, league=_lg)
 
         signed = _try_sign_leaning_players(session, max_signings=signs_cap)
         all_signings.extend(signed)
@@ -1701,6 +1755,13 @@ def sign_with_best_cpu_rival(
             continue
         aav = round(float(offer.get("aav_m") or 0.0), 3)
         years = max(1, int(offer.get("years") or 1))
+        try:
+            _ctx = evaluate_team_position_needs(team, league, getattr(session, "sim", None), season_year=season_year)
+            _room = max(float(_ctx.get("cap_space_m", 0) or 0), float(_ctx.get("spendable_cap_space_m", 0) or 0))
+            if _room + 1e-6 < aav:
+                continue
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         result = sign_player_to_team(
             player,
             team,

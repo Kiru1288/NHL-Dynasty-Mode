@@ -4,7 +4,7 @@ import { useGameUI } from "../game/GameUIContext";
 import { SCREENS, teamNameToNhlAbbr } from "../game/constants";
 import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
 import { CHEMISTRY_HIGH, CHEMISTRY_MID, chemistryLabel } from "../utils/chemistryScale";
-import { getAhlLines, getFranchiseChemistry, saveAhlLines, saveFranchiseLines } from "../services/franchiseService";
+import { getAhlLines, getFranchiseChemistry, previewFranchiseChemistry, saveAhlLines, saveFranchiseLines } from "../services/franchiseService";
 import { getFranchiseSessionId, readSessionLineupCache, writeSessionLineupCache } from "../services/api";
 import TeamLinesViewer from "../components/franchise/lines/TeamLinesViewer";
 import PlayerHeadshot from "../components/PlayerHeadshot";
@@ -20,7 +20,9 @@ const TABS = ["unit", "fit", "player", "warnings"];
 // Shared scale (utils/chemistryScale) — same cut points as the Chemistry report.
 const LINK_STRONG = CHEMISTRY_HIGH;
 const LINK_FORMING = CHEMISTRY_MID;
-const CHEM_DISPLAY_LIFT = 8;
+// Was 8: inflated unsaved projections, so chemistry 'dropped' on save when the
+// backend scored the real lineup. Projections now aim at the backend number.
+const CHEM_DISPLAY_LIFT = 0;
 const NEW_PAIR_FAMILIARITY = 34;
 
 function numberOrNull(value) {
@@ -66,14 +68,35 @@ function shortRole(role) {
   return value.slice(0, 14);
 }
 function roleMixLabel(players) {
-  const roles = [...new Set(players.map((player) => shortRole(player.role)).filter(Boolean))];
+  const roles = [...new Set(players.map((player) => roleName(player)).filter(Boolean))];
   if (!roles.length) return "—";
   if (roles.length <= 3) return roles.join(" · ");
   return `${roles.slice(0, 3).join(" · ")} +${roles.length - 3}`;
 }
+const ROLE_NAMES = {
+  playmaker: "Playmaker", sniper: "Sniper", power_forward: "Power forward", grinder: "Grinder",
+  enforcer: "Enforcer", two_way: "Two-way", offensive_d: "Offensive D", shutdown: "Shutdown D",
+  puck_mover: "Puck mover", net_front: "Net-front",
+};
+function roleName(player) {
+  // Backend role read from the player's ratings (archetype is a random draw).
+  if (player?.play_role_label) return String(player.play_role_label);
+  const sources = [player?.playstyle, player?.archetype, player?.chemistry_profile?.playstyle, player?.role, player?.player_role];
+  for (const raw of sources) {
+    const key = styleKey(raw);
+    if (!key || key === "—") continue;
+    const mapped = PLAYSTYLE_ALIASES[key] || Object.entries(PLAYSTYLE_ALIASES).find(([alias]) => key.includes(alias))?.[1];
+    if (mapped && ROLE_NAMES[mapped]) {
+      if (mapped === "two_way") return isDefense(player?.position) ? "Two-way D" : "Two-way F";
+      return ROLE_NAMES[mapped];
+    }
+  }
+  const fallback = String(player?.role || "").replace(/_/g, " ").trim().toLowerCase();
+  return fallback && fallback !== "—" ? fallback.charAt(0).toUpperCase() + fallback.slice(1) : "";
+}
 function slotMeta(player) {
   const bits = [];
-  const role = shortRole(player?.role);
+  const role = roleName(player);
   const hand = String(player?.handedness || "").replace(/[—-]/g, "").trim().toUpperCase();
   if (role) bits.push(role);
   if (hand === "L" || hand === "R") bits.push(hand);
@@ -432,7 +455,7 @@ function pairChemistry(a, b, chemReport, slotA, slotB) {
   const weightSum = baseTerms.reduce((sum, term) => sum + term.weight, 0);
   const baseScore = baseTerms.reduce((sum, term) => sum + (term.weight / weightSum) * term.value, 0);
   const quality = ((Number(a.overall) || 70) + (Number(b.overall) || 70)) / 2;
-  const qualityAdj = Math.max(-2, Math.min(6, (quality - 76) * 0.4));
+  const qualityAdj = Math.max(-2, Math.min(2, (quality - 76) * 0.2));
   const score = clamp(baseScore + personality + style + egoTension + qualityAdj + CHEM_DISPLAY_LIFT);
   return { score, projected: true, familiarity, fresh: familiarityValue <= NEW_PAIR_FAMILIARITY, a: a.id, b: b.id };
 }
@@ -648,7 +671,7 @@ function calculateUnitChemistry(players, unitType = "forward", chemReport = null
   const bonds = [];
   for (let i = 0; i < selected.length; i += 1) {
     for (let j = i + 1; j < selected.length; j += 1) {
-      const bond = pairChemistry(selected[i], selected[j], null)?.score;
+      const bond = pairChemistry(selected[i], selected[j], chemReport)?.score;
       if (Number.isFinite(bond)) bonds.push(bond);
     }
   }
@@ -706,287 +729,7 @@ export function teamIdentity(franchiseState, props) {
 }
 
 export function EditLinesStyles() {
-  return <style>{`
-.linebuilder-root{--nv:var(--ops-navy,#0d2250);--nv2:var(--ops-navy-deep,#0c214d);--panel:var(--ops-panel,rgba(14, 40, 88, .97));--panel2:var(--ops-panel-2,rgba(12,35,52,.92));--line:var(--ops-grid,rgba(156,218,236,.16));--line2:var(--ops-grid-2,rgba(115,229,241,.3));--cyan:var(--ops-cyan,#2ee6d6);--gold:var(--ops-gold,#e9a83c);--green:var(--ops-success,#52df94);--red:var(--ops-injury,#ff606d);--text:var(--ops-text,#e9f7fb);--muted:var(--ops-text-secondary,#8096a8);--muted2:var(--ops-text-disabled,#607789);width:100%;height:100vh;height:100dvh;overflow:hidden;color:var(--text);background:linear-gradient(180deg,var(--nv),var(--nv2));font-family:var(--font-ops-ui,Inter,system-ui,sans-serif);display:grid;grid-template-columns:88px minmax(0,1fr)}
-.linebuilder-root *{box-sizing:border-box}
-.linebuilder-root button,.linebuilder-root input{font:inherit}
-.linebuilder-root button:focus-visible,.linebuilder-root input:focus-visible,.linebuilder-root [tabindex]:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
-
-.linebuilder-root .lb-sidebar{height:100%;padding:10px 8px;border-right:1px solid var(--line);background:rgba(12, 32, 76, .94);display:flex;flex-direction:column;gap:10px;overflow:hidden}
-.linebuilder-root .lb-team-mark{height:46px;flex:0 0 46px;border:1px solid var(--line2);border-radius:6px;display:grid;place-items:center;color:var(--cyan);font-size:12px;font-weight:900;letter-spacing:.09em;background:rgba(46, 230, 214, .08)}
-.linebuilder-root .lb-team-mark img{width:34px;height:34px;object-fit:contain}
-.linebuilder-root .lb-nav{flex:1;min-height:0;display:flex;flex-direction:column;gap:0}
-.linebuilder-root .lb-nav-btn{position:relative;width:100%;min-height:66px;padding:6px 4px;border:0;border-radius:0;color:var(--muted);background:transparent;cursor:pointer;display:grid;place-items:center;align-content:center;gap:4px}
-.linebuilder-root .lb-nav-btn:hover{color:var(--text);background:rgba(255,255,255,.03)}
-.linebuilder-root .lb-nav-btn.active{color:var(--cyan);background:linear-gradient(90deg,rgba(46, 230, 214, .12),transparent 72%);box-shadow:inset 3px 0 0 var(--cyan)}
-.linebuilder-root .lb-nav-label{font-size:11px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;text-align:center;line-height:1.1}
-.linebuilder-root .lb-glyph{display:inline-grid;place-items:center;font-size:22px;font-weight:400;line-height:1}
-
-.linebuilder-root .lb-shell{min-width:0;min-height:0;height:100%;padding:10px;display:grid;grid-template-rows:58px 34px minmax(0,1fr);gap:8px;overflow:hidden}
-.linebuilder-root .lb-header{height:58px;border:1px solid var(--line);border-radius:8px;background:var(--panel);display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 12px;position:relative;z-index:20}
-.linebuilder-root .lb-title-group{min-width:0;display:flex;align-items:center;gap:10px}
-.linebuilder-root .lb-logo{width:40px;height:40px;flex:0 0 40px;border:1px solid var(--line);border-radius:6px;background:rgba(0,0,0,.2);display:grid;place-items:center;overflow:hidden;color:var(--cyan);font-size:11px;font-weight:900}
-.linebuilder-root .lb-logo img{width:32px;height:32px;object-fit:contain}
-.linebuilder-root .lb-title{margin:0;font-family:var(--font-ops-head);font-size:clamp(20px,2vw,26px);line-height:1;letter-spacing:.04em;font-weight:800;text-transform:uppercase;white-space:nowrap}
-.linebuilder-root .lb-subtitle{margin-top:4px;color:var(--muted);font-size:11px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;white-space:nowrap;display:flex;align-items:center;gap:6px}
-.linebuilder-root .lb-live-dot{width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block}
-.linebuilder-root .lb-live-dot.projected{background:var(--gold)}
-.linebuilder-root .lb-actions{display:flex;align-items:center;justify-content:flex-end;gap:6px}
-.linebuilder-root .lb-btn,.linebuilder-root .lb-icon{min-height:34px;border:1px solid var(--line);border-radius:6px;color:var(--text);background:rgba(255,255,255,.02);cursor:pointer;font-size:11px;font-weight:850;letter-spacing:.06em;text-transform:uppercase}
-.linebuilder-root .lb-btn{padding:0 12px;display:inline-flex;align-items:center;justify-content:center;gap:6px;white-space:nowrap}
-.linebuilder-root .lb-icon{width:34px;padding:0;display:inline-grid;place-items:center}
-.linebuilder-root .lb-btn:hover:not(:disabled),.linebuilder-root .lb-icon:hover:not(:disabled){border-color:var(--line2);background:rgba(46, 230, 214, .12)}
-.linebuilder-root .lb-btn:disabled,.linebuilder-root .lb-icon:disabled{opacity:.38;cursor:not-allowed}
-.linebuilder-root .lb-btn.primary{color:var(--nv2);border-color:var(--cyan);background:var(--cyan);font-weight:900}
-.linebuilder-root .lb-btn.subtle{color:var(--muted);border-color:var(--line);background:transparent;font-weight:750}
-.linebuilder-root .lb-btn.subtle:hover:not(:disabled){color:var(--text);border-color:var(--line2)}
-.linebuilder-root .lb-btn.subtle.danger{background:transparent;border-color:transparent;color:rgba(190,150,152,.85)}
-.linebuilder-root .lb-btn.subtle.danger:hover:not(:disabled){background:rgba(255,96,109,.1);border-color:rgba(255,96,109,.45);color:#ffd5d5}
-.linebuilder-root .lb-btn.danger{color:#ffd5d5;border-color:rgba(255,96,109,.45);background:rgba(255,96,109,.08)}
-.linebuilder-root .lb-save-error{color:var(--red);font-size:11px;font-weight:800}
-
-.linebuilder-root .lb-status{height:34px;border:1px solid var(--line);border-radius:6px;background:rgba(0,0,0,.2);padding:0 4px;display:flex;align-items:center;overflow:hidden}
-.linebuilder-root .lb-pill{height:100%;padding:0 11px;border-right:1px solid var(--line);display:flex;align-items:center;gap:7px;white-space:nowrap}
-.linebuilder-root .lb-pill:last-child{border-right:0}
-.linebuilder-root .lb-pill-label{color:var(--muted2);font-size:11px;font-weight:850;letter-spacing:.1em;text-transform:uppercase}
-.linebuilder-root .lb-pill-value{font-size:12px;font-weight:900;font-variant-numeric:tabular-nums}
-.linebuilder-root .lb-pill-value.good{color:var(--green)}
-.linebuilder-root .lb-pill-value.warn{color:var(--gold)}
-.linebuilder-root .lb-pill-value.bad{color:var(--red)}
-.linebuilder-root .lb-chemmeter{display:flex;gap:2px;margin-left:auto;padding:0 10px}
-.linebuilder-root .lb-chemmeter{align-items:center}
-.linebuilder-root .lb-chemmeter-label{margin-right:6px;color:var(--muted);font-size:10px;font-weight:900;letter-spacing:.08em;text-transform:uppercase}
-.linebuilder-root .lb-chemseg{width:11px;height:7px;border-radius:1px;background:rgba(255,255,255,.09)}
-.linebuilder-root .lb-chemseg.strong{background:var(--green)}
-.linebuilder-root .lb-chemseg.forming{background:var(--gold)}
-.linebuilder-root .lb-chemseg.weak{background:var(--red)}
-
-.linebuilder-root .lb-workspace{min-width:0;min-height:0;height:100%;display:grid;grid-template-columns:240px minmax(0,1fr) 260px;gap:8px;overflow:hidden}
-.linebuilder-root .lb-region{min-width:0;min-height:0;height:100%;border:1px solid var(--line);border-radius:8px;background:var(--panel);overflow:hidden;display:grid;grid-template-rows:38px minmax(0,1fr)}
-.linebuilder-root .lb-region-head{height:38px;padding:0 10px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:8px;background:rgba(0,0,0,.18)}
-.linebuilder-root .lb-region-title{margin:0;font-size:11px;font-weight:900;letter-spacing:.12em;text-transform:uppercase}
-.linebuilder-root .lb-region-note{color:var(--muted);font-size:11px;font-weight:800;white-space:nowrap}
-
-.linebuilder-root .lb-pool{min-height:0;display:grid;grid-template-rows:auto minmax(0,1fr);gap:6px;padding:8px;overflow:hidden}
-.linebuilder-root .lb-search-wrap{position:relative}
-.linebuilder-root .lb-search{width:100%;height:32px;padding:0 28px 0 9px;border:1px solid var(--line);border-radius:5px;color:var(--text);background:rgba(0,0,0,.22);outline:none;font-size:11px}
-.linebuilder-root .lb-search::placeholder{color:var(--muted2)}
-.linebuilder-root .lb-clear{position:absolute;top:2px;right:2px;width:28px;height:28px;border:0;border-radius:4px;color:var(--muted);background:transparent;cursor:pointer}
-.linebuilder-root .lb-player-list{min-height:0;height:100%;display:flex;flex-direction:column;overflow-x:hidden;overflow-y:auto;scrollbar-width:thin;scrollbar-color:rgba(46, 230, 214, .35) rgba(0,0,0,.22)}
-.linebuilder-root .lb-player{flex:0 0 auto;min-height:40px;padding:0 8px 0 6px;border:0;border-bottom:1px solid var(--line);border-left:3px solid transparent;background:transparent;display:grid;grid-template-columns:28px minmax(0,1fr) 34px;gap:7px;align-items:center;cursor:grab;text-align:left}
-.linebuilder-root .lb-player:hover{background:rgba(46, 230, 214, .1)}
-.linebuilder-root .lb-player.selected{border-left-color:var(--cyan);background:rgba(46, 230, 214, .14)}
-.linebuilder-root .lb-player.assigned{border-left-color:rgba(128,150,168,.5);background:rgba(0,0,0,.16)}
-.linebuilder-root .lb-player.assigned .lb-player-name{color:#b7c9d3}
-.linebuilder-root .lb-player.disabled{cursor:not-allowed;opacity:.42}
-.linebuilder-root .lb-player.locked{border-left-color:var(--gold)}
-/* Drive the portrait through --size so face and flag scale together. */
-.linebuilder-root .lb-player .player-headshot{--size:28px!important;width:28px!important;height:28px!important}
-.linebuilder-root .lb-player-copy{min-width:0}
-.linebuilder-root .lb-player-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;font-weight:800;line-height:1.1}
-.linebuilder-root .lb-player-meta{margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted2);font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase}
-.linebuilder-root .lb-player-side{display:grid;justify-items:end;align-content:center;gap:3px}
-.linebuilder-root .lb-player-ovr{color:var(--cyan);font-size:13px;font-weight:900;font-variant-numeric:tabular-nums;line-height:1}
-.linebuilder-root .lb-dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--green)}
-.linebuilder-root .lb-dot.warn{background:var(--gold)}
-.linebuilder-root .lb-dot.bad{background:var(--red)}
-
-.linebuilder-root .lb-board-region{grid-template-rows:34px minmax(0,1fr)}
-.linebuilder-root .lb-modebar{height:34px;padding:0 6px;border-bottom:1px solid var(--line);display:flex;align-items:stretch;background:rgba(0,0,0,.2)}
-.linebuilder-root .lb-mode{padding:0 14px;border:0;border-bottom:2px solid transparent;color:var(--muted);background:transparent;cursor:pointer;display:inline-flex;align-items:center;font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;white-space:nowrap}
-.linebuilder-root .lb-mode:hover{color:var(--text)}
-.linebuilder-root .lb-mode.active{color:var(--cyan);border-bottom-color:var(--cyan)}
-span.lb-mode,.linebuilder-root span.lb-mode:hover{cursor:default}
-.linebuilder-root .lb-icon.lb-icon--history{font-size:18px;font-weight:700;color:var(--text)}
-.linebuilder-root .lb-mobile-tools{display:none;margin-left:auto;gap:4px;align-items:center;padding:3px 0}
-
-/* ---- formation board ---- */
-.linebuilder-root .fm-scroll{min-height:0;height:100%;overflow-y:auto;overflow-x:hidden;padding:10px 14px 18px;scrollbar-width:thin;scrollbar-color:rgba(46, 230, 214, .35) rgba(0,0,0,.22)}
-.linebuilder-root .fm-section{display:block;margin-bottom:6px}
-.linebuilder-root .fm-section-head{display:flex;align-items:center;gap:10px;margin:10px 0 4px}
-.linebuilder-root .fm-section-title{font-size:11px;font-weight:900;letter-spacing:.12em;text-transform:uppercase;color:var(--muted2);white-space:nowrap}
-.linebuilder-root .fm-section-rule{flex:1;height:1px;background:var(--line)}
-.linebuilder-root .fm-section-note{font-size:11px;font-weight:700;color:var(--muted2);white-space:nowrap}
-.linebuilder-root .fm-unit{position:relative;width:100%;border-radius:8px;cursor:pointer}
-.linebuilder-root .fm-unit.selected{background:rgba(46, 230, 214, .06);box-shadow:inset 0 0 0 1px var(--line2)}
-.linebuilder-root .fm-unit.forwards{height:178px}
-.linebuilder-root .fm-unit.defense{height:118px}
-.linebuilder-root .fm-unit.goalies{height:118px}
-.linebuilder-root .fm-unit.ppf{height:178px}
-.linebuilder-root .fm-unit.ppd{height:118px}
-.linebuilder-root .fm-unit.pkbox{height:224px}
-.linebuilder-root .fm-unit.isolated{border:1px dashed rgba(128,150,168,.35);background:rgba(0,0,0,.12)}
-.linebuilder-root .fm-links{position:absolute;inset:0;width:100%;height:100%;z-index:1;pointer-events:none}
-.linebuilder-root .fm-link{stroke:rgba(128,150,168,.35);stroke-width:3;stroke-linecap:round}
-.linebuilder-root .fm-link.strong{stroke:var(--green)}
-.linebuilder-root .fm-link.forming{stroke:var(--gold)}
-.linebuilder-root .fm-link.weak{stroke:var(--red)}
-.linebuilder-root .fm-link.empty{stroke:rgba(128,150,168,.22);stroke-dasharray:3 4}
-.linebuilder-root .fm-link.dashed{stroke-width:2;stroke-dasharray:2 4}
-.linebuilder-root .fm-badge{position:absolute;z-index:3;transform:translate(-50%,-50%);min-width:26px;padding:2px 5px;border-radius:11px;border:1px solid currentColor;background:var(--nv2);font-size:10px;font-weight:900;text-align:center;font-variant-numeric:tabular-nums;line-height:1.15;pointer-events:none}
-.linebuilder-root .fm-badge.strong{color:var(--green)}
-.linebuilder-root .fm-badge.forming{color:var(--gold)}
-.linebuilder-root .fm-badge.weak{color:var(--red)}
-.linebuilder-root .fm-badge.empty{color:var(--muted2)}
-.linebuilder-root .fm-unit-tag{position:absolute;left:0;top:50%;transform:translateY(-50%);z-index:3;display:flex;flex-direction:column;align-items:center;gap:1px;width:52px}
-.linebuilder-root .fm-unit-kicker{color:var(--muted2);font-size:10px;font-weight:800;letter-spacing:.1em;text-transform:uppercase}
-.linebuilder-root .fm-unit-num{font-size:26px;font-weight:950;line-height:1;font-variant-numeric:tabular-nums}
-.linebuilder-root .fm-unit-score{margin-top:3px;font-size:12px;font-weight:900;color:var(--green);font-variant-numeric:tabular-nums}
-.linebuilder-root .fm-unit-score.warn{color:var(--gold)}
-.linebuilder-root .fm-unit-score.bad{color:var(--red)}
-.linebuilder-root .fm-unit-warn{margin-top:3px;min-width:22px;height:18px;padding:0 5px;border:1px solid rgba(233,168,60,.45);border-radius:4px;background:rgba(233,168,60,.14);color:var(--gold);font-size:10px;font-weight:900;cursor:pointer}
-.linebuilder-root .fm-unit-menu-btn{margin-top:3px;min-width:22px;height:18px;border:1px solid var(--line);border-radius:4px;background:transparent;color:var(--muted);font-size:10px;font-weight:900;cursor:pointer}
-.linebuilder-root .fm-unit-formation{margin-top:3px;font-size:10px;font-weight:900;letter-spacing:.04em;color:var(--gold)}
-.linebuilder-root .fm-unit-menu-btn:hover{color:var(--cyan);border-color:var(--line2)}
-
-.linebuilder-root .fm-card{position:absolute;z-index:2;border:1px solid var(--line2);border-top:3px solid rgba(128,150,168,.5);border-radius:7px;background:var(--panel2);padding:7px 6px 6px;text-align:center;cursor:pointer;overflow:hidden;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px}
-.linebuilder-root .fm-card:hover{border-color:var(--line2);background:rgba(46, 230, 214, .08)}
-.linebuilder-root .fm-card.strong{border-top-color:var(--green)}
-.linebuilder-root .fm-card.forming{border-top-color:var(--gold)}
-.linebuilder-root .fm-card.weak{border-top-color:var(--red)}
-.linebuilder-root .fm-card.empty{border:1px dashed rgba(128,150,168,.4);border-top:1px dashed rgba(128,150,168,.4);background:rgba(0,0,0,.18)}
-.linebuilder-root .fm-card.fresh{border:1px dashed var(--red);border-top:3px solid var(--red);background:rgba(255,96,109,.07)}
-.linebuilder-root .fm-card.selected{box-shadow:inset 0 0 0 2px var(--cyan);background:rgba(46, 230, 214, .14)}
-.linebuilder-root .fm-card.locked{border-right:3px solid var(--gold)}
-.linebuilder-root .fm-card.valid{border-color:var(--cyan);background:rgba(46, 230, 214, .14)}
-.linebuilder-root .fm-card.swap{border-color:var(--gold);background:rgba(233,168,60,.14)}
-.linebuilder-root .fm-card.invalid{border-color:var(--red);background:rgba(255,96,109,.1);cursor:not-allowed}
-.linebuilder-root .fm-card.unavailable{opacity:.55}
-.linebuilder-root .fm-card-slot{position:absolute;top:4px;left:6px;color:var(--muted2);font-size:10px;font-weight:900;letter-spacing:.06em;text-transform:uppercase}
-.linebuilder-root .fm-card-flag{position:absolute;top:4px;right:6px;font-size:9px;font-weight:900;letter-spacing:.04em;color:var(--red)}
-.linebuilder-root .fm-card-ovr{font-size:26px;font-weight:950;line-height:1;color:var(--cyan);font-variant-numeric:tabular-nums;margin-top:6px}
-.linebuilder-root .fm-card.fresh .fm-card-ovr{color:var(--red);font-size:17px}
-.linebuilder-root .fm-card-name{margin-top:3px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;font-weight:900;letter-spacing:-.01em;line-height:1.05}
-.linebuilder-root .fm-card-meta{margin-top:2px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted2);font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase}
-.linebuilder-root .fm-card-drop{position:absolute;bottom:5px;right:8px;color:var(--red);font-size:11px;font-weight:900;line-height:1}
-.linebuilder-root .fm-card{background-color:#10285a}
-.linebuilder-root .fm-card.selected,.linebuilder-root .fm-card.valid,.linebuilder-root .fm-card.swap,.linebuilder-root .fm-card.invalid,.linebuilder-root .fm-card:hover{background-color:#10285a;background-image:linear-gradient(rgba(46, 230, 214, .14),rgba(46, 230, 214, .14))}
-.linebuilder-root .fm-card.swap{background-image:linear-gradient(rgba(233,168,60,.14),rgba(233,168,60,.14))}
-.linebuilder-root .fm-card.invalid{background-image:linear-gradient(rgba(255,96,109,.1),rgba(255,96,109,.1))}
-.linebuilder-root .fm-card.fresh{background-color:#10285a}
-.linebuilder-root .fm-card-name{flex-shrink:0;padding:0 4px}
-.linebuilder-root .fm-pips{display:flex;justify-content:center;gap:3px;margin-top:5px}
-.linebuilder-root .fm-pip{width:5px;height:5px;border-radius:50%;background:rgba(128,150,168,.35)}
-.linebuilder-root .fm-pip.strong{background:var(--green)}
-.linebuilder-root .fm-pip.forming{background:var(--gold)}
-.linebuilder-root .fm-pip.weak{background:var(--red)}
-.linebuilder-root .fm-card-empty{color:var(--muted);font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}
-.linebuilder-root .fm-card-actions{position:absolute;bottom:3px;right:3px;display:flex;gap:3px;z-index:4}
-.linebuilder-root .fm-mini{width:19px;height:19px;border:1px solid var(--line);border-radius:3px;color:var(--muted);background:rgba(0,0,0,.4);cursor:pointer;display:grid;place-items:center;font-size:10px;font-weight:900}
-.linebuilder-root .fm-mini:hover{color:var(--cyan);border-color:var(--line2)}
-.linebuilder-root .fm-mini.danger:hover{color:var(--red);border-color:rgba(255,96,109,.45)}
-.linebuilder-root .fm-depth{position:relative;height:26px;display:flex;align-items:center;justify-content:center}
-.linebuilder-root .fm-depth-line{width:0;height:100%;border-left:2px dashed rgba(128,150,168,.3)}
-.linebuilder-root .fm-depth-line.strong{border-left-color:var(--green)}
-.linebuilder-root .fm-depth-line.forming{border-left-color:var(--gold)}
-.linebuilder-root .fm-depth-line.weak{border-left-color:var(--red)}
-.linebuilder-root .fm-depth-badge{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);padding:1px 6px;border-radius:10px;border:1px solid currentColor;background:var(--nv2);font-size:9px;font-weight:900;color:var(--muted2)}
-.linebuilder-root .fm-depth-badge.strong{color:var(--green)}
-.linebuilder-root .fm-depth-badge.forming{color:var(--gold)}
-.linebuilder-root .fm-depth-badge.weak{color:var(--red)}
-.linebuilder-root .fm-isolated-note{position:absolute;top:6px;left:10px;font-size:10px;font-weight:800;color:var(--muted2);letter-spacing:.04em}
-.linebuilder-root .fm-legend{display:flex;flex-wrap:wrap;gap:14px;justify-content:center;padding:12px 6px 4px;border-top:1px solid var(--line);margin-top:12px}
-.linebuilder-root .fm-legend-item{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:10px;font-weight:700}
-.linebuilder-root .fm-legend-swatch{width:16px;height:3px;border-radius:2px;background:var(--green)}
-.linebuilder-root .fm-legend-swatch.forming{background:var(--gold)}
-.linebuilder-root .fm-legend-swatch.weak{background:var(--red)}
-.linebuilder-root .fm-legend-swatch.depth{height:0;border-top:2px dashed rgba(128,150,168,.55);background:transparent}
-.linebuilder-root .fm-unit-menu{position:absolute;left:56px;top:6px;z-index:40;width:160px;padding:5px;border:1px solid var(--line2);border-radius:6px;background:var(--panel);box-shadow:0 24px 70px rgba(0,0,0,.5);display:grid;gap:3px}
-.linebuilder-root .lb-menu-action{min-height:29px;padding:0 8px;border:0;border-radius:4px;color:var(--text);background:transparent;cursor:pointer;text-align:left;font-size:11px;font-weight:750}
-.linebuilder-root .lb-menu-action:hover:not(:disabled){background:rgba(46, 230, 214, .13);color:var(--cyan)}
-.linebuilder-root .lb-menu-action:disabled{opacity:.35}
-
-/* ---- inspector ---- */
-.linebuilder-root .lb-inspector{min-height:0;display:grid;grid-template-rows:32px minmax(0,1fr);overflow:hidden}
-.linebuilder-root .lb-tabs{padding:0 2px;border-bottom:1px solid var(--line);display:grid;grid-template-columns:repeat(4,minmax(0,1fr));background:rgba(0,0,0,.16)}
-.linebuilder-root .lb-tab{border:0;border-bottom:2px solid transparent;color:var(--muted);background:transparent;cursor:pointer;font-size:10px;font-weight:850;text-transform:uppercase;letter-spacing:.03em;min-height:30px}
-.linebuilder-root .lb-tab.active{color:var(--cyan);border-bottom-color:var(--cyan)}
-.linebuilder-root .lb-inspector-body{min-height:0;padding:10px;overflow:auto;display:flex;flex-direction:column;gap:9px;scrollbar-width:thin;scrollbar-color:rgba(46, 230, 214, .35) rgba(0,0,0,.22)}
-.linebuilder-root .lb-inspector-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:15px;font-weight:900}
-.linebuilder-root .lb-inspector-sub{margin-top:3px;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.08em}
-.linebuilder-root .lb-gauge{display:flex;align-items:center;gap:10px}
-.linebuilder-root.lb-ahl .lb-gauge,.linebuilder-root.lb-ahl .lb-linkrow,.linebuilder-root.lb-ahl .lb-chemmeter{display:none!important}
-.linebuilder-root .lb-gauge-score{color:var(--cyan);font-size:34px;line-height:1;font-weight:950;font-variant-numeric:tabular-nums}
-.linebuilder-root .lb-gauge-score.warn{color:var(--gold)}
-.linebuilder-root .lb-gauge-score.bad{color:var(--red)}
-.linebuilder-root .lb-gauge-label{font-size:12px;font-weight:850;text-transform:uppercase;letter-spacing:.03em}
-.linebuilder-root .lb-gauge-source{margin-top:3px;color:var(--muted2);font-size:10px;text-transform:uppercase;letter-spacing:.06em}
-.linebuilder-root .lb-bar-row{display:block}
-.linebuilder-root .lb-bar-head{display:flex;justify-content:space-between;font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px}
-.linebuilder-root .lb-bar-head span:last-child{color:var(--text);font-variant-numeric:tabular-nums}
-.linebuilder-root .lb-bar{height:5px;border-radius:3px;background:rgba(255,255,255,.07);overflow:hidden}
-.linebuilder-root .lb-bar-fill{height:100%;border-radius:3px;background:var(--cyan)}
-.linebuilder-root .lb-bar-fill.warn{background:var(--gold)}
-.linebuilder-root .lb-bar-fill.bad{background:var(--red)}
-.linebuilder-root .lb-block{border-top:1px solid var(--line);padding-top:9px;display:flex;flex-direction:column;gap:6px}
-.linebuilder-root .lb-block-title{font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted2)}
-.linebuilder-root .lb-note{display:flex;gap:7px;align-items:flex-start}
-.linebuilder-root .lb-note-mark{font-size:11px;font-weight:900;line-height:1.35}
-.linebuilder-root .lb-note-mark.good{color:var(--green)}
-.linebuilder-root .lb-note-mark.warn{color:var(--gold)}
-.linebuilder-root .lb-note-mark.bad{color:var(--red)}
-.linebuilder-root .lb-note-text{font-size:11px;color:var(--muted);line-height:1.4}
-.linebuilder-root .lb-kv{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:26px;font-size:11px}
-.linebuilder-root .lb-kv-label{color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.05em;font-size:10px}
-.linebuilder-root .lb-kv-value{font-weight:850;text-align:right;font-variant-numeric:tabular-nums}
-.linebuilder-root .lb-kv-value.ok{color:var(--green)}
-.linebuilder-root .lb-kv-value.warn{color:var(--gold)}
-.linebuilder-root .lb-linkrow{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:28px;border-bottom:1px solid var(--line);font-size:11px}
-.linebuilder-root .lb-linkrow:last-child{border-bottom:0}
-.linebuilder-root .lb-linkrow-names{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-weight:700}
-.linebuilder-root .lb-linkrow-score{font-weight:900;font-variant-numeric:tabular-nums}
-.linebuilder-root .lb-linkrow-score.strong{color:var(--green)}
-.linebuilder-root .lb-linkrow-score.forming{color:var(--gold)}
-.linebuilder-root .lb-linkrow-score.weak{color:var(--red)}
-.linebuilder-root .lb-inspector-player{padding:8px;border:1px solid var(--line);border-radius:6px;background:rgba(0,0,0,.16);display:grid;grid-template-columns:48px minmax(0,1fr);gap:9px;align-items:center}
-.linebuilder-root .lb-inspector-player .player-headshot{width:44px!important;height:44px!important}
-.linebuilder-root .lb-inspector-player-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:900}
-.linebuilder-root .lb-inspector-player-meta{margin-top:3px;color:var(--muted2);font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.04em}
-.linebuilder-root .lb-inspector-actions{margin-top:2px;display:grid;grid-template-columns:1fr 1fr;gap:6px}
-.linebuilder-root .lb-compare{min-height:42px;display:flex;align-items:center;justify-content:space-between;gap:8px;border-bottom:1px solid var(--line);padding:5px 0}
-.linebuilder-root .lb-compare-name{font-size:12px;font-weight:900;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.linebuilder-root .lb-compare-meta{margin-top:2px;color:var(--muted);font-size:10px;text-transform:uppercase}
-.linebuilder-root .lb-empty,.linebuilder-root .lb-loading{height:100%;display:grid;place-items:center;padding:18px;color:var(--muted);text-align:center;font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}
-.linebuilder-root .lb-skeleton{width:min(220px,80%);height:8px;border-radius:3px;background:linear-gradient(90deg,rgba(255,255,255,.03),rgba(46, 230, 214, .12),rgba(255,255,255,.03));background-size:200% 100%;animation:lb-shimmer 1.2s linear infinite}
-@keyframes lb-shimmer{from{background-position:100% 0}to{background-position:-100% 0}}
-.linebuilder-root .lb-popover{position:absolute;top:62px;right:14px;z-index:60;width:300px;max-height:min(440px,calc(100dvh - 100px));padding:9px;border:1px solid var(--line2);border-radius:8px;background:var(--panel);box-shadow:0 24px 70px rgba(0,0,0,.5);display:grid;gap:7px;overflow:hidden}
-.linebuilder-root .lb-popover-title{margin:0;font-size:12px;font-weight:900;text-transform:uppercase;letter-spacing:.06em}
-.linebuilder-root .lb-auto-options{display:grid;grid-template-columns:1fr 1fr;gap:5px}
-.linebuilder-root .lb-auto-option{min-height:32px;padding:0 7px;border:1px solid var(--line);border-radius:5px;color:var(--muted);background:rgba(0,0,0,.16);cursor:pointer;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.03em}
-.linebuilder-root .lb-auto-option.active{color:var(--cyan);border-color:var(--line2);background:rgba(46, 230, 214, .13)}
-.linebuilder-root .lb-preview{max-height:210px;display:grid;align-content:start;border:1px solid var(--line);border-radius:6px;overflow-y:auto}
-.linebuilder-root .lb-preview-row{padding:5px 7px;border-bottom:1px solid var(--line);display:grid;gap:2px}
-.linebuilder-root .lb-preview-label{color:var(--muted);font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.06em}
-.linebuilder-root .lb-preview-change{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}
-.linebuilder-root .lb-popover-actions{display:grid;grid-template-columns:1fr 1fr;gap:5px}
-.linebuilder-root .lb-toast{position:fixed;right:18px;bottom:18px;z-index:100;min-width:230px;max-width:340px;padding:9px 11px;border:1px solid var(--line2);border-left:3px solid var(--cyan);border-radius:6px;background:var(--panel);box-shadow:0 24px 70px rgba(0,0,0,.5);display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center}
-.linebuilder-root .lb-toast.success{border-left-color:var(--green)}
-.linebuilder-root .lb-toast.warning{border-left-color:var(--gold)}
-.linebuilder-root .lb-toast.error{border-left-color:var(--red)}
-.linebuilder-root .lb-toast-message{font-size:11px;font-weight:800}
-.linebuilder-root .lb-toast-actions{display:flex;gap:4px}
-.linebuilder-root .lb-drawer-close{display:none}
-.linebuilder-root .lb-live{position:fixed;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}
-
-@media(max-width:1400px){.linebuilder-root .lb-workspace{grid-template-columns:220px minmax(0,1fr) 240px}}
-@media(max-width:1180px){
-.linebuilder-root .lb-workspace{grid-template-columns:210px minmax(0,1fr)}
-.linebuilder-root .lb-inspector-region{position:fixed;top:70px;right:8px;bottom:8px;width:290px;height:auto;z-index:70;transform:translateX(calc(100% + 20px));transition:transform .18s;box-shadow:0 24px 70px rgba(0,0,0,.5)}
-.linebuilder-root .lb-inspector-region.open{transform:translateX(0)}
-.linebuilder-root .lb-drawer-close{display:inline-grid}
-.linebuilder-root .lb-mobile-tools{display:flex}}
-@media(max-width:900px){
-.linebuilder-root{grid-template-columns:1fr;grid-template-rows:58px minmax(0,1fr)}
-.linebuilder-root .lb-sidebar{height:58px;padding:6px 8px;border-right:0;border-bottom:1px solid var(--line);flex-direction:row;align-items:center}
-.linebuilder-root .lb-nav{flex:1;display:flex;grid-template-rows:none;gap:5px}
-.linebuilder-root .lb-nav-btn{min-width:56px;min-height:44px;height:auto;display:flex}
-.linebuilder-root .lb-workspace{grid-template-columns:1fr}
-.linebuilder-root .lb-pool-region{position:fixed;top:70px;left:8px;bottom:8px;width:260px;height:auto;z-index:72;transform:translateX(calc(-100% - 20px));transition:transform .18s;box-shadow:0 24px 70px rgba(0,0,0,.5)}
-.linebuilder-root .lb-pool-region.open{transform:translateX(0)}
-.linebuilder-root .fm-card-name{font-size:12px}
-.linebuilder-root .fm-card-ovr{font-size:21px}}
-@media(prefers-reduced-motion:reduce){.linebuilder-root .lb-skeleton{animation:none}}
-`}</style>;
+  return null;
 }
 
 /* ---------------------------------------------------------------------------
@@ -994,18 +737,18 @@ span.lb-mode,.linebuilder-root span.lb-mode:hover{cursor:default}
    board scales with the workspace instead of relying on fixed pixel columns.
 --------------------------------------------------------------------------- */
 const FWD_GEO = {
-  LW: { left: 11, top: 44, width: 22, height: 52, cx: 22, cy: 70 },
-  C: { left: 39, top: 4, width: 22, height: 52, cx: 50, cy: 30 },
-  RW: { left: 67, top: 44, width: 22, height: 52, cx: 78, cy: 70 },
+  LW: { left: 0, top: 6, width: 27, height: 76, cx: 13.5, cy: 44 },
+  C: { left: 36.5, top: 6, width: 27, height: 76, cx: 50, cy: 44 },
+  RW: { left: 73, top: 6, width: 27, height: 76, cx: 86.5, cy: 44 },
 };
 const DEF_GEO = {
-  LD: { left: 26, top: 11, width: 21, height: 78, cx: 36.5, cy: 50 },
-  RD: { left: 54, top: 11, width: 21, height: 78, cx: 64.5, cy: 50 },
+  LD: { left: 0, top: 6, width: 42, height: 76, cx: 21, cy: 44 },
+  RD: { left: 58, top: 6, width: 42, height: 76, cx: 79, cy: 44 },
 };
 const GOALIE_GEO = {
-  Starter: { left: 22, top: 11, width: 21, height: 78 },
-  Backup: { left: 46, top: 11, width: 21, height: 78 },
-  Third: { left: 70, top: 11, width: 21, height: 78 },
+  Starter: { left: 0, top: 6, width: 29, height: 76 },
+  Backup: { left: 35.5, top: 6, width: 29, height: 76 },
+  Third: { left: 71, top: 6, width: 29, height: 76 },
 };
 const PP_GEO = {
   LW: { left: 11, top: 26, width: 21, height: 30, cx: 21.5, cy: 41 },
@@ -1034,16 +777,23 @@ function buildLinks(pairs, geo, slotPlayers, chemReport) {
     const b = slotPlayers[slotB];
     const bond = a && b ? pairChemistry(a, b, chemReport, slotA, slotB) : null;
     const tier = bond ? linkTier(bond.score) : "empty";
+    // Same-row neighbours: draw only across the gap between the two players.
+    const ga = geo[slotA];
+    const gb = geo[slotB];
+    const sameRow = ga.cy === gb.cy && ga.width != null && gb.width != null;
+    const leftG = ga.cx <= gb.cx ? ga : gb;
+    const rightG = ga.cx <= gb.cx ? gb : ga;
     return {
       key: `${slotA}-${slotB}`,
       slotA,
       slotB,
-      x1: geo[slotA].cx,
-      y1: geo[slotA].cy,
-      x2: geo[slotB].cx,
-      y2: geo[slotB].cy,
+      x1: sameRow ? leftG.left + leftG.width : ga.cx,
+      y1: ga.cy,
+      x2: sameRow ? rightG.left : gb.cx,
+      y2: gb.cy,
       mx: (geo[slotA].cx + geo[slotB].cx) / 2,
-      my: (geo[slotA].cy + geo[slotB].cy) / 2,
+      my: (geo[slotA].cy === geo[slotB].cy && Math.abs(geo[slotA].cx - geo[slotB].cx) > 40) ? 93 : (geo[slotA].cy + geo[slotB].cy) / 2,
+      skipLine: geo[slotA].cy === geo[slotB].cy && Math.abs(geo[slotA].cx - geo[slotB].cx) > 40,
       score: bond?.score ?? null,
       projected: bond?.projected ?? true,
       familiarity: bond?.familiarity ?? null,
@@ -1088,8 +838,8 @@ function LineBuilderHeader({ team, title = "Line Chemistry", subtitle, live, can
     </div>
     <div className="lb-actions">
       {showHistory ? <>
-        <button type="button" className="lb-icon lb-icon--history" onClick={onUndo} disabled={!canUndo} aria-label="Undo lineup change" title="Undo">↶</button>
-        <button type="button" className="lb-icon lb-icon--history" onClick={onRedo} disabled={!canRedo} aria-label="Redo lineup change" title="Redo">↷</button>
+        <button type="button" className="lb-icon lb-icon--history" onClick={onUndo} disabled={!canUndo} aria-label="Undo lineup change" title="Undo (Ctrl+Z)">↶ Undo</button>
+        <button type="button" className="lb-icon lb-icon--history" onClick={onRedo} disabled={!canRedo} aria-label="Redo lineup change" title="Redo (Ctrl+Y)">↷ Redo</button>
       </> : null}
       <button type="button" className="lb-btn subtle danger" onClick={onClear}>Clear</button>
       <button type="button" className="lb-btn subtle" onClick={onReset}>{resetLabel}</button>
@@ -1139,7 +889,7 @@ function PlayerPool({ players, assignedSet, lockedSet, selectedPlayerId, search,
         const fit = focusSlot && posFit(player, focusSlot) ? chemistryFitScore(player, focusSlot) : null;
         const status = player.availability?.key === "active" ? null : player.availability?.label;
         const meta = [assigned ? `✓ ${player.position}` : player.position, fit != null ? `${fit} fit` : null, status].filter(Boolean).join(" · ");
-        return <div key={player.id} className={`lb-player ${assigned ? "assigned" : ""} ${selectedPlayerId === player.id ? "selected" : ""} ${disabled ? "disabled" : ""} ${locked ? "locked" : ""}`} draggable={!disabled} onDragStart={(event) => onDragStart(event, player.id)} onClick={() => onPlayerSelect(player.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onPlayerSelect(player.id); } }} role="button" tabIndex={0} aria-label={`${player.name}, ${player.position}, ${player.overall} overall${assigned ? ", dressed" : ""}`} title={disabled ? player.availability?.reason || "Player cannot be moved." : `${player.name} · ${player.position} · ${player.overall} overall${assigned ? " · Dressed" : ""}`}>
+        return <div key={player.id} className={`lb-player ${assigned ? "assigned" : ""} ${selectedPlayerId === player.id ? "selected" : ""} ${disabled ? "disabled" : ""} ${locked ? "locked" : ""}`} draggable={!disabled} onDragStart={(event) => { document.body.classList.add("lb-dragging"); onDragStart(event, player.id); }} onDragEnd={() => { document.body.classList.remove("lb-dragging"); document.querySelectorAll(".fm-card.is-dragover").forEach((el) => el.classList.remove("is-dragover")); }} onClick={() => onPlayerSelect(player.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onPlayerSelect(player.id); } }} role="button" tabIndex={0} aria-label={`${player.name}, ${player.position}, ${player.overall} overall${assigned ? ", dressed" : ""}`} title={disabled ? player.availability?.reason || "Player cannot be moved." : `${player.name} · ${player.position} · ${player.overall} overall${assigned ? " · Dressed" : ""}`}>
           <PlayerHeadshot player={player} size="md" />
           <div className="lb-player-copy">
             <div className="lb-player-name">{player.name}</div>
@@ -1157,7 +907,7 @@ function PlayerPool({ players, assignedSet, lockedSet, selectedPlayerId, search,
 
 function LinkLayer({ links }) {
   return <svg className="fm-links" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-    {links.map((link) => (
+    {links.filter((link) => !link.skipLine).map((link) => (
       <line key={link.key} x1={link.x1} y1={link.y1} x2={link.x2} y2={link.y2}
         className={`fm-link ${link.tier}${link.dashed ? " dashed" : ""}`} vectorEffect="non-scaling-stroke" />
     ))}
@@ -1166,8 +916,8 @@ function LinkLayer({ links }) {
 
 function LinkBadges({ links }) {
   return links.map((link) => (
-    <span key={`badge-${link.key}`} className={`fm-badge ${link.tier}`} style={{ left: `${link.mx}%`, top: `${link.my}%` }}>
-      {link.score == null ? "—" : link.score}
+    <span key={`badge-${link.key}`} className={`fm-badge ${link.tier}${link.skipLine ? " is-wide" : ""}`} style={{ left: `${link.mx}%`, top: `${link.my}%` }} title={`${link.slotA}–${link.slotB} chemistry${link.score == null ? "" : `: ${link.score}`}${link.fresh ? " · no shared history yet" : ""}`}>
+      {link.skipLine ? `${link.slotA}–${link.slotB} ` : ""}{link.score == null ? "—" : `${link.projected ? "~" : ""}${link.score}`}
     </span>
   ));
 }
@@ -1193,17 +943,21 @@ function FormationCard({ descriptor, geo, player, tier, pips, locked, selected, 
     title={player ? shortText(getOverallTooltip(player)) : `Add ${descriptor.slot}`}
     onClick={(event) => { event.stopPropagation(); onSelect(descriptor); }}
     onKeyDown={(event) => onKeyDown && onKeyDown(event, descriptor)}
-    onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
-    onDrop={(event) => onDrop(event, descriptor)}
+    onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; event.currentTarget.classList.add("is-dragover"); }}
+    onDragEnter={(event) => event.currentTarget.classList.add("is-dragover")}
+    onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) event.currentTarget.classList.remove("is-dragover"); }}
+    onDrop={(event) => { event.currentTarget.classList.remove("is-dragover"); onDrop(event, descriptor); }}
     draggable={Boolean(player) && !locked && player.availability?.placeable}
-    onDragStart={(event) => player && onDragStart(event, player.id)}
+    onDragStart={(event) => { if (!player) return; event.currentTarget.classList.add("is-dragging"); document.body.classList.add("lb-dragging"); onDragStart(event, player.id); }}
+    onDragEnd={(event) => { event.currentTarget.classList.remove("is-dragging"); document.body.classList.remove("lb-dragging"); document.querySelectorAll(".fm-card.is-dragover").forEach((el) => el.classList.remove("is-dragover")); }}
   >
     <span className="fm-card-slot">{descriptor.label || descriptor.slot}</span>
     {flag ? <span className="fm-card-flag">{flag}</span> : null}
     {player ? <>
-      <span className="fm-card-ovr">{fresh ? "NEW" : player.overall}</span>
+      <span className="fm-card-face"><PlayerHeadshot player={player} size="md" /></span>
+      <span className={`fm-card-ovr ovr-${Number(player.overall) >= 88 ? "elite" : Number(player.overall) >= 84 ? "high" : Number(player.overall) >= 79 ? "mid" : "low"}`}>{player.overall}</span>
       <span className="fm-card-name" title={player.name}>{lastName(player.name)}</span>
-      <span className="fm-card-meta">{fresh ? "No shared history" : slotMeta(player)}</span>
+      <span className="fm-card-meta">{slotMeta(player)}{fresh ? <em className="fm-card-new">New</em> : null}</span>
       {player.overall_drop > 0 ? <span className="fm-card-drop">-{player.overall_drop}</span> : null}
       {showPips && pips?.length ? <span className="fm-pips">{pips.map((pip, index) => <span key={index} className={`fm-pip ${pip}`} />)}</span> : null}
       {selected ? <span className="fm-card-actions">
@@ -1214,11 +968,21 @@ function FormationCard({ descriptor, geo, player, tier, pips, locked, selected, 
   </div>;
 }
 
-function UnitTag({ kicker, number, score, warnings, onWarnings, onMenu }) {
+function UnitTag({ kicker, number, score, warnings, onWarnings, onMenu, flag, roles = [], identity = "", projected = false }) {
+  const named = roles.filter(Boolean);
+  const counts = named.reduce((acc, r) => ({ ...acc, [r]: (acc[r] || 0) + 1 }), {});
+  const repeated = Object.entries(counts).find(([, n]) => n > 1);
   return <div className="fm-unit-tag">
-    <span className="fm-unit-kicker">{kicker}</span>
-    <span className="fm-unit-num">{number}</span>
-    {score != null ? <span className={`fm-unit-score ${scoreTone(score)}`}>{score}</span> : null}
+    <span className="fm-unit-kicker">{kicker} {number}</span>
+    {identity ? <span className="fm-unit-identity">{identity}</span> : null}
+    {named.length > 1 ? (
+      <span className={`fm-unit-roles${repeated ? " is-repeat" : ""}`} title={repeated ? `${repeated[1]} players share the ${repeated[0]} role` : "Roles on this unit"}>
+        {repeated ? `${repeated[1]}× ${repeated[0]}` : [...new Set(named)].join(" · ")}
+      </span>
+    ) : null}
+    {score != null ? <span className={`fm-unit-score ${scoreTone(score)}${projected ? " is-projected" : ""}`} title={projected ? "Estimate until you save. The saved number comes from the full chemistry model." : "Saved lineup chemistry"}>{projected ? "~" : ""}{score}</span> : null}
+    {score != null ? <span className={`fm-unit-chem ${scoreTone(score)}`}>{chemistryLabel(score)}</span> : null}
+    {flag ? <span className="fm-unit-flag" title={flag}>{flag}</span> : null}
     {warnings?.length ? <button type="button" className="fm-unit-warn" onClick={(event) => { event.stopPropagation(); onWarnings(); }} title={`${warnings.length} warnings`}>{warnings.length}</button> : null}
     <button type="button" className="fm-unit-menu-btn" onClick={(event) => { event.stopPropagation(); onMenu(); }} aria-label="Unit actions" title="Unit actions">···</button>
   </div>;
@@ -1247,6 +1011,15 @@ function DepthConnector({ tier, score, slot, from, to }) {
     <div className={`fm-depth-line ${tier}`} />
     <span className={`fm-depth-badge ${tier}`}>{slot} {score == null ? "—" : score}</span>
   </div>;
+}
+
+function ShareTotal({ total }) {
+  if (total == null) return null;
+  const ok = Math.round(total) === 100;
+  return <span className={`fm-share-total ${ok ? "is-ok" : "is-off"}`}>
+    Ice time total <b>{Math.round(total)}%</b>
+    {ok ? null : <em>{total > 100 ? `${Math.round(total - 100)}% over` : `${Math.round(100 - total)}% left to assign`} · must equal 100%</em>}
+  </span>;
 }
 
 function SectionHead({ title, note }) {
@@ -1279,49 +1052,13 @@ function DeployPills({ value, options, onPick }) {
   </span>;
 }
 
-function DeploymentStrip({ group, lines, onShare, onDeploy }) {
-  const defense = group === "defense";
-  return <div className="lb-deploy" onClick={(event) => event.stopPropagation()}>
-    {lines.map((line, index) => {
-      const share = shownShare(line, index, group);
-      return <div className="lb-deploy-row" key={line.id}>
-        <span className="lb-deploy-name">{defense ? `Pair ${index + 1}` : `Line ${index + 1}`}</span>
-        <span className="lb-deploy-share" role="group" aria-label={`${defense ? "Pair" : "Line"} ${index + 1} ice-time share`}>
-          <button type="button" className="lb-share-step" onClick={() => onShare(group, line.id, -1)} disabled={share <= 8 || index === lines.length - 1} aria-label="Less ice time" title={index === lines.length - 1 ? "The bottom unit takes whatever is left" : "Give 1% to the bottom unit"}>−</button>
-          <span>{Math.round(share)}%</span>
-          <button type="button" className="lb-share-step" onClick={() => onShare(group, line.id, 1)} disabled={share >= 60 || index === lines.length - 1} aria-label="More ice time" title={index === lines.length - 1 ? "The bottom unit takes whatever is left" : "Take 1% from the bottom unit"}>+</button>
-        </span>
-        {defense ? (
-          <DeployPills
-            value={line.pair_role || (index === 0 ? "shutdown" : index === 1 ? "neutral" : "sheltered")}
-            options={[["shutdown", "Shutdown"], ["sheltered", "Sheltered"], ["neutral", "Neutral"], ["offensive", "Offensive"]]}
-            onPick={(pair_role) => onDeploy(group, line.id, { pair_role })}
-          />
-        ) : (
-          <>
-            <DeployPills
-              value={line.zone || (index < 2 ? "offensive" : "defensive")}
-              options={[["offensive", "Offensive"], ["defensive", "Defensive"]]}
-              onPick={(zone) => onDeploy(group, line.id, { zone })}
-            />
-            <DeployPills
-              value={line.usage || (index < 2 ? "attack" : "checking")}
-              options={[["attack", "Attack"], ["checking", "Checking"]]}
-              onPick={(usage) => onDeploy(group, line.id, { usage })}
-            />
-          </>
-        )}
-      </div>;
-    })}
-  </div>;
-}
-
 function FormationLegend({ depthLabel = "Line-to-line depth" }) {
   return <div className="fm-legend">
-    <span className="fm-legend-item"><span className="fm-legend-swatch" />Strong link</span>
-    <span className="fm-legend-item"><span className="fm-legend-swatch forming" />Forming link</span>
-    <span className="fm-legend-item"><span className="fm-legend-swatch weak" />Weak / new link</span>
-    <span className="fm-legend-item"><span className="fm-legend-swatch depth" />{depthLabel}</span>
+    <span className="fm-legend-title">Chemistry links</span>
+    <span className="fm-legend-item"><span className="fm-legend-swatch" />Strong</span>
+    <span className="fm-legend-item"><span className="fm-legend-swatch forming" />Forming</span>
+    <span className="fm-legend-item"><span className="fm-legend-swatch weak" />Weak or new</span>
+    <span className="fm-legend-hint">Numbers between players are their pair chemistry. Hover one for details.</span>
   </div>;
 }
 
@@ -1336,13 +1073,11 @@ function FormationUnit({
   kicker, sizeClass, selectedUnit, selectedSlotKey, selectedPlayer, locks, menuOpen, clipboard,
   onSelectUnit, onSlotSelect, onDrop, onDragStart, onRemove, onToggleLock, onSlotKeyDown,
   registerSlotRef, onWarnings, onMenuToggle, actions, slots, showPips = true, isolated = false, isolatedNote,
+  deploy = null, unitFlag = null, depth = 0,
 }) {
   const selected = selectedUnit?.group === group && selectedUnit?.lineId === line.id;
   const unitNumber = String(line.name || "").replace(/\D+/g, "") || String(line.id).toUpperCase();
-  return <div role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.currentTarget.click(); } }} className={`fm-unit ${sizeClass} ${selected ? "selected" : ""} ${isolated ? "isolated" : ""}`} onClick={() => onSelectUnit(group, line.id)}>
-    {isolated && isolatedNote ? <span className="fm-isolated-note">{isolatedNote}</span> : null}
-    {links.length ? <LinkLayer links={links} /> : null}
-    {links.length ? <LinkBadges links={links} /> : null}
+  return <div role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.currentTarget.click(); } }} className={`fm-unit ${sizeClass} depth-${depth} ${selected ? "selected" : ""} ${isolated ? "isolated" : ""}`} onClick={() => onSelectUnit(group, line.id)}>
     <UnitTag
       kicker={kicker}
       number={unitNumber}
@@ -1350,7 +1085,18 @@ function FormationUnit({
       warnings={warnings}
       onWarnings={() => onWarnings(group, line.id)}
       onMenu={() => onMenuToggle(group, line.id)}
+      flag={unitFlag}
+      identity={group === "goalies" ? "" : unitIdentity(group, line, depth)}
+      projected={Boolean(chemistry?.projected)}
+      roles={group === "goalies" ? [] : slots.map((slot) => {
+        const pl = playerMap[String(line.slots?.[slot] || "")];
+        return pl ? roleName(pl) : null;
+      })}
     />
+    <div className="fm-unit-board">
+    {isolated && isolatedNote ? <span className="fm-isolated-note">{isolatedNote}</span> : null}
+    {links.length ? <LinkLayer links={links} /> : null}
+    {links.length ? <LinkBadges links={links} /> : null}
     {slots.map((slot) => {
       const descriptor = { key: slotKey(group, line.id, slot), group, lineId: line.id, lineName: line.name, slot, playerId: String(line.slots?.[slot] || "") };
       const player = playerMap[descriptor.playerId] || null;
@@ -1381,8 +1127,85 @@ function FormationUnit({
         showPips={showPips}
       />;
     })}
+    </div>
+    {deploy ? <div className="fm-unit-deploy is-open" onClick={(event) => event.stopPropagation()}>{deploy}</div> : null}
     {menuOpen ? <UnitMenu line={line} group={group} locks={locks} clipboard={clipboard} actions={actions} /> : null}
   </div>;
+}
+
+/* Ice time + deployment for one unit, shown on that unit's own row. */
+function unitIdentity(group, line, index) {
+  if (group === "defense") {
+    const role = line.pair_role || (index === 0 ? "shutdown" : index === 1 ? "neutral" : "sheltered");
+    return { shutdown: "Shutdown pair", neutral: "Second pair", offensive: "Offensive pair", sheltered: "Sheltered pair" }[role] || "Pair";
+  }
+  const zone = line.zone || (index < 2 ? "offensive" : "defensive");
+  const usage = line.usage || (index < 2 ? "attack" : "checking");
+  if (zone === "offensive" && usage === "attack") return index === 0 ? "Top line" : "Scoring line";
+  if (zone === "defensive" && usage === "checking") return index >= 3 ? "Energy line" : "Checking line";
+  return "Two-way line";
+}
+
+function UnitDeploy({ group, line, index, count, onShare, onDeploy }) {
+  const defense = group === "defense";
+  const share = shownShare(line, index, group);
+  const minutes = Math.round((share / 100) * 60);
+  const zone = line.zone || (index < 2 ? "offensive" : "defensive");
+  const usage = line.usage || (index < 2 ? "attack" : "checking");
+  const pairRole = line.pair_role || (index === 0 ? "shutdown" : index === 1 ? "neutral" : "sheltered");
+  const cap = (v) => v.charAt(0).toUpperCase() + v.slice(1);
+  return <>
+    <div className="fm-deploy-summary" title="Select the unit to change ice time and deployment">
+      <strong>{Math.round(share)}%</strong>
+      <span>{defense ? `${cap(pairRole)} pair` : `${cap(zone)} starts · ${cap(usage)}`}</span>
+    </div>
+    <div className="fm-deploy-share" role="group" aria-label={`${defense ? "Pair" : "Line"} ${index + 1} ice time`}>
+      <label className="fm-share-input">
+        <input
+          type="number"
+          min={0}
+          max={100}
+          step={1}
+          value={Number.isFinite(Number(share)) ? Math.round(share) : ""}
+          onChange={(event) => onShare(group, line.id, event.target.value)}
+          onClick={(event) => event.stopPropagation()}
+          aria-label={`${defense ? "Pair" : "Line"} ${index + 1} ice time percent`}
+        />
+        <span>%</span>
+      </label>
+      <span className="fm-share-min" title="Approximate minutes in a 60-minute game">~{minutes} min</span>
+      <span className="fm-share-bar" aria-hidden="true"><i style={{ width: `${Math.min(100, (share / 50) * 100)}%` }} /></span>
+    </div>
+    {defense ? (
+      <div className="fm-deploy-row">
+        <span className="fm-deploy-label" title="Shutdown faces the other team's best lines. Sheltered gets the easy minutes.">Matchup</span>
+        <DeployPills
+          value={line.pair_role || (index === 0 ? "shutdown" : index === 1 ? "neutral" : "sheltered")}
+          options={[["shutdown", "Shutdown"], ["neutral", "Neutral"], ["offensive", "Offensive"], ["sheltered", "Sheltered"]]}
+          onPick={(pair_role) => onDeploy(group, line.id, { pair_role })}
+        />
+      </div>
+    ) : (
+      <>
+        <div className="fm-deploy-row">
+          <span className="fm-deploy-label" title="Where his shifts start: the offensive or defensive zone">Zone starts</span>
+          <DeployPills
+            value={line.zone || (index < 2 ? "offensive" : "defensive")}
+            options={[["offensive", "Offensive"], ["defensive", "Defensive"]]}
+            onPick={(zone) => onDeploy(group, line.id, { zone })}
+          />
+        </div>
+        <div className="fm-deploy-row">
+          <span className="fm-deploy-label" title="How the line plays once it's on the ice">Style</span>
+          <DeployPills
+            value={line.usage || (index < 2 ? "attack" : "checking")}
+            options={[["attack", "Attack"], ["checking", "Checking"]]}
+            onPick={(usage) => onDeploy(group, line.id, { usage })}
+          />
+        </div>
+      </>
+    )}
+  </>;
 }
 
 function FormationBoard({
@@ -1390,13 +1213,17 @@ function FormationBoard({
   selectedUnit, selectedSlotKey, selectedPlayer, locks, showThird, menuKey, clipboard,
   onSelectUnit, onSlotSelect, onDrop, onDragStart, onRemove, onToggleLock, onSlotKeyDown,
   registerSlotRef,   onWarnings, onMenuToggle, actions, onTogglePool, onToggleInspector, rosterEmpty,
-  onShare, onDeploy, onCoach,
+  onShare, onDeploy, onCoach, shareTotals,
 }) {
   const options = [[LINEUP_MODES.ALL, "All"], [LINEUP_MODES.FORWARDS, "Forwards"], [LINEUP_MODES.DEFENSE, "Defence"], [LINEUP_MODES.GOALIES, "Goalies"]];
   const showForwards = mode === LINEUP_MODES.ALL || mode === LINEUP_MODES.FORWARDS;
   const showDefense = mode === LINEUP_MODES.ALL || mode === LINEUP_MODES.DEFENSE;
   const showGoalies = mode === LINEUP_MODES.ALL || mode === LINEUP_MODES.GOALIES;
   const goalieSlots = ["Starter", "Backup", ...(showThird ? ["Third"] : [])];
+  const forwardScores = (lineState.forwards || []).map((line) => chemistryByUnit[`forwards:${line.id}`]?.score);
+  const weakestForwardIndex = forwardScores.every((v) => v == null)
+    ? -1
+    : forwardScores.reduce((best, v, i) => (v != null && (best < 0 || v < forwardScores[best]) ? i : best), -1);
   const shared = {
     playerMap, chemReport, selectedUnit, selectedSlotKey, selectedPlayer, locks, clipboard,
     onSelectUnit, onSlotSelect, onDrop, onDragStart, onRemove, onToggleLock, onSlotKeyDown,
@@ -1413,11 +1240,12 @@ function FormationBoard({
       </div>
     </div>
     {rosterEmpty ? <div className="lb-empty">Roster unavailable</div> : <div className="fm-scroll">
+      <FormationLegend />
       {showForwards ? <div className="fm-section">
-        <SectionHead title="Forwards" note="Ice share is the coach's plan. The bench still adjusts during the game." />
-        <div className="lb-deploy" onClick={(event) => event.stopPropagation()}>
+        <SectionHead title="Forwards" note={<ShareTotal total={shareTotals?.forwards} />} />
+        <div className="lb-deploy fm-coach" onClick={(event) => event.stopPropagation()}>
           <div className="lb-deploy-row">
-            <span className="lb-deploy-name">Coach adjustments</span>
+            <span className="lb-deploy-name">In-game coach changes</span>
             <span className="lb-deploy-share" role="group" aria-label="Coach adjustments">
               {["off", "light", "full"].map((modeId) => (
                 <button
@@ -1430,9 +1258,15 @@ function FormationBoard({
                 </button>
               ))}
             </span>
+            <span className="fm-coach-note">
+              {(lineState.coach_adjustments || "light") === "off"
+                ? "Your lines and ice time play exactly as set."
+                : (lineState.coach_adjustments || "light") === "full"
+                  ? "The coach shortens the bench and reshuffles lines when you're losing or tired."
+                  : "The coach makes small ice-time tweaks for fatigue and penalties."}
+            </span>
           </div>
         </div>
-        <DeploymentStrip group="forwards" lines={lineState.forwards} onShare={onShare} onDeploy={onDeploy} />
         {lineState.forwards.map((line, index) => <React.Fragment key={line.id}>
           <FormationUnit
             {...shared}
@@ -1447,14 +1281,16 @@ function FormationBoard({
             sizeClass="forwards"
             slots={["LW", "C", "RW"]}
             menuOpen={menuKey === `forwards:${line.id}`}
+            depth={index}
+            unitFlag={index === 0 && weakestForwardIndex === 0 && lineState.forwards.length > 1 ? "Least connected line" : null}
+            deploy={<UnitDeploy group="forwards" line={line} index={index} count={lineState.forwards.length} onShare={onShare} onDeploy={onDeploy} />}
           />
           {index < lineState.forwards.length - 1 ? <DepthConnector tier={depthLinks.forwards[index]?.tier || "empty"} score={depthLinks.forwards[index]?.score ?? null} slot="C" from={`Line ${index + 1}`} to={`Line ${index + 2}`} /> : null}
         </React.Fragment>)}
       </div> : null}
 
       {showDefense ? <div className="fm-section">
-        <SectionHead title="Defence" note="Shutdown takes the hard minutes. Sheltered hides them." />
-        <DeploymentStrip group="defense" lines={lineState.defense} onShare={onShare} onDeploy={onDeploy} />
+        <SectionHead title="Defence" note={<ShareTotal total={shareTotals?.defense} />} />
         {lineState.defense.map((line, index) => <React.Fragment key={line.id}>
           <FormationUnit
             {...shared}
@@ -1469,6 +1305,8 @@ function FormationBoard({
             sizeClass="defense"
             slots={["LD", "RD"]}
             menuOpen={menuKey === `defense:${line.id}`}
+            depth={index}
+            deploy={<UnitDeploy group="defense" line={line} index={index} count={lineState.defense.length} onShare={onShare} onDeploy={onDeploy} />}
           />
           {index < lineState.defense.length - 1 ? <DepthConnector tier={depthLinks.defense[index]?.tier || "empty"} score={depthLinks.defense[index]?.score ?? null} slot="LD" from={`Pair ${index + 1}`} to={`Pair ${index + 2}`} /> : null}
         </React.Fragment>)}
@@ -1496,7 +1334,6 @@ function FormationBoard({
         />)}
       </div> : null}
 
-      <FormationLegend />
     </div>}
   </section>;
 }
@@ -1724,6 +1561,21 @@ export function EvenStrengthLines(props) {
     return () => { active = false; };
   }, [franchiseState?.session_id, chemNonce, ahl]);
 
+  // Unsaved edits are scored live by the backend chemistry model (nothing is
+  // saved), so a swap shows its real chemistry immediately instead of an
+  // estimate that changes on save.
+  useEffect(() => {
+    if (ahl) return undefined;
+    if (JSON.stringify(lineState) === JSON.stringify(savedSnapshot?.lineState)) return undefined;
+    let active = true;
+    const timer = window.setTimeout(() => {
+      previewFranchiseChemistry(lineState)
+        .then((data) => { if (active && data) setChemReport(data); })
+        .catch(() => {});
+    }, 300);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [lineState, savedSnapshot, ahl]);
+
   const players = useMemo(() => {
     if (ahl) return (Array.isArray(ahlData?.roster) ? ahlData.roster : []).map(normalizePlayer);
     return liveNhlPlayers(franchiseState, props);
@@ -1943,6 +1795,32 @@ export function EvenStrengthLines(props) {
 
   // Ice time moves 1% at a time between the chosen unit and the bottom unit only, so
   // nudging Line 2 never quietly shifts Line 1. The bottom unit absorbs the remainder.
+  const onShareSet = useCallback((group, lineId, raw) => {
+    const units = lineState[group] || [];
+    const text = String(raw ?? "").trim();
+    const value = text === "" ? 0 : Math.max(0, Math.min(100, Math.round(Number(text) || 0)));
+    commit(
+      { ...lineState, [group]: units.map((line, i) => (line.id === lineId ? { ...line, toi_share: value } : { ...line, toi_share: Math.round(shownShare(line, i, group)) })) },
+      locks,
+      "Ice time updated."
+    );
+  }, [lineState, locks, commit]);
+  const shareTotals = useMemo(() => {
+    if (ahl) return null;
+    const sum = (group) => (lineState[group] || []).reduce((acc, line, i) => acc + (Number(shownShare(line, i, group)) || 0), 0);
+    return { forwards: sum("forwards"), defense: sum("defense") };
+  }, [lineState, ahl]);
+  const sharesValid = !shareTotals || (Math.round(shareTotals.forwards) === 100 && Math.round(shareTotals.defense) === 100);
+  const shareMessage = shareTotals && !sharesValid
+    ? `Ice time must add up to 100% (forwards ${Math.round(shareTotals.forwards)}%, defence ${Math.round(shareTotals.defense)}%).`
+    : "";
+  const guardedSetScreen = useCallback((next) => {
+    if (!sharesValid) {
+      setToast({ type: "error", message: `${shareMessage} Fix it before leaving Lines.` });
+      return;
+    }
+    setScreen(next);
+  }, [sharesValid, shareMessage, setScreen]);
   const onShareStep = useCallback((group, lineId, delta) => {
     const defaults = group === "defense" ? DEF_SHARE_DEFAULT : FWD_SHARE_DEFAULT;
     const units = lineState[group] || [];
@@ -2021,7 +1899,8 @@ export function EvenStrengthLines(props) {
     const changed = commit(next, locks, targetId ? "Players swapped." : "Player placed.");
     if (changed) {
       setSelectedUnit({ group: target.group, lineId: target.lineId });
-      setSelectedSlotKey(target.key);
+      // Clear the slot so the next click starts a fresh move instead of moving him again.
+      setSelectedSlotKey("");
       setSelectedPlayerId("");
       setInspectorOpen(true);
     }
@@ -2037,12 +1916,16 @@ export function EvenStrengthLines(props) {
   }, [selectedSlot, placePlayer]);
   const onSlotSelect = useCallback((row) => {
     if (selectedPlayerId) { placePlayer(selectedPlayerId, row); return; }
+    if (selectedSlot && selectedSlot.key !== row.key && selectedSlot.playerId) {
+      placePlayer(selectedSlot.playerId, row);
+      return;
+    }
     setSelectedUnit({ group: row.group, lineId: row.lineId });
     setSelectedSlotKey((current) => current === row.key ? "" : row.key);
     setSelectedPlayerId("");
     setInspectorOpen(true);
     setComparing(false);
-  }, [selectedPlayerId, placePlayer]);
+  }, [selectedPlayerId, selectedSlot, placePlayer]);
   const onDragStart = useCallback((event, playerId) => {
     const player = playerMap[playerId];
     const source = findAssignment(lineState, playerId);
@@ -2059,6 +1942,7 @@ export function EvenStrengthLines(props) {
     let playerId = fallback;
     try { playerId = raw ? JSON.parse(raw)?.pid : fallback; } catch { playerId = fallback; }
     if (playerId) placePlayer(String(playerId), target);
+    setSelectedPlayerId("");
   }, [placePlayer]);
   const removeSlot = useCallback((row) => {
     if (!row || locks[row.key]) return;
@@ -2221,6 +2105,11 @@ export function EvenStrengthLines(props) {
   }, [holeFill, locks, commit]);
   const saveLines = useCallback(async () => {
     if (saving || !players.length) return;
+    if (!sharesValid) {
+      setSaveError(true);
+      setToast({ type: "error", message: shareMessage });
+      return;
+    }
     if (validation.errors.length) {
       setSaveError(true);
       setToast({ type: "error", message: validation.errors[0].text, details: validation.errors.length > 1 });
@@ -2268,7 +2157,7 @@ export function EvenStrengthLines(props) {
     } finally {
       setSaving(false);
     }
-  }, [saving, players.length, validation, holesFillable, autoFillHoles, lineState, locks, sessionId, props, setFranchiseState, setScreen, ahl]);
+  }, [saving, players.length, validation, holesFillable, autoFillHoles, lineState, locks, sessionId, props, setFranchiseState, setScreen, ahl, sharesValid, shareMessage]);
   useEffect(() => {
     if (!setNavGuard || ahl) return undefined;
     setNavGuard(() => {
@@ -2301,9 +2190,9 @@ export function EvenStrengthLines(props) {
   const live = !unsaved && !teamChemistry.projected;
   const subtitle = `${players.length} players · ${live ? "Live chemistry" : unsaved ? "Unsaved edits — projected scores" : "Projected chemistry"}`;
 
-  return <div className={`linebuilder-root${ahl ? " lb-ahl" : ""}`}>
+  return <div className={`linebuilder-root lb-dd${ahl ? " lb-ahl" : ""}`}>
     <EditLinesStyles />
-    <LineBuilderSidebar setScreen={setScreen} abbreviation={team.abbreviation} logo={team.logo} activeScreen={ahl ? SCREENS.AHL_CENTER : SCREENS.EDIT_LINES} />
+    <LineBuilderSidebar setScreen={guardedSetScreen} abbreviation={team.abbreviation} logo={team.logo} activeScreen={ahl ? SCREENS.AHL_CENTER : SCREENS.EDIT_LINES} />
     <main className="lb-shell">
       <LineBuilderHeader
         team={team}
@@ -2359,9 +2248,10 @@ export function EvenStrengthLines(props) {
           onTogglePool={() => setPoolOpen((current) => !current)}
           onToggleInspector={() => setInspectorOpen((current) => !current)}
           rosterEmpty={!players.length && !rosterLoading}
-          onShare={onShareStep}
+          onShare={onShareSet}
           onDeploy={onDeploy}
           onCoach={onCoach}
+          shareTotals={shareTotals}
         />
         <LineInspector
           open={inspectorOpen}

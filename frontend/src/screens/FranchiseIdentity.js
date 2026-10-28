@@ -13,7 +13,6 @@ import { getTeamLogoSrc } from "../utils/teamLogos";
 import { CrestSVG, contrastRatio } from "../components/legacy/crest";
 import CrestEditor from "../components/legacy/CrestEditor";
 import { apiError, legacyApi, seasonLabel, setLegacyFocus } from "../components/legacy/legacyApi";
-import "../components/legacy/legacy.css";
 
 const UniformStudio3D = React.lazy(() => import("../components/legacy/UniformStudio3D"));
 

@@ -16,6 +16,8 @@ export default function ComingSeasonNight({
   franchiseState = {},
 }) {
   const leave = onBack || onContinue;
+  // Theme slug from the night's label ("TRADE DEADLINE" -> "trade-deadline"); game.css dresses each one.
+  const theme = String(phaseLabel || "season-night").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
   const season =
     franchiseState?.season_label ||
     (franchiseState?.season_year
@@ -24,7 +26,7 @@ export default function ComingSeasonNight({
 
   return (
     <>
-      <style>{COMING_NIGHT_CSS}</style>
+      {null}
       <CinematicEventShell
         prefix="comingnight"
         phaseLabel={phaseLabel}
@@ -39,7 +41,8 @@ export default function ComingSeasonNight({
         onContinue={leave}
         onBack={leave}
         heroContent={
-          <div className="comingnight-hero">
+          <div className={`comingnight-hero comingnight-hero--${theme}`}>
+            <span className="comingnight-prop" aria-hidden="true" />
             <p className="comingnight-kicker">{eyebrow}</p>
             <h1 className="comingnight-title">{title}</h1>
             <p className="comingnight-body">{body}</p>
@@ -57,38 +60,4 @@ export default function ComingSeasonNight({
   );
 }
 
-const COMING_NIGHT_CSS = `
-.comingnight-hero {
-  display: grid;
-  gap: 12px;
-  max-width: 42rem;
-}
-.comingnight-kicker {
-  margin: 0;
-  font-size: 0.72rem;
-  font-weight: 900;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--ops-cyan, #2ee6d6);
-}
-.comingnight-title {
-  margin: 0;
-  font-size: clamp(1.8rem, 4vw, 3rem);
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--ops-text, #e9f7fb);
-  line-height: 1.05;
-}
-.comingnight-body,
-.comingnight-rail {
-  margin: 0;
-  color: var(--ops-text, #e9f7fb);
-  font-size: 0.95rem;
-  line-height: 1.5;
-}
-.comingnight-rail {
-  color: var(--ops-muted, #8096a8);
-  font-size: 0.85rem;
-}
-`;
+

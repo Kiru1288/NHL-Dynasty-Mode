@@ -149,7 +149,7 @@ describe("draft complete recap", () => {
 
     expect(screen.getByRole("heading", { name: "Entry Draft" })).toBeInTheDocument();
     expect(screen.getByText("Draft complete")).toBeInTheDocument();
-    expect(document.querySelector(".cap-report-cap-display strong")).toHaveTextContent("D");
+    expect(document.querySelector(".drx-grade strong")).toHaveTextContent("D");
     expect(screen.getByText(/59\/100/)).toBeInTheDocument();
     expect(screen.getByLabelText(/Draft class rank 24 of 32/)).toBeInTheDocument();
     expect(screen.getAllByText("Avg value")).toHaveLength(1);
@@ -159,11 +159,11 @@ describe("draft complete recap", () => {
     expect(screen.getAllByText("Ada Reach")).toHaveLength(1);
     expect(screen.getAllByText("Bea Value")).toHaveLength(1);
 
-    expect(screen.getByText("REACH −14")).toBeInTheDocument();
-    expect(screen.getByText("VALUE +16")).toBeInTheDocument();
-    expect(screen.getByText("EXPECTED +8")).toBeInTheDocument();
-    expect(screen.getByText("VALUE +10")).toBeInTheDocument();
-    expect(screen.getByText("EXPECTED +9")).toBeInTheDocument();
+    expect(screen.getByText("Reach −14")).toBeInTheDocument();
+    expect(screen.getByText("Value +16")).toBeInTheDocument();
+    expect(screen.getByText("Expected +8")).toBeInTheDocument();
+    expect(screen.getByText("Value +10")).toBeInTheDocument();
+    expect(screen.getByText("Expected +9")).toBeInTheDocument();
 
     expect(screen.getAllByText(/NCAA|Junior|Europe/).length).toBeGreaterThan(0);
     expect(screen.getByText(/30% confidence/)).toBeInTheDocument();
@@ -191,7 +191,7 @@ describe("draft complete recap", () => {
     expect(screen.getByText("Fourth Left")).toBeInTheDocument();
 
     expect(screen.getByRole("button", { name: /Continue offseason/i })).toBeInTheDocument();
-    expect(document.querySelector(".edraft-haul-pick")).toBeInTheDocument();
+    expect(document.querySelector(".drx-slip")).toBeInTheDocument();
   });
 
   test("shows an empty class when the user made no picks", () => {

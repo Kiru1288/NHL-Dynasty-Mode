@@ -44,7 +44,10 @@ STAGE_NEXT_EVENT: Dict[str, str] = {
     "development_report": "draft_lottery",
     "draft_lottery": "draft_combine",
     "draft_combine": "draft",
-    "draft": "draft_review",
+    # Draft Haul Review was a repeat of the post-draft recap: the draft goes
+    # straight to Prospect Rights. Saves already parked on draft_review still
+    # advance through the entry below.
+    "draft": "prospect_rights",
     "draft_review": "prospect_rights",
     "prospect_rights": "re_sign",
     "re_sign": "free_agency",
@@ -58,7 +61,7 @@ STAGE_NEXT_EVENT: Dict[str, str] = {
 # un-hydrated forever, so every state fetch re-runs its side effects.
 STAGE_PAYLOAD_VERSION: Dict[str, int] = {
     "draft_review": 4,
-    "prospect_rights": 5,
+    "prospect_rights": 6,  # 6: real displayed potential (was 99 for everyone)
     "re_sign": 7,
     "free_agency": 4,
 }
@@ -6111,17 +6114,20 @@ def _run_prospect_rights_stage(session: FranchiseSession, *, force: bool = False
             draft_year = int(card.get("draft_year") or getattr(player, "draft_year", 0) or 0)
         except (TypeError, ValueError):
             draft_year = 0
-        try:
-            pot = int(round(float(
-                getattr(player, "potential", None)
-                or getattr(getattr(player, "ratings", None), "get", lambda *_a, **_k: None)("dev_potential")
-                or (getattr(player, "ratings", {}) or {}).get("dev_potential")
-                or 0
-            )))
-        except (TypeError, ValueError):
-            pot = 0
-        if pot and pot <= 1:
-            pot = int(round(pot * 99))
+        # Same displayed potential every other screen uses. The old path rounded a
+        # 0-1 potential to an int *before* scaling it, so anything >= 0.5 became
+        # 1 * 99 and every prospect on the Rights Desk showed 99 POT.
+        pot = int(round(_dev_player_potential_display(player))) if player is not None else 0
+        if not pot:
+            try:
+                raw_pot = float(
+                    getattr(player, "potential", None)
+                    or (getattr(player, "ratings", {}) or {}).get("dev_potential")
+                    or 0
+                )
+            except (TypeError, ValueError, AttributeError):
+                raw_pot = 0.0
+            pot = int(round(raw_pot * 99)) if 0 < raw_pot <= 1 else int(round(raw_pot))
         stats = getattr(player, "season_stats", None) or {}
         if not isinstance(stats, dict):
             stats = {}
@@ -6134,7 +6140,7 @@ def _run_prospect_rights_stage(session: FranchiseSession, *, force: bool = False
             "potential": pot or card.get("potential") or None,
             "draft_round": getattr(player, "draft_round", None) or card.get("draft_round"),
             "draft_pick": getattr(player, "draft_pick_number", None) or card.get("draft_pick"),
-            "years_since_drafted": (season_year - draft_year) if draft_year else None,
+            "years_since_drafted": max(0, season_year - draft_year) if draft_year else None,
             "rights_expiry_date": getattr(player, "rights_expiry_date", None) or card.get("rights_signing_deadline"),
             "key_stats": {
                 "gp": stats.get("gp") or stats.get("games_played"),
