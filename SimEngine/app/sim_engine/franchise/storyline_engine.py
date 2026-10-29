@@ -169,7 +169,20 @@ def _headline_pick(rng: random.Random, pool: List[str]) -> str:
 
 def _effect_summary(effects: Dict[str, Any]) -> str:
     parts: List[str] = []
-    label = {
+    label = _EFFECT_LABELS
+    for k, v in sorted(effects.items()):
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            continue
+        if abs(fv) < 0.01:
+            continue
+        sign = "+" if fv > 0 else ""
+        parts.append(f"{label.get(k, k.replace('_', ' ').title())} {sign}{fv:.0f}")
+    return " · ".join(parts) if parts else "Minor narrative ripple"
+
+
+_EFFECT_LABELS: Dict[str, str] = {
         "player_confidence": "Player confidence",
         "player_morale": "Player morale",
         "team_morale": "Team morale",
@@ -187,17 +200,7 @@ def _effect_summary(effects: Dict[str, Any]) -> str:
         "owner_patience": "Owner patience",
         "coach_security": "Coach security",
         "depth_pressure": "Depth pressure",
-    }
-    for k, v in sorted(effects.items()):
-        try:
-            fv = float(v)
-        except (TypeError, ValueError):
-            continue
-        if abs(fv) < 0.01:
-            continue
-        sign = "+" if fv > 0 else ""
-        parts.append(f"{label.get(k, k.replace('_', ' ').title())} {sign}{fv:.0f}")
-    return " · ".join(parts) if parts else "Minor narrative ripple"
+}
 
 
 #: Field → (label, higher_is_good) for the post-meeting impact card.
@@ -345,7 +348,7 @@ def _summarize_meeting_receipts(receipts: Optional[Dict[str, Any]], choice_label
         parts.append(f"{label} {sign}{d:.1f}".rstrip("0").rstrip("."))
 
     for r in raw.get("profiles") or []:
-        field = str(r.get("field") or "profile").replace("state.", "").replace("_", " ").title()
+        field = str(r.get("field") or "profile").replace("state.", "").replace("_", " ").capitalize().replace("Gm ", "GM ")
         _append_delta(field, r.get("delta"))
     for r in raw.get("team") or []:
         field = str(r.get("field") or "room").replace("_", " ").title()
@@ -366,6 +369,8 @@ def _summarize_meeting_receipts(receipts: Optional[Dict[str, Any]], choice_label
     for r in raw.get("reporter") or []:
         field = str(r.get("field") or "media").replace("_", " ").title()
         _append_delta(field, r.get("delta"))
+    for r in raw.get("media") or []:
+        _append_delta(str(r.get("field") or "Media"), r.get("delta"))
     if raw.get("promise_id"):
         parts.append("Promise logged")
 
@@ -3998,6 +4003,22 @@ def _static_reddit_thread_templates() -> List[Dict[str, Any]]:
     ]
 
 
+def _user_player_minds(session: Any) -> Dict[str, Any]:
+    """Inner life of the user's own players, for the dossier and the press room."""
+    out: Dict[str, Any] = {}
+    try:
+        from app.sim_engine.franchise.player_mind import snapshot  # noqa: WPS433
+
+        utid = str(getattr(session, "user_team_id", "") or "")
+        ents = getattr(session, "universe_players", None) or {}
+        for pid, ent in ents.items():
+            if isinstance(ent, dict) and str(ent.get("team_id") or "") == utid and isinstance(ent.get("mind"), dict):
+                out[str(pid)] = snapshot(ent)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    return out
+
+
 def build_narrative_universe_payload(session: Any) -> Dict[str, Any]:
     """API payload for Storylines UI + player dossier media tabs."""
     migrate_session_storyline_state(session)
@@ -4017,7 +4038,8 @@ def build_narrative_universe_payload(session: Any) -> Dict[str, Any]:
         "knowledge_graph": list(getattr(session, "knowledge_graph", None) or [])[-80:],
         "player_narrative_memory": dict(mem) if isinstance(mem, dict) else {},
         "press_conference_queue": list(getattr(session, "press_conference_queue", None) or []),
-        "narrative_archive": list(getattr(session, "narrative_archive", None) or [])[-120:],
+        "player_minds": _user_player_minds(session),
+        "narrative_archive":list(getattr(session, "narrative_archive", None) or [])[-120:],
         "narrative_eras": eras,
         "prospect_social_profiles": dict(getattr(session, "prospect_social_profiles", None) or {}),
         "agent_relationships": dict(getattr(session, "agent_relationships", None) or {}),
@@ -4267,6 +4289,66 @@ def _maybe_agent_leak(session: Any, sl: Dict[str, Any], rng: Optional[random.Ran
     session.social_posts = _trim_legacy_social_posts(posts, 200)
 
 
+_PRESS_GOOD_WORDS = (
+    "shuts out", "shutout", "hat trick", "milestone", "career-high", "career high", "breakout",
+    "winning streak", "point streak", "goal streak", "on a run", "heater", "award", "named",
+    "returns", "back in the lineup", "record", "wins", "scores", "first nhl", "clinch", "star of",
+)
+_PRESS_BAD_WORDS = (
+    "slump", "drought", "injur", "benched", "scratched", "suspend", "struggl", "demand",
+    "rumor", "rumour", "skid", "frustrat", "feud", "tension", "criticis", "cold", "losing",
+    "concern", "doubt", "hot seat", "fired", "pointless", "minus", "upset", "angry", "goalless",
+    "shopping", "shopped", "unhappy", "conduct", "arrest", "fight",
+    "sidelined", "restless", "out with", "out for", "chants", "fire the", "boo", "slipping away",
+    "frustrated", "blows up", "gone cold", "worst",
+)
+_PRESS_ROUTINE_WORDS = (
+    "charity", "hospital", "community", "food-drive", "food drive", "fundraiser", "visit",
+    "appearance", "youth camp", "school", "signs autographs", "first of the season",
+    "practice", "morning skate", "birthday", "celebrity", "is a fan", "fan of", "celly",
+    "personal goal", "recalled from", "assigned to", "trade offer from",
+    "fans are", "fans slide", "fans climb", "rookie dinner", "dinner bill",
+)
+
+
+def _press_story_sentiment(sl: Dict[str, Any]) -> str:
+    """good / bad from what the story is about. The tone field is mostly a writing style
+    (narrative, analytical, chaos), so a shutout used to get 'how worried are you?'."""
+    tone = str(sl.get("tone") or "").lower()
+    if tone in ("positive", "hopeful"):
+        return "good"
+    if tone in ("negative", "outrage", "hostile", "critical"):
+        return "bad"
+    text = (str(sl.get("headline") or "") + " " + str(sl.get("summary") or "") + " " + str(sl.get("cause_type") or "")).lower()
+    bad = sum(1 for w in _PRESS_BAD_WORDS if w in text)
+    good = sum(1 for w in _PRESS_GOOD_WORDS if w in text)
+    if bad > good:
+        return "bad"
+    if good > bad:
+        return "good"
+    return "bad" if str(sl.get("priority") or "") == "CRITICAL" else "good"
+
+
+def _press_story_is_routine(sl: Dict[str, Any]) -> bool:
+    """Community visits and first-goal blurbs don't bring the press to the GM."""
+    text = (str(sl.get("headline") or "") + " " + str(sl.get("cause_type") or "")).lower()
+    return any(w in text for w in _PRESS_ROUTINE_WORDS) or "COMMUNITY" in str(sl.get("cause_type") or "").upper()
+
+
+def _press_topic_flags(sl: Dict[str, Any]) -> Dict[str, bool]:
+    """Topic flags read from the story's cause and words, not only its category."""
+    text = " ".join(
+        str(sl.get(k) or "") for k in ("headline", "summary", "cause_type", "category", "type")
+    ).lower()
+    return {
+        "injury": any(w in text for w in ("injur", "day-to-day", "long-term ir", "lower-body", "upper-body", " ir ")),
+        "trade": any(w in text for w in ("trade", "rumor", "rumour", "shopp", "deadline", "demand")),
+        "contract": any(w in text for w in ("contract", "extension", "re-sign", "resign", " ufa", " rfa", "cap hit", "negotiat")),
+        "room": any(w in text for w in ("locker", "room", "teammate", "captain", "chemistry", "feud", "tension", "belonging")),
+        "coach": any(w in text for w in ("coach", "hot seat", "system", "deployment", "benched", "scratched")),
+    }
+
+
 def _build_press_moment_context(session: Any, sl: Dict[str, Any]) -> Dict[str, Any]:
     """Snapshot team record / standings / storyline flags that drive press questions."""
     utid = str(getattr(session, "user_team_id", "") or "")
@@ -4285,24 +4367,30 @@ def _build_press_moment_context(session: Any, sl: Dict[str, Any]) -> Dict[str, A
         player = _player_from_roster(session, plid)
         if player is not None:
             trade_heat = int(_ensure_player_storyline_state(player).get("trade_rumor_heat") or 0)
+    topics = _press_topic_flags(sl)
+    skind0, slen0 = _team_current_streak(session, utid)
+    bad_story = _press_story_sentiment(sl) == "bad"
 
     triggers: Dict[str, bool] = {
-        "losing_skid": gp >= TEAM_GP_MIN and l >= 4 and w <= 2,
+        # A real skid is the current run of losses, not "4+ losses all season".
+        "losing_skid": gp >= TEAM_GP_MIN and skind0 == "L" and slen0 >= 3,
         "cold_record": gp >= 8 and win_pct <= 0.42,
-        "win_streak": gp >= 8 and win_pct >= 0.62 and w >= 5,
+        "win_streak": gp >= 8 and skind0 == "W" and slen0 >= 4,
         "hot_team": gp >= 8 and win_pct >= 0.58,
         "playoff_race": gp >= 35 and 6 <= rank <= 12,
         "playoff_spot": gp >= 20 and rank <= 6,
         "bottom_feeder": gp >= 15 and rank >= 24,
-        "trade_rumors": trade_heat >= 10 or "trade" in category or "TRADE" in cause,
+        "trade_rumors": trade_heat >= 10 or topics["trade"],
         "player_focus": bool(plid),
-        "coach_pressure": (gp >= TEAM_GP_MIN and l >= 4 and w <= 2)
+        "coach_pressure": (gp >= TEAM_GP_MIN and skind0 == "L" and slen0 >= 4)
         or (gp >= 8 and win_pct <= 0.42)
-        or "COACH" in cause,
-        "injury_news": "INJURY" in cause or "injury" in category,
-        "contract_news": "CONTRACT" in cause or "contract" in category,
-        "locker_room": "locker" in category or "LOCKER" in cause or "ROOM" in cause,
+        or "COACH" in cause
+        or (topics["coach"] and bad_story),
+        "injury_news": topics["injury"],
+        "contract_news": topics["contract"],
+        "locker_room": topics["room"] and bad_story,
         "storyline_heat": int(sl.get("heat") or 0) >= 55,
+        "preseason": gp == 0,
     }
     trigger_labels: List[Dict[str, Any]] = []
     skind, slen = _team_current_streak(session, utid)
@@ -4358,6 +4446,7 @@ def _build_press_moment_context(session: Any, sl: Dict[str, Any]) -> Dict[str, A
         "trade_rumor_heat": trade_heat,
         "triggers": triggers,
         "trigger_labels": trigger_labels,
+        "sentiment": _press_story_sentiment(sl),
     }
 
 
@@ -4532,7 +4621,11 @@ def _build_press_questions(sl: Dict[str, Any], session: Any, ctx: Optional[Dict[
                 [
                     ("deflect", "Deflect", "Keep internal matters internal.", "neutral"),
                     ("support_staff", "Back the staff", "Reaffirm confidence in coaching decisions.", "firm"),
-                    ("support_player", "Back the player", f"Publicly support {pname}.", "diplomatic"),
+                    *(
+                        [("support_player", f"Back {pname}", f"Publicly support {pname}.", "diplomatic")]
+                        if sl.get("player_id")
+                        else []
+                    ),
                     ("no_comment", "Decline comment", "Silence — media will interpret.", "cold"),
                 ],
                 ["coach_pressure"],
@@ -4544,7 +4637,11 @@ def _build_press_questions(sl: Dict[str, Any], session: Any, ctx: Optional[Dict[
             _q(
                 "q_injury",
                 reporter,
-                f"What can you share about {pname}'s status and the impact on the lineup?",
+                (
+                    f"What can you share about {pname}'s status and the impact on the lineup?"
+                    if sl.get("player_id")
+                    else "What's the injury picture, and how does the lineup hold up?"
+                ),
                 [
                     ("optimistic", "Optimistic timeline", "Reassure without overpromising.", "diplomatic"),
                     ("no_timeline", "No timeline yet", "Keep details internal for now.", "neutral"),
@@ -4585,8 +4682,7 @@ def _build_press_questions(sl: Dict[str, Any], session: Any, ctx: Optional[Dict[
             )
         )
 
-    story_tone = str(sl.get("tone") or "").lower()
-    if story_tone == "positive":
+    if str(moment.get("sentiment") or _press_story_sentiment(sl)) == "good":
         candidates.append(
             _q(
                 "q_story_good",
@@ -4621,7 +4717,11 @@ def _build_press_questions(sl: Dict[str, Any], session: Any, ctx: Optional[Dict[
         _q(
             "q_fan_message",
             reporter,
-            f"Looking at the big picture at {rec}, what should fans take from this moment?",
+            (
+                "Camp is open. What should fans expect from this group?"
+                if triggers.get("preseason")
+                else f"Looking at the big picture at {rec}, what should fans take from this moment?"
+            ),
             [
                 ("trust_process", "Trust the process", "Ask for patience with the plan.", "neutral"),
                 ("compete_daily", "Compete every night", "Focus on daily standards.", "firm"),
@@ -4714,6 +4814,9 @@ def _press_answer_headline(question_id: str, response_id: str, entry: Dict[str, 
         "stay_course": f"GM urges patience with {rec} record",
         "credit_team": "GM credits team compete level",
         "trust_process": "GM asks fans to trust the process",
+        "clarify": "Pressed by reporters, GM clarifies",
+        "stand_by": "GM stands by his answer",
+        "shut_down": "GM shuts down follow-up questions",
     }
     return fallback.get(rid, fallback.get(tone, "GM addresses media"))
 
@@ -4980,10 +5083,52 @@ _PRESS_RESPONSE_SPECS: Dict[str, Dict[str, Any]] = {
 # P3: trade-offs layered on top of the base specs so no answer is a free win and no
 # answer is pure loss. Shielding a player, praising him or circling the wagons all cost
 # something somewhere else (the room, his focus, your credibility with the beat).
+_PRESS_RESPONSE_SPECS.update({
+    "q_followup:clarify": {
+        "storyline_effects": {"media_pressure": -3, "fan_confidence": 1},
+        "entity": {"state.media_stress": -2, "state.gm_trust": 2},
+        "reporter": {"trust": 3, "friction": -2},
+        "heat_delta": -8,
+    },
+    "q_followup:stand_by": {
+        "storyline_effects": {"media_pressure": 2},
+        "entity": {"state.media_stress": 2},
+        "reporter": {"friction": 2},
+        "heat_delta": 2,
+    },
+    "q_followup:shut_down": {
+        "storyline_effects": {"media_pressure": 4, "fan_confidence": -2},
+        "entity": {"state.media_stress": 3, "state.gm_trust": -2},
+        "reporter": {"friction": 5, "access": -2},
+        "fan_engagement": -0.6,
+        "heat_delta": 5,
+    },
+    "q_followup_trade:clarify": {
+        "storyline_effects": {"media_pressure": -3, "trade_market_heat": -3},
+        "entity": {"state.media_stress": -3, "state.gm_trust": 3},
+        "reporter": {"trust": 3, "friction": -2},
+        "trade_rumor_heat": -8,
+        "heat_delta": -8,
+    },
+    "q_followup_trade:stand_by": {
+        "storyline_effects": {"media_pressure": 2, "trade_market_heat": 2},
+        "entity": {"state.media_stress": 3},
+        "trade_rumor_heat": 4,
+        "heat_delta": 2,
+    },
+    "q_followup_trade:shut_down": {
+        "storyline_effects": {"media_pressure": 4, "trade_market_heat": 4},
+        "entity": {"state.media_stress": 4, "state.gm_trust": -3},
+        "reporter": {"friction": 5},
+        "trade_rumor_heat": 8,
+        "heat_delta": 5,
+    },
+})
+
+
 _PRESS_TRADEOFFS: Dict[str, Dict[str, Any]] = {
     "q_coach:support_player": {"team": {"tension": 2}, "storyline_effects": {"coach_security": -2}},
     "q_coach:support_staff": {"entity": {"state.gm_trust": -3}},
-    "q_coach:no_comment": {"entity": {"state.focus": 3}, "team": {"unity": 1}},
     "q_coach:deflect": {"entity": {"state.focus": 1}},
     "q_trade:deny": {"reporter": {"trust": -2, "friction": 1}},
     "q_trade:listen": {"storyline_effects": {"fan_confidence": 1}},
@@ -4998,16 +5143,13 @@ _PRESS_TRADEOFFS: Dict[str, Dict[str, Any]] = {
     "q_injury:optimistic": {"entity": {"state.focus": -2}, "reporter": {"friction": 1}},
     "q_injury:transparent": {"storyline_effects": {"trade_market_heat": 2}},
     "q_contract:fair_talks": {"entity": {"state.focus": -1}, "storyline_effects": {"media_pressure": 1}},
-    "q_contract:no_comment": {"entity": {"state.focus": 2}},
     "q_locker_room:united": {"team": {"accountability": -3}},
     "q_locker_room:internal": {"team": {"unity": 2}},
-    "q_story_good:praise": {"entity": {"state.media_stress": 3}, "team": {"tension": 1}},
+    "q_story_good:praise": {"entity": {"state.media_stress": 1}, "team": {"tension": 1}},
     "q_story_good:temper": {"entity": {"state.morale": -1}},
     "q_story_good:credit_staff": {"entity": {"state.confidence": -1}},
     "q_story_concern:support_player": {"team": {"accountability": -3}, "storyline_effects": {"fan_confidence": -2}},
-    "q_story_concern:no_comment": {"entity": {"state.focus": 3}, "team": {"unity": 1}},
     "q_story_concern:address": {"entity": {"state.morale": -1}},
-    "q_fan_message:no_comment": {"entity": {"state.focus": 3}, "team": {"unity": 1}},
     "q_fan_message:trust_process": {"storyline_effects": {"owner_patience": -1}},
     "q_fan_message:compete_daily": {"entity": {"state.energy": -2}},
 }
@@ -5060,6 +5202,10 @@ def _press_response_spec(question_id: str, response_id: str) -> Dict[str, Any]:
 def _build_press_effect_preview(spec: Dict[str, Any]) -> str:
     parts: List[str] = []
     storyline_effects = dict(spec.get("storyline_effects") or {})
+    if spec.get("entity"):
+        # The same player confidence / morale shows once, through the profile row.
+        storyline_effects.pop("player_confidence", None)
+        storyline_effects.pop("player_morale", None)
     if storyline_effects:
         parts.append(_effect_summary(storyline_effects))
     entity_labels = {
@@ -5101,7 +5247,7 @@ def _apply_press_response_effects(
     spec: Dict[str, Any],
 ) -> Dict[str, Any]:
     """Apply press answer consequences to player, team, media, and trade rumor state."""
-    receipts: Dict[str, Any] = {"profiles": [], "team": [], "media": [], "reporter": []}
+    receipts: Dict[str, Any] = {"profiles": [], "team": [], "media": [], "reporter": [], "relationships": []}
     utid = str(getattr(session, "user_team_id", "") or "")
     plid = str(entry.get("player_id") or "")
     player = _player_from_roster(session, plid) if plid else None
@@ -5109,6 +5255,16 @@ def _apply_press_response_effects(
     storyline_effects = dict(spec.get("storyline_effects") or {})
     if storyline_effects and utid:
         _apply_storyline_effects(session, utid, plid, storyline_effects)
+        # Everything the preview promised is reported back, not just the player rows.
+        for key, val in storyline_effects.items():
+            if key in ("player_confidence", "player_morale") and spec.get("entity"):
+                continue  # shown once, through the player's own profile row
+            try:
+                fv = float(val)
+            except (TypeError, ValueError):
+                continue
+            if abs(fv) >= 0.01:
+                receipts["media"].append({"field": _EFFECT_LABELS.get(key, key.replace("_", " ").title()), "delta": fv})
 
     if plid:
         _u_sync_player_entities(session, player_id=plid, team_id=utid or None)
@@ -5134,7 +5290,7 @@ def _apply_press_response_effects(
                 _u_push_morale_to_player(session, str(getattr(pl, "id", "")), float((ent.get("state") or {}).get("morale", 55) or 55))
             touched += 1
         if touched:
-            receipts["team"].append({"field": "Whole room (a third each)", "before": None, "after": None, "delta": touched})
+            receipts["relationships"] = [{"summary": f"Heard by {touched} players (a third of the effect each)"}]
 
     if player is not None and spec.get("trade_rumor_heat"):
         pst = _ensure_player_storyline_state(player)
@@ -5189,7 +5345,8 @@ def _apply_press_response_effects(
     # P9: the agent relationship contract talks read. Once per conference, small.
     if player is not None and not entry.get("_agent_trust_applied"):
         tone_now = str(response.get("tone") or "neutral")
-        bump = 0.02 if tone_now in ("support_player", "diplomatic") else (-0.02 if str(response.get("id") or "") == "no_comment" else 0.0)
+        rid_now = str(response.get("id") or "")
+        bump = 0.02 if (rid_now in ("support_player", "praise") or tone_now == "diplomatic") else (-0.02 if rid_now == "no_comment" else 0.0)
         if bump:
             try:
                 from app.sim_engine.franchise.player_agent_engine import ensure_player_agent, get_agent_gm_relationship  # noqa: WPS433
@@ -5211,23 +5368,12 @@ def _apply_press_response_effects(
         tone = str(response.get("tone") or "neutral")
         before = float(rel[plid].get("gm_trust") or 0.5)
         gm_trust_delta = 0.0
-        if tone in ("support_player", "diplomatic"):
-            gm_trust_delta = 0.08
+        if tone == "diplomatic" or str(response.get("id") or "") in ("support_player", "praise"):
+            gm_trust_delta = 0.02
             rel[plid]["gm_trust"] = min(1.0, before + gm_trust_delta)
         elif tone in ("cold", "firm") and str(response.get("id") or "") == "no_comment":
-            gm_trust_delta = -0.05
+            gm_trust_delta = -0.02
             rel[plid]["gm_trust"] = max(0.0, before + gm_trust_delta)
-        if gm_trust_delta:
-            after = float(rel[plid].get("gm_trust") or before)
-            receipts["profiles"].append(
-                {
-                    "field": "Agent channel trust",
-                    "before": round(before * 100, 1),
-                    "after": round(after * 100, 1),
-                    "delta": round((after - before) * 100, 1),
-                    "player_id": plid,
-                }
-            )
         session.agent_relationships = rel
 
     return receipts
@@ -5270,9 +5416,24 @@ def expire_press_conferences(session: Any) -> int:
             continue
         if bool(getattr(session, "_bulk_calendar_advance", False)):
             # You were simming ahead: the office put out a short statement instead (P4).
+            # It still reads as dodging, at half the cost of a skip, so simming past
+            # every availability isn't free.
+            try:
+                half: Dict[str, Any] = {
+                    bucket: {k: float(v) * 0.5 for k, v in (_PRESS_SKIP_SPEC.get(bucket) or {}).items()}
+                    for bucket in ("storyline_effects", "entity", "reporter")
+                }
+                half["fan_engagement"] = float(_PRESS_SKIP_SPEC.get("fan_engagement") or 0) * 0.5
+                half["heat_delta"] = 1
+                q0 = (entry.get("questions") or [{}])[0]
+                entry["skip_receipts"] = _apply_press_response_effects(
+                    session, entry, q0, {"id": "statement", "tone": "neutral"}, half
+                )
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             entry["coverage"] = list(entry.get("coverage") or []) + [{
                 "headline": "Team issues brief statement",
-                "summary": "The club's communications staff handled the availability while you were away.",
+                "summary": "The communications staff handled it while you were away. Reporters noted the GM wasn't there.",
             }]
             continue
         try:
@@ -5320,13 +5481,81 @@ def reconcile_requires_action(session: Any) -> int:
     return cleared
 
 
+PRESS_MAX_PER_WEEK = 2
+
+# Question families a callback can refer back to.
+_PRESS_TOPIC_OF = {
+    "q_trade": "trade", "q_followup_trade": "trade",
+    "q_contract": "contract",
+    "q_coach": "coach", "q_record_losing": "record", "q_record_winning": "record",
+    "q_story_concern": "player", "q_story_good": "player",
+    "q_rebuild": "direction", "q_fan_message": "direction",
+    "q_locker_room": "room", "q_injury": "injury", "q_playoff": "record",
+}
+
+
+def _press_memory(session: Any) -> List[Dict[str, Any]]:
+    mem = getattr(session, "press_memory", None)
+    if not isinstance(mem, list):
+        mem = []
+        session.press_memory = mem
+    return mem
+
+
+def _personalize_press_questions(session: Any, sl: Dict[str, Any], questions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Reporters remember: what you said last time, and how they feel about you."""
+    today = int(_u_current_meta(session)[0])
+    plid = str(sl.get("player_id") or "")
+    mem = _press_memory(session)
+    out = []
+    for q in questions:
+        q = dict(q)
+        topic = _PRESS_TOPIC_OF.get(str(q.get("id") or ""), "")
+        prior = next(
+            (
+                m for m in reversed(mem)
+                if m.get("topic") == topic and topic
+                and str(m.get("player_id") or "") == plid
+                and today - int(m.get("day") or -999) <= 45
+            ),
+            None,
+        )
+        lead = ""
+        if prior and prior.get("quote"):
+            ago = today - int(prior.get("day") or today)
+            when = "a few days ago" if ago <= 4 else ("last week" if ago <= 10 else "a few weeks back")
+            lead = f"You told us {when}: “{prior['quote']}” Does that still hold? "
+            q["callback"] = {"quote": prior["quote"], "day": prior.get("day"), "response_id": prior.get("response_id")}
+        rel = {}
+        if plid and q.get("reporter_id"):
+            try:
+                rel = _u_reporter_relationship(session, str(q["reporter_id"]), plid)
+            except Exception:
+                rel = {}
+        friction = float(rel.get("friction", 50.0) or 50.0)
+        trust = float(rel.get("trust", 50.0) or 50.0)
+        if not lead and friction >= 62:
+            lead = "You've dodged us before, so straight answer this time: "
+            q["reporter_mood"] = "hostile"
+        elif not lead and trust >= 66:
+            lead = "Quick one, and I know you'll be straight with us: "
+            q["reporter_mood"] = "friendly"
+        if lead:
+            body = str(q.get("question") or "")
+            q["question"] = lead + body
+        out.append(q)
+    return out
+
+
 def _maybe_queue_press_conference(session: Any, sl: Dict[str, Any]) -> None:
     utid = str(getattr(session, "user_team_id") or "")
     if str(sl.get("team_id") or "") != utid:
         return
     heat = int(sl.get("heat") or 0)
     priority = str(sl.get("priority") or "")
-    if heat < 52 and priority not in ("CRITICAL", "HIGH"):
+    if heat < 60 and priority != "CRITICAL":
+        return
+    if _press_story_is_routine(sl) and priority != "CRITICAL":
         return
     try:
         expire_press_conferences(session)
@@ -5335,6 +5564,17 @@ def _maybe_queue_press_conference(session: Any, sl: Dict[str, Any]) -> None:
     queue = list(getattr(session, "press_conference_queue", None) or [])
     sid = str(sl.get("storyline_id") or "")
     if any(str(p.get("storyline_id") or "") == sid for p in queue):
+        return
+    # At most PRESS_MAX_PER_WEEK availabilities a week; only a CRITICAL story breaks in.
+    today = int(_u_current_meta(session)[0])
+    recent = [p for p in queue if today - int(p.get("created_day") or -99) < 7]
+    if len(recent) >= PRESS_MAX_PER_WEEK and priority != "CRITICAL":
+        return
+    # The same player doesn't get two availabilities in three weeks.
+    plid_new = str(sl.get("player_id") or "")
+    if plid_new and any(
+        str(p.get("player_id") or "") == plid_new and today - int(p.get("created_day") or -99) < 21 for p in queue
+    ):
         return
     open_rows = [p for p in queue if str(p.get("status") or "") in ("pending", "in_progress")]
     if len(open_rows) >= 3:
@@ -5352,7 +5592,7 @@ def _maybe_queue_press_conference(session: Any, sl: Dict[str, Any]) -> None:
                 ev["requires_action"] = False
     press_id = f"press_{uuid.uuid4().hex[:10]}"
     press_ctx = _build_press_moment_context(session, sl)
-    questions = _build_press_questions(sl, session, press_ctx)
+    questions = _personalize_press_questions(session, sl, _build_press_questions(sl, session, press_ctx))
     queue.append(
         {
             "id": press_id,
@@ -5410,12 +5650,33 @@ def apply_press_conference_response(session: Any, press_id: str, question_id: st
         answered.append(qid)
     entry["answered_questions"] = answered
     entry["answered"] = {"question_id": qid, "response_id": rid, "tone": response.get("tone")}
+    from app.sim_engine.franchise import press_fallout as _pf  # noqa: WPS433
+
+    topic = _PRESS_TOPIC_OF.get(qid, "") or ("trade" if qid == "q_followup_trade" else "")
+    quote = _pf.gm_quote(session, entry, qid, rid)
+    followup = _pf.maybe_followup(session, entry, question, rid, topic)
+    if followup is not None:
+        entry["questions"] = list(entry.get("questions") or []) + [followup]
     all_answered = all(
         str(q.get("id") or "") in answered for q in (entry.get("questions") or [])
     )
     entry["status"] = "answered" if all_answered else "in_progress"
     session.press_conference_queue = queue
     receipts = _apply_press_response_effects(session, entry, question, response, spec)
+    reaction = None
+    fallout_notes: List[str] = []
+    try:
+        reaction = _pf.react(session, entry, qid, rid, quote)
+        fallout_notes = _pf.room_fallout(session, entry, qid, rid, quote)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    if topic:
+        mem = _press_memory(session)
+        mem.append({
+            "player_id": str(entry.get("player_id") or ""), "topic": topic, "question_id": qid,
+            "response_id": rid, "quote": quote, "day": int(_u_current_meta(session)[0]),
+        })
+        del mem[:-60]
     tone = str(response.get("tone") or "neutral")
     headline = _press_answer_headline(qid, rid, entry, tone)
     from app.sim_engine.franchise.state import _record_storyline  # noqa: WPS433
@@ -5424,7 +5685,7 @@ def apply_press_conference_response(session: Any, press_id: str, question_id: st
         session,
         {
             "headline": headline,
-            "summary": str(response.get("description") or ""),
+            "summary": f"\u201c{quote}\u201d" + (f" {reaction}" if reaction else ""),
             "team_id": getattr(session, "user_team_id", ""),
             "player_id": entry.get("player_id"),
             "player_name": entry.get("player_name"),
@@ -5447,8 +5708,11 @@ def apply_press_conference_response(session: Any, press_id: str, question_id: st
         "question_id": qid,
         "response_label": str(response.get("label") or ""),
         "headline": headline,
+        "quote": quote,
+        "reaction": reaction,
+        "fallout": fallout_notes,
         "summary": effect_summary,
-    }])[-6:]
+    }])[-8:]
     session.press_conference_queue = queue
     if remaining:
         effect_summary = f"{effect_summary} · {remaining} question{'s' if remaining != 1 else ''} remaining"
@@ -5463,6 +5727,10 @@ def apply_press_conference_response(session: Any, press_id: str, question_id: st
         "message": summary["message"],
         "questions_remaining": remaining,
         "conference_complete": remaining == 0,
+        "quote": quote,
+        "reaction": reaction,
+        "fallout": fallout_notes,
+        "followup_added": followup is not None,
     }
 
 
@@ -11471,7 +11739,13 @@ def narrative_universe_v2_daily_pass(session: Any, calendar_idx: int, day_meta: 
             _u_tick_player_life(session, team_id, entity, local_rng, elapsed_days)
     for team_id in (getattr(session, "team_by_id", None) or {}).keys():
         _u_rebuild_locker_room(session, str(team_id))
-    minor_life = _u_generate_minor_life_events(session, local_rng, elapsed_days)
+    try:
+        from app.sim_engine.franchise.player_mind import tick_minds  # noqa: WPS433
+
+        tick_minds(session, elapsed_days)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    minor_life =_u_generate_minor_life_events(session, local_rng, elapsed_days)
     try:
         _u_cpu_morale_management(session, local_rng)
     except Exception:
@@ -13135,6 +13409,14 @@ def start_gm_player_meeting(session: Any, player_id: str, interaction_type: str)
         ):
             # One conversation at a time: reopening resumes the one already on the table.
             return {"ok": True, "meeting": open_m, "resumed": True}
+    # He has to want to talk. An angry player refuses; one who thinks he's being moved
+    # sends his agent; an unhappy one shows up but keeps it short.
+    from app.sim_engine.franchise import player_mind as _mind  # noqa: WPS433
+
+    will = _mind.willingness(ctx.get("entity"))
+    if will["mode"] == "refuse":
+        _mind.ledger_append(session, "meeting_refused", str(player_id), will["reason"], {"type": str(interaction_type)})
+        raise ValueError(f"{ctx['entity'].get('player_name') or 'He'} declined the meeting. {will['reason']}")
     meeting = _gm_build_interaction(session, ctx, str(interaction_type))
     if meeting is None:
         # The menu may have been built before this player's situation changed.
@@ -13147,6 +13429,11 @@ def start_gm_player_meeting(session: Any, player_id: str, interaction_type: str)
         _mconv.dress_opening(session, ctx, meeting, topic, _u_player_fact_bits(session, ctx["player_id"]))
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
+    if will["mode"] in ("agent", "curt"):
+        meeting["attendance"] = will["mode"]
+        meeting["attendance_note"] = will["reason"]
+        if will["mode"] == "agent":
+            meeting["via_agent"] = True
     active = dict(getattr(session, "gm_active_meetings", None) or {})
     active[str(meeting["id"])] = meeting
     session.gm_active_meetings = active

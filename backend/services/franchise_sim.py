@@ -13402,6 +13402,12 @@ def _franchise_daily_league_tick(session: FranchiseSession, calendar_idx: int) -
                 maybe_generate_inbound_offer(session, int(calendar_idx))
             except Exception:
                 _swallowed_log.debug("suppressed exception", exc_info=True)
+            try:
+                from services.contract_economy import run_cpu_in_season_extensions
+
+                run_cpu_in_season_extensions(session, int(calendar_idx))
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         except Exception:
             socio_ok = False
     iso = ""
@@ -20732,9 +20738,14 @@ def advance_franchise_bulk(
             # Week / month sims stop so a waiver claim, meeting, or press availability
             # is still inside its window. A full-season sim keeps going through those,
             # and stops only when a player on the user's club demands a trade.
-            if interrupt_before is not None and _actionable_interrupt_ids(session) != interrupt_before:
-                stopped = "user_action"
-                break
+            # Only a NEW item stops the sim. An item expiring or being cleared is a
+            # change too, and stopping on it halted sims with nothing to answer.
+            if interrupt_before is not None:
+                interrupt_now = _actionable_interrupt_ids(session)
+                if any(set(now) - set(before) for now, before in zip(interrupt_now, interrupt_before)):
+                    stopped = "user_action"
+                    break
+                interrupt_before = interrupt_now
             if _user_trade_demand_open(session):
                 stopped = "trade_demand"
                 break
@@ -21090,6 +21101,10 @@ def _apply_press_storyline_choice(session: FranchiseSession, storyline_id: str, 
         "choice_label": response_label,
         "receipts": dict(result.get("receipts") or {}),
         "conference_complete": bool(result.get("conference_complete")),
+        "quote": result.get("quote"),
+        "reaction": result.get("reaction"),
+        "fallout": list(result.get("fallout") or []),
+        "followup_added": bool(result.get("followup_added")),
     }
     ev = _find_storyline_event(session, sid) or _find_storyline_event(session, str(entry.get("storyline_id") or ""))
     if ev and result.get("conference_complete"):

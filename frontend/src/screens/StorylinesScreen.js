@@ -931,6 +931,14 @@ function MeetingOutcomePanel({ outcome, onDismiss, kicker = "Meeting resolved" }
       <div className="sl-meeting-outcome__glow" aria-hidden />
       <p className="sl-meeting-outcome__kicker">{kicker}</p>
       <h4>{str(outcome.message || outcome.choice_label || "Conversation recorded")}</h4>
+      {outcome.quote ? <blockquote className="sl-press-quote">“{str(outcome.quote)}”</blockquote> : null}
+      {outcome.reaction ? <p className="sl-press-reaction">{str(outcome.reaction)}</p> : null}
+      {asArray(outcome.fallout).map((note, i) => (
+        <p key={i} className="sl-press-reaction sl-press-reaction--room">{str(note)}</p>
+      ))}
+      {outcome.followup_added ? (
+        <p className="sl-press-reaction sl-press-reaction--followup">The reporter isn't done. A follow-up was added.</p>
+      ) : null}
       {outcome.summary ? <p className="sl-meeting-outcome__summary">{str(outcome.summary)}</p> : null}
       <MeetingRelationshipPanel relationship={rel} />
       <MeetingEffectCards receipts={outcome.receipts} />
@@ -4459,6 +4467,10 @@ export default function StorylinesScreen() {
           summary: str(result.summary || result.effect_summary || ""),
           receipts: result.receipts,
           choice_label: result.choice_label || result.response_label,
+          quote: str(result.quote || ""),
+          reaction: str(result.reaction || ""),
+          fallout: asArray(result.fallout),
+          followup_added: Boolean(result.followup_added),
         });
         setActionNotice("");
       } catch (err) {
@@ -5333,7 +5345,10 @@ export default function StorylinesScreen() {
                 <li>Reporter relationships</li>
               </ul>
               <p className="sl-pressroom__rule">
-                Availabilities close after {4} days. Skipping one is treated like a cold "no comment".
+                Availabilities close after {4} days, at most two a week. Skipping one is treated like a cold
+                "no comment"; simming past one sends a brief team statement, which costs half as much. Dodge a
+                question and the reporter may follow up. Reporters remember what you said last time, and the
+                player you talk about hears every word.
               </p>
             </div>
             {pressOutcome ? (
@@ -5396,10 +5411,16 @@ export default function StorylinesScreen() {
                                 Q{qi + 1} · {str(q.reporter_name || "Reporter")}
                                 {q.outlet ? ` · ${q.outlet}` : ""}
                               </div>
-                              <p className="sl-press__answer">
-                                You said <b>{str(cov?.response_label || "—")}</b>
-                                {cov?.headline ? <> → <em>“{str(cov.headline)}”</em></> : null}
-                              </p>
+                              <p className="sl-press__question">{str(q.question || "")}</p>
+                              {cov?.quote ? (
+                                <blockquote className="sl-press-quote">“{str(cov.quote)}”</blockquote>
+                              ) : (
+                                <p className="sl-press__answer">
+                                  You said <b>{str(cov?.response_label || "—")}</b>
+                                </p>
+                              )}
+                              {cov?.headline ? <p className="sl-press__answer">Headline: <em>{str(cov.headline)}</em></p> : null}
+                              {cov?.reaction ? <p className="sl-press-reaction">{str(cov.reaction)}</p> : null}
                             </div>
                           );
                         }
@@ -5407,8 +5428,9 @@ export default function StorylinesScreen() {
                           <div key={str(q.id)} className="sl-press__q">
                             <div className="sl-press__reporter">
                               <i aria-hidden />
-                              Q{qi + 1} · {str(q.reporter_name || "Reporter")}
+                              {q.is_followup ? "Follow-up" : `Q${qi + 1}`} · {str(q.reporter_name || "Reporter")}
                               {q.outlet ? ` · ${q.outlet}` : ""}
+                              {q.reporter_mood === "hostile" ? " · has an edge" : q.reporter_mood === "friendly" ? " · friendly" : ""}
                             </div>
                             <p className="sl-press__question">{str(q.question || "")}</p>
                             <div className="sl-choices sl-choices--press">
@@ -5454,9 +5476,9 @@ export default function StorylinesScreen() {
                       <strong>{str(press.headline || "Media availability")}</strong>
                       {asArray(press.coverage).map((c, i) => (
                         <p key={i}>
-                          {c.response_label ? <b>{str(c.response_label)}</b> : null}
-                          {c.response_label ? " → " : ""}
+                          {c.quote ? <>“{str(c.quote)}” → </> : c.response_label ? <><b>{str(c.response_label)}</b> → </> : null}
                           {str(c.headline || "")}
+                          {c.reaction ? <span className="sl-press-reaction"> {str(c.reaction)}</span> : null}
                         </p>
                       ))}
                     </div>

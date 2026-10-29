@@ -6838,6 +6838,16 @@ def _is_user_team(session: Any, team: Any) -> bool:
     return bool(tid) and tid == str(getattr(session, "user_team_id", "") or "")
 
 
+def _mind_extension_reluctance(session: Any, player_id: str) -> float:
+    """Goals and beliefs: a 'get paid' goal waits for July; 'stay home' leans in."""
+    try:
+        from app.sim_engine.franchise.player_mind import entity_for, extension_reluctance
+
+        return float(extension_reluctance(entity_for(session, player_id)))
+    except Exception:
+        return 0.0
+
+
 def in_season_talks_reluctance(player: Any, season_year: int) -> float:
     """Chance (stable per player per season) he refuses to talk contract mid-season."""
     prof = _player_negotiation_profile(player)
@@ -6922,7 +6932,7 @@ def _negotiation_gate(
     phase = str(getattr(session, "phase", "") or "").lower()
     if own and phase in ("regular", "playoffs", "playoff_ready"):
         roll = random.Random(_stable_seed("in_season_talks", pid, int(season_year))).random()
-        if roll < in_season_talks_reluctance(player, season_year):
+        if roll < in_season_talks_reluctance(player, season_year) + _mind_extension_reluctance(session, pid):
             try:
                 want = float(compute_player_demand(player, team, league, context="re_sign").get("want_aav_m") or 0.0)
             except Exception:
@@ -9922,6 +9932,217 @@ def run_cpu_free_agency(session: Any, max_signings: int = 40) -> Dict[str, Any]:
         "count": len(signings),
         "post_fa_issues": post_fa_issues,
     }
+
+
+def _next_season_committed_m(team: Any) -> float:
+    """Cap already promised for next season: deals running past this one plus extensions."""
+    try:
+        from app.sim_engine.economy.cap_engine import pending_extension_cap_hit_millions
+    except Exception:
+        pending_extension_cap_hit_millions = None  # type: ignore[assignment]
+    total = 0.0
+    for p in _all_rostered(team):
+        if _contract_years_remaining(p) >= 2:
+            total += _contract_cap_hit_m(p)
+        elif pending_extension_cap_hit_millions is not None:
+            try:
+                total += float(pending_extension_cap_hit_millions(p) or 0.0)
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+    return total
+
+
+def run_cpu_in_season_extensions(session: Any, calendar_idx: int) -> Dict[str, Any]:
+    """CPU clubs extend players in the final year of their deals during the season.
+
+    Without this, every CPU contract ran to July 1 and only the off-season
+    re-sign pass could keep anyone. Runs weekly; each week a share of the
+    eligible players gets talks, so extensions land across the season.
+    """
+    out: Dict[str, Any] = {"extended": [], "count": 0}
+    if str(getattr(session, "phase", "") or "").lower() != "regular":
+        return out
+    last = getattr(session, "_cpu_ext_last_idx", None)
+    if last is not None and int(calendar_idx) - int(last) < 7:
+        return out
+    session._cpu_ext_last_idx = int(calendar_idx)
+    sim = getattr(session, "sim", None)
+    league = getattr(sim, "league", None)
+    if league is None:
+        return out
+    season_year = int(getattr(session, "season_calendar_year", 2025) or 2025)
+    user_tid = str(getattr(session, "user_team_id", "") or "")
+    schedule = _get(league, "cap_schedule_m", None) or {}
+    next_cap = float(
+        (schedule.get(season_year + 1) if isinstance(schedule, dict) else None)
+        or _get(league, "salary_cap_m", 0) or 0
+    )
+    if next_cap <= 0:
+        return out
+    try:
+        from app.sim_engine.economy.cap_engine import pending_extension_cap_hit_millions
+    except Exception:
+        pending_extension_cap_hit_millions = None  # type: ignore[assignment]
+
+    for team in list(_get(league, "teams", None) or []):
+        tid = str(_get(team, "team_id", "") or _get(team, "id", ""))
+        if not tid or tid == user_tid:
+            continue
+        eligible = []
+        for p in _all_rostered(team):
+            if _get(p, "retired", False) or _contract_years_remaining(p) != 1:
+                continue
+            c = _get(p, "contract", None)
+            if isinstance(c, dict) and (
+                c.get("pending_extension") or c.get("pending_july1_expiry") or c.get("extension_aav_m")
+            ):
+                continue
+            if getattr(p, "pending_july1_expiry", False):
+                continue
+            if pending_extension_cap_hit_millions is not None:
+                try:
+                    if float(pending_extension_cap_hit_millions(p) or 0) > 0:
+                        continue
+                except Exception:
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
+            eligible.append(p)
+        if not eligible:
+            continue
+        ctx = evaluate_team_position_needs(team, league, sim, season_year=season_year)
+        window = str(ctx.get("window") or getattr(team, "gm_window", "") or "").lower()
+        rebuilding = window in ("rebuilder", "rebuild", "tank", "retool")
+        contending = window in ("contender", "contend", "win_now", "win-now", "cup_contender")
+        # Where each player sits on his club: top-6 is core, beyond ~14 is depth.
+        team_rank = {
+            _player_id(p): i
+            for i, p in enumerate(sorted(_all_rostered(team), key=lambda q: -float(_player_ovr(q))))
+        }
+        eligible.sort(key=lambda p: -float(_player_ovr(p)))
+        for player in eligible:
+            pid = _player_id(player)
+            ovr = _player_ovr(player)
+            age = _player_age(player)
+            pos = _position_bucket(player)
+            if ovr < 70:
+                continue
+            rank = team_rank.get(pid, 99)
+            best_at_pos = float(ctx["best_ovr"].get(pos, 0.0) or 0.0)
+            need = float((ctx.get("need_score") or {}).get(pos, 0.3) or 0.3)
+            overload = bool(ctx["overload"].get(pos)) and ovr < best_at_pos + 2.0
+            cur_aav = _contract_cap_hit_m(player)
+            c_now = _get(player, "contract", None) or {}
+            rights = str((c_now.get("rights") if isinstance(c_now, dict) else "") or "").upper()
+            rfa = rights == "RFA" or (rights != "UFA" and age <= 25)
+
+            # Priority: how much the club stands to lose by letting him reach July.
+            score = (ovr - 72.0) / 14.0                      # talent
+            score += 0.45 if rank < 6 else (0.2 if rank < 12 else -0.15)
+            score += (need - 0.3) * 0.8                      # thin position
+            if age <= 26:
+                score += 0.25                                # entering his prime
+            elif age >= 33:
+                score -= 0.15 * (age - 32)                   # decline risk on a new term
+            if contending:
+                score += 0.15 if age >= 28 else 0.05         # keep the window together
+            elif rebuilding:
+                score += 0.2 if age <= 25 else -0.35 * max(0, age - 28) / 3.0
+            if overload:
+                score -= 0.4
+            if rfa:
+                score -= 0.2                                 # club keeps his rights anyway
+            if score < 0.2:
+                continue                                     # decide in the summer
+
+            demand = compute_player_demand(player, team, league, context="extension")
+            want = float(demand["want_aav_m"])
+            # A big raise is a harder call mid-season; a cheap ask gets done quickly.
+            raise_ratio = want / cur_aav if cur_aav > 0 else 1.5
+            if raise_ratio > 2.5 and ovr < 84:
+                score -= 0.25
+            elif raise_ratio <= 1.15:
+                score += 0.15
+
+            # Weekly chance of talks, from the priority: core gets done early.
+            weekly_p = max(0.04, min(0.5, 0.09 + 0.26 * score))
+            rng = random.Random(_stable_seed("cpu_in_season_ext", pid, season_year, int(calendar_idx)) & 0xFFFFFFFF)
+            if rng.random() >= weekly_p:
+                continue
+            # Same mid-season reluctance the user meets, eased for RFAs with little leverage.
+            reluct = in_season_talks_reluctance(player, season_year) * (0.6 if rfa else 1.0)
+            reluct = max(0.0, reluct + _mind_extension_reluctance(session, pid))
+            if random.Random(_stable_seed("in_season_talks", pid, season_year)).random() < reluct:
+                continue
+
+            # Term by age and role: lock up young core long, keep vets short.
+            if age >= 35:
+                max_years = 1
+            elif age >= 32:
+                max_years = 2 if ovr < 88 else 3
+            elif age <= 26 and ovr >= 82:
+                max_years = 8
+            else:
+                max_years = 5 if ovr >= 80 else 3
+            years = max(1, min(int(demand["want_years"]) or max_years, max_years))
+
+            # Cap: next season's room, and no single deal past ~16% of the cap.
+            committed = _next_season_committed_m(team)
+            room = next_cap * 0.97 - committed
+            open_core = sum(
+                1 for p in eligible
+                if p is not player and team_rank.get(_player_id(p), 99) < 8
+            )
+            # Leave space for other core players still needing deals.
+            room_for_him = room - 0.35 * open_core * max(1.0, cur_aav)
+            if room_for_him < max(LEAGUE_MINIMUM_AAV_M, want * 0.9):
+                continue
+            pay_cap = next_cap * 0.16
+            ceiling = min(room_for_him, pay_cap, want * (1.10 if rank < 6 else 1.03))
+            start_aav = round(max(LEAGUE_MINIMUM_AAV_M, min(want * 0.95, ceiling)), 3)
+            room = room_for_him
+            agreed, final_aav, final_years = _cpu_negotiate_offer(
+                team, player, league, start_aav, years, ctx, context="extension",
+                ceiling=max(start_aav, ceiling), max_rounds=3 if ovr >= 84 else 2,
+                session=session,
+            )
+            if not agreed or final_aav > room:
+                continue
+            final_years = max(1, min(int(final_years), max_years))
+            result = sign_player_to_team(
+                player, team, league, season_year,
+                {"aav_m": final_aav, "years": final_years, "context": "extension", "force": True},
+            )
+            if not result.get("ok"):
+                continue
+            ext = result.get("extension")
+            if isinstance(ext, dict):
+                ext["user_signed"] = False
+            out["extended"].append({
+                "team_id": tid, "player_id": pid, "name": _player_name(player),
+                "overall": round(ovr), "position": pos, "age": age,
+                "aav_m": final_aav, "years": final_years,
+                "prev_aav_m": round(cur_aav, 3), "rfa": rfa,
+                "priority": round(score, 2), "team_rank": rank + 1,
+            })
+        try:
+            _books = cap_books_for_session(session)
+            sync_team_cap_fields(
+                team, league, sim,
+                season_year=_books["season_year"],
+                calendar_cursor=_books["calendar_cursor"],
+                regular_season_last_index=_books["regular_season_last_index"],
+                count_expiring=_books["count_expiring"],
+                opening_day=_books["opening_day"],
+            )
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    out["count"] = len(out["extended"])
+    if out["extended"]:
+        log = getattr(session, "cpu_in_season_extensions", None)
+        if not isinstance(log, list):
+            log = []
+        log.extend(out["extended"])
+        session.cpu_in_season_extensions = log[-400:]
+    return out
 
 
 def run_cpu_in_season_free_agency(
