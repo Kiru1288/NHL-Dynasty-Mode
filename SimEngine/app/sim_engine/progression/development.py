@@ -2133,11 +2133,20 @@ def resolve_development_profile(player: Any, context: Optional[Any] = None) -> D
             maximum = max(maximum, expected)
         # Never let a sticky/inferred profile erase a higher true potential on the player.
         ratings = getattr(player, "ratings", None)
+        # The rated ceiling lives in several places; a stale copy (true_potential
+        # from before a lift) must not win just because it is read first.
+        chapter_pot = None
+        try:
+            chapter_pot = ((getattr(player, "attribute_profile", None) or {}).get("chapters") or {}).get("potential")
+        except Exception:
+            chapter_pot = None
+        best_pot = None
         for raw_pot in (
-            getattr(player, "true_potential", None),
-            getattr(player, "true_potential_score", None),
+            chapter_pot,
             getattr(player, "potential", None),
             (ratings.get("dev_potential") if isinstance(ratings, dict) else None),
+            getattr(player, "true_potential", None),
+            getattr(player, "true_potential_score", None),
             (ratings.get("true_potential") if isinstance(ratings, dict) else None),
         ):
             if raw_pot is None:
@@ -2146,10 +2155,11 @@ def resolve_development_profile(player: Any, context: Optional[Any] = None) -> D
                 pot01 = normalize_rating(raw_pot)
             except Exception:
                 continue
-            if pot01 > expected + 0.005:
-                expected = pot01
-                maximum = max(maximum, clamp01(min(0.99, expected + 0.03)))
-                break
+            if best_pot is None or pot01 > best_pot:
+                best_pot = pot01
+        if best_pot is not None and best_pot > expected + 0.005:
+            expected = best_pot
+            maximum = max(maximum, clamp01(min(0.99, expected + 0.03)))
         profile: Dict[str, Any] = dict(base or {})
         profile.update(
             {
@@ -2561,7 +2571,8 @@ def calculate_season_growth_budget(
 
     # Meaningful season jumps for runway kids (display OVR ≈ budget * 99).
     # Age 18–20 with 10+ OVR gap: approach toward +4–6 before phase/noise.
-    approach = min(0.072, gap_exp * 0.42 + 0.024)
+    # Young players with room were landing +1/+2 a year; a real runway year is +3 to +6.
+    approach = min(0.080, gap_exp * 0.50 + 0.030)
     if gap_exp <= 0.012:
         approach = min(0.028, max(0.010, gap_max * 0.10 + 0.008))
 
@@ -3530,9 +3541,10 @@ def apply_player_development(player: Any, rng: Any) -> None:
         budget = max(budget, floor)
     elif budget < 0 and not young_minors:
         budget = min(0.0, float(budget) - min(0.0, _net_in))
-        # Aging decline: about -1 a year at 30-31, -2 at 32-34, steeper after 35.
+        # The engine's age roll already takes the yearly aging loss; this budget only
+        # adds a little for the oldest players so the two don't stack into -4 at 31.
         _age_now = _get_player_age(player)
-        budget *= 2.0 if _age_now >= 35 else (1.7 if _age_now >= 32 else (1.3 if _age_now >= 30 else 1.0))
+        budget *= 1.5 if _age_now >= 35 else (1.2 if _age_now >= 33 else 0.8)
     budget = _revert_checkpoint_tails(player, budget)
 
     # Prospects already received their in-season pulses: only pay what is still owed.

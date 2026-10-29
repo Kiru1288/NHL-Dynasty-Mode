@@ -124,18 +124,42 @@ def cached_http_text(url: str, fetch: Any) -> str:
     return text
 
 
-def _http_get_json(url: str, *, timeout: float = HTTP_TIMEOUT_S) -> Any:
+_FAILED_URLS: Dict[str, float] = {}
+_FAILED_RETRY_S = 600.0  # after a failed call, don't wait on the same URL again for 10 minutes
+
+
+def _http_get_json(url: str, *, timeout: float = HTTP_TIMEOUT_S, ttl_s: Optional[float] = None) -> Any:
+    """Disk-cached GET. Fresh cache is used as-is; on a network failure a stale copy is
+    used rather than nothing, and the failure is remembered so the next call returns at
+    once instead of waiting out the timeout again."""
     import os
     import time as _time
 
+    ttl = float(_API_CACHE_TTL_S if ttl_s is None else ttl_s)
+    stale = None
     try:
         path = _api_cache_path(url)
-        if os.path.exists(path) and _time.time() - os.path.getmtime(path) < _API_CACHE_TTL_S:
+        if os.path.exists(path):
             with open(path, "rb") as fh:
-                return json.loads(fh.read().decode("utf-8"))
+                cached = json.loads(fh.read().decode("utf-8"))
+            if _time.time() - os.path.getmtime(path) < ttl:
+                return cached
+            stale = cached
     except Exception:
         path = ""
-    data = _http_get_json_live(url, timeout=timeout)
+    failed_at = _FAILED_URLS.get(url)
+    if failed_at and _time.time() - failed_at < _FAILED_RETRY_S:
+        if stale is not None:
+            return stale
+        raise RealNhlImportError("NHL API recently unreachable for this request.", code="REAL_NHL_NETWORK_ERROR")
+    try:
+        data = _http_get_json_live(url, timeout=timeout)
+    except Exception:
+        _FAILED_URLS[url] = _time.time()
+        if stale is not None:
+            return stale
+        raise
+    _FAILED_URLS.pop(url, None)
     if path:
         try:
             tmp = path + ".tmp"
@@ -829,7 +853,8 @@ def apply_r4_target(
 
 def _fetch_player_landing(nhl_id: int) -> Optional[Dict[str, Any]]:
     try:
-        return _http_get_json(f"{WEB_API}/player/{int(nhl_id)}/landing", timeout=20)
+        # Draft record and past seasons don't change mid-season: keep a player's page for 30 days.
+        return _http_get_json(f"{WEB_API}/player/{int(nhl_id)}/landing", timeout=8, ttl_s=30 * 24 * 3600)
     except Exception:
         return None
 

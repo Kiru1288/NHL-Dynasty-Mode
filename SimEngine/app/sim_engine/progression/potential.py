@@ -277,11 +277,17 @@ def write_player_potential99(player: Any, pot99: float) -> float:
         _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         setattr(player, "potential", pot01)
+        # Stale copies of the ceiling must follow, or a later read can restore the old value.
+        for attr in ("true_potential", "true_potential_score"):
+            if getattr(player, attr, None) is not None:
+                setattr(player, attr, pot01)
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
     ratings = getattr(player, "ratings", None)
     if isinstance(ratings, dict):
         ratings["dev_potential"] = float(display_rating(pot01))
+        if "true_potential" in ratings:
+            ratings["true_potential"] = float(display_rating(pot01))
         try:
             if float(ratings.get("dev_ceiling") or 0) < pot99:
                 ratings["dev_ceiling"] = float(min(99.0, pot99 + 2.0))

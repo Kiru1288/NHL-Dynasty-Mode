@@ -300,3 +300,30 @@ def player_awards_history(session: Any, pid: str) -> Dict[str, Any]:
     if p is not None:
         out.update(_draft_payload_from_player(p))
     return out
+
+
+def warm_user_team_landings(session: Any) -> int:
+    """Background: pull NHL.com player pages for the user's organisation so dossiers open instantly."""
+    try:
+        from services.real_nhl_roster_importer import fetch_landings_by_id, nhl_player_id_from_obj
+    except Exception:
+        return 0
+    league = getattr(getattr(session, "sim", None), "league", None)
+    uid = str(getattr(session, "user_team_id", "") or "")
+    ids = []
+    for team in list(getattr(league, "teams", None) or []):
+        tid = str(getattr(team, "team_id", None) or getattr(team, "id", "") or "")
+        if tid != uid:
+            continue
+        for attr in ("roster", "ahl_roster", "prospect_pool", "injured_reserve"):
+            for p in list(getattr(team, attr, None) or []):
+                nid = nhl_player_id_from_obj(p)
+                if nid:
+                    ids.append(int(nid))
+    if not ids:
+        return 0
+    try:
+        return len(fetch_landings_by_id(ids, max_workers=8) or {})
+    except Exception:
+        log.debug("landing warm failed", exc_info=True)
+        return 0

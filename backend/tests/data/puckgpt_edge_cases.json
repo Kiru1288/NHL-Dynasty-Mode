@@ -918,7 +918,8 @@
     {
      "q": "how are we doing lately",
      "expect": [
-      "teamq:form"
+      "teamq:form",
+      "team_plan:record"
      ]
     },
     {
@@ -936,6 +937,598 @@
     {
      "q": "who leads rookies in points",
      "expect": [
+      "rank_metric"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Team planner: windows, splits, opponents, rankings",
+   "prime": [],
+   "cases": [
+    {
+     "q": "How did we do against Boston?",
+     "expect": [
+      "team_plan:record"
+     ]
+    },
+    {
+     "q": "our record in our last 10 road games",
+     "expect": [
+      "team_plan:record"
+     ]
+    },
+    {
+     "q": "how are we doing lately",
+     "expect": [
+      "team_plan:record"
+     ]
+    },
+    {
+     "q": "what was our record after the trade deadline",
+     "expect": [
+      "team_plan:record"
+     ]
+    },
+    {
+     "q": "which team allows the fewest goals since january",
+     "expect": [
+      "team_plan:ga"
+     ]
+    },
+    {
+     "q": "which team has the best power play",
+     "expect": [
+      "team_plan:pp"
+     ]
+    },
+    {
+     "q": "which team scores the most goals per game",
+     "expect": [
+      "team_plan:gf_pg"
+     ]
+    },
+    {
+     "q": "how many one goal games have we won",
+     "expect": [
+      "team_plan:one_goal"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Game records",
+   "prime": [],
+   "cases": [
+    {
+     "q": "what was the biggest below leads for any team this year",
+     "expect": [
+      "game_records:blown_lead"
+     ]
+    },
+    {
+     "q": "biggest comeback this season",
+     "expect": [
+      "game_records:comeback"
+     ]
+    },
+    {
+     "q": "longest overtime game",
+     "expect": [
+      "game_records:long_ot"
+     ]
+    },
+    {
+     "q": "which NHL team has the best future",
+     "expect": [
+      "team:future"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "League events",
+   "prime": [],
+   "cases": [
+    {
+     "q": "what happened around the league this week",
+     "expect": [
+      "events:search"
+     ]
+    },
+    {
+     "q": "who got hurt this week",
+     "expect": [
+      "events:search"
+     ]
+    },
+    {
+     "q": "latest trades",
+     "expect": [
+      "events:search"
+     ]
+    },
+    {
+     "q": "any news on edmonton",
+     "expect": [
+      "events:search"
+     ]
+    },
+    {
+     "q": "what's new",
+     "expect": [
+      "events:search"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Opinion verdicts",
+   "prime": [],
+   "cases": [
+    {
+     "q": "who is the biggest draft bust",
+     "expect": [
+      "verdict:bust"
+     ]
+    },
+    {
+     "q": "biggest draft steal in the league",
+     "expect": [
+      "verdict:steal"
+     ]
+    },
+    {
+     "q": "which player is the reason we missed the playoffs",
+     "expect": [
+      "verdict:blame"
+     ]
+    },
+    {
+     "q": "who's to blame for our season",
+     "expect": [
+      "verdict:blame"
+     ]
+    },
+    {
+     "q": "most disappointing player this year",
+     "expect": [
+      "verdict:disappoint"
+     ]
+    },
+    {
+     "q": "biggest surprise of the season",
+     "expect": [
+      "verdict:surprise"
+     ]
+    },
+    {
+     "q": "what was the most lopsided trade this year",
+     "expect": [
+      "verdict:trade_verdict"
+     ]
+    },
+    {
+     "q": "worst trade I made",
+     "expect": [
+      "verdict:trade_verdict"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "45 reasoning categories",
+   "prime": [],
+   "cases": [
+    {
+     "q": "Who won the Stanley Cup last season?",
+     "expect": [
+      "champions"
+     ]
+    },
+    {
+     "q": "How much has our scoring improved this season?",
+     "expect": [
+      "reason:trend"
+     ]
+    },
+    {
+     "q": "What are the biggest strengths of my roster?",
+     "expect": [
+      "reason:strengths"
+     ]
+    },
+    {
+     "q": "Which of my two goalies has performed better?",
+     "expect": [
+      "goalie_choice",
+      "compare"
+     ]
+    },
+    {
+     "q": "How has our team changed over the last five seasons?",
+     "expect": [
+      "reason:history"
+     ]
+    },
+    {
+     "q": "Are our shooting percentages sustainable?",
+     "expect": [
+      "reason:sustain"
+     ]
+    },
+    {
+     "q": "Which players are prospects, established starters, or declining veterans?",
+     "expect": [
+      "reason:categorize"
+     ]
+    },
+    {
+     "q": "Give me an overview of my franchise right now.",
+     "expect": [
+      "reason:overview"
+     ]
+    },
+    {
+     "q": "Why has our defensive performance declined?",
+     "expect": [
+      "reason:trend"
+     ]
+    },
+    {
+     "q": "What is the biggest problem preventing us from winning?",
+     "expect": [
+      "diagnose"
+     ]
+    },
+    {
+     "q": "Was hiring this coach a good decision?",
+     "expect": [
+      "reason:coach"
+     ]
+    },
+    {
+     "q": "What does our poor record despite strong scoring suggest?",
+     "expect": [
+      "reason:interpret"
+     ]
+    },
+    {
+     "q": "What can we infer about this prospect's future?",
+     "expect": [
+      "reason:speculate"
+     ]
+    },
+    {
+     "q": "Do our highest-paid players contribute the most points?",
+     "expect": [
+      "reason:correlate"
+     ]
+    },
+    {
+     "q": "What patterns appear in our losses?",
+     "expect": [
+      "reason:pattern"
+     ]
+    },
+    {
+     "q": "Which players are performing far above or below expectations?",
+     "expect": [
+      "reason:anomaly"
+     ]
+    },
+    {
+     "q": "What makes a successful NHL rebuild?",
+     "expect": [
+      "reason:theory"
+     ]
+    },
+    {
+     "q": "What if we traded our captain before the deadline?",
+     "expect": [
+      "reason:hypothetical"
+     ]
+    },
+    {
+     "q": "What might have happened if we had drafted a different player?",
+     "expect": [
+      "reason:counterfactual"
+     ]
+    },
+    {
+     "q": "How many points could our leading scorer finish with?",
+     "expect": [
+      "reason:predict"
+     ]
+    },
+    {
+     "q": "How likely are we to make the playoffs?",
+     "expect": [
+      "teamq:playoffs"
+     ]
+    },
+    {
+     "q": "What happens if we trade two veterans and promote our prospects?",
+     "expect": [
+      "reason:scenario"
+     ]
+    },
+    {
+     "q": "Should we rebuild, retool, or remain contenders?",
+     "expect": [
+      "reason:rebuild_or_compete",
+      "strategy"
+     ]
+    },
+    {
+     "q": "What is the strongest roster we can build under the salary cap?",
+     "expect": [
+      "reason:optimize"
+     ]
+    },
+    {
+     "q": "Who is the most exciting player on my team?",
+     "expect": [
+      "reason:exciting"
+     ]
+    },
+    {
+     "q": "Is building through the draft better than buying players in free agency?",
+     "expect": [
+      "reason:debate"
+     ]
+    },
+    {
+     "q": "Who is our best player?",
+     "expect": [
+      "best_on_team"
+     ]
+    },
+    {
+     "q": "Why is our goalie responsible for every loss?",
+     "expect": [
+      "reason:premise"
+     ]
+    },
+    {
+     "q": "Was trading our franchise player a mistake?",
+     "expect": [
+      "verdict:trade_verdict"
+     ]
+    },
+    {
+     "q": "Could this prospect eventually become a superstar?",
+     "expect": [
+      "reason:speculate"
+     ]
+    },
+    {
+     "q": "Should we trade a popular veteran to improve our future?",
+     "expect": [
+      "reason:normative"
+     ]
+    },
+    {
+     "q": "How confident are you that this trade will benefit us?",
+     "expect": [
+      "reason:confidence"
+     ]
+    },
+    {
+     "q": "Which three players should I target in a trade?",
+     "expect": [
+      "trade_target"
+     ]
+    },
+    {
+     "q": "What are the risks of signing this veteran to a seven-year contract?",
+     "expect": [
+      "player:contract_risk_7"
+     ]
+    },
+    {
+     "q": "Is this player's production worth his salary?",
+     "expect": [
+      "worth_it"
+     ]
+    },
+    {
+     "q": "Which roster weakness should I address first?",
+     "expect": [
+      "reason:prioritize"
+     ]
+    },
+    {
+     "q": "How should I allocate my available cap space?",
+     "expect": [
+      "reason:allocate"
+     ]
+    },
+    {
+     "q": "Which trade target offers the best combination of age, ability, salary, and potential?",
+     "expect": [
+      "reason:multi_criteria"
+     ]
+    },
+    {
+     "q": "Which of my past management decisions had the biggest positive impact?",
+     "expect": [
+      "reason:retro"
+     ]
+    },
+    {
+     "q": "What should our plan be if our starting goalie gets injured during the playoffs?",
+     "expect": [
+      "reason:contingency"
+     ]
+    },
+    {
+     "q": "Tell me something interesting about my franchise that I probably haven't noticed.",
+     "expect": [
+      "reason:exploratory"
+     ]
+    },
+    {
+     "q": "Invent a compelling narrative about our current playoff run using actual events.",
+     "expect": [
+      "reason:creative"
+     ]
+    },
+    {
+     "q": "I think our worst player is actually our most valuable. Prove me right or wrong.",
+     "expect": [
+      "reason:adversarial"
+     ]
+    },
+    {
+     "q": "What information would you need to evaluate my roster more accurately?",
+     "expect": [
+      "reason:self_reflect"
+     ]
+    },
+    {
+     "q": "Identify our biggest weakness, find realistic trade targets, and explain how each would address it.",
+     "expect": [
+      "reason:multi_step"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Slang, typos and messy sentences",
+   "prime": [],
+   "cases": [
+    {
+     "q": "did we beat the leafs more then they beat us",
+     "expect": [
+      "team_plan:record"
+     ]
+    },
+    {
+     "q": "wat team gives up the most shots or goals idk",
+     "expect": [
+      "team_plan:ga"
+     ]
+    },
+    {
+     "q": "is ullmark actualy bad or is it the d in front of him",
+     "expect": [
+      "reason:premise"
+     ]
+    },
+    {
+     "q": "why we keep losin in ot bro",
+     "expect": [
+      "team_plan:ot",
+      "reason:pattern"
+     ]
+    },
+    {
+     "q": "whos gonna win the art ross",
+     "expect": [
+      "reason:award_race"
+     ]
+    },
+    {
+     "q": "who blew the biggest lead vs us",
+     "expect": [
+      "game_records:blown_lead"
+     ]
+    },
+    {
+     "q": "any1 get hurt bad this week",
+     "expect": [
+      "events:search",
+      "injuries"
+     ]
+    },
+    {
+     "q": "if we trade chabot what happens to our d",
+     "expect": [
+      "reason:hypothetical"
+     ]
+    },
+    {
+     "q": "stutzle on pace for how many",
+     "expect": [
+      "reason:predict"
+     ]
+    },
+    {
+     "q": "our pk sucks or nah",
+     "expect": [
+      "team_plan:pk",
+      "diagnose"
+     ]
+    },
+    {
+     "q": "shud i resign giroux hes old af",
+     "expect": [
+      "trade_advice",
+      "player_contract",
+      "worth_it",
+      "reason:normative"
+     ]
+    },
+    {
+     "q": "our record when we score first",
+     "expect": [
+      "team_plan:record"
+     ]
+    },
+    {
+     "q": "how many 1 goal games we lost",
+     "expect": [
+      "team_plan:one_goal"
+     ]
+    },
+    {
+     "q": "biggest draft bust in the league n why",
+     "expect": [
+      "verdict:bust"
+     ]
+    },
+    {
+     "q": "tell me smth crazy about our season",
+     "expect": [
+      "reason:exploratory"
+     ]
+    },
+    {
+     "q": "compar sanderson n chabot",
+     "expect": [
+      "compare"
+     ]
+    },
+    {
+     "q": "how bad r we at home",
+     "expect": [
+      "team_plan:record"
+     ]
+    },
+    {
+     "q": "whats our goal diff last 15",
+     "expect": [
+      "team_plan:gd"
+     ]
+    },
+    {
+     "q": "who will make playoffs in the atlantic",
+     "expect": [
+      "reason:playoff_race"
+     ]
+    },
+    {
+     "q": "yo whos been our best d man since like january lol",
+     "expect": [
+      "best_on_team",
+      "rank_metric"
+     ]
+    },
+    {
+     "q": "best young skater in the leage under 21",
+     "expect": [
+      "find_players",
       "rank_metric"
      ]
     }

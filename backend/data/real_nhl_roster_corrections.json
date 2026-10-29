@@ -1,0 +1,6 @@
+{
+  "_meta": {
+    "notes": "Moves applied after the real-NHL import when the cached NHL.com rosters predate a trade or signing. Keys are NHL.com playerIds; value is the team abbreviation he belongs to."
+  },
+  "8480801": {"name": "Brady Tkachuk", "team": "FLA", "reason": "Traded OTT -> FLA, June 2026"}
+}

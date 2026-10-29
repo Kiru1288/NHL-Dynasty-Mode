@@ -79,19 +79,36 @@ def _finish(out: Dict[str, Any], it: Any, q: str, t0: float) -> Dict[str, Any]:
     """Stamp the interpretation, and say which parts of the question the answer couldn't honour."""
     from .answers4 import caveats
 
-    notes = caveats(q.lower(), str(it.intent or ""))
+    # The planner and reasoning layers already say what they could and couldn't split.
+    own = str(it.intent or "").split(":")[0] in ("team_plan", "game_records", "reason", "verdict", "events")
+    notes = [] if own else caveats(q.lower(), str(it.intent or ""))
     if notes:
         out.setdefault("analysis", [])[0:0] = notes
         it.band = "medium"
+    try:
+        from .data import live_view
+        from .evidence import attach
+
+        attach(live_view(_SESSION_FOR_EVIDENCE.get("s")), out, str(it.intent or ""), q.lower(), it.slots or {}) if _SESSION_FOR_EVIDENCE.get("s") is not None else None
+    except Exception:
+        log.debug("analytics check failed", exc_info=True)
+    out.pop("_evidence_done", None)
     out["interpretation"] = it.as_dict()
     out["elapsed_ms"] = round((time.perf_counter() - t0) * 1000, 1)
     out.pop("list_ids", None)
     return out
 
 
+_SESSION_FOR_EVIDENCE: Dict[str, Any] = {}
+
+
 def ask(session: Any, query: str) -> Dict[str, Any]:
     t0 = time.perf_counter()
-    q = str(query or "").strip()
+    _SESSION_FOR_EVIDENCE["s"] = session
+    from .normalize import normalize
+
+    # Slang, texting shorthand and typos are cleaned once, so every layer reads the same words.
+    q = normalize(str(query or "").strip()) or str(query or "").strip()
     view = live_view(session)
     ctx = _ctx_for(session)
     if not q:
@@ -108,6 +125,72 @@ def ask(session: Any, query: str) -> Dict[str, Any]:
                 "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1)}
 
     it = interpret(q, view.world, ctx)
+    from . import answers6
+
+    try:
+        early = answers6.plan(q, it.slots, view)
+    except Exception:
+        log.exception("puckgpt team planner failed")
+        early = None
+    # Questions with an opponent, a time window, a split or "which team" go straight to
+    # the planner; plain "what's our record" still uses the fixed team answers.
+    if early and (early["rank"] or early.get("opp") or early["window"] or early["metric"] in ("pp", "pk", "one_goal", "ot", "so", "gf_pg", "ga_pg")):
+        try:
+            out = answers6.run(early, view)
+        except Exception:
+            log.exception("puckgpt team plan run failed")
+            out = None
+        if out:
+            it.intent, it.confidence, it.band = f"team_plan:{early['metric']}", 0.88, "high"
+            it.rewritten = " ".join(q.split())
+            if early.get("focus"):
+                ctx["team"] = str(early["focus"])
+            ctx["intent"] = it.intent
+            return _finish(out, it, q, t0)
+    from . import answers7
+
+    vk = answers7.verdict_kind(q)
+    if vk or answers7.is_event_question(q):
+        try:
+            out = answers7.verdict(view, vk, q, it.slots) if vk else answers7.events(view, q, it.slots)
+        except Exception:
+            log.exception("puckgpt verdict/event layer failed")
+            out = None
+        if out:
+            it.intent, it.confidence, it.band = (f"verdict:{vk}" if vk else "events:search"), 0.85, "high"
+            it.rewritten = " ".join(q.split())
+            ctx["intent"] = it.intent
+            return _finish(out, it, q, t0)
+    from . import answers8
+
+    mode = answers8.match(q)
+    if mode:
+        try:
+            out = answers8.run(mode, view, q, it.slots, ctx)
+        except Exception:
+            log.exception("puckgpt reasoning mode %s failed", mode)
+            out = None
+        if out:
+            it.intent, it.confidence, it.band = f"reason:{mode}", 0.85, "high"
+            it.rewritten = " ".join(q.split())
+            focus = out.get("focus_ids") or []
+            if focus:
+                ctx["players"] = focus[:4]
+            ctx["intent"] = it.intent
+            return _finish(out, it, q, t0)
+    from . import answers5
+
+    kind = answers5.match(q)
+    if kind:
+        try:
+            out = answers5.run(kind, view, q, it.slots)
+        except Exception:
+            log.exception("puckgpt game records %s failed", kind)
+            out = {"answer": "That question hit a snag reading the save.", "analysis": ["Try rephrasing, or ask something narrower."]}
+        it.intent, it.confidence, it.band = f"game_records:{kind}", 0.9, "high"
+        it.rewritten = " ".join(q.split())
+        ctx["intent"] = it.intent
+        return _finish(out, it, q, t0)
     from . import answers3, history
 
     past = history.match(q)
@@ -162,6 +245,28 @@ def ask(session: Any, query: str) -> Dict[str, Any]:
             ctx["list"] = out["list_ids"][:15]
         ctx["intent"] = it.intent
         return _finish(out, it, q, t0)
+    # Generic team/game planner: any record/goals/special-teams question about clubs,
+    # with any window or split, before falling back to the fixed intent handlers.
+    from . import answers6
+
+    try:
+        tplan = answers6.plan(q, it.slots, view)
+    except Exception:
+        log.exception("puckgpt team planner failed")
+        tplan = None
+    if tplan and (it.band != "high" or it.intent in ("team_card", "standings", "diagnose", "help", "unsupported", "streak")):
+        try:
+            out = answers6.run(tplan, view)
+        except Exception:
+            log.exception("puckgpt team plan run failed")
+            out = None
+        if out:
+            it.intent, it.confidence, it.band = f"team_plan:{tplan['metric']}", 0.85, "high"
+            it.rewritten = " ".join(q.split())
+            if tplan.get("focus"):
+                ctx["team"] = str(tplan["focus"])
+            ctx["intent"] = it.intent
+            return _finish(out, it, q, t0)
     routed = route(it, view, ctx)
     if routed:
         it.intent, it.slots = routed

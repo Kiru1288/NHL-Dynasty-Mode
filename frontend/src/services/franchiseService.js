@@ -130,6 +130,11 @@ export async function enterPlayoffs() {
   return data;
 }
 
+export async function playoffSeriesPreview(high, low) {
+  const { data } = await api.get("/api/franchise/playoffs/preview", { params: { high, low }, timeout: 20000 });
+  return data;
+}
+
 export async function playoffAction(action, body = {}) {
   const heavy = ["sim_rest", "finish", "complete", "sim_round"].includes(
     String(action || "").toLowerCase()
@@ -217,6 +222,11 @@ export async function setExpansionSchedule(everyNSeasons) {
 
 export async function getProspectRightsDesk() {
   const { data } = await api.get("/api/franchise/prospect-rights/desk");
+  return data;
+}
+
+export async function getPlayoffStats() {
+  const { data } = await api.get("/api/franchise/playoffs/stats");
   return data;
 }
 

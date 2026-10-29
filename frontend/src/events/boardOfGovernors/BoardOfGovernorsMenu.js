@@ -41,174 +41,175 @@ function TeamTile({ ballot, shown }) {
   );
 }
 
+function groupReasons(ballots) {
+  // "Why governors voted this way": one line per (vote, reason) with the clubs behind it.
+  const groups = new Map();
+  ballots.filter((b) => !b.is_user && b.vote).forEach((b) => {
+    const key = `${b.vote}|${b.reason || "No stated reason"}`;
+    if (!groups.has(key)) groups.set(key, { vote: b.vote, reason: b.reason || "No stated reason", teams: [] });
+    groups.get(key).teams.push(b.abbr);
+  });
+  return [...groups.values()].sort((a, b) => b.teams.length - a.teams.length);
+}
+
 function ProposalCard({ proposal, tokens, busy, onVote, onLobby, reveal, onNext, isLast }) {
+  const [showAllWhy, setShowAllWhy] = useState(false);
   const decided = proposal.status !== "pending";
   const forecast = proposal.forecast || {};
   const needed = Number(proposal.votes_needed || 0);
-  const nTeams = asArray(proposal.ballots).length || 32;
-  const expected = Number(forecast.expected_yes || 0);
   const ballots = asArray(proposal.ballots);
+  const nTeams = ballots.length || Number(proposal._n_teams || 32);
+  const expected = Number(forecast.expected_yes || 0);
   const shownCount = decided ? Math.min(reveal, ballots.length) : 0;
   const shown = ballots.slice(0, shownCount);
   const yes = shown.filter((b) => b.vote === "yes").length;
   const no = shown.filter((b) => b.vote === "no").length;
+  const abst = shown.filter((b) => b.vote !== "yes" && b.vote !== "no").length;
   const revealDone = decided && shownCount >= ballots.length;
   const tally = proposal.tally || {};
   const lobbied = proposal.lobbied;
+  const why = revealDone ? groupReasons(ballots) : [];
+  const whyShown = showAllWhy ? why : why.slice(0, 4);
+  const pct = (n) => `${Math.min(100, (n / Math.max(1, nTeams)) * 100)}%`;
 
   return (
-    <section className={`${PREFIX}-panel ${PREFIX}-card`} aria-live="polite">
-      <div className={`${PREFIX}-kicker`}>
-        <span className={`${PREFIX}-chip`}>{proposal.category_label}</span>
-        <span className={`${PREFIX}-chip cyan`}>
-          {proposal.threshold_label} · {needed} votes needed
-        </span>
+    <section className="bog2-card" aria-live="polite">
+      <header className="bog2-head">
+        <p className="bog2-cat">
+          {proposal.category_label} · {proposal.threshold_label} vote ({needed} of {nTeams})
+        </p>
+        <h2>{proposal.title}</h2>
+        <p className="bog2-summary">{proposal.summary}</p>
         {lobbied ? (
-          <span className={`${PREFIX}-chip cyan`}>
-            You lobbied {lobbied.side === "yes" ? "for" : "against"}: {asArray(lobbied.teams).join(", ")}
-          </span>
+          <p className="bog2-note">
+            You lobbied {lobbied.side === "yes" ? "for" : "against"} it: {asArray(lobbied.teams).join(", ")}.
+          </p>
         ) : null}
-      </div>
-      <h2>{proposal.title}</h2>
-      <p className={`${PREFIX}-summary`}>{proposal.summary}</p>
+      </header>
 
-      <div className={`${PREFIX}-effects`}>
-        {asArray(proposal.effects).map((e) => (
-          <div key={`${e.key}-${e.label}`} className={`${PREFIX}-effect ${e.tone ? `is-${e.tone}` : ""}`}>
-            <span>{e.label}</span>
-            <strong>{e.text}</strong>
-            {e.note ? <em>{e.note}</em> : null}
-          </div>
-        ))}
-      </div>
+      {asArray(proposal.effects).length ? (
+        <dl className="bog2-impact">
+          {asArray(proposal.effects).map((e) => (
+            <div key={`${e.key}-${e.label}`} className={e.tone ? `is-${e.tone}` : ""}>
+              <dt>{e.label}</dt>
+              <dd>{e.text}{e.note ? <small>{e.note}</small> : null}</dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
 
       {proposal.pros_cons ? (
-        <div className={`${PREFIX}-proscons`}>
-          <div className="pros">
-            <span>Pros</span>
-            {asArray(proposal.pros_cons.pros).length ? (
-              asArray(proposal.pros_cons.pros).map((t) => <p key={t}>+ {t}</p>)
-            ) : (
-              <p className="none">No clear upside for most clubs</p>
-            )}
+        <div className="bog2-args">
+          <div>
+            <h4>For</h4>
+            {asArray(proposal.pros_cons.pros).length ? asArray(proposal.pros_cons.pros).map((t) => <p key={t}>{t}</p>) : <p className="muted">No clear upside for most clubs.</p>}
           </div>
-          <div className="cons">
-            <span>Cons</span>
-            {asArray(proposal.pros_cons.cons).length ? (
-              asArray(proposal.pros_cons.cons).map((t) => <p key={t}>− {t}</p>)
-            ) : (
-              <p className="none">No obvious downside</p>
-            )}
+          <div>
+            <h4>Against</h4>
+            {asArray(proposal.pros_cons.cons).length ? asArray(proposal.pros_cons.cons).map((t) => <p key={t}>{t}</p>) : <p className="muted">No obvious downside.</p>}
           </div>
           {asArray(proposal.pros_cons.mixed).length ? (
-            <div className="mixed">
-              <span>Trade-offs</span>
-              {asArray(proposal.pros_cons.mixed).map((t) => <p key={t}>± {t}</p>)}
+            <div>
+              <h4>Trade-offs</h4>
+              {asArray(proposal.pros_cons.mixed).map((t) => <p key={t}>{t}</p>)}
             </div>
           ) : null}
         </div>
       ) : null}
 
-      {!decided ? (
-        <>
-          <div className={`${PREFIX}-forecast`}>
-            <span>Board read</span>
-            <div className={`${PREFIX}-meter`} aria-hidden="true">
-              <i style={{ width: `${Math.min(100, (expected / Math.max(1, nTeams)) * 100)}%` }} />
-              <b style={{ left: `${Math.min(100, (needed / Math.max(1, nTeams)) * 100)}%` }} />
-            </div>
-            <strong>
-              {forecast.label || "—"} · ≈{expected.toFixed(0)} of {needed}
-            </strong>
-          </div>
-          {proposal.room_mood ? <p className={`${PREFIX}-note`}>Room read: {proposal.room_mood}.</p> : null}
-          <div className={`${PREFIX}-dock`}>
-            <button type="button" className="nhlcal-advance-button" disabled={busy} onClick={() => onVote("yes")}>
-              Agree
-            </button>
-            <button
-              type="button"
-              className="nhlcal-advance-button nhlcal-advance-button-secondary"
-              disabled={busy}
-              onClick={() => onVote("no")}
-            >
-              Disagree
-            </button>
-            <button type="button" className={`${PREFIX}-link`} disabled={busy} onClick={() => onVote("abstain")}>
-              Abstain
-            </button>
-            <span style={{ flex: 1 }} />
-            <button
-              type="button"
-              className={`${PREFIX}-link`}
-              disabled={busy || tokens <= 0 || Boolean(lobbied)}
-              onClick={() => onLobby("yes")}
-            >
-              Lobby for it
-            </button>
-            <button
-              type="button"
-              className={`${PREFIX}-link`}
-              disabled={busy || tokens <= 0 || Boolean(lobbied)}
-              onClick={() => onLobby("no")}
-            >
-              Lobby against
-            </button>
-          </div>
-          <p className={`${PREFIX}-note`}>
-            Lobbying calls the four most persuadable governors whose clubs look like yours. {tokens} call
-            {tokens === 1 ? "" : "s"} left this meeting.
-          </p>
-        </>
-      ) : (
-        <div className={`${PREFIX}-tally`}>
-          <div className={`${PREFIX}-count`}>
-            <div className="side yes">
-              <span className="num bog-tabular">{yes}</span>
-              <span className="lbl">Agree</span>
-            </div>
-            <div className="need">
-              {needed} needed
-              <br />
-              {revealDone && tally.abstain ? `${tally.abstain} abstained` : ""}
-            </div>
-            <div className="side no">
-              <span className="num bog-tabular">{no}</span>
-              <span className="lbl">Disagree</span>
-            </div>
-          </div>
-          <div className={`${PREFIX}-tiles`}>
+      <section className="bog2-chamber" aria-label="Vote">
+        <div className="bog2-bar" aria-hidden="true">
+          {decided ? (
+            <>
+              <i className="yes" style={{ width: pct(yes) }} />
+              <i className="no" style={{ width: pct(no), left: `calc(100% - ${pct(no)})` }} />
+            </>
+          ) : (
+            <i className="forecast" style={{ width: pct(expected) }} />
+          )}
+          <b style={{ left: pct(needed) }} title={`${needed} needed`} />
+        </div>
+        <p className="bog2-count">
+          {decided ? (
+            <>
+              <strong className="yes">{yes} in favour</strong> · <strong className="no">{no} opposed</strong>
+              {abst ? ` · ${abst} abstained` : ""} · {needed} needed · {nTeams} governors
+            </>
+          ) : (
+            <>
+              Board read: <strong>{forecast.label || "—"}</strong> · about {expected.toFixed(0)} in favour, {needed} needed
+              {proposal.room_mood ? ` · ${proposal.room_mood}` : ""}
+            </>
+          )}
+        </p>
+
+        {decided ? (
+          <div className="bog2-grid">
             {ballots.map((b, i) => (
               <TeamTile key={b.team_id || i} ballot={b} shown={i < shownCount} />
             ))}
           </div>
-          {revealDone ? (
-            <>
-              <div className={`${PREFIX}-result ${proposal.status}`}>
-                <div>
-                  <h3>{proposal.status === "passed" ? "Passed" : "Failed"}</h3>
-                  <span className={`${PREFIX}-muted`}>
-                    {tally.yes}–{tally.no} · you voted {proposal.user_vote}
-                  </span>
-                </div>
-                <button type="button" className="nhlcal-advance-button" onClick={onNext}>
-                  {isLast ? "Close the meeting" : "Next proposal"}
+        ) : (
+          <div className="bog2-actions">
+            <button type="button" className="nhlcal-advance-button" disabled={busy} onClick={() => onVote("yes")}>
+              Vote in favour
+            </button>
+            <button type="button" className="nhlcal-advance-button nhlcal-advance-button-secondary" disabled={busy} onClick={() => onVote("no")}>
+              Vote against
+            </button>
+            <button type="button" className="bog2-link" disabled={busy} onClick={() => onVote("abstain")}>
+              Abstain
+            </button>
+            <span className="bog2-spacer" />
+            <button type="button" className="bog2-link" disabled={busy || tokens <= 0 || Boolean(lobbied)} onClick={() => onLobby("yes")}>
+              Lobby for it
+            </button>
+            <button type="button" className="bog2-link" disabled={busy || tokens <= 0 || Boolean(lobbied)} onClick={() => onLobby("no")}>
+              Lobby against
+            </button>
+            <p className="bog2-note">
+              A lobbying call reaches the four most persuadable governors whose clubs look like yours ({tokens} left).
+              Keys: A = in favour, D = against.
+            </p>
+          </div>
+        )}
+      </section>
+
+      {revealDone ? (
+        <>
+          <footer className={`bog2-outcome ${proposal.status}`}>
+            <div>
+              <h3>{proposal.status === "passed" ? "Passed" : "Defeated"}</h3>
+              <p>
+                {tally.yes}–{tally.no}
+                {tally.abstain ? `, ${tally.abstain} abstained` : ""} · {needed} needed · you voted {proposal.user_vote === "yes" ? "in favour" : proposal.user_vote === "no" ? "against" : "to abstain"}
+              </p>
+            </div>
+            <button type="button" className="nhlcal-advance-button" onClick={onNext}>
+              {isLast ? "Close the meeting" : "Next proposal →"}
+            </button>
+          </footer>
+          {why.length ? (
+            <section className="bog2-why">
+              <h4>Why governors voted this way</h4>
+              <ul>
+                {whyShown.map((g) => (
+                  <li key={`${g.vote}-${g.reason}`} className={g.vote}>
+                    <span className="v">{g.vote === "yes" ? "For" : g.vote === "no" ? "Against" : "Abstained"}</span>
+                    <span className="r">{g.reason}</span>
+                    <span className="t">{g.teams.join(", ")}</span>
+                  </li>
+                ))}
+              </ul>
+              {why.length > 4 ? (
+                <button type="button" className="bog2-link" onClick={() => setShowAllWhy((v) => !v)}>
+                  {showAllWhy ? "Show fewer" : `Show all ${why.length} reasons`}
                 </button>
-              </div>
-              <div className={`${PREFIX}-reasons`}>
-                {ballots
-                  .filter((b) => !b.is_user)
-                  .slice(0, 12)
-                  .map((b) => (
-                    <span key={b.team_id}>
-                      <b>{b.abbr}</b> {b.vote === "yes" ? "✓" : "✗"} {b.reason}
-                    </span>
-                  ))}
-              </div>
-            </>
+              ) : null}
+            </section>
           ) : null}
-        </div>
-      )}
+        </>
+      ) : null}
     </section>
   );
 }

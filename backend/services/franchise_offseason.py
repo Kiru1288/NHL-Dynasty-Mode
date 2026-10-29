@@ -3469,6 +3469,11 @@ def _dev_build_record(
     if season_start is not None and season_start > 0:
         prev_ovr = season_start
         cur_ovr = snap_cur if snap_cur > 0 else int(round(ledger_cur or snap_cur))
+        # The start mark can be re-stamped mid-offseason (draft, signing, call-up);
+        # then fall back to the earliest reading we hold so the year's growth still shows.
+        earliest = [v for v in (ledger_prev, snap_prev) if v]
+        if earliest and _dev_player_age(player) <= 23:
+            prev_ovr = min(prev_ovr, int(round(min(earliest))))
         ovr_delta = int(cur_ovr - prev_ovr)
     elif ledger_prev is not None:
         prev_ovr = int(round(ledger_prev))

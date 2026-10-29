@@ -4320,6 +4320,23 @@ function mergeCareerSeasonsWithCurrent(player, stats, options) {
   const existing = Array.isArray(player?.career_seasons) ? player.career_seasons : EMPTY_ARRAY;
   const currentRow = buildCurrentSeasonCareerRow(player, stats, options);
   if (!currentRow) return existing;
+  // Traded mid-season: one line per club this season, newest club last (as NHL.com shows it).
+  const splits = stats && typeof stats.by_team === "object" ? Object.entries(stats.by_team) : [];
+  if (splits.length > 1) {
+    const curTid = String(stats.team_id || "");
+    const ordered = [...splits.filter(([tid]) => tid !== curTid), ...splits.filter(([tid]) => tid === curTid)];
+    const splitRows = ordered
+      .filter(([, sp]) => Number(sp?.gp || 0) > 0)
+      .map(([tid, sp]) => {
+        const row = buildCurrentSeasonCareerRow(player, { ...stats, ...sp, team_name: sp.abbr || tid, team: sp.abbr || tid }, options);
+        if (row && tid !== curTid) row.is_current_season = false;
+        return row;
+      })
+      .filter(Boolean);
+    const seasonKey = String(currentRow.season);
+    const others = existing.filter((row) => String(pickFirstDefined(row?.season, row?.year) || "") !== seasonKey);
+    return [...others, ...splitRows];
+  }
 
   const dedupKey = `${currentRow.season}__${safeStr(currentRow.league, "NHL").toUpperCase()}__${currentRow.team}`;
   const filtered = existing.filter((row) => {

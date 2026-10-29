@@ -42,7 +42,7 @@ _add("value", "Value for money", "fact", ["value", "for the money", "bang for bu
 _add("morale", "Morale", "fact", ["morale", "happy", "happiest", "unhappy", "mood", "hates being here", "wants out"])
 _add("g", "Goals", "stat", ["goals", "goal", "scorer", "sniper", "who can score", "finisher", "lit the lamp"], goalie=False)
 _add("a", "Assists", "stat", ["assists", "assist", "playmaker", "setup man"], goalie=False)
-_add("ppg", "Power-play goals", "stat", ["power play goals", "pp goals", "power play goal", "ppg"], goalie=False)
+_add("ppg", "Power-play goals", "stat", ["power play goals", "pp goals", "power play goal", "ppg", "goals on the power play", "goals on power play"], goalie=False)
 _add("ppp", "Power-play points", "stat", ["power play points", "pp points", "ppp"], goalie=False)
 _add("shg", "Shorthanded goals", "stat", ["shorthanded goals", "short handed goals", "shg", "shorties"], goalie=False)
 _add("gwg", "Game-winning goals", "stat", ["game winning goals", "game winners", "gwg", "clutch goals"], goalie=False)

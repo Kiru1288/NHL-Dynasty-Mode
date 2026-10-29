@@ -426,7 +426,8 @@ def _cpu_offer_vs_ask(
     offer = min(target, space * (0.98 if ovr >= 86 else 0.95))
     # A club that cannot get close to the ask stays out instead of posting a
     # number the player would laugh at.
-    if offer < ask * (0.9 if ovr >= 80 else 0.85):
+    # Stars weigh term and fit, so a contender within ~12% of the ask is still in it.
+    if offer < ask * (0.88 if ovr >= 84 else (0.9 if ovr >= 80 else 0.85)):
         return None
     return round(max(LEAGUE_MINIMUM_AAV_M, offer), 3)
 
@@ -805,6 +806,13 @@ def _collect_cpu_offers(
                 0,
                 ROSTER_FILL_TARGET - int(_on_roster or 0) - committed_n.get(tid, 0) + (1 if prior_here else 0),
             )
+            if ovr >= 82:
+                # Real clubs clear room for a difference-maker: some of the money held
+                # back for future extensions is in play, and the depth spots behind him
+                # get filled from the farm. Without this only the user (who ignores the
+                # reserve) could fit an expensive UFA, so every big deal was the user's.
+                spendable += 0.5 * float(ctx.get("extension_reserve_m") or 0.0)
+                bodies_needed = min(bodies_needed, 3)
             spendable -= max(0, bodies_needed - 1) * LEAGUE_MINIMUM_AAV_M * 1.1
             if spendable < LEAGUE_MINIMUM_AAV_M * 1.02:
                 continue

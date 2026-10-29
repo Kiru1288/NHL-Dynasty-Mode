@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { resolveFranchiseTeamLogo, toLogoUrl } from "../../utils/teamLogos";
-import { enterPlayoffs, playoffAction } from "../../services/franchiseService";
+import { enterPlayoffs, playoffAction, playoffSeriesPreview } from "../../services/franchiseService";
 import { isNetworkError, formatFranchiseApiError, isTimeoutError } from "../../services/api";
 import { useGameUI } from "../../game/GameUIContext";
 import TeamLogoBadge from "../../components/ui/TeamLogoBadge";
@@ -577,6 +577,135 @@ function SeriesCard({ series, high, low, state, feeders, teamFor, selected, just
 
 /* ───────────────────────── series desk ───────────────────────── */
 
+/* Series Hype Panel: the story of the matchup, fetched once per series per day. */
+const PREVIEW_CACHE = new Map();
+
+function useSeriesPreview(highId, lowId, day) {
+  const key = highId && lowId ? `${highId}|${lowId}|${day ?? ""}` : "";
+  const [data, setData] = useState(() => (key ? PREVIEW_CACHE.get(key) || null : null));
+  useEffect(() => {
+    if (!key) {
+      setData(null);
+      return undefined;
+    }
+    const hit = PREVIEW_CACHE.get(key);
+    if (hit) {
+      setData(hit);
+      return undefined;
+    }
+    let alive = true;
+    setData(null);
+    playoffSeriesPreview(highId, lowId)
+      .then((d) => {
+        if (!d) return;
+        if (PREVIEW_CACHE.size > 40) PREVIEW_CACHE.clear();
+        PREVIEW_CACHE.set(key, d);
+        if (alive) setData(d);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [key, highId, lowId]);
+  return data;
+}
+
+function PressureBar({ label, value }) {
+  const v = Math.max(0, Math.min(100, Number(value) || 0));
+  return (
+    <div className="po-hype-pressure">
+      <span>{label}</span>
+      <i style={{ "--v": `${v}%` }} className={v >= 80 ? "is-hot" : ""} />
+      <b>{v}</b>
+    </div>
+  );
+}
+
+function HypePanel({ series, high, low, playoffDay }) {
+  const p = useSeriesPreview(series?.team_high_id, series?.team_low_id, playoffDay);
+  if (!p) {
+    return (
+      <div className="po-hype is-loading" aria-busy="true">
+        <span className="po-spinner" /> Building the series story…
+      </div>
+    );
+  }
+  const H = p.teams?.high || {};
+  const L = p.teams?.low || {};
+  const duels = [
+    ["Star", H.star, L.star],
+    ["In goal", H.goalie, L.goalie],
+    ["X-factor", H.xfactor, L.xfactor],
+  ].filter(([, a, b]) => a || b);
+  return (
+    <div className="po-hype">
+      <h4 className="po-hype-headline">{p.headline}</h4>
+      {p.tags?.length ? (
+        <div className="po-hype-tags">
+          {p.tags.map((t) => (
+            <span key={t} className="po-hype-tag">{t}</span>
+          ))}
+        </div>
+      ) : null}
+
+      <div className="po-hype-odds" aria-label="Series odds">
+        <span>{high?.abbrev} {p.odds?.high}%</span>
+        <div className="po-hype-oddsbar">
+          <i style={{ width: `${p.odds?.high ?? 50}%` }} />
+        </div>
+        <span>{p.odds?.low}% {low?.abbrev}</span>
+      </div>
+
+      <div className="po-hype-grid">
+        <div><small>Season series</small><b>{p.season_series}</b></div>
+        <div><small>Expert pick</small><b>{p.pick}</b></div>
+        <div><small>Last 10</small><b>{H.last10} · {L.last10}</b></div>
+        <div><small>Goals for/against</small><b>{H.gf}/{H.ga} · {L.gf}/{L.ga}</b></div>
+      </div>
+
+      {p.story?.length ? (
+        <ul className="po-hype-story">
+          {p.story.map((s) => (
+            <li key={s}>{s}</li>
+          ))}
+        </ul>
+      ) : null}
+      {p.history ? <p className="po-hype-history">{p.history}</p> : null}
+
+      <div className="po-hype-pressures">
+        <small>Pressure meter</small>
+        <PressureBar label={high?.abbrev} value={H.pressure} />
+        <PressureBar label={low?.abbrev} value={L.pressure} />
+      </div>
+
+      <div className="po-hype-droughts">
+        <span><b>{high?.abbrev}</b> {H.drought?.label}</span>
+        <span><b>{low?.abbrev}</b> {L.drought?.label}</span>
+      </div>
+
+      {duels.length ? (
+        <div className="po-hype-duels">
+          <small>Key matchups</small>
+          {duels.map(([label, a, b]) => (
+            <div key={label} className="po-hype-duel">
+              <em>{label}</em>
+              <span>{a ? <><b>{a.name}</b><i>{a.line}</i></> : "—"}</span>
+              <span className="vs">vs</span>
+              <span>{b ? <><b>{b.name}</b><i>{b.line}</i></> : "—"}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {p.injuries?.length ? (
+        <p className="po-hype-injuries">
+          Injury watch: {p.injuries.map((x) => `${x.name} (${x.team})`).join(", ")}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function SeriesDesk({ series, high, low, state, canAct, busy, playoffDay, onClear, onAction }) {
   if (!series) {
     return (
@@ -670,6 +799,8 @@ function SeriesDesk({ series, high, low, state, canAct, busy, playoffDay, onClea
           {series.is_user_series ? <span className="po-fact is-gold">Your club</span> : null}
         </div>
       ) : null}
+
+      {state !== "pending" ? <HypePanel series={series} high={high} low={low} playoffDay={`${Number(wh) || 0}-${Number(wl) || 0}`} /> : null}
 
       <div className="po-games">
         {Array.from({ length: 7 }, (_, i) => {

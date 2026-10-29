@@ -78,6 +78,18 @@ def repair_rated_potential(session: Any) -> int:
     except Exception:
         return 0
     n = 0
+    # Second pass, every load: any prospect whose shown ceiling fell under its rated
+    # chapter (a stale copy written back by in-season development) is restored.
+    for p in _iter_rights_players(league):
+        try:
+            chapters = (getattr(p, "attribute_profile", None) or {}).get("chapters") or {}
+            rated = float(chapters.get("potential") or 0)
+            shown = float((getattr(p, "ratings", None) or {}).get("dev_potential") or 0)
+            if rated > 0 and shown < rated - 0.5:
+                write_player_potential99(p, rated)
+                n += 1
+        except Exception:
+            continue
     for team in list(getattr(league, "teams", None) or []):
         for attr in ("roster", "ahl_roster", "echl_roster", "prospect_pool", "injured_reserve"):
             for p in list(getattr(team, attr, None) or []):

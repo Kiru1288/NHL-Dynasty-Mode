@@ -147,9 +147,17 @@ def _season_lines(session: Any) -> Tuple[Dict[str, Dict[str, Any]], str]:
 
 
 def _entry(session: Any, p: Any, tid: str, value: float, display: str, why: str) -> Dict[str, Any]:
-    return {"player_id": str(getattr(p, "id", "")), "name": _name(p), "position": _pos(p), "team_id": tid,
-            "team": _team_abbr(session, tid), "age": _age(p), "ovr": round(_ovr(p)), "value": round(value, 3),
-            "display": display, "why": why}
+    row = {"player_id": str(getattr(p, "id", "")), "name": _name(p), "position": _pos(p), "team_id": tid,
+           "team": _team_abbr(session, tid), "age": _age(p), "ovr": round(_ovr(p)), "value": round(value, 3),
+           "display": display, "why": why}
+    # Real NHL photo / generated face fields, so the board shows the actual player.
+    try:
+        from app.sim_engine.generation.player_headshots import headshot_fields_from_player
+
+        row.update({k: v for k, v in headshot_fields_from_player(p).items() if v not in (None, "", 0)})
+    except Exception:
+        pass
+    return row
 
 
 def _board(session: Any, players: Iterable[Tuple[Any, str]], score: Callable[[Any, str], Optional[Tuple[float, str, str]]],
@@ -178,10 +186,10 @@ def _fmt_toi(sec: float) -> str:
 def build_rankings(session: Any, *, team_id: Optional[str] = None) -> Dict[str, Any]:
     key = (int(getattr(session, "season_calendar_year", 0) or 0), int(getattr(session, "_stats_revision", 0) or 0),
            int(getattr(session, "calendar_cursor", 0) or 0), str(team_id or ""))
-    if not getattr(session, "_rankings_elc_v2", False):
+    if not getattr(session, "_rankings_elc_v3", False):
         session._rankings_cache = None
         try:
-            session._rankings_elc_v2 = True
+            session._rankings_elc_v3 = True
         except Exception:
             pass
     cache = getattr(session, "_rankings_cache", None)
@@ -261,9 +269,16 @@ def _build(session: Any, team_id: Optional[str]) -> Dict[str, Any]:
             entry = bool(getattr(contract, "is_entry_level", False))
         if "ELC" in ctype.upper() or entry:
             return True
-        # Entry-level money that was stored as a standard deal still prices like an ELC.
+        # Real rookie deals carry performance bonuses, so imported ELCs land at
+        # $1.7-3.8M and were stored as standard deals (Stenberg, Howard, Demidov).
+        # No 23-or-under player earns $3.8M or less on anything but his ELC in practice.
         cap = _cap(p)
-        return cap > 0 and cap <= 1.50 and _age(p) <= 25
+        age = _age(p)
+        if cap <= 0:
+            return False
+        if age <= 23 and cap <= 3.8:
+            return True
+        return age <= 25 and cap <= 1.50
 
     def value(p: Any, t: str, worst: bool) -> Optional[Tuple[float, str, str]]:
         cap, pts = _cap(p), _i(L(p).get("pts"))

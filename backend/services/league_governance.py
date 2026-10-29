@@ -742,41 +742,89 @@ def _rule_probability(rule: Dict[str, Any], t: Dict[str, Any], session: Any, tid
     return _clamp(p, 0.04, 0.96), {"yes": yes_r, "no": no_r}
 
 
+def _recent_passed(session: Any, kind: str, within: int) -> List[int]:
+    """Seasons in the last ``within`` years when the board approved this kind of move."""
+    gov = ensure_governance(session)
+    now = _season(session)
+    return [int(h.get("season") or 0) for h in gov.get("history") or []
+            if h.get("kind") == kind and h.get("status") == "passed" and now - int(h.get("season") or 0) < within]
+
+
 def _relocation_probability(prop: Dict[str, Any], t: Dict[str, Any], session: Any, tid: str) -> Tuple[float, Dict[str, str]]:
+    """Governors guard their markets: a relocation needs a real reason.
+
+    Real boards approve moves rarely (Arizona to Utah was the first in decades) and
+    only when a club is plainly failing where it is. A healthy club moving for a
+    slightly bigger city, or a second move soon after the last one, should struggle.
+    """
     if tid == str(prop["team_id"]):
         return 0.97, {"yes": "Their own club is moving", "no": "Their own club is moving"}
-    p = 0.68
+    p = 0.50
     yes_r, no_r = "Better market for the league", "Wants the club to stay put"
     mover = prop.get("_mover_traits") or {}
     if "poor" in (mover.get("traits") or ()):
-        p += 0.1
+        p += 0.20
         yes_r = "Club is losing money where it is"
+    else:
+        p -= 0.20
+        no_r = "The club is healthy where it is"
+    tier = str((prop.get("market") or {}).get("tier") or "").lower()
+    if tier == "large":
+        p += 0.06
+        yes_r = yes_r if "losing" in yes_r else "Big new market lifts league revenue"
+    elif tier == "small":
+        p -= 0.10
+        no_r = "Moving to another small market fixes nothing"
+    recent = _recent_passed(session, "relocation", 6)
+    if recent:
+        p -= 0.15 * len(recent)
+        no_r = "Too soon after the last relocation"
     if t["canadian"] and prop["market"]["abbr"] not in CANADA_ABBRS and mover.get("canadian"):
         p -= 0.25
         no_r = "Won't lose a Canadian club"
     if "small" in t["traits"]:
-        p -= 0.05
+        p -= 0.08
         no_r = "Small markets fear they're next"
     p += gov_mod(session, "relocation_ease")
     p += _taste(session, tid, prop["id"])
-    return _clamp(p, 0.05, 0.95), {"yes": yes_r, "no": no_r}
+    return _clamp(p, 0.05, 0.92), {"yes": yes_r, "no": no_r}
 
 
 def _expansion_probability(prop: Dict[str, Any], t: Dict[str, Any], session: Any, tid: str) -> Tuple[float, Dict[str, str]]:
-    share_m = prop["fee_b"] * 1000.0 / max(1, prop.get("_n_teams") or 32)
-    p = 0.72 + gov_mod(session, "expansion_pressure") / 100.0
+    """Expansion fees are tempting, but every new club dilutes TV money and talent.
+
+    Owners weigh their fee share against the dilution: the more clubs the league
+    already has, the more recently it expanded, and the more cities in one go, the
+    harder the sell. Momentum helps, but no longer decides the vote by itself.
+    """
+    n_teams = max(1, int(prop.get("_n_teams") or 32))
+    share_m = prop["fee_b"] * 1000.0 / n_teams
+    n_new = len(prop.get("cities") or []) or 1
+    p = 0.50
     yes_r, no_r = f"Takes the ${share_m:.0f}M fee share", "Doesn't want to share revenue"
+    p += _clamp((share_m - 40.0) / 200.0, -0.10, 0.15)
+    p += _clamp(gov_mod(session, "expansion_pressure") / 250.0, -0.16, 0.20)
+    if n_teams > 32:
+        p -= 0.06 * (n_teams - 32)
+        no_r = f"Already {n_teams} clubs; the talent is thin enough"
+    if n_new > 1:
+        p -= 0.06 * (n_new - 1)
+    recent = _recent_passed(session, "expansion", 10)
+    if recent:
+        gap = _season(session) - max(recent)
+        p -= 0.28 if gap < 6 else 0.12
+        no_r = "The last expansion clubs are still finding their feet"
     if "poor" in t["traits"]:
         p += 0.15
         yes_r = f"Needs the ${share_m:.0f}M fee share"
     if "large" in t["traits"]:
-        p -= 0.06
+        p -= 0.08
         no_r = "Dilutes national TV money"
     if "contender" in t["traits"]:
-        p -= 0.04
+        p -= 0.08
         no_r = "Won't lose a player to the expansion draft"
     p += _taste(session, tid, prop["id"])
-    return _clamp(p, 0.05, 0.95), {"yes": yes_r, "no": no_r}
+    return _clamp(p, 0.05, 0.92), {"yes": yes_r, "no": no_r}
 
 
 def _vote_climate(session: Any, prop: Dict[str, Any], mean: float, spread: float) -> Tuple[str, float]:

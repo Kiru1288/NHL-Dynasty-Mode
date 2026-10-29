@@ -2302,14 +2302,29 @@ def start_franchise(
                 trim_team_roster_to_nhl_limit(tm)
             try:
                 import_meta = getattr(league, "real_nhl_import_meta", None) or {}
+                try:
+                    from services.real_nhl_roster_corrections import apply_roster_corrections
+
+                    corrected = apply_roster_corrections(teams)
+                    for line in corrected:
+                        session.notifications.append(f"Roster correction: {line}")
+                    if corrected:
+                        from services.real_nhl_roster_corrections import keep_corrected_on_nhl_roster
+
+                        for tm in teams:
+                            trim_team_roster_to_nhl_limit(tm)
+                        keep_corrected_on_nhl_roster(teams)
+                except Exception:
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
                 if not import_meta.get("fast_import"):
                     from services.brady_tkachuk_chaos import (
                         apply_brady_chaos_to_league,
                         inject_brady_storylines,
                     )
 
-                    apply_brady_chaos_to_league(teams)
-                    inject_brady_storylines(session, team_abbr="OTT")
+                    brady = apply_brady_chaos_to_league(teams)
+                    # The storylines follow whichever club actually has him.
+                    inject_brady_storylines(session, team_abbr=str((brady or {}).get("team") or "FLA").upper()[:3])
             except Exception as brady_err:
                 session.notifications.append(f"Brady chaos skipped: {brady_err}")
         npl = len(getattr(league, "players", None) or [])
@@ -3047,6 +3062,13 @@ def shown_ovr_and_potential(player: Any) -> tuple:
         pot = 0.0
     if 0 < pot <= 1.5:
         pot *= 99.0
+    # The potential chapter is the rated ceiling; a stale dev_potential copy must not undercut it.
+    try:
+        chap = ((getattr(player, "attribute_profile", None) or {}).get("chapters") or {}).get("potential")
+        if chap is not None and float(chap) > pot:
+            pot = float(chap)
+    except (TypeError, ValueError, AttributeError):
+        pass
     pot_i = int(round(pot)) if pot > 0 else ovr
     pot_i = max(0, min(99, pot_i))
     if pot_i <= 0:
@@ -13080,11 +13102,52 @@ def _maybe_emit_trade_wire_rumors(
 CPU_TRADE_POPUP_MIN_VALUE = 140.0
 
 
+def _log_cpu_trade_on_players(session: FranchiseSession, ev: Dict[str, Any], *, iso: str = "") -> None:
+    """Every CPU trade lands in each moved player's dossier transaction log."""
+    from services.contract_economy import append_player_transaction
+
+    ex = dict(ev.get("execution") or {}) if isinstance(ev, dict) else {}
+    vb = dict(ex.get("value_breakdown") or {})
+    sides = [str(k) for k, v in vb.items() if isinstance(v, dict)]
+    if len(sides) < 2:
+        return
+    league = getattr(getattr(session, "sim", None), "league", None)
+    teams = {str(getattr(t, "team_id", None) or getattr(t, "id", "")): t for t in list(getattr(league, "teams", None) or [])}
+    by_pid: Dict[str, Any] = {}
+    for t in teams.values():
+        for p in list(getattr(t, "roster", None) or []) + list(getattr(t, "ahl_roster", None) or []):
+            by_pid[str(getattr(p, "id", "") or "")] = p
+
+    def _club(tid: str) -> str:
+        tm = teams.get(tid)
+        return str(getattr(tm, "abbr", None) or getattr(tm, "name", None) or tid)
+
+    for tid in sides:
+        dest = next((o for o in sides if o != tid), "")
+        for row in list((vb.get(tid) or {}).get("outgoing") or []):
+            if not isinstance(row, dict):
+                continue
+            pid = str(row.get("player_id") or row.get("id") or "")
+            pl = by_pid.get(pid)
+            if pl is None:
+                continue
+            append_player_transaction(
+                pl,
+                kind="trade",
+                summary=f"Traded from {_club(tid)} to {_club(dest)}" + (f" ({iso})" if iso else ""),
+                season=getattr(session, "season_calendar_year", None),
+            )
+
+
 def _enqueue_cpu_trade_popup(session: FranchiseSession, ev: Dict[str, Any], *, calendar_idx: int, iso: str) -> None:
     """Queue a trade wire popup only when a moved player's trade value exceeds CPU_TRADE_POPUP_MIN_VALUE.
 
     Quieter depth / pick-heavy swaps stay in the showcase archive without a modal.
     """
+    try:
+        _log_cpu_trade_on_players(session, ev, iso=iso)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     max_player_value = _max_moved_player_trade_value(ev)
     cached = ev.get("_wire_payload")
     popup: Optional[Dict[str, Any]] = None
