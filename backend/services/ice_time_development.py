@@ -267,16 +267,9 @@ def apply_season_performance_potential(session: Any) -> Dict[str, Any]:
                 if "active_development_ceiling" in profile:
                     profile["active_development_ceiling"] = new_exp
                 p.development_profile = profile
-                p.potential = float(new_exp)
-                for attr in ("true_potential", "true_potential_score"):
-                    if getattr(p, attr, None) is not None:
-                        setattr(p, attr, float(new_exp))
-                ratings = getattr(p, "ratings", None)
-                if isinstance(ratings, dict):
-                    ratings["dev_potential"] = float(display_rating(new_exp))
-                    for k in ("true_potential",):
-                        if k in ratings:
-                            ratings[k] = float(display_rating(new_exp))
+                from app.sim_engine.progression.potential import write_player_potential99
+
+                write_player_potential99(p, float(new_exp) * 99.0)
                 p.season_potential_delta = round((new_exp - exp) * 99.0, 1)
                 hist = list(getattr(p, "potential_history", None) or [])
                 hist.append({"season": sy, "pot_before": round(exp * 99.0, 1), "pot_after": round(new_exp * 99.0, 1), "performance": round(perf, 2)})

@@ -82,7 +82,7 @@ function RetirementRow({ row, index }) {
     <article className="retirement-row" style={{ "--row-index": index }}>
       <div className="retirement-player-cell">
         <div className="retirement-headshot">
-          <PlayerHeadshot player={player} size="md" variant="card" mood="neutral" />
+          <PlayerHeadshot player={player} size="md" variant="card" mood="neutral" showFlag={false} style={{ "--size": "72px" }} />
         </div>
         <div className="retirement-player-meta">
           <strong className="retirement-player-name" title={name}>
@@ -99,6 +99,7 @@ function RetirementRow({ row, index }) {
               row.legacy_tier ? String(row.legacy_tier).replace(/_/g, " ") : null,
             ].filter(Boolean).join(" · ")}
           </span>
+          {row.confirmed === false ? <span className="retirement-player-reason is-considering">Considering retirement — decision pending</span> : null}
           {row.retirement_reason ? <span className="retirement-player-reason">{row.retirement_reason}</span> : null}
         </div>
       </div>

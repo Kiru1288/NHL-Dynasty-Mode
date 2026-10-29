@@ -1876,6 +1876,176 @@ function TeamHaulBoard({
   );
 }
 
+/* ───────────── War room desk: the centre of the floor ─────────────
+   Pinned scouting cards for the best players left, a draft-trend whiteboard and
+   room chatter, all derived from data already on the screen (no extra requests). */
+const WR_POS_GROUP = (pos) => (pos === "LW" || pos === "RW" || pos === "W" ? "W" : pos);
+const WR_POS_NAME = { C: "centres", W: "wingers", D: "defencemen", G: "goalies" };
+
+function warRoomTag(p, overallNow, isBiggestFaller) {
+  const stock = normalizeStockLabel(p);
+  const risk = String(getRisk(p) || "");
+  const age = num(p?.age ?? p?.dossier?.age);
+  const rank = getRank(p);
+  const fell = rank != null && overallNow ? Number(overallNow) - rank : 0;
+  if (isBiggestFaller && fell >= 5) return { label: "Steal", tone: "lime" };
+  if (fell >= 4) return { label: `Fell from #${rank}`, tone: "sky" };
+  if (stock === "Rising") return { label: "Riser", tone: "orange" };
+  if (stock === "Falling") return { label: "Sliding", tone: "coral" };
+  if (/high|bust|major/i.test(risk)) return { label: "Raw", tone: "coral" };
+  if (/low|safe/i.test(risk) || (age != null && age >= 19)) return { label: "Safe", tone: "sky" };
+  return { label: "Watch", tone: "yellow" };
+}
+
+function warRoomNote(p) {
+  const trait = getDefiningTrait(p);
+  if (trait) return trait.length > 34 ? `${trait.slice(0, 32)}…` : trait;
+  const league = p?.league || p?.junior_league || p?.dossier?.league;
+  return league ? `Tracked in ${league}` : "Scouts split";
+}
+
+function WarRoomDesk({ available, completed, draftOrder, userTeamId, overallNow, clockTeamName, onOpenProspect, totalPicks, completedCount }) {
+  const top = useMemo(
+    () =>
+      safeArray(available)
+        .slice()
+        .sort((a, b) => (getRank(a) ?? 9999) - (getRank(b) ?? 9999))
+        .slice(0, 10),
+    [available]
+  );
+  const recent = useMemo(
+    () =>
+      safeArray(completed)
+        .slice()
+        .sort((a, b) => Number(b.overall_pick || 0) - Number(a.overall_pick || 0))
+        .slice(0, 6),
+    [completed]
+  );
+  const run = useMemo(() => {
+    const counts = {};
+    recent.forEach((p) => {
+      const g = WR_POS_GROUP(p.position || getPlayerPosition(p));
+      if (g) counts[g] = (counts[g] || 0) + 1;
+    });
+    const [pos, n] = Object.entries(counts).sort((a, b) => b[1] - a[1])[0] || [];
+    return pos && n >= 3 ? { pos, n } : null;
+  }, [recent]);
+  const identity = useMemo(() => {
+    const pool = safeArray(available)
+      .slice()
+      .sort((a, b) => (getRank(a) ?? 9999) - (getRank(b) ?? 9999))
+      .slice(0, 40);
+    if (pool.length < 10) return null;
+    const counts = { C: 0, W: 0, D: 0, G: 0 };
+    pool.forEach((p) => {
+      const g = WR_POS_GROUP(getPlayerPosition(p));
+      if (g in counts) counts[g] += 1;
+    });
+    const share = { C: 0.25, W: 0.36, D: 0.32, G: 0.07 };
+    const ratio = Object.keys(counts).map((k) => [k, counts[k] / pool.length / share[k]]);
+    ratio.sort((a, b) => b[1] - a[1]);
+    return { deep: WR_POS_NAME[ratio[0][0]], thin: WR_POS_NAME[ratio[ratio.length - 1][0]] };
+  }, [available]);
+  const nextUser = useMemo(() => {
+    const now = Number(overallNow || 0);
+    const slot = safeArray(draftOrder).find(
+      (s) => String(s.team_id || "") === String(userTeamId) && Number(s.overall_pick || s.pick || 0) >= now
+    );
+    const n = slot ? Number(slot.overall_pick || slot.pick || 0) : null;
+    return n ? { pick: n, away: Math.max(0, n - now) } : null;
+  }, [draftOrder, userTeamId, overallNow]);
+  const chatter = useMemo(() => {
+    const out = [];
+    recent.forEach((p) => {
+      const { tag } = getPickDisplayTag(p);
+      const team = teamAbbrev(p.team_id, p.team_name);
+      const name = p.prospect_name || getPlayerName(p);
+      if (/reach/i.test(String(tag || ""))) out.push(`Murmurs on the floor: ${team} reached for ${name}.`);
+      else if (/steal|value/i.test(String(tag || ""))) out.push(`Scouts nodding — ${team} got value with ${name}.`);
+    });
+    if (run) out.push(`${run.n} ${WR_POS_NAME[run.pos]} in the last ${recent.length} picks — a run is on.`);
+    if (top[0]) out.push(`${getPlayerName(top[0])} is still on the board. Phones are ringing.`);
+    if (clockTeamName) out.push(`${clockTeamName} huddling at the table.`);
+    if (identity) out.push(`This class is deep in ${identity.deep}, thin at ${identity.thin}.`);
+    return out.length ? out : ["The floor is quiet. Every club is waiting on the next card."];
+  }, [recent, run, top, clockTeamName, identity]);
+
+  if (!top.length) return null;
+  return (
+    <section className={`${PREFIX}-wr`} aria-label="War room desk">
+      <div className={`${PREFIX}-wr-cards`}>
+        <p className={`${PREFIX}-wr-kicker`}>Top of the board</p>
+        <div className={`${PREFIX}-wr-spread`}>
+          {top.map((p, i) => {
+            const biggest = top.reduce((best, q) => ((getRank(q) ?? 9999) < (getRank(best) ?? 9999) ? q : best), top[0]);
+            const tag = warRoomTag(p, overallNow, p === biggest);
+            const pot = resolvePotentialOvrLabel(p);
+            const ovr = resolveCurrentOvrLabel(p);
+            const potN = num(String(pot || "").replace(/[^\d.]/g, ""));
+            const stock = normalizeStockLabel(p);
+            const nat = p.nationality || p.country || p.dossier?.nationality;
+            return (
+              <button
+                type="button"
+                key={getId(p)}
+                className={`${PREFIX}-wr-card${i === 0 ? " is-pinned" : ""}`}
+                style={{ "--tilt": `${[-1.2, 0.8, -0.5, 1.1, -0.9, 0.6, -1.0, 0.9, -0.4, 1.2][i] || 0}deg`, "--i": i }}
+                onClick={() => onOpenProspect?.(p)}
+              >
+                <span className={`${PREFIX}-wr-sticky tone-${tag.tone}`}>{tag.label}</span>
+                <span className={`${PREFIX}-wr-rank`}>#{getRank(p) ?? i + 1}</span>
+                <strong className={`${PREFIX}-wr-name`}>{getPlayerName(p)}</strong>
+                <span className={`${PREFIX}-wr-meta`}>
+                  <ProspectFlag country={nat} code={p.country_code || p.nat || nat} width={16} />
+                  {getPlayerPosition(p)}
+                  {stock === "Rising" ? <em className="up">▲</em> : stock === "Falling" ? <em className="down">▼</em> : null}
+                </span>
+                <span className={`${PREFIX}-wr-heat`} title={`Potential ${pot || "?"}`}>
+                  <i style={{ width: `${potN ? Math.max(8, Math.min(100, (potN - 60) * 2.6)) : 30}%` }} />
+                </span>
+                <span className={`${PREFIX}-wr-nums`}>{[ovr, pot].filter(Boolean).join(" · ") || "—"}</span>
+                <span className={`${PREFIX}-wr-note`}>{warRoomNote(p)}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <aside className={`${PREFIX}-wr-board`}>
+        <p className={`${PREFIX}-wr-kicker`}>Whiteboard</p>
+        {nextUser ? (
+          <p className={`${PREFIX}-wr-line is-you`}>
+            Your next pick: <b>#{nextUser.pick}</b>
+            {nextUser.away ? ` · ${nextUser.away} away` : " · you're up"}
+          </p>
+        ) : null}
+        {run ? (
+          <p className={`${PREFIX}-wr-line`}>
+            <b>{WR_POS_NAME[run.pos].replace(/^./, (c) => c.toUpperCase())} run</b> — {run.n} of the last {recent.length}
+          </p>
+        ) : null}
+        {identity ? (
+          <p className={`${PREFIX}-wr-line`}>
+            Class: deep <b>{identity.deep}</b>, thin <b>{identity.thin}</b>
+          </p>
+        ) : null}
+        <p className={`${PREFIX}-wr-line`}>
+          <b>{Math.max(0, Number(totalPicks || 224) - Number(completedCount || 0))}</b> picks left · {safeArray(available).length} eligible players
+        </p>
+      </aside>
+      <div className={`${PREFIX}-wr-ticker`} aria-label="Draft room chatter">
+        <span className={`${PREFIX}-wr-ticker-flag`}>Floor</span>
+        <div className={`${PREFIX}-wr-ticker-view`}>
+          <div className={`${PREFIX}-wr-ticker-track`} key={chatter.join("|")}>
+            {[...chatter, ...chatter].map((line, i) => (
+              <span key={i}>{line}</span>
+            ))}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function BoardPopup({
   open,
   available,
@@ -4357,6 +4527,21 @@ export default function EntryDraftMenu({ franchiseState = {}, eventData = {}, on
                       }}
                     />
                   ) : null}
+
+                  <WarRoomDesk
+                    available={available}
+                    completed={completed}
+                    draftOrder={draftOrder}
+                    userTeamId={uid}
+                    overallNow={overallNow}
+                    clockTeamName={draft.current_team_name}
+                    totalPicks={totalPicks}
+                    completedCount={completed.length}
+                    onOpenProspect={(p) => {
+                      setSelectedAvailable(p);
+                      setSelectedCompletedPick(null);
+                    }}
+                  />
 
                   <TeamHaulBoard
                     floor

@@ -3107,14 +3107,15 @@ def _aging_v3_base_decline_chance(age: int) -> float:
         return 0.12
     # 29 and up. Young players now get a full year of growth, so this side
     # of the curve has to take it back or the league fills up with 88s.
-    if age == 29:
-        return 0.78
-    if age <= 31:
-        return 0.84
+    # Real curves: a gentle slide from 30, a real one from 33-34.
+    if age <= 30:
+        return 0.45
+    if age == 31:
+        return 0.60
     if age <= 33:
-        return 0.90
+        return 0.78
     if age <= 36:
-        return 0.94
+        return 0.90
     return 0.96
 
 
@@ -3511,14 +3512,15 @@ def _career_aging_decline_try_v3(
 
     r = rng.random()
     if elite:
-        decline_amount = -float(rng.uniform(1.0, 1.8))
+        decline_amount = -float(rng.uniform(0.6, 1.5) if age <= 32 else rng.uniform(1.0, 2.0))
+    elif age >= 37:
+        decline_amount = -float(rng.uniform(2.0, 3.4))
+    elif age >= 34:
+        decline_amount = -float(rng.uniform(1.6, 3.0))
+    elif age >= 32:
+        decline_amount = -float(rng.uniform(1.0, 2.4))
     elif age >= 29:
-        if r < 0.40:
-            decline_amount = -float(rng.uniform(1.5, 2.2))
-        elif r < 0.75:
-            decline_amount = -float(rng.uniform(2.0, 2.6))
-        else:
-            decline_amount = -float(rng.uniform(2.4, 3.0))
+        decline_amount = -float(rng.uniform(0.4, 1.4) if age <= 30 else rng.uniform(0.6, 1.8))
     elif r < 0.70:
         decline_amount = -float(rng.uniform(0.4, 1.2))
     elif r < 0.92:
@@ -3542,11 +3544,13 @@ def _career_aging_decline_try_v3(
     def _cap_loss(amount: float) -> float:
         if age < 29:
             return max(amount, -1.8)
-        if elite:
-            return max(amount, -1.8 * 1.30)
         if age < 32:
-            return max(amount, -2.8)
-        return max(amount, -3.0)
+            return max(amount, -2.0)
+        if elite:
+            return max(amount, -2.3)
+        if age < 34:
+            return max(amount, -2.6)
+        return max(amount, -3.4)
 
     decline_amount = _cap_loss(decline_amount)
     dmm = float((macro or {}).get("decline_mag_mult", 1.0))
@@ -12281,7 +12285,9 @@ class SimEngine:
         cache = self._gm_player_runtime_cache(p)
         if "bulk_tend" not in cache:
             cache["bulk_tend"] = self._gm_bulk_unit_shot_tendency(p)
-        w = float(cache["bulk_tend"]) ** 2.0
+        # Squaring the tendency handed one shooter per line ~4x his linemates' shots,
+        # and finishing skill compounded it: one 50-goal man, everyone else assists.
+        w = float(cache["bulk_tend"]) ** 1.4
         if str(strength or "").upper() == "PP" and self._gm_pos_str(p).upper() == "D":
             w *= 1.15
         return max(0.02, w)
@@ -13410,6 +13416,24 @@ class SimEngine:
                 else:
                     day_set.add(pid)
         pos_u = str(row.get("position") or "").upper()
+        tid_s = str(team_id or "")
+        if tid_s and str(row.get("team_id") or "") != tid_s:
+            # Traded mid-season: the line follows his current club; earlier clubs stay in by_team.
+            row["team_id"] = tid_s
+            row.pop("team_name", None)
+            row.pop("team", None)
+        split = None
+        if tid_s:
+            split = row.setdefault("by_team", {}).setdefault(tid_s, {})
+            if "abbr" not in split:
+                amap = getattr(self, "_gm_team_abbr_map", None)
+                if not isinstance(amap, dict):
+                    amap = {}
+                    for t in list(getattr(getattr(self, "league", None), "teams", None) or []):
+                        k = str(getattr(t, "team_id", None) or getattr(t, "id", "") or "")
+                        amap[k] = str(getattr(t, "abbreviation", None) or getattr(t, "abbr", None) or k)
+                    self._gm_team_abbr_map = amap
+                split["abbr"] = amap.get(tid_s, tid_s)
         for k, v in kwargs.items():
             if not v:
                 continue
@@ -13417,6 +13441,11 @@ class SimEngine:
                 row[k] = round(float(row.get(k, 0) or 0) + float(v), 4)
             else:
                 row[k] = int(row.get(k, 0) or 0) + int(v)
+            if split is not None and k in ("gp", "g", "a", "w", "l", "otl", "ga", "shots_against", "saves", "toi_sec", "sog", "plus_minus", "pim"):
+                split[k] = (round(float(split.get(k, 0) or 0) + float(v), 4) if k in _GM_FLOAT_LEDGER_KEYS
+                            else int(split.get(k, 0) or 0) + int(v))
+        if split is not None and pos_u != "G":
+            split["pts"] = int(split.get("g", 0)) + int(split.get("a", 0))
         if pos_u != "G":
             row["pts"] = int(row.get("g", 0)) + int(row.get("a", 0))
         elif "pts" in row:

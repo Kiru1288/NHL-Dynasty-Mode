@@ -6,6 +6,11 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../../services/api";
 import PlayerHeadshot from "../PlayerHeadshot";
+import TeamLogoBadge from "../ui/TeamLogoBadge";
+import { resolveFranchiseTeamLogo } from "../../utils/teamLogos";
+
+const asPlayer = (r) => ({ ...r, id: r.player_id, player_id: r.player_id, team_abbrev: r.team, overall: r.ovr });
+const logoFor = (r) => resolveFranchiseTeamLogo({ team_id: r.team_id, abbrev: r.team, abbreviation: r.team, name: r.team });
 
 const COVER_LINES = {
   best_player: (r) => `${r.name} is the best player alive. Discuss.`,
@@ -119,14 +124,16 @@ export default function PlayerRankings({ userTeamId, onOpenPlayer }) {
               onKeyDown={(e) => (e.key === "Enter" ? onOpenPlayer?.(top.player_id) : null)}>
               <span className="slr-sticker">#1</span>
               <div className="slr-cover__face">
-                <PlayerHeadshot player={{ id: top.player_id, player_id: top.player_id, name: top.name, team_abbrev: top.team }} size={120} />
+                <PlayerHeadshot player={asPlayer(top)} size="lg" showFlag={false} style={{ "--size": "220px" }} />
+                <span className="slr-cover__logo"><TeamLogoBadge teamLogo={logoFor(top)} teamName={top.team} size={64} variant="badge" /></span>
               </div>
               <div className="slr-cover__copy">
                 <span className="slr-cover__cat">{board.label}</span>
                 <h3>{(COVER_LINES[board.key] || ((r) => r.name))(top)}</h3>
                 <p className="slr-cover__num">{top.display}</p>
-                <p className="slr-cover__why">{top.name} · {top.position} · {top.team} — {top.why}</p>
+                <p className="slr-cover__why">{top.name} · {top.position} · {top.team} · age {top.age} — {top.why}</p>
               </div>
+              <span className="slr-cover__ovr" aria-label={`Overall ${top.ovr}`}><small>OVR</small>{top.ovr}</span>
             </article>
           ) : (
             <p className="slr-empty">{board.empty_reason || "Nobody qualifies yet."}</p>
@@ -137,7 +144,10 @@ export default function PlayerRankings({ userTeamId, onOpenPlayer }) {
                 <li key={r.player_id}>
                   <button type="button" onClick={() => onOpenPlayer?.(r.player_id)}>
                     <span className="slr-rank">{r.rank}</span>
+                    <span className="slr-face"><PlayerHeadshot player={asPlayer(r)} size="sm" showFlag={false} style={{ "--size": "56px" }} /></span>
+                    <span className="slr-logo"><TeamLogoBadge teamLogo={logoFor(r)} teamName={r.team} size={40} variant="badge" /></span>
                     <span className="slr-who"><b>{r.name}</b><small>{r.position} · {r.team} · age {r.age}</small></span>
+                    <span className="slr-ovr"><small>OVR</small>{r.ovr}</span>
                     <span className="slr-why">{r.why}</span>
                     <span className="slr-val">{r.display}</span>
                   </button>

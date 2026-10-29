@@ -367,6 +367,12 @@ def post_franchise_start(body: FranchiseStartBody, background_tasks: BackgroundT
     # Warm the draft board after the response is sent: started inside start_franchise,
     # the warm thread held the GIL/import lock and delayed this reply by several seconds.
     background_tasks.add_task(franchise_sim._schedule_draft_class_cache_warm, session)
+    try:
+        from services.award_history import warm_user_team_landings
+
+        background_tasks.add_task(warm_user_team_landings, session)
+    except Exception:
+        log.debug("landing warm not scheduled", exc_info=True)
     log.info(
         "POST /api/franchise/start ok session_id=%s schedule_slots=%s",
         session.session_id,
@@ -1416,6 +1422,88 @@ def post_franchise_enter_playoffs(
     state = franchise_sim.build_state_payload(s, include_heavy=False)
     save_session(s)
     return {"step": step, "state": state}
+
+
+@app.get("/api/franchise/playoffs/preview")
+def get_franchise_playoff_preview(
+    high: str,
+    low: str,
+    x_franchise_session: Optional[str] = Header(default=None),
+) -> dict[str, Any]:
+    """Series Hype Panel: storyline, odds and key matchups for one series."""
+    from services.playoff_preview import build_preview
+
+    s = _session_or_404(x_franchise_session)
+    try:
+        return build_preview(s, high, low)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Series preview failed: {e}") from e
+
+
+@app.get("/api/franchise/playoffs/stats")
+def get_franchise_playoff_stats(x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    """Stats Central playoff tab: skater + goalie playoff lines and team series records."""
+    from services.json_safe import json_safe
+
+    s = _session_or_404(x_franchise_session)
+    league = getattr(getattr(s, "sim", None), "league", None)
+    teams = {str(getattr(t, "team_id", None) or getattr(t, "id", "")): t for t in list(getattr(league, "teams", None) or [])}
+    cur_team: dict[str, str] = {}
+    for tid, t in teams.items():
+        for p in list(getattr(t, "roster", None) or []) + list(getattr(t, "ahl_roster", None) or []):
+            cur_team[str(getattr(p, "id", "") or "")] = tid
+
+    def _abbr(tid: str) -> str:
+        t = teams.get(str(tid))
+        return str(getattr(t, "abbr", None) or getattr(t, "abbreviation", None) or getattr(t, "name", None) or tid)
+
+    skaters, goalies = [], []
+    for pid, raw in dict(getattr(s, "playoff_player_stats", None) or {}).items():
+        if not isinstance(raw, dict) or int(raw.get("gp") or 0) <= 0:
+            continue
+        r = {k: v for k, v in raw.items() if not isinstance(v, (dict, list))}
+        tid = str(r.get("team_id") or cur_team.get(str(pid)) or "")
+        r["team_id"] = tid
+        r["team_abbr"] = _abbr(tid)
+        gp = max(1, int(r.get("gp") or 0))
+        if str(r.get("position") or "").upper().startswith("G"):
+            sa = int(r.get("shots_against") or r.get("goalie_shots_against") or 0)
+            sv = int(r.get("saves") or max(0, sa - int(r.get("ga") or 0)))
+            r["sv_pct"] = round(sv / sa, 3) if sa else None
+            r["gaa"] = round(int(r.get("ga") or 0) * 3600 / max(1, int(r.get("toi_sec") or gp * 3600)), 2)
+            goalies.append(r)
+        else:
+            g, a = int(r.get("g") or 0), int(r.get("a") or 0)
+            r["pts"] = g + a
+            r["p_per_gp"] = round((g + a) / gp, 2)
+            r["toi_per_gp_sec"] = int(int(r.get("toi_sec") or 0) / gp)
+            skaters.append(r)
+    skaters.sort(key=lambda r: (-int(r.get("pts") or 0), -int(r.get("g") or 0), int(r.get("gp") or 0)))
+    goalies.sort(key=lambda r: (-int(r.get("w") or 0), -(r.get("sv_pct") or 0)))
+
+    series = []
+    live = getattr(s, "playoff_live", None) or {}
+    for row in list(live.get("series") or []):
+        if not isinstance(row, dict) or not row.get("team_high_id") or not row.get("team_low_id"):
+            continue
+        series.append({
+            "round": int(row.get("round_index") or 1),
+            "high": _abbr(row.get("team_high_id")),
+            "low": _abbr(row.get("team_low_id")),
+            "high_id": str(row.get("team_high_id")),
+            "low_id": str(row.get("team_low_id")),
+            "wins_high": int(row.get("wins_high") or 0),
+            "wins_low": int(row.get("wins_low") or 0),
+            "status": str(row.get("status") or ""),
+        })
+    return json_safe({
+        "skaters": skaters,
+        "goalies": goalies,
+        "series": series,
+        "champion_id": str(getattr(s, "champion_id", "") or ""),
+        "champion": _abbr(getattr(s, "champion_id", "") or "") if getattr(s, "champion_id", None) else "",
+        "user_team_id": str(getattr(s, "user_team_id", "") or ""),
+    })
 
 
 @app.post("/api/franchise/playoffs/action")

@@ -141,12 +141,17 @@ export function isGoalieRetiree(row) {
 
 export function normalizeRetireesPayload(raw) {
   if (!raw) return [];
-  const rows = Array.isArray(raw) ? raw : safeArray(raw.all || raw);
+  // Your own club's players can be "considering" (not confirmed yet). They used
+  // to be dropped here, so user-team retirees went missing from the page.
+  const rows = Array.isArray(raw)
+    ? raw
+    : [...safeArray(raw.all), ...safeArray(raw.team), ...(raw.all ? [] : safeArray(raw))];
   const seen = new Set();
   const out = [];
 
   rows.forEach((row) => {
-    if (!row || row.confirmed === false) return;
+    if (!row) return;
+    if (row.confirmed === false && !(Array.isArray(raw?.team) && raw.team.includes(row))) return;
     const key = String(firstDefined(row.player_id, row.id, getRetireeName(row)) || "");
     if (key && seen.has(key)) return;
     if (key) seen.add(key);

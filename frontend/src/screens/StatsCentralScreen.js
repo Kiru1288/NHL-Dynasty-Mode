@@ -6,7 +6,7 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { getAhlLedger, getStatsCentral, peekStatsCentral } from "../services/franchiseService";
+import { getAhlLedger, getPlayoffStats, getStatsCentral, peekStatsCentral } from "../services/franchiseService";
 import { formatFranchiseApiError, isExpiredFranchiseSessionError } from "../services/api";
 import { useGameUI } from "../game/GameUIContext";
 import { SCREENS, teamNameToNhlAbbr } from "../game/constants";
@@ -714,10 +714,14 @@ function normalizeSkater(row, index, teamId) {
       ? pct(gfOn, gfSample)
       : undefined;
 
+  // Rates always follow the counting stats on this row; stale backend rate fields
+  // (prior season / pre-reset ledger) made 1-GP rows show 82-game rates.
   const shootingPct =
-    firstPresent(row?.shooting_pct, row?.sh_pct) !== undefined
-      ? normalizePct(firstPresent(row?.shooting_pct, row?.sh_pct))
-      : pct(g, sog);
+    sog > 0
+      ? pct(g, sog)
+      : firstPresent(row?.shooting_pct, row?.sh_pct) !== undefined && gp === 0
+        ? normalizePct(firstPresent(row?.shooting_pct, row?.sh_pct))
+        : 0;
 
   const faceoffPct =
     firstPresent(row?.faceoff_pct, row?.fo_pct) !== undefined
@@ -727,9 +731,9 @@ function normalizeSkater(row, index, teamId) {
   const pPerGpRaw = firstPresent(row?.points_per_game, row?.pts_per_game);
   const gPerGpRaw = firstPresent(row?.goals_per_game);
   const aPerGpRaw = firstPresent(row?.assists_per_game);
-  const pPerGp = hasRealNumber(pPerGpRaw) ? Number(pPerGpRaw) : perGame(pts, gp);
-  const gPerGp = hasRealNumber(gPerGpRaw) ? Number(gPerGpRaw) : perGame(g, gp);
-  const aPerGp = hasRealNumber(aPerGpRaw) ? Number(aPerGpRaw) : perGame(a, gp);
+  const pPerGp = gp > 0 || !hasRealNumber(pPerGpRaw) ? perGame(pts, gp) : Number(pPerGpRaw);
+  const gPerGp = gp > 0 || !hasRealNumber(gPerGpRaw) ? perGame(g, gp) : Number(gPerGpRaw);
+  const aPerGp = gp > 0 || !hasRealNumber(aPerGpRaw) ? perGame(a, gp) : Number(aPerGpRaw);
 
   const pointsPer60Raw = firstPresent(row?.points_per_60, row?.pts_per_60, row?.p60);
   const goalsPer60Raw = firstPresent(row?.goals_per_60, row?.g_per_60);
@@ -1459,11 +1463,24 @@ function normalizeStatsCentral(franchiseState) {
       .filter(Boolean)
   );
 
+  // The user-team lists can carry a short (playoff / single-game) ledger; the league
+  // regular-season row is the authority whenever the same player is in it.
+  const leagueRawById = new Map();
+  [...mixedSkaters, ...rawGoalies, ...mixedGoalies].forEach((row) => {
+    const id = pickString(row?.player_id, row?.id, row?.pid, "");
+    if (id && !leagueRawById.has(id)) leagueRawById.set(id, row);
+  });
+  const preferLeagueRow = (row) => {
+    const id = pickString(row?.player_id, row?.id, row?.pid, "");
+    const league = id ? leagueRawById.get(id) : null;
+    return league ? { ...row, ...league } : row;
+  };
+
   const userSkaterRowsByPayload = userSkaterRaw.length
-    ? uniqueById(userSkaterRaw.filter((p) => !isGoalieRow(p)), "user_skater")
+    ? uniqueById(userSkaterRaw.filter((p) => !isGoalieRow(p)).map(preferLeagueRow), "user_skater")
     : skaters.filter((p) => String(p.team_id) === String(teamId) || String(p.team) === String(teamId));
   const userGoalieRowsByPayload = userGoalieRaw.length
-    ? uniqueById(userGoalieRaw, "user_goalie")
+    ? uniqueById(userGoalieRaw.map(preferLeagueRow), "user_goalie")
     : goalies.filter((p) => String(p.team_id) === String(teamId) || String(p.team) === String(teamId));
 
   const userSkatersMerged = uniqueById(
@@ -1681,13 +1698,15 @@ const TABS = [
   { id: "team_stats", label: "TEAM STATS" },
   { id: "player_stats", label: "PLAYER STATS" },
   { id: "league_leaders", label: "LEAGUE LEADERS" },
+  { id: "playoffs", label: "PLAYOFFS" },
 ];
 
 function normalizeStatsMenu(tabId) {
   if (tabId === "team" || tabId === "overview") return "team_stats";
   if (["players", "goalies", "advanced", "compare"].includes(tabId)) return "player_stats";
   if (["leaders", "awards"].includes(tabId)) return "league_leaders";
-  return ["team_stats", "player_stats", "league_leaders"].includes(tabId) ? tabId : "team_stats";
+  if (tabId === "playoff") return "playoffs";
+  return ["team_stats", "player_stats", "league_leaders", "playoffs"].includes(tabId) ? tabId : "team_stats";
 }
 
 
@@ -2264,6 +2283,7 @@ export function StatsCentralScreen() {
           {league === "nhl" && tab === "league_leaders" ? (
             <LeagueLeadersPage data={data} />
           ) : null}
+          {league === "nhl" && tab === "playoffs" ? <PlayoffStatsPage /> : null}
         </section>
       </main>
     </div>
@@ -3559,9 +3579,9 @@ function PlayerOverviewTab({
       render: (row) => (
         <SkaterStatCell
           value={fmtMaybeTwo(
-            hasRealNumber(row.points_per_game)
-              ? row.points_per_game
-              : perGame(row.pts, row.gp)
+            safe(row.gp, 0) > 0
+              ? perGame(row.pts, row.gp)
+              : row.points_per_game
           )}
         />
       ),
@@ -11073,5 +11093,126 @@ function StatsCentralStretchStyles() {
 function StatsCentralStyles() {
   return (
     null
+  );
+}
+
+/* =========================================================
+   PLAYOFF STATS
+========================================================= */
+
+function fmtToiSec(sec) {
+  const n = Math.max(0, Math.round(Number(sec) || 0));
+  return `${Math.floor(n / 60)}:${String(n % 60).padStart(2, "0")}`;
+}
+
+function PlayoffStatsPage() {
+  const [state, setState] = useState({ loading: true, error: "", data: null });
+  const [view, setView] = useState("skaters");
+  useEffect(() => {
+    let alive = true;
+    getPlayoffStats()
+      .then((data) => alive && setState({ loading: false, error: "", data }))
+      .catch((err) => alive && setState({ loading: false, error: formatFranchiseApiError(err) || "Could not load playoff stats", data: null }));
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const data = state.data || {};
+  const skaters = Array.isArray(data.skaters) ? data.skaters : [];
+  const goalies = Array.isArray(data.goalies) ? data.goalies : [];
+  const series = Array.isArray(data.series) ? data.series : [];
+  const userTeam = String(data.user_team_id || "");
+  const rounds = [1, 2, 3, 4].map((r) => series.filter((s) => s.round === r)).filter((list) => list.length);
+  const roundName = ["", "First Round", "Second Round", "Conference Final", "Stanley Cup Final"];
+
+  if (state.loading) return <div className="sc-po-empty">Loading playoff stats…</div>;
+  if (state.error) return <div className="sc-po-empty">{state.error}</div>;
+  if (!skaters.length && !goalies.length && !series.length) {
+    return (
+      <div className="sc-po-empty">
+        <strong>No playoff games yet</strong>
+        <span>Playoff stats show up here once the postseason starts.</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="sc-po">
+      <aside className="sc-po-bracket">
+        <h3>{data.champion ? `${data.champion} · Stanley Cup Champions` : "Series"}</h3>
+        {rounds.map((list, i) => (
+          <div key={i} className="sc-po-round">
+            <h4>{roundName[list[0].round] || `Round ${list[0].round}`}</h4>
+            {list.map((s, j) => {
+              const done = s.wins_high >= 4 || s.wins_low >= 4;
+              const highWon = s.wins_high > s.wins_low;
+              return (
+                <div key={j} className={`sc-po-series${[s.high_id, s.low_id].includes(userTeam) ? " is-user" : ""}`}>
+                  <span className={done && highWon ? "is-win" : ""}>{s.high}</span>
+                  <b>{s.wins_high}–{s.wins_low}</b>
+                  <span className={done && !highWon ? "is-win" : ""}>{s.low}</span>
+                </div>
+              );
+            })}
+          </div>
+        ))}
+      </aside>
+      <section className="sc-po-main">
+        <div className="sc-po-toggle">
+          <button type="button" className={view === "skaters" ? "is-active" : ""} onClick={() => setView("skaters")}>Skaters ({skaters.length})</button>
+          <button type="button" className={view === "goalies" ? "is-active" : ""} onClick={() => setView("goalies")}>Goalies ({goalies.length})</button>
+        </div>
+        <div className="sc-po-tablewrap">
+          {view === "skaters" ? (
+            <table className="sc-po-table">
+              <thead>
+                <tr><th>#</th><th className="l">Player</th><th>Team</th><th>Pos</th><th>GP</th><th>G</th><th>A</th><th>PTS</th><th>+/-</th><th>P/GP</th><th>SOG</th><th>TOI/GP</th></tr>
+              </thead>
+              <tbody>
+                {skaters.map((r, i) => (
+                  <tr key={r.player_id || i} className={String(r.team_id) === userTeam ? "is-user" : ""}>
+                    <td>{i + 1}</td>
+                    <td className="l">{r.name}</td>
+                    <td>{r.team_abbr}</td>
+                    <td>{r.position}</td>
+                    <td>{r.gp}</td>
+                    <td>{r.g}</td>
+                    <td>{r.a}</td>
+                    <td className="b">{r.pts}</td>
+                    <td>{Number(r.plus_minus || 0) > 0 ? `+${r.plus_minus}` : r.plus_minus || 0}</td>
+                    <td>{Number(r.p_per_gp || 0).toFixed(2)}</td>
+                    <td>{r.sog || 0}</td>
+                    <td>{fmtToiSec(r.toi_per_gp_sec)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <table className="sc-po-table">
+              <thead>
+                <tr><th>#</th><th className="l">Goalie</th><th>Team</th><th>GP</th><th>W</th><th>L</th><th>SV%</th><th>GAA</th><th>SA</th><th>GA</th></tr>
+              </thead>
+              <tbody>
+                {goalies.map((r, i) => (
+                  <tr key={r.player_id || i} className={String(r.team_id) === userTeam ? "is-user" : ""}>
+                    <td>{i + 1}</td>
+                    <td className="l">{r.name}</td>
+                    <td>{r.team_abbr}</td>
+                    <td>{r.gp}</td>
+                    <td className="b">{r.w || 0}</td>
+                    <td>{r.l || 0}</td>
+                    <td>{r.sv_pct != null ? Number(r.sv_pct).toFixed(3).replace(/^0/, "") : "—"}</td>
+                    <td>{r.gaa != null ? Number(r.gaa).toFixed(2) : "—"}</td>
+                    <td>{r.shots_against || r.goalie_shots_against || 0}</td>
+                    <td>{r.ga || 0}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </section>
+    </div>
   );
 }
