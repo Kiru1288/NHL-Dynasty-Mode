@@ -1324,7 +1324,10 @@ def _normalize_contract_payload_uncached(player_or_contract: Any) -> Dict[str, A
 # ---------------------------------------------------------------------------
 
 def get_contract_cap_hit(contract: Any, season: Optional[int] = None) -> float:
-    c = normalize_contract_payload(contract)
+    return _contract_cap_hit_n(normalize_contract_payload(contract), season)
+
+
+def _contract_cap_hit_n(c: Dict[str, Any], season: Optional[int] = None) -> float:
     ctype = str(c.get("contract_type") or c.get("type") or "").upper()
     if ctype in ("AHL", "ECHL", "AHL_ECHL", "PTO", "ATO", "TRYOUT"):
         return float(c.get("cap_hit_m") or 0.0)
@@ -1347,7 +1350,10 @@ def get_contract_cap_hit(contract: Any, season: Optional[int] = None) -> float:
 
 
 def get_contract_nhl_salary(contract: Any, season: Optional[int] = None) -> float:
-    c = normalize_contract_payload(contract)
+    return _contract_nhl_salary_n(normalize_contract_payload(contract), season)
+
+
+def _contract_nhl_salary_n(c: Dict[str, Any], season: Optional[int] = None) -> float:
     arr = c.get("nhl_salary_by_year_m")
     if isinstance(arr, list) and arr:
         idx = 0
@@ -1358,7 +1364,10 @@ def get_contract_nhl_salary(contract: Any, season: Optional[int] = None) -> floa
 
 
 def get_contract_minor_salary(contract: Any, season: Optional[int] = None) -> float:
-    c = normalize_contract_payload(contract)
+    return _contract_minor_salary_n(normalize_contract_payload(contract), season)
+
+
+def _contract_minor_salary_n(c: Dict[str, Any], season: Optional[int] = None) -> float:
     arr = c.get("minor_salary_by_year_m")
     if isinstance(arr, list) and arr:
         idx = 0
@@ -1369,7 +1378,10 @@ def get_contract_minor_salary(contract: Any, season: Optional[int] = None) -> fl
 
 
 def get_contract_bonus_total(contract: Any, season: Optional[int] = None) -> float:
-    c = normalize_contract_payload(contract)
+    return _contract_bonus_total_n(normalize_contract_payload(contract), season)
+
+
+def _contract_bonus_total_n(c: Dict[str, Any], season: Optional[int] = None) -> float:
     return float(
         c.get("maximum_performance_bonus_m")
         or (float(c.get("schedule_a_bonus_m") or 0) + float(c.get("schedule_b_bonus_m") or 0))
@@ -1379,12 +1391,18 @@ def get_contract_bonus_total(contract: Any, season: Optional[int] = None) -> flo
 
 
 def get_contract_years_remaining(contract: Any, season: Optional[int] = None) -> int:
-    c = normalize_contract_payload(contract)
+    return _contract_years_remaining_n(normalize_contract_payload(contract), season)
+
+
+def _contract_years_remaining_n(c: Dict[str, Any], season: Optional[int] = None) -> int:
     return int(c.get("years_remaining") or 0)
 
 
 def get_contract_clause(contract: Any, season: Optional[int] = None) -> Dict[str, Any]:
-    c = normalize_contract_payload(contract)
+    return _contract_clause_n(normalize_contract_payload(contract), season)
+
+
+def _contract_clause_n(c: Dict[str, Any], season: Optional[int] = None) -> Dict[str, Any]:
     return {
         "clause_type": c.get("clause_type") or (
             "NMC" if c.get("nmc") else (
@@ -1517,19 +1535,21 @@ def iter_org_contract_players(team: Any) -> List[Any]:
 
 
 def get_contract_display_summary(contract: Any, season: Optional[int] = None) -> Dict[str, Any]:
+    # Normalize once. Handing the normalized dict to the public accessors normalized
+    # and copied it six more times per player row.
     c = normalize_contract_payload(contract)
     return {
         "type": c.get("contract_type") or c.get("type"),
-        "years_remaining": get_contract_years_remaining(c, season),
+        "years_remaining": _contract_years_remaining_n(c, season),
         "aav_m": float(c.get("aav_m") or 0),
-        "cap_hit_m": get_contract_cap_hit(c, season),
-        "nhl_salary_m": get_contract_nhl_salary(c, season),
-        "minor_salary_m": get_contract_minor_salary(c, season),
+        "cap_hit_m": _contract_cap_hit_n(c, season),
+        "nhl_salary_m": _contract_nhl_salary_n(c, season),
+        "minor_salary_m": _contract_minor_salary_n(c, season),
         "signing_bonus_m": float(c.get("signing_bonus_m") or 0),
-        "performance_bonus_m": get_contract_bonus_total(c, season),
+        "performance_bonus_m": _contract_bonus_total_n(c, season),
         "two_way": bool(c.get("two_way")),
         "is_entry_level": bool(c.get("is_entry_level") or str(c.get("type") or "").upper() == "ELC"),
-        "clause": get_contract_clause(c, season),
+        "clause": _contract_clause_n(c, season),
         "schema_version": c.get("schema_version"),
     }
 

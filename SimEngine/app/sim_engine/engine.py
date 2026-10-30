@@ -10989,6 +10989,16 @@ class SimEngine:
 
     def _roster_depth_strength(self, team: Any) -> float:
         """Team quality from all 4 lines + 3 pairs + crease — depth actually decides games."""
+        comps = self._roster_depth_components(team)
+        return self._roster_depth_score(comps, self._gm_deployment_style(team))
+
+    def _roster_depth_strength_by_style(self, team: Any, styles: Sequence[str]) -> Dict[str, float]:
+        """``_roster_depth_strength`` under each bench style. Lines, chemistry and the crease
+        do not depend on the style, so they are built once instead of once per style."""
+        comps = self._roster_depth_components(team)
+        return {s: self._roster_depth_score(comps, s) for s in styles}
+
+    def _roster_depth_components(self, team: Any) -> Dict[str, Any]:
         sk = self._gm_skaters(team)
         lines, defs = self._gm_forward_lines(sk, team)
         while len(lines) < 4:
@@ -10999,26 +11009,12 @@ class SimEngine:
             pairs.append(dlist[i : i + 2])
         while len(pairs) < 3:
             pairs.append([])
-        style = self._gm_deployment_style(team)
-        # All four lines and three pairs play real minutes and give up real goals.
-        if style == "rolling_four":
-            lw = (0.27, 0.26, 0.25, 0.22)
-            pw = (0.35, 0.33, 0.32)
-        elif style == "top_heavy":
-            lw = (0.34, 0.28, 0.22, 0.16)
-            pw = (0.41, 0.33, 0.26)
-        else:
-            lw = (0.29, 0.26, 0.24, 0.21)
-            pw = (0.36, 0.33, 0.31)
         # The GM's Edit Lines ice share is how the minutes really split, so it weights each
         # unit, and a unit run past normal top-line minutes tires: it plays below its ratings,
         # more so with low stamina. Before this the shares only moved points between players,
         # so stacking minutes on one line cost nothing.
         saved_fw, saved_d = self._gm_saved_unit_shares(team)
-        if saved_fw:
-            lw = saved_fw
-        if saved_d:
-            pw = saved_d
+
         def _unit_team_syn(unit: List[Any], *, defense: bool) -> float:
             if len(unit) < 2:
                 return 1.0
@@ -11041,22 +11037,51 @@ class SimEngine:
             ovr_u = self._unit_mean_ovr01(unit)
             return _gm_unit_synergy_team_mult(chem, ovr_u)
 
-        f_team_syn = [_unit_team_syn(lines[i], defense=False) for i in range(4)]
-        d_team_syn = [_unit_team_syn(pairs[i], defense=True) for i in range(3)]
-        f_score = sum(
-            lw[i] * max(0.0, self._unit_mean_ovr01(lines[i]) - self._gm_unit_fatigue(lines[i], lw[i], 0.36))
-            for i in range(4)
-        )
-        d_score = sum(
-            pw[i] * max(0.0, self._unit_mean_ovr01(pairs[i]) - self._gm_unit_fatigue(pairs[i], pw[i], 0.46))
-            for i in range(3)
-        )
         goalies = self._gm_goalies(team)
         if goalies:
             ranked_g = sorted(goalies, key=self._gm_ovr_bonus, reverse=True)
             g_score = 0.78 * self._unit_mean_ovr01(ranked_g[:1]) + 0.22 * self._unit_mean_ovr01(ranked_g[1:2] or ranked_g[:1])
         else:
             g_score = 0.72
+        return {
+            "lines": lines,
+            "pairs": pairs,
+            "line_ovr": [self._unit_mean_ovr01(lines[i]) for i in range(4)],
+            "pair_ovr": [self._unit_mean_ovr01(pairs[i]) for i in range(3)],
+            "f_syn": [_unit_team_syn(lines[i], defense=False) for i in range(4)],
+            "d_syn": [_unit_team_syn(pairs[i], defense=True) for i in range(3)],
+            "g_score": g_score,
+            "saved_fw": saved_fw,
+            "saved_d": saved_d,
+        }
+
+    def _roster_depth_score(self, comps: Dict[str, Any], style: str) -> float:
+        lines, pairs = comps["lines"], comps["pairs"]
+        # All four lines and three pairs play real minutes and give up real goals.
+        if style == "rolling_four":
+            lw = (0.27, 0.26, 0.25, 0.22)
+            pw = (0.35, 0.33, 0.32)
+        elif style == "top_heavy":
+            lw = (0.34, 0.28, 0.22, 0.16)
+            pw = (0.41, 0.33, 0.26)
+        else:
+            lw = (0.29, 0.26, 0.24, 0.21)
+            pw = (0.36, 0.33, 0.31)
+        if comps["saved_fw"]:
+            lw = comps["saved_fw"]
+        if comps["saved_d"]:
+            pw = comps["saved_d"]
+        f_team_syn = comps["f_syn"]
+        d_team_syn = comps["d_syn"]
+        f_score = sum(
+            lw[i] * max(0.0, comps["line_ovr"][i] - self._gm_unit_fatigue(lines[i], lw[i], 0.36))
+            for i in range(4)
+        )
+        d_score = sum(
+            pw[i] * max(0.0, comps["pair_ovr"][i] - self._gm_unit_fatigue(pairs[i], pw[i], 0.46))
+            for i in range(3)
+        )
+        g_score = comps["g_score"]
         # Every unit counts in proportion to the minutes it plays, so a better player is
         # worth the same per minute on the 4th line as on the 1st. (A separate depth term
         # used to add the bottom six / 3rd pair a second time and dock clubs whose top
@@ -16574,6 +16599,17 @@ class SimEngine:
                 teams = list(raw)
         except Exception:
             teams = []
+        # Same league, same day, same rosters -> same means. Built once per game it cost
+        # ~80ms (every roster in the league sorted and rated) for each of a day's games.
+        day = getattr(self, "_franchise_gp_calendar_day", None)
+        day_key: Any = None
+        if day is not None:
+            day_key = (int(day), tuple(tuple(id(p) for p in (getattr(tm, "roster", None) or [])) for tm in teams))
+            held = getattr(self, "_gm_slot_means_day_cache", None)
+            if isinstance(held, tuple) and len(held) == 2 and held[0] == day_key:
+                if isinstance(scope, dict):
+                    scope["slot_means"] = held[1]
+                return held[1]
         for tm in teams:
             fw: List[Any] = []
             df: List[Any] = []
@@ -16600,6 +16636,8 @@ class SimEngine:
         means = {k: (sum(v) / len(v)) for k, v in acc.items() if v}
         if isinstance(scope, dict):
             scope["slot_means"] = means
+        if day_key is not None:
+            self._gm_slot_means_day_cache = (day_key, means)
         return means
 
     def _gm_star_scoring_mult(self, team: Any) -> float:
@@ -16724,6 +16762,17 @@ class SimEngine:
 
         live_atk: Optional[Tuple[List[float], List[float]]] = None
         live_def: Optional[Tuple[List[float], List[float]]] = None
+        # A unit's attempt rate is fixed for the game; it was recomputed for every unit on
+        # every shot attempt (~750 times per game).
+        rate_memo: Dict[Tuple[Tuple[int, ...], bool, int, bool], float] = {}
+
+        def _unit_rate(members: List[Any], defense: bool, key: int, attack: bool) -> float:
+            mk = (tuple(id(p) for p in members), bool(defense), int(key), bool(attack))
+            v = rate_memo.get(mk)
+            if v is None:
+                v = self._gm_unit_attempt_rate(members, defense, int(key), attack=attack)
+                rate_memo[mk] = v
+            return v
 
         def _pick_unit(
             groups: Dict[int, List[Any]],
@@ -16743,7 +16792,7 @@ class SimEngine:
                 if not matching:
                     # Versus the league average for this slot, not the opponent's
                     # matching unit. A strong line stays strong against every opponent.
-                    rate = self._gm_unit_attempt_rate(members, defense, int(key), attack=True)
+                    rate = _unit_rate(members, defense, int(key), True)
                     weights.append(max(0.01, share * rate))
                 else:
                     bias = 1.0
@@ -16751,7 +16800,7 @@ class SimEngine:
                         bias += 0.35
                         if last_change:
                             bias += 0.25
-                    suppress = self._gm_unit_attempt_rate(members, defense, int(key), attack=False)
+                    suppress = _unit_rate(members, defense, int(key), False)
                     weights.append(max(0.01, share * bias * suppress))
             return int(rng.choices(keys, weights=weights, k=1)[0])
 

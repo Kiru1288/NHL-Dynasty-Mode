@@ -18,6 +18,19 @@ from services.franchise_sim import get_cached_draft_class_rankings, ensure_prosp
 from services.franchise_session import FranchiseSession
 from services.franchise_sim import invalidate_session_payload_caches
 import logging as _logging_swallow
+
+
+def _int_attr(obj, name, default=-1):
+    """int attribute that keeps a stored 0 (``int(getattr(o, n, -1) or -1)`` turned 0 into -1,
+    so caches keyed on revision/cursor 0 never hit)."""
+    v = getattr(obj, name, None)
+    if v is None:
+        return default
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
+
 _swallowed_log = _logging_swallow.getLogger(__name__)
 
 DRAFT_OVR_REVEAL_THRESHOLD = 72.0
@@ -1169,24 +1182,28 @@ def _normalize_prospect(
     return out
 
 
-_BACKGROUND_ENTRIES_MAX_AGE_DAYS = 21
+# Passive scouting only reads ids, region and rank from this list, and the Draft Class
+# screen always rebuilds, so a six-week-old ranking is fine here. At 21 days the
+# ~17s rebuild landed inside a sim every three weeks.
+_BACKGROUND_ENTRIES_MAX_AGE_DAYS = 42
 
 
 def _draft_entries(session: FranchiseSession, *, background: bool = False) -> List[Dict[str, Any]]:
     """Ranked draft class. ``background=True`` (the daily passive-scouting pass) may
-    reuse the last ranked list for up to 21 days: a full rebuild costs ~16s and
+    reuse the last ranked list for up to 42 days: a full rebuild costs ~16s and
     prospect growth invalidated it every few sim days. Screens always rebuild."""
     sim = getattr(session, "sim", None)
     rev = int(getattr(session, "_prospect_revision", 0) or 0)
     cur = int(getattr(session, "calendar_cursor", 0) or 0)
     # Class identity: a new class arrives at the draft, inside the same season year.
+    # Phase is not part of it: preseason -> regular season kept the same class but
+    # forced a ~20s full board rebuild on the first regular-season sim day.
     season = (
         int(getattr(session, "season_calendar_year", 0) or 0),
-        str(getattr(session, "phase", "") or ""),
         bool(getattr(session, "draft_completed", False)),
     )
     cached = getattr(session, "_cached_draft_class_rankings", None)
-    cached_rev = int(getattr(session, "_cached_draft_class_rankings_rev", -1) or -1)
+    cached_rev = _int_attr(session, "_cached_draft_class_rankings_rev")
     if isinstance(cached, dict) and cached.get("entries") and cached_rev == rev:
         entries = list(cached.get("entries") or [])
         session._background_draft_entries = (cur, season, entries)

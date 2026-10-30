@@ -27,6 +27,20 @@ from app.sim_engine.franchise.storyline_copy import (
     valid_goalie_meltdown_sv,
 )
 import logging as _logging_swallow
+import threading
+
+
+def _int_attr(obj, name, default=-1):
+    """int attribute that keeps a stored 0 (``int(getattr(o, n, -1) or -1)`` turned 0 into -1,
+    so caches keyed on revision/cursor 0 never hit)."""
+    v = getattr(obj, name, None)
+    if v is None:
+        return default
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
+
 _swallowed_log = _logging_swallow.getLogger(__name__)
 
 _log = logging.getLogger("uvicorn.error")
@@ -699,7 +713,7 @@ def _trim_legacy_social_posts(posts: List[Any], keep: int) -> List[Any]:
 def _player_index_by_id(session: Any) -> Dict[str, Any]:
     """One roster walk per stats revision — O(1) player lookup for storyline passes."""
     rev = int(getattr(session, "_stats_revision", 0) or 0)
-    cached_rev = int(getattr(session, "_player_index_rev", -1) or -1)
+    cached_rev = _int_attr(session, "_player_index_rev")
     cached = getattr(session, "_player_index_by_id", None)
     if isinstance(cached, dict) and cached_rev == rev:
         return cached
@@ -717,7 +731,7 @@ def _player_index_by_id(session: Any) -> Dict[str, Any]:
 
 def _build_standings_rank_map(session: Any) -> Dict[str, int]:
     """Sort league standings once; reuse ranks across all storyline triggers."""
-    cached_rev = int(getattr(session, "_standings_rank_rev", -1) or -1)
+    cached_rev = _int_attr(session, "_standings_rank_rev")
     rev = int(getattr(session, "_stats_revision", 0) or 0)
     cached = getattr(session, "_standings_rank_by_team", None)
     if isinstance(cached, dict) and cached_rev == rev:
@@ -2063,7 +2077,7 @@ def migrate_session_storyline_state(session: Any) -> None:
     if league is not None:
         setattr(league, "_franchise_user_team_id", str(getattr(session, "user_team_id", "") or ""))
     stats_rev = int(getattr(session, "_stats_revision", 0) or 0)
-    if int(getattr(session, "_storyline_migrate_stats_rev", -1) or -1) != stats_rev:
+    if _int_attr(session, "_storyline_migrate_stats_rev") != stats_rev:
         for tm in (getattr(session, "team_by_id", None) or {}).values():
             for pl in getattr(tm, "roster", None) or []:
                 _ensure_player_storyline_state(pl)
@@ -6518,7 +6532,24 @@ def _u_team_players(session: Any, team_id: str) -> List[Any]:
     return list(getattr(team, "roster", None) or []) if team is not None else []
 
 
+# Read-only payload builds open this so the league walk below runs once per build;
+# the meetings payload synced ~190 players one by one, each walking every roster.
+# Thread-local: a sim running on another API thread must never read this snapshot.
+_U_ALL_PLAYERS_PASS = threading.local()
+
+
 def _u_all_players(session: Any) -> List[Tuple[str, Any]]:
+    held = getattr(_U_ALL_PLAYERS_PASS, "rows", None)
+    if held is not None:
+        rows = held.get(id(session))
+        if rows is None:
+            rows = _u_all_players_uncached(session)
+            held[id(session)] = rows
+        return list(rows)
+    return _u_all_players_uncached(session)
+
+
+def _u_all_players_uncached(session: Any) -> List[Tuple[str, Any]]:
     rows: List[Tuple[str, Any]] = []
     seen = set()
     for team_id, team in (getattr(session, "team_by_id", None) or {}).items():
@@ -8839,8 +8870,15 @@ def enrich_storyline_for_narrative_universe(session: Any, event: Dict[str, Any])
 
 
 def build_narrative_universe_payload(session: Any) -> Dict[str, Any]:
-    legacy = _UNIVERSE_LEGACY_PAYLOAD(session)
-    expanded = build_narrative_universe_v2_payload(session)
+    opened = getattr(_U_ALL_PLAYERS_PASS, "rows", None) is None
+    if opened:
+        _U_ALL_PLAYERS_PASS.rows = {}
+    try:
+        legacy = _UNIVERSE_LEGACY_PAYLOAD(session)
+        expanded = build_narrative_universe_v2_payload(session)
+    finally:
+        if opened:
+            _U_ALL_PLAYERS_PASS.rows = None
     merged = {**dict(legacy or {}), **expanded, "legacy_narrative": legacy}
     merged["breaking_alerts"] = _collect_breaking_alerts(session)
     return merged
@@ -9581,6 +9619,27 @@ def _u_migrate_v2(session: Any) -> None:
     session.universe_engine_version = UNIVERSE_ENGINE_VERSION
 
 
+def _u_personality_for_day(session: Any, player: Any, player_id: str) -> Dict[str, float]:
+    """``_u_personality`` cached for the current calendar day. Each game re-synced both
+    rooms, deriving every player's personality from his traits ~50 times a sim day."""
+    day = getattr(session, "calendar_cursor", None)
+    held = getattr(session, "_u_personality_day_cache", None)
+    if not (isinstance(held, tuple) and len(held) == 2 and held[0] == day and isinstance(held[1], dict)):
+        held = (day, {})
+        try:
+            session._u_personality_day_cache = held
+        except Exception:
+            return _u_personality(player, player_id)
+    cache = held[1]
+    key = (player_id, id(player))
+    hit = cache.get(key)
+    if hit is None:
+        hit = _u_personality(player, player_id)
+        cache[key] = dict(hit)
+        return hit
+    return dict(hit)
+
+
 def _u_sync_player_entities(
     session: Any,
     *,
@@ -9649,7 +9708,7 @@ def _u_sync_player_entities(
         _u_reconcile_psych_morale(entity, player)
         entity["life"].setdefault("last_minor_event_day", -999)
         entity["life"].setdefault("minor_event_history", [])
-        base_personality = _u_personality(player, player_id)
+        base_personality = _u_personality_for_day(session, player, player_id)
         base_personality["character"] = _u_clip(
             float(base_personality.get("character", 55))
             + float(entity["state"].get("character_modifier", 0.0) or 0.0)
@@ -11721,7 +11780,7 @@ def _u_tick_player_life(session: Any, team_id: str, entity: Dict[str, Any], rng:
 def narrative_universe_v2_daily_pass(session: Any, calendar_idx: int, day_meta: Dict[str, Any], rng: Optional[random.Random] = None) -> Dict[str, Any]:
     """V3 daily director: lives, meetings, trade-demand deadlines, minor events and 3-5 league-wide major events."""
     _u_migrate_v2(session)
-    if int(getattr(session, "_universe_last_daily_tick", -1) or -1) == int(calendar_idx):
+    if _int_attr(session, "_universe_last_daily_tick") == int(calendar_idx):
         return {"already_processed": True, "calendar_day": int(calendar_idx), "generated_interactions": 0}
     entities = _u_sync_player_entities(session)
     season = int(getattr(session, "season_calendar_year", 2025) or 2025)
@@ -11729,7 +11788,7 @@ def narrative_universe_v2_daily_pass(session: Any, calendar_idx: int, day_meta: 
     # Bulk sims run this director once per UNIVERSE_BULK_PASS_EVERY_DAYS: day-counted
     # timers must advance by the days actually elapsed, not by one per pass (a 5-day
     # readiness hit used to last ~35 days in a sim-to-date).
-    last_tick = int(getattr(session, "_universe_last_daily_tick", -1) or -1)
+    last_tick = _int_attr(session, "_universe_last_daily_tick")
     elapsed_days = max(1, min(60, int(calendar_idx) - last_tick)) if last_tick >= 0 else 1
     readiness_expired = _u_tick_readiness_modifiers(session, elapsed_days)
     availability_cleared = _u_tick_player_availability_days(session, elapsed_days)

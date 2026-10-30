@@ -14,6 +14,7 @@ import hashlib
 import math
 import random
 from datetime import date
+from functools import lru_cache
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 import logging as _logging_swallow
 _swallowed_log = _logging_swallow.getLogger(__name__)
@@ -394,7 +395,13 @@ def _clamp(v: float, lo: float, hi: float) -> float:
 
 def normalize_prospect_league_key(league: Any) -> str:
     """Map varied league codes/names to a scoring profile key."""
-    raw = str(league or "").strip()
+    return _normalize_prospect_league_str(str(league or ""))
+
+
+@lru_cache(maxsize=1024)
+def _normalize_prospect_league_str(league: str) -> str:
+    # Pure on the string; the prospect sync normalised the same few codes ~100k times per day.
+    raw = league.strip()
     if not raw:
         return "JUNIOR"
     up = raw.upper().replace("—", "-").replace("–", "-")
@@ -673,7 +680,12 @@ def _default_games_played(profile: Dict[str, Any], age: int, rng: random.Random)
 
 
 def _parse_calendar_iso(calendar_iso: Any) -> Tuple[int, int]:
-    raw = str(calendar_iso or "").strip()
+    return _parse_calendar_iso_str(str(calendar_iso or ""))
+
+
+@lru_cache(maxsize=512)
+def _parse_calendar_iso_str(calendar_iso: str) -> Tuple[int, int]:
+    raw = calendar_iso.strip()
     if not raw:
         return 9, 15
     try:
@@ -1069,8 +1081,7 @@ def _defensive_analytics_score(prospect: Any) -> float:
     else:
         vals: List[float] = []
         for k, v in ratings.items():
-            kl = str(k).lower()
-            if any(x in kl for x in ("def", "stick", "check", "position", "aware", "gap", "transition", "skating")):
+            if _process_key_match(str(k)):
                 vals.append(_safe_float(v, 50.0) / 99.0)
         if not vals:
             style = _playstyle_bucket(prospect)
@@ -1178,6 +1189,11 @@ def _stock_reason_from_signals(
 
 def _iso_week_key(calendar_iso: Any) -> str:
     """ISO year-week key for weekly draft-stock snapshots."""
+    return _iso_week_key_str(str(calendar_iso or "")[:10])
+
+
+@lru_cache(maxsize=512)
+def _iso_week_key_str(calendar_iso: str) -> str:
     try:
         from datetime import datetime
 
@@ -2089,10 +2105,39 @@ def advance_all_development_league_stats(
     return updated
 
 
+# Kept off the player objects on purpose: adding attributes to a player from the
+# draft-board warm thread while another thread pickles or deep-copies the session
+# fails with "dictionary changed size during iteration". Keyed by id() with an
+# identity check; bounded, and cleared rather than evicted.
+_EVENT_SKILLS_MEMO: Dict[int, Tuple[Any, Any, Dict[str, float]]] = {}
+_EVENT_SKILLS_MEMO_MAX = 30000
+
+
 def _prospect_event_skills(prospect: Any) -> Dict[str, float]:
     """Latent event-skill dimensions shared with NHL event simulation philosophy."""
     ratings = getattr(prospect, "ratings", None) or {}
     style = _playstyle_bucket(prospect)
+    ovr_n = _clamp(_player_ovr_0_1(prospect), 0.20, 0.95)
+    # Pure on (ratings, style, ovr). The daily prospect-league sync asked for it
+    # ~5k times per sim day, re-averaging unchanged ratings each time.
+    try:
+        memo_key: Any = (style, ovr_n, tuple(ratings.items()))
+        hash(memo_key)
+    except TypeError:
+        memo_key = None
+    if memo_key is not None:
+        held = _EVENT_SKILLS_MEMO.get(id(prospect))
+        if held is not None and held[0] is prospect and held[1] == memo_key:
+            return dict(held[2])
+    out = _prospect_event_skills_uncached(ratings, style, ovr_n)
+    if memo_key is not None:
+        if len(_EVENT_SKILLS_MEMO) >= _EVENT_SKILLS_MEMO_MAX:
+            _EVENT_SKILLS_MEMO.clear()
+        _EVENT_SKILLS_MEMO[id(prospect)] = (prospect, memo_key, dict(out))
+    return out
+
+
+def _prospect_event_skills_uncached(ratings: Dict[str, Any], style: str, ovr_n: float) -> Dict[str, float]:
     # The all-ratings fallback below is identical for every skill (same ratings, same
     # default), so compute it at most once per call.
     fallback_vals: Dict[float, List[float]] = {}
@@ -2132,7 +2177,6 @@ def _prospect_event_skills(prospect: Any) -> Dict[str, float]:
 
     # Blend overall so draft-board talent (not only sparse rating dicts) drives PPG bands.
     # Player.ovr is a *method*; float(method) used to fail silently and pin this to 0.50.
-    ovr_n = _clamp(_player_ovr_0_1(prospect), 0.20, 0.95)
     volume = _clamp(volume * 0.88 + ovr_n * 0.12, 0.15, 0.98)
     finishing = _clamp(finishing * 0.86 + ovr_n * 0.14, 0.15, 0.98)
     playmaking = _clamp(playmaking * 0.88 + ovr_n * 0.12, 0.15, 0.98)
@@ -2574,6 +2618,23 @@ def ensure_prospect_season_stats(
     return initialize_prospect_season(prospect, league, rng=rng, season_year=season_year, calendar_iso=calendar_iso)
 
 
+@lru_cache(maxsize=2048)
+def _process_key_match(key: str) -> bool:
+    kl = key.lower()
+    return any(x in kl for x in ("def", "stick", "check", "position", "aware", "gap", "transition", "skating"))
+
+
+@lru_cache(maxsize=2048)
+def _defensive_key_groups(key: str) -> Tuple[bool, bool, bool, bool]:
+    kl = key.lower()
+    return (
+        any(x in kl for x in ("def", "stick", "gap", "block", "poke", "positioning")),
+        any(x in kl for x in ("iq", "sense", "awareness", "read")),
+        any(x in kl for x in ("strength", "physical", "reach", "body")),
+        "skat" in kl,
+    )
+
+
 def _defensive_talent_score(prospect: Any) -> float:
     """0–1 defensive talent estimate from current ratings and playstyle (no potential input)."""
     ovr = _player_ovr_0_1(prospect)
@@ -2586,14 +2647,14 @@ def _defensive_talent_score(prospect: Any) -> float:
         phys_vals: List[float] = []
         skate_vals: List[float] = []
         for k, v in ratings.items():
-            kl = str(k).lower()
-            if any(x in kl for x in ("def", "stick", "gap", "block", "poke", "positioning")):
+            is_def, is_iq, is_phys, is_skate = _defensive_key_groups(str(k))
+            if is_def:
                 def_vals.append(_safe_float(v, 50.0) / 99.0)
-            if any(x in kl for x in ("iq", "sense", "awareness", "read")):
+            if is_iq:
                 iq_vals.append(_safe_float(v, 50.0) / 99.0)
-            if any(x in kl for x in ("strength", "physical", "reach", "body")):
+            if is_phys:
                 phys_vals.append(_safe_float(v, 50.0) / 99.0)
-            if "skat" in kl:
+            if is_skate:
                 skate_vals.append(_safe_float(v, 50.0) / 99.0)
         if def_vals:
             score += sum(def_vals) / len(def_vals) * 0.30

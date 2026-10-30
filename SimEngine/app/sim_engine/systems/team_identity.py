@@ -98,13 +98,34 @@ def _avg_keys(r: Dict[str, float], keys: Iterable[str]) -> Optional[float]:
     return sum(vals) / len(vals) if vals else None
 
 
+# Off the player objects so a background thread never grows a player's __dict__ while
+# the session is being pickled. Keyed by id() with an identity check; bounded.
+_ATTR_PROFILE_MEMO: Dict[int, Tuple[Any, Any, Dict[str, float]]] = {}
+_ATTR_PROFILE_MEMO_MAX = 20000
+
+
 def player_attribute_profile(player: Any) -> Dict[str, float]:
     """Group averages on the 0-99 rating scale (missing groups fall back to 60)."""
     r = _ratings(player)
+    # Pure on the ratings dict. League identities re-ran it for every rostered player
+    # whenever any roster in the league changed (most sim days).
+    try:
+        memo_key: Any = tuple(r.items())
+        hash(memo_key)
+    except TypeError:
+        memo_key = None
+    if memo_key is not None:
+        held = _ATTR_PROFILE_MEMO.get(id(player))
+        if held is not None and held[0] is player and held[1] == memo_key:
+            return dict(held[2])
     out: Dict[str, float] = {}
     for g, keys in _GROUP_KEYS.items():
         v = _avg_keys(r, keys)
         out[g] = float(v) if v is not None else 60.0
+    if memo_key is not None:
+        if len(_ATTR_PROFILE_MEMO) >= _ATTR_PROFILE_MEMO_MAX:
+            _ATTR_PROFILE_MEMO.clear()
+        _ATTR_PROFILE_MEMO[id(player)] = (player, memo_key, dict(out))
     return out
 
 

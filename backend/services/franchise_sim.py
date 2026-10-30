@@ -78,6 +78,18 @@ from services.nhl_season_calendar import (
     season_anchor_event_markers,
 )
 
+
+def _int_attr(obj, name, default=-1):
+    """int attribute that keeps a stored 0 (``int(getattr(o, n, -1) or -1)`` turned 0 into -1,
+    so caches keyed on revision/cursor 0 never hit)."""
+    v = getattr(obj, name, None)
+    if v is None:
+        return default
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
+
 # Canonical NHL names (lowercase) -> 3-letter code. Avoids "Stars" -> STA when team_id is numeric.
 _NHL_DISPLAY_LOWER_TO_ABBR: Dict[str, str] = {
     "anaheim ducks": "ANA",
@@ -6858,7 +6870,7 @@ def _build_stats_central_payload(session: FranchiseSession) -> Dict[str, Any]:
     StatsCentral payload via canonical player_analytics enrichment.
     """
     stats_rev = int(getattr(session, "_stats_revision", 0) or 0)
-    skip_backfill = int(getattr(session, "_stats_backfill_revision", -1) or -1) == stats_rev
+    skip_backfill = _int_attr(session, "_stats_backfill_revision") == stats_rev
     epoch0 = _stats_ledger_epoch(session)
     if epoch0 < LEGACY_REPAIR_EPOCH:
         try:
@@ -13227,12 +13239,13 @@ def _cpu_choose_deployment_styles(sim: Any, teams: List[Any], user_team_id: str)
         if tid == str(user_team_id):
             continue
         best_style, best_val = "balanced", -1.0
-        for style in ("balanced", "rolling_four", "top_heavy"):
-            setattr(t, "deployment_style", style)
-            try:
-                v = float(sim._roster_depth_strength(t))
-            except Exception:
-                v = -1.0
+        styles = ("balanced", "rolling_four", "top_heavy")
+        try:
+            by_style = sim._roster_depth_strength_by_style(t, styles)
+        except Exception:
+            by_style = {}
+        for style in styles:
+            v = float(by_style.get(style, -1.0))
             if v > best_val + (0.0005 if style != "balanced" else 0.0):
                 best_style, best_val = style, v
         setattr(t, "deployment_style", best_style)
@@ -14757,7 +14770,7 @@ def ensure_prospect_stats_current_for_scouting(session: FranchiseSession) -> Non
     iso = _scouting_calendar_iso(session)
     last_iso = str(getattr(session, "_prospect_stats_synced_iso", "") or "")
     cur_cursor = int(getattr(session, "calendar_cursor", 0) or 0)
-    last_cursor = int(getattr(session, "_prospect_stats_synced_cursor", -1) or -1)
+    last_cursor = _int_attr(session, "_prospect_stats_synced_cursor")
     if last_iso and iso and last_iso == str(iso) and last_cursor == cur_cursor:
         return
     _sync_prospect_stats_to_calendar(session, force=True)
@@ -14858,7 +14871,7 @@ def _sync_prospect_stats_to_calendar(session: FranchiseSession, *, force: bool =
             prospect_rows=rows,
         )
         cur_cursor = int(getattr(session, "calendar_cursor", 0) or 0)
-        last_cursor = int(getattr(session, "_prospect_stats_synced_cursor", -1) or -1)
+        last_cursor = _int_attr(session, "_prospect_stats_synced_cursor")
         cursor_advanced = cur_cursor != last_cursor
         session._prospect_stats_synced_iso = str(iso)
         session._prospect_stats_synced_cursor = cur_cursor
@@ -22565,14 +22578,14 @@ def _get_draft_board_entry(
         return None
     rev = int(getattr(session, "_prospect_revision", 0) or 0)
     index = getattr(session, "_draft_board_entry_by_id", None)
-    index_rev = int(getattr(session, "_draft_board_entry_by_id_rev", -1) or -1)
+    index_rev = _int_attr(session, "_draft_board_entry_by_id_rev")
     if isinstance(index, dict) and index_rev == rev:
         row = index.get(pid)
         if isinstance(row, dict):
             return row
     board = get_cached_draft_class_rankings(session, sim)
     index = getattr(session, "_draft_board_entry_by_id", None)
-    index_rev = int(getattr(session, "_draft_board_entry_by_id_rev", -1) or -1)
+    index_rev = _int_attr(session, "_draft_board_entry_by_id_rev")
     if not isinstance(index, dict) or index_rev != rev:
         index = _rebuild_draft_board_entry_index(session, board)
     row = index.get(pid) if isinstance(index, dict) else None
@@ -27340,7 +27353,7 @@ def get_cached_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict
     rev = int(getattr(session, "_draft_board_revision", 0) or 0)
     cur_cursor = int(getattr(session, "calendar_cursor", 0) or 0)
     cached = getattr(session, "_cached_draft_class_rankings", None)
-    cached_rev = int(getattr(session, "_cached_draft_class_rankings_rev", -1) or -1)
+    cached_rev = _int_attr(session, "_cached_draft_class_rankings_rev")
     if isinstance(cached, dict) and cached and cached_rev == rev:
         # NOTE: must not be `cached.get(...) or -1` — calendar_cursor is legitimately 0
         # at the start of a season/draft, and `0 or -1` collapses to -1, so the cache
@@ -27363,7 +27376,7 @@ def get_cached_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict
         rev = int(getattr(session, "_draft_board_revision", 0) or 0)
         cur_cursor = int(getattr(session, "calendar_cursor", 0) or 0)
         cached = getattr(session, "_cached_draft_class_rankings", None)
-        cached_rev = int(getattr(session, "_cached_draft_class_rankings_rev", -1) or -1)
+        cached_rev = _int_attr(session, "_cached_draft_class_rankings_rev")
         if isinstance(cached, dict) and cached and cached_rev == rev:
             raw_cached_cursor = cached.get("calendar_cursor")
             cached_cursor = int(raw_cached_cursor) if raw_cached_cursor is not None else -1
@@ -27392,7 +27405,7 @@ def get_cached_draft_class_hud(
     build isn't repeated on every Draft Class open. Calendar/countdown slices refresh every read."""
     rev = int(getattr(session, "_prospect_revision", 0) or 0)
     cached = getattr(session, "_cached_draft_class_hud_payload", None)
-    cached_rev = int(getattr(session, "_cached_draft_class_hud_rev", -1) or -1)
+    cached_rev = _int_attr(session, "_cached_draft_class_hud_rev")
     cal_slice = _draft_class_hud_calendar_slice(session, user_team, cal_rec, roster_rows)
     if isinstance(cached, dict) and cached and cached_rev == rev:
         return {**cached, **cal_slice}

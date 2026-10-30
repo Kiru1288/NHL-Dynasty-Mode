@@ -1610,6 +1610,20 @@ def _maybe_offer_trade_opportunity(
 
 def process_trade_demand_day(session: Any, calendar_idx: int, day_meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Update stability for all players; open formal demands when warranted."""
+    # One deployment pass for the whole league: each club's depth chart and TOI leader
+    # were rebuilt for every one of its players (~720 players a day).
+    try:
+        from app.sim_engine.franchise.trade_stability_engine import deployment_pass_begin, deployment_pass_end
+    except Exception:
+        return _process_trade_demand_day(session, calendar_idx, day_meta)
+    deployment_pass_begin()
+    try:
+        return _process_trade_demand_day(session, calendar_idx, day_meta)
+    finally:
+        deployment_pass_end()
+
+
+def _process_trade_demand_day(session: Any, calendar_idx: int, day_meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     import random
 
     rng = getattr(getattr(session, "sim", None), "rng", None) or random.Random(int(calendar_idx) + 17)
