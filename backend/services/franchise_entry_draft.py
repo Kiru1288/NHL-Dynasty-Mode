@@ -1427,6 +1427,8 @@ def _sync_row_live_stats(
             year = int(getattr(session, "season_calendar_year", 0) or 2026)
             cal_iso = f"{year}-06-25"
         rng = getattr(getattr(session, "sim", None), "rng", None)
+        if bool(getattr(player, "real_nhl_import", False)):
+            return out
         actual = ensure_prospect_season_stats(
             player,
             code,
@@ -2115,9 +2117,92 @@ def _build_round_recap(session: FranchiseSession, rnd: int, picks: List[Dict[str
     }
 
 
+def _recover_draft_pointer_from_registry(session: FranchiseSession) -> int:
+    """Skip slots the pick registry already resolved.
+
+    Re-opening the draft used to rebuild it at round 1 pick 1 while every earlier pick was
+    already resolved in the registry, so each CPU pick failed with "Pick already resolved".
+    Walk forward past those slots and record them, so the draft resumes where it really is.
+    """
+    state = getattr(session, "draft_state", None) or {}
+    if not state.get("draft_started") or state.get("draft_completed"):
+        return 0
+    league = getattr(getattr(session, "sim", None), "league", None)
+    reg = getattr(league, "draft_pick_registry", None) if league is not None else None
+    if not isinstance(reg, dict):
+        return 0
+    order = list(state.get("draft_order") or [])
+    overall = int(state.get("overall_pick") or 1)
+    completed = list(state.get("completed_picks") or [])
+    done_overall = {int(p.get("overall_pick") or 0) for p in completed}
+    drafted = list(state.get("drafted_prospect_ids") or [])
+    board = {str(e.get("key")): e for e in (state.get("public_draft_board") or []) if isinstance(e, dict)}
+    skipped = 0
+    while overall <= len(order):
+        slot = order[overall - 1] or {}
+        row = reg.get(str(slot.get("pick_id") or ""))
+        if not (isinstance(row, dict) and row.get("resolved") and row.get("selected_prospect_id")):
+            break
+        pid = str(row.get("selected_prospect_id"))
+        if overall not in done_overall:
+            e = board.get(pid) or {}
+            completed.append({
+                "overall_pick": overall,
+                "round": int(slot.get("round") or 1),
+                "pick_in_round": int(slot.get("pick_in_round") or 0),
+                "team_id": str(row.get("current_owner_team_id") or row.get("owner_team_id") or slot.get("team_id") or ""),
+                "prospect_id": pid,
+                "player_id": pid,
+                "name": e.get("name") or e.get("player_name") or row.get("selected_prospect_name") or pid,
+                "position": e.get("position"),
+                "recovered": True,
+            })
+        if pid not in drafted:
+            drafted.append(pid)
+        overall += 1
+        skipped += 1
+    if not skipped:
+        return 0
+    completed.sort(key=lambda p: int(p.get("overall_pick") or 0))
+    draft_year = int(state.get("draft_year") or session.season_calendar_year + 1)
+    done = overall > len(order)
+    nxt = None
+    if not done:
+        nxt = apply_registry_owner_to_slot(session, dict(order[overall - 1]), draft_year)
+        order[overall - 1] = nxt
+    taken = set(drafted)
+    state.update({
+        "draft_order": order,
+        "overall_pick": overall if not done else len(order),
+        "current_round": int(nxt.get("round") or 1) if nxt else int(state.get("current_round") or 1),
+        "current_pick": int(nxt.get("pick_in_round") or 0) if nxt else 0,
+        "current_team_id": _clock_team_for_slot(session, nxt) if nxt else "",
+        "is_user_pick": bool(nxt) and _clock_team_for_slot(session, nxt) == str(session.user_team_id),
+        "completed_picks": completed,
+        "draft_results": completed,
+        "drafted_prospect_ids": drafted,
+        "available_prospects": [k for k in (state.get("available_prospects") or []) if str(k) not in taken],
+        "draft_completed": done,
+        "event_status": "complete" if done else "live",
+        "updated_at": _now_iso(),
+    })
+    session.draft_state = state
+    return skipped
+
+
 def initialize_entry_draft(session: FranchiseSession) -> Dict[str, Any]:
     if not getattr(session, "draft_combine_done", False):
         raise ValueError("Complete the Draft Combine before starting the Entry Draft")
+    existing = getattr(session, "draft_state", None) or {}
+    want_year = int(session.season_calendar_year) + 1
+    if (
+        existing.get("draft_started")
+        and not existing.get("draft_completed")
+        and int(existing.get("draft_year") or 0) == want_year
+    ):
+        # Coming back from the trade hub (or a refresh) resumes the live draft — never restart it.
+        _recover_draft_pointer_from_registry(session)
+        return get_entry_draft_payload(session, refresh_ownership=True)
     try:
         from services.franchise_scouting import ensure_team_scouting_profiles
 
@@ -3446,6 +3531,7 @@ def _build_batch_summary(session: FranchiseSession, picks: List[Dict[str, Any]])
 
 
 def sim_entry_draft_to_user_pick(session: FranchiseSession) -> Dict[str, Any]:
+    _recover_draft_pointer_from_registry(session)
     picks = _batch_cpu_picks(session, until_user=True)
     summary = _build_batch_summary(session, picks)
     payload = get_entry_draft_payload(session, refresh_ownership=True)
@@ -3460,6 +3546,7 @@ def sim_entry_draft_to_user_pick(session: FranchiseSession) -> Dict[str, Any]:
 
 
 def sim_entry_draft_round(session: FranchiseSession) -> Dict[str, Any]:
+    _recover_draft_pointer_from_registry(session)
     picks = _batch_cpu_picks(session, until_round_end=True)
     summary = _build_batch_summary(session, picks)
     payload = get_entry_draft_payload(session, refresh_ownership=False)
@@ -3477,6 +3564,7 @@ def complete_entry_draft(session: FranchiseSession) -> Dict[str, Any]:
     state = getattr(session, "draft_state", None) or {}
     if not state.get("draft_started"):
         raise ValueError("Draft not started")
+    _recover_draft_pointer_from_registry(session)
     picks = _batch_cpu_picks(session, until_user=False, complete_all=True)
     state = getattr(session, "draft_state", None) or {}
     # Guarantee the draft is flagged complete once the order is exhausted, even if
@@ -4015,3 +4103,193 @@ def prepare_offseason_draft_payload(session: FranchiseSession) -> Dict[str, Any]
     session.draft_payload = payload
     session.draft_completed = bool((getattr(session, "draft_state", None) or {}).get("draft_completed"))
     return {"draft": payload}
+
+# ---------------------------------------------------------------------------
+# User-initiated "trade for this pick" on the draft floor
+# ---------------------------------------------------------------------------
+
+def _draft_trade_ctx(session: FranchiseSession, league: Any) -> Dict[str, Any]:
+    from app.sim_engine.trades.cpu_trade_proposer import build_league_trade_context
+
+    ctx = build_league_trade_context(
+        league,
+        calendar_cursor=int(getattr(session, "calendar_cursor", 0) or 0),
+        regular_season_last_index=int(getattr(session, "nhl_regular_season_last_index", 192) or 192),
+        season_year=int(getattr(session, "season_calendar_year", 2025) or 2025),
+    )
+    ctx["draft_day_trade"] = True
+    ctx["known_pick_slots"] = build_known_pick_slots(session)
+    dy = int((getattr(session, "draft_state", None) or {}).get("draft_year") or 0)
+    if dy > 0:
+        ctx["draft_year"] = dy
+        ctx["tradeable_draft_year"] = dy
+    return ctx
+
+
+def _user_tradeable_picks(session: FranchiseSession) -> List[Dict[str, Any]]:
+    """User picks that can go the other way: later picks in this draft, then next year's."""
+    from services.draft_pick_ownership import resolve_slot_owner
+
+    state = getattr(session, "draft_state", None) or {}
+    uid = str(session.user_team_id)
+    overall = int(state.get("overall_pick") or 1)
+    dy = int(state.get("draft_year") or 0)
+    out: List[Dict[str, Any]] = []
+    for idx, slot in enumerate(list(state.get("draft_order") or []), start=1):
+        if idx < overall or not slot.get("pick_id"):
+            continue
+        if str(resolve_slot_owner(session, slot) or "") != uid:
+            continue
+        out.append({
+            "pick_id": str(slot["pick_id"]), "year": dy, "round": int(slot.get("round") or 1),
+            "overall_pick": idx, "label": f"{dy} R{int(slot.get('round') or 1)} #{idx}",
+        })
+    league = getattr(getattr(session, "sim", None), "league", None)
+    reg = getattr(league, "draft_pick_registry", None) or {}
+    for pick_id, row in reg.items():
+        if not isinstance(row, dict) or row.get("resolved"):
+            continue
+        yr = int(row.get("year") or 0)
+        if yr <= dy or yr > dy + 2 or str(row.get("current_owner_team_id") or "") != uid:
+            continue
+        orig = str(row.get("original_team_id") or "")
+        tag = "" if orig == uid else f" ({_team_abbr(session, orig)})"
+        out.append({
+            "pick_id": str(pick_id), "year": yr, "round": int(row.get("round") or 1),
+            "overall_pick": None, "label": f"{yr} R{int(row.get('round') or 1)}{tag}",
+        })
+    # Cheapest first: later rounds / later picks / further years.
+    out.sort(key=lambda p: (-(p["round"]), -(p["overall_pick"] or 0), -p["year"]))
+    return out
+
+
+def _team_abbr(session: FranchiseSession, tid: str) -> str:
+    t = (getattr(session, "team_by_id", None) or {}).get(str(tid))
+    return str(getattr(t, "abbr", None) or getattr(t, "abbreviation", None) or getattr(t, "name", None) or tid)
+
+
+def quote_draft_pick_trade(session: FranchiseSession, target_overall: int) -> Dict[str, Any]:
+    """Find the smallest package of the user's picks the owner of ``target_overall`` accepts."""
+    from itertools import combinations
+
+    from app.sim_engine.trades.trade_evaluator import evaluate_trade_package
+    from services.draft_pick_ownership import resolve_slot_owner
+
+    state = getattr(session, "draft_state", None) or {}
+    if not state.get("draft_started") or state.get("draft_completed"):
+        raise ValueError("Draft is not live")
+    _recover_draft_pointer_from_registry(session)
+    state = getattr(session, "draft_state", None) or {}
+    order = list(state.get("draft_order") or [])
+    overall = int(state.get("overall_pick") or 1)
+    t = int(target_overall or 0)
+    if t < overall or t > len(order):
+        raise ValueError("That pick has already been made")
+    slot = order[t - 1]
+    uid = str(session.user_team_id)
+    owner = str(resolve_slot_owner(session, slot) or "")
+    if owner == uid:
+        raise ValueError("You already own that pick")
+    target_pick_id = str(slot.get("pick_id") or "")
+    league = getattr(getattr(session, "sim", None), "league", None)
+    if league is None or not target_pick_id:
+        raise ValueError("League not ready")
+    try:
+        setattr(league, "_franchise_user_team_id", uid)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    team_by_id = dict(getattr(session, "team_by_id", None) or {})
+    ctx = _draft_trade_ctx(session, league)
+    mine = [p for p in _user_tradeable_picks(session) if p["pick_id"] != target_pick_id][:10]
+    if not mine:
+        raise ValueError("You have no picks left to offer")
+
+    tried = 0
+    best_fail = None
+    for size in (1, 2, 3):
+        for combo in combinations(mine, size):
+            tried += 1
+            if tried > 60:
+                break
+            package = {
+                uid: [{"type": "pick", "id": target_pick_id, "team": owner}],
+                owner: [{"type": "pick", "id": p["pick_id"], "team": uid} for p in combo],
+            }
+            ev = evaluate_trade_package(package, league=league, team_by_id=team_by_id, context=ctx, user_team_id=uid)
+            if ev.get("can_execute") and ev.get("accepted", True):
+                return {
+                    "ok": True,
+                    "target_overall": t,
+                    "target_round": int(slot.get("round") or 1),
+                    "target_pick_id": target_pick_id,
+                    "partner_team_id": owner,
+                    "partner_abbr": _team_abbr(session, owner),
+                    "give": list(combo),
+                    "give_pick_ids": [p["pick_id"] for p in combo],
+                    "interest": ev.get("interest_level"),
+                }
+            best_fail = ev
+        if tried > 60:
+            break
+    reasons = (best_fail or {}).get("rejection_reasons") or []
+    return {
+        "ok": False,
+        "target_overall": t,
+        "partner_abbr": _team_abbr(session, owner),
+        "reason": f"{_team_abbr(session, owner)} won't move #{t} for the picks you have left"
+        + (f" — {reasons[0]}" if reasons else ""),
+    }
+
+
+def execute_draft_pick_trade(session: FranchiseSession, target_overall: int, give_pick_ids: List[str]) -> Dict[str, Any]:
+    from app.sim_engine.trades.trade_evaluator import evaluate_trade_package
+    from app.sim_engine.trades.trade_executor import execute_validated_trade
+    from services.draft_pick_ownership import resolve_slot_owner, sync_draft_clock_after_trade
+
+    state = getattr(session, "draft_state", None) or {}
+    if not state.get("draft_started") or state.get("draft_completed"):
+        raise ValueError("Draft is not live")
+    order = list(state.get("draft_order") or [])
+    t = int(target_overall or 0)
+    if t < int(state.get("overall_pick") or 1) or t > len(order):
+        raise ValueError("That pick has already been made")
+    slot = order[t - 1]
+    uid = str(session.user_team_id)
+    owner = str(resolve_slot_owner(session, slot) or "")
+    allowed = {p["pick_id"] for p in _user_tradeable_picks(session)}
+    give = [str(x) for x in (give_pick_ids or []) if str(x) in allowed]
+    if not give or owner == uid:
+        raise ValueError("Trade is stale — get a new quote")
+    league = getattr(getattr(session, "sim", None), "league", None)
+    team_by_id = dict(getattr(session, "team_by_id", None) or {})
+    ctx = _draft_trade_ctx(session, league)
+    ctx["user_accepted_draft_floor_offer"] = True
+    package = {
+        uid: [{"type": "pick", "id": str(slot.get("pick_id")), "team": owner}],
+        owner: [{"type": "pick", "id": pid, "team": uid} for pid in give],
+    }
+    ev = evaluate_trade_package(package, league=league, team_by_id=team_by_id, context=ctx, user_team_id=uid)
+    if not ev.get("can_execute"):
+        reasons = ev.get("blocking_reasons") or ev.get("rejection_reasons") or ["Trade failed validation"]
+        raise ValueError("; ".join(str(r) for r in reasons[:2]))
+    result = execute_validated_trade(ev, league=league, team_by_id=team_by_id, context=ctx, user_team_id=uid)
+    sync_draft_clock_after_trade(session)
+    state = getattr(session, "draft_state", None) or {}
+    log = list(state.get("draft_trade_log") or [])
+    log.append({
+        "trade_id": result.get("trade_id"),
+        "overall_pick": t,
+        "from_team_id": owner,
+        "to_team_id": uid,
+        "reason_codes": ["USER_TRADE_UP"],
+        "gave_pick_ids": give,
+    })
+    state["draft_trade_log"] = log[-40:]
+    session.draft_state = state
+    try:
+        from services.franchise_sim import invalidate_session_payload_caches
+
+        invalidate_session_payload_caches(session, "draft_trade")
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    return {"ok": True, "trade": result, "draft": get_entry_draft_payload(session, refresh_ownership=True)}

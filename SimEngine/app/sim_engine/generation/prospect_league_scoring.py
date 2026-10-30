@@ -2313,10 +2313,20 @@ def calculate_prospect_ppg_scale(
 
     # Overager scoring bump is applied in-game only (_simulate_skater_games), not here,
     # so draft ceilings and development stamps are not inflated by age-20+ PPG.
-    if age == 19:
-        base *= srng.uniform(0.96, 1.04)
-    elif age <= 17:
-        base *= srng.uniform(0.92, 0.98)
+    # Natural junior progression: a 19-year-old in his third junior year produces well
+    # above his draft season, and 16-17 year olds below it (overager bonus adds at 20).
+    _superstar = bool(getattr(prospect, "exceptional_status", False)) or str(
+        getattr(prospect, "pipeline_tier", "") or ""
+    ) in ("generational", "franchise")
+    if _superstar and age <= 17:
+        # Exceptional talents (McDavid / Bedard types) put up huge numbers at 15-16 in any league.
+        base *= srng.uniform(1.15, 1.35)
+    elif age >= 19:
+        base *= srng.uniform(1.12, 1.22)
+    elif age <= 16:
+        base *= srng.uniform(0.74, 0.84)
+    elif age == 17:
+        base *= srng.uniform(0.86, 0.94)
 
     if _is_boom_bust(prospect):
         base *= srng.uniform(0.88, 1.12)
@@ -2973,6 +2983,11 @@ def derive_prospect_analytics(
     return {k: v for k, v in out.items() if v is not None}
 
 
+def is_real_prospect(prospect: Any) -> bool:
+    """Imported real-world player (e.g. a real draft prospect), not one the sim generated."""
+    return bool(getattr(prospect, "real_nhl_import", False)) or bool(getattr(prospect, "real_player", False))
+
+
 def prospect_stats_for_api(
     prospect: Any,
     league: Any,
@@ -2982,6 +2997,9 @@ def prospect_stats_for_api(
     season_year: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Flatten actual + projected stats for franchise API payloads."""
+    if is_real_prospect(prospect):
+        # Real-world prospects carry their real careers; a simulated junior line would be fiction.
+        return {"stats_hidden": True, "reason": "real_prospect"}
     actual = ensure_prospect_season_stats(
         prospect,
         league,

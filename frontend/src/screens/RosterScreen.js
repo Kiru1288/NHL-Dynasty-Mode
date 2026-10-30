@@ -4322,17 +4322,26 @@ function mergeCareerSeasonsWithCurrent(player, stats, options) {
   if (!currentRow) return existing;
   // Traded mid-season: one line per club this season, newest club last (as NHL.com shows it).
   const splits = stats && typeof stats.by_team === "object" ? Object.entries(stats.by_team) : [];
-  if (splits.length > 1) {
-    const curTid = String(stats.team_id || "");
-    const ordered = [...splits.filter(([tid]) => tid !== curTid), ...splits.filter(([tid]) => tid === curTid)];
-    const splitRows = ordered
-      .filter(([, sp]) => Number(sp?.gp || 0) > 0)
-      .map(([tid, sp]) => {
-        const row = buildCurrentSeasonCareerRow(player, { ...stats, ...sp, team_name: sp.abbr || tid, team: sp.abbr || tid }, options);
-        if (row && tid !== curTid) row.is_current_season = false;
+  const curTid = String(stats?.team_id || "");
+  // by_team holds only the clubs he left; the current club is the season total minus those.
+  const prior = splits.filter(([tid, sp]) => tid !== curTid && Number(sp?.gp || 0) > 0);
+  if (prior.length) {
+    const KEYS = ["gp", "g", "a", "pts", "w", "l", "otl", "ga", "shots_against", "saves", "toi_sec", "sog", "plus_minus", "pim"];
+    const less = { ...stats };
+    prior.forEach(([, sp]) => {
+      KEYS.forEach((k) => {
+        if (sp?.[k] != null) less[k] = Number(less[k] || 0) - Number(sp[k] || 0);
+      });
+    });
+    if (less.pts == null || prior.some(([, sp]) => sp?.pts == null)) less.pts = Number(less.g || 0) + Number(less.a || 0);
+    const splitRows = [
+      ...prior.map(([tid, sp]) => {
+        const row = buildCurrentSeasonCareerRow(player, { ...stats, ...sp, pts: sp.pts ?? Number(sp.g || 0) + Number(sp.a || 0), team_name: sp.abbr || tid, team: sp.abbr || tid }, options);
+        if (row) row.is_current_season = false;
         return row;
-      })
-      .filter(Boolean);
+      }),
+      Number(less.gp || 0) > 0 ? buildCurrentSeasonCareerRow(player, less, options) : null,
+    ].filter(Boolean);
     const seasonKey = String(currentRow.season);
     const others = existing.filter((row) => String(pickFirstDefined(row?.season, row?.year) || "") !== seasonKey);
     return [...others, ...splitRows];

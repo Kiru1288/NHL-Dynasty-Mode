@@ -2019,6 +2019,44 @@ def post_entry_draft_accept_trade(
     return {**result, "state": franchise_sim.build_state_payload(s, include_heavy=False)}
 
 
+@app.post("/api/franchise/entry-draft/trade-quote")
+def post_entry_draft_trade_quote(body: dict[str, Any] = Body(default=None), x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    """Price a trade-up: the smallest set of your picks that the owner of this slot accepts."""
+    from services.franchise_entry_draft import quote_draft_pick_trade
+    from services.json_safe import json_safe
+
+    s = _session_or_404(x_franchise_session)
+    try:
+        return json_safe(quote_draft_pick_trade(s, int((body or {}).get("target_overall") or 0)))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.post("/api/franchise/entry-draft/trade-for-pick")
+def post_entry_draft_trade_for_pick(body: dict[str, Any] = Body(default=None), x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    from services.franchise_entry_draft import execute_draft_pick_trade
+    from services.json_safe import json_safe
+
+    s = _session_or_404(x_franchise_session)
+    b = body or {}
+    try:
+        result = execute_draft_pick_trade(s, int(b.get("target_overall") or 0), list(b.get("give_pick_ids") or []))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    save_session(s)
+    return json_safe({**result, "state": franchise_sim.build_state_payload(s, include_heavy=False)})
+
+
+@app.get("/api/franchise/prospects/stats")
+def get_franchise_prospect_stats(x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    """Prospect stats ledger: every generated junior / college / European player, by league."""
+    from services.json_safe import json_safe
+    from services.prospect_ledger import build_prospect_ledger
+
+    s = _session_or_404(x_franchise_session)
+    return json_safe(build_prospect_ledger(s))
+
+
 @app.get("/api/franchise/entry-draft/results")
 def get_entry_draft_results(
     x_franchise_session: Optional[str] = Header(default=None),

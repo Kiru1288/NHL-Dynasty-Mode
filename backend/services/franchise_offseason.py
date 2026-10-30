@@ -516,12 +516,24 @@ def team_signing_bonus_eligibility(session: FranchiseSession, team_id: Optional[
 
 
 def ensure_own_fa_window(session: FranchiseSession) -> Dict[str, Any]:
-    """Start the 6-day exclusive window to sign your own free agents."""
+    """Start the 7-day exclusive window to sign your own free agents."""
+    cur_season = int(getattr(session, "season_calendar_year", 0) or 0)
+    if (
+        getattr(session, "own_fa_window_active", False)
+        and not session.free_agency_open
+        and getattr(session, "own_fa_window_season", None) != cur_season
+    ):
+        # Saves made before the per-season reset: the window is live but still counting last year.
+        session.own_fa_window_day = 0
+        session.own_fa_window_signings = []
+        session.own_fa_window_season = cur_season
     if not getattr(session, "own_fa_window_active", False) and not session.free_agency_open:
         session.own_fa_window_active = True
-        session.own_fa_window_day = int(getattr(session, "own_fa_window_day", 0) or 0)
-        if not isinstance(getattr(session, "own_fa_window_signings", None), list):
-            session.own_fa_window_signings = []
+        # A fresh window every offseason: the day counter used to carry last summer's 7/7
+        # forward, which unlocked "Open Free Agency" on day 0 from season two on.
+        session.own_fa_window_day = 0
+        session.own_fa_window_signings = []
+        session.own_fa_window_season = int(getattr(session, "season_calendar_year", 0) or 0)
     day = int(getattr(session, "own_fa_window_day", 0) or 0)
     remaining = max(0, OWN_FA_MORATORIUM_DAYS - day)
     return {
@@ -6834,6 +6846,10 @@ def _open_free_agency(session: FranchiseSession, *, force: bool = False) -> Dict
                 _swallowed_log.debug("suppressed exception", exc_info=True)
         if not getattr(session, "cpu_rfa_decisions", None):
             session.cpu_rfa_decisions = run_cpu_rfa_decisions(session)
+        try:
+            session.user_unqualified_rfa_report = release_unqualified_user_rfas(session)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         if not getattr(session, "cpu_own_ufa_resign", None):
             # Retain stars on CPU clubs BEFORE exclusivity clears onto Opening Day.
             session.cpu_own_ufa_resign = run_cpu_own_ufa_resign(session)
@@ -7922,6 +7938,11 @@ def _roll_development_league_draft_class(session: FranchiseSession, season_year:
         _swallowed_log.debug("suppressed exception", exc_info=True)
 
     try:
+        _spawn_exceptional_status_juniors(session, league, rng, used_names, league_players, int(season_year))
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+
+    try:
         from app.sim_engine.league_hierarchy_bootstrap import prepare_draft_class_for_season
 
         prepare_draft_class_for_season(league, rng, season_year=int(season_year))
@@ -8461,6 +8482,9 @@ def generate_next_season(session: FranchiseSession) -> Dict[str, Any]:
     session.player_season_stats = {}
     session.game_results = []
     session.processed_game_ids = set()
+    session.own_fa_window_active = False
+    session.own_fa_window_day = 0
+    session.own_fa_window_signings = []
     try:
         # Stats Central caches (server and client) key on this; without a bump the
         # year-2 ledger kept serving last season's payload until the first game.
@@ -9106,3 +9130,112 @@ def build_offseason_state_extras(session: FranchiseSession, *, lean: bool = Fals
     payload["free_agents"] = session.free_agents_payload
     payload["free_agency_market"] = getattr(session, "free_agency_market_payload", None)
     return payload
+
+
+def release_unqualified_user_rfas(session: Any) -> List[Dict[str, Any]]:
+    """July 1: an RFA your club never qualified becomes an unrestricted free agent.
+
+    His rights used to sit on the team's off-roster RFA list after the re-sign desk
+    closed, so he showed up nowhere — not on the roster, the desk, or the market.
+    """
+    from services.contract_economy import release_rfa_rights
+
+    league = getattr(getattr(session, "sim", None), "league", None)
+    uid = str(getattr(session, "user_team_id", "") or "")
+    team = (getattr(session, "team_by_id", None) or {}).get(uid)
+    if league is None or team is None:
+        return []
+    out: List[Dict[str, Any]] = []
+    for entry in list(getattr(team, "rfa_rights", None) or []):
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("qualified") or entry.get("arbitration_filed") or entry.get("offer_sheet_pending"):
+            continue
+        pid = str(entry.get("player_id") or "")
+        if not pid:
+            continue
+        res = release_rfa_rights(team, pid, league, session)
+        if res.get("ok", True):
+            out.append({"player_id": pid, "name": entry.get("name"), "outcome": "ufa_unqualified"})
+            try:
+                from services.contract_economy import append_player_transaction
+
+                pl = entry.get("player_ref")
+                if pl is not None:
+                    append_player_transaction(
+                        pl,
+                        kind="free_agency",
+                        summary="Not qualified — became an unrestricted free agent",
+                        season=getattr(session, "season_calendar_year", None),
+                    )
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+    return out
+
+
+def _spawn_exceptional_status_juniors(
+    session: FranchiseSession, league: Any, rng: Any, used_names: set, league_players: List[Any], season_year: int
+) -> int:
+    """CHL exceptional status: most years one 15-year-old (rarely two) joins major junior early.
+
+    They are real players on a club roster, so they age, play, and enter the draft
+    three years later as true elite prospects. Their ceiling is stamped as already
+    shaped so the draft-class pass does not re-roll it.
+    """
+    from app.sim_engine.entities.player import Position
+    from app.sim_engine.league_hierarchy_bootstrap import _set_assignment, _spawn_player
+
+    roll = rng.random()
+    count = 0 if roll < 0.30 else (2 if roll > 0.92 else 1)
+    if not count:
+        return 0
+    chl = [
+        b for b in (getattr(league, "development_leagues", None) or [])
+        if str(b.get("league_code") or "").upper() in ("OHL", "WHL", "QMJHL", "CHL_OHL", "CHL_WHL", "CHL_QMJHL")
+        or "OHL" in str(b.get("league_code") or "").upper() or "WHL" in str(b.get("league_code") or "").upper()
+        or "QMJHL" in str(b.get("league_code") or "").upper()
+    ] or list(getattr(league, "development_leagues", None) or [])
+    made = 0
+    for _ in range(count):
+        block = rng.choice(chl) if chl else None
+        teams = list((block or {}).get("teams") or [])
+        if not teams:
+            break
+        tm = rng.choice(teams)
+        code = str(block.get("league_code") or "")
+        pos = rng.choice([Position.C, Position.C, Position.LW, Position.RW, Position.D])
+        p = _spawn_player(
+            rng, pos=pos, ovr_lo=0.50, ovr_hi=0.58, age_lo=15, age_hi=15,
+            used_names=used_names, league_players=league_players, pool_context="junior", league_code=code,
+        )
+        _set_assignment(p, level="junior", league_code=code, club=str(tm.get("name") or ""))
+        try:
+            p.context.current_team_id = str(tm.get("team_id") or "")
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+        pot = rng.randint(91, 97)
+        if isinstance(getattr(p, "ratings", None), dict):
+            p.ratings["dev_potential"] = pot
+        for k, v in (
+            ("potential", pot), ("exceptional_status", True), ("pipeline_tier", "generational"),
+            ("dev_type", "elite"), ("_pipeline_shaped_year", int(season_year) + 4),
+        ):
+            try:
+                setattr(p, k, v)
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+        tm.setdefault("players", []).append(p)
+        league_players.append(p)
+        try:
+            from app.sim_engine.generation.prospect_league_scoring import initialize_prospect_season
+
+            initialize_prospect_season(p, code, rng, season_year=int(season_year) + 1, force=True)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+        made += 1
+    if made:
+        try:
+            session.timeline.append(f"JUNIOR: {made} exceptional-status 15-year-old(s) granted early entry.")
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    return made

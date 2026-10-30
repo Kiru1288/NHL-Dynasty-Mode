@@ -6,7 +6,9 @@ import {
   completeEntryDraft,
   getDraftProspectProfile,
   getEntryDraftState,
+  quoteEntryDraftPickTrade,
   simEntryDraftToUserPick,
+  tradeForEntryDraftPick,
   startEntryDraft,
   submitCpuDraftPick,
   submitDraftPick,
@@ -1299,7 +1301,7 @@ function DraftActionDock({
   );
 }
 
-function OnDeckRail({ upcoming, userTeamId }) {
+function OnDeckRail({ upcoming, userTeamId, onTrade }) {
   const slots = safeArray(upcoming);
   if (!slots.length) return null;
   return (
@@ -1322,6 +1324,16 @@ function OnDeckRail({ upcoming, userTeamId }) {
                   <span className={`${PREFIX}-slot-via`}>via {teamAbbrev(slot.via_team_id, slot.via_team_name)}</span>
                 ) : null}
               </span>
+              {!isUser && onTrade ? (
+                <button
+                  type="button"
+                  className={`${PREFIX}-slot-trade`}
+                  onClick={() => onTrade(slot)}
+                  title={`Trade for pick #${slot.overall_pick}`}
+                >
+                  Trade
+                </button>
+              ) : null}
             </div>
           );
         })}
@@ -4035,6 +4047,30 @@ export default function EntryDraftMenu({ franchiseState = {}, eventData = {}, on
     else if (res?.recap) setDraft((d) => ({ ...d, recap: res.recap }));
   }, [mergeFranchiseState]);
 
+  const [tradeUp, setTradeUp] = useState(null);
+  const openTradeUp = useCallback(async (slot) => {
+    if (!slot?.overall_pick) return;
+    setTradeUp({ slot, loading: true });
+    try {
+      const quote = await quoteEntryDraftPickTrade(slot.overall_pick);
+      setTradeUp({ slot, quote });
+    } catch (err) {
+      setTradeUp({ slot, error: err?.response?.data?.detail || err?.message || "Could not reach that team" });
+    }
+  }, []);
+  const confirmTradeUp = useCallback(async () => {
+    const q = tradeUp?.quote;
+    if (!q?.ok) return;
+    setTradeUp((t) => ({ ...t, busy: true }));
+    try {
+      const res = await tradeForEntryDraftPick(q.target_overall, q.give_pick_ids);
+      applyResponse(res);
+      setTradeUp(null);
+    } catch (err) {
+      setTradeUp((t) => ({ ...t, busy: false, error: err?.response?.data?.detail || err?.message || "Trade failed" }));
+    }
+  }, [tradeUp, applyResponse]);
+
   const acceptTradeOffer = useCallback(async (offer) => {
     setTradeAccepting(true);
     setError("");
@@ -4443,7 +4479,39 @@ export default function EntryDraftMenu({ franchiseState = {}, eventData = {}, on
 
       {stage === "live" ? (
         <>
-          <OnDeckRail upcoming={upcomingPicks} userTeamId={uid} />
+          <OnDeckRail upcoming={upcomingPicks} userTeamId={uid} onTrade={openTradeUp} />
+          {tradeUp ? (
+            <div className={`${PREFIX}-tradeup`} role="dialog" aria-label="Trade for a pick">
+              <div className={`${PREFIX}-tradeup__card`}>
+                <header>
+                  <span>Trade for a pick</span>
+                  <strong>
+                    #{tradeUp.slot?.overall_pick} · {teamAbbrev(tradeUp.slot?.team_id, tradeUp.slot?.team_name)}
+                  </strong>
+                  <button type="button" className={`${PREFIX}-tradeup__x`} onClick={() => setTradeUp(null)} aria-label="Close">×</button>
+                </header>
+                {tradeUp.loading ? <p>Calling {teamAbbrev(tradeUp.slot?.team_id, tradeUp.slot?.team_name)}…</p> : null}
+                {tradeUp.error ? <p className={`${PREFIX}-tradeup__err`}>{tradeUp.error}</p> : null}
+                {tradeUp.quote && tradeUp.quote.ok ? (
+                  <>
+                    <p>{tradeUp.quote.partner_abbr} will move pick #{tradeUp.quote.target_overall} for:</p>
+                    <ul>
+                      {safeArray(tradeUp.quote.give).map((g) => (
+                        <li key={g.pick_id}>{g.label}</li>
+                      ))}
+                    </ul>
+                    <div className={`${PREFIX}-tradeup__actions`}>
+                      <button type="button" onClick={() => setTradeUp(null)}>Not now</button>
+                      <button type="button" className="is-go" disabled={tradeUp.busy} onClick={confirmTradeUp}>
+                        {tradeUp.busy ? "Making the call…" : "Make the trade"}
+                      </button>
+                    </div>
+                  </>
+                ) : null}
+                {tradeUp.quote && !tradeUp.quote.ok ? <p className={`${PREFIX}-tradeup__err`}>{tradeUp.quote.reason}</p> : null}
+              </div>
+            </div>
+          ) : null}
 
           {batchMeta ? (
             <div className={`${PREFIX}-batch-banner`}>

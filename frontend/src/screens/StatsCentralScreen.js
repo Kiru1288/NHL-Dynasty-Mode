@@ -6,7 +6,7 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { getAhlLedger, getPlayoffStats, getStatsCentral, peekStatsCentral } from "../services/franchiseService";
+import { getAhlLedger, getPlayoffStats, getProspectLedger, getStatsCentral, peekStatsCentral } from "../services/franchiseService";
 import { formatFranchiseApiError, isExpiredFranchiseSessionError } from "../services/api";
 import { useGameUI } from "../game/GameUIContext";
 import { SCREENS, teamNameToNhlAbbr } from "../game/constants";
@@ -1699,6 +1699,7 @@ const TABS = [
   { id: "player_stats", label: "PLAYER STATS" },
   { id: "league_leaders", label: "LEAGUE LEADERS" },
   { id: "playoffs", label: "PLAYOFFS" },
+  { id: "prospects", label: "PROSPECTS" },
 ];
 
 function normalizeStatsMenu(tabId) {
@@ -1706,7 +1707,7 @@ function normalizeStatsMenu(tabId) {
   if (["players", "goalies", "advanced", "compare"].includes(tabId)) return "player_stats";
   if (["leaders", "awards"].includes(tabId)) return "league_leaders";
   if (tabId === "playoff") return "playoffs";
-  return ["team_stats", "player_stats", "league_leaders", "playoffs"].includes(tabId) ? tabId : "team_stats";
+  return ["team_stats", "player_stats", "league_leaders", "playoffs", "prospects"].includes(tabId) ? tabId : "team_stats";
 }
 
 
@@ -2284,6 +2285,7 @@ export function StatsCentralScreen() {
             <LeagueLeadersPage data={data} />
           ) : null}
           {league === "nhl" && tab === "playoffs" ? <PlayoffStatsPage /> : null}
+          {league === "nhl" && tab === "prospects" ? <ProspectLedgerPage /> : null}
         </section>
       </main>
     </div>
@@ -11213,6 +11215,131 @@ function PlayoffStatsPage() {
           )}
         </div>
       </section>
+    </div>
+  );
+}
+
+
+/* =========================================================
+   PROSPECT LEDGER — junior / college / European leagues
+========================================================= */
+
+const PROSPECT_STATUS = ["All", "Draft eligible", "Overage", "Future class", "Exceptional", "Drafted", "Undrafted"];
+
+function ProspectLedgerPage() {
+  const [state, setState] = useState({ loading: true, error: "", data: null });
+  const [leagueCode, setLeagueCode] = useState("all");
+  const [status, setStatus] = useState("All");
+  const [pos, setPos] = useState("all");
+  const [sort, setSort] = useState("pts");
+  const [q, setQ] = useState("");
+  useEffect(() => {
+    let alive = true;
+    getProspectLedger()
+      .then((data) => alive && setState({ loading: false, error: "", data }))
+      .catch((err) => alive && setState({ loading: false, error: formatFranchiseApiError(err) || "Could not load prospects", data: null }));
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const data = state.data || {};
+  const rows = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    const list = (Array.isArray(data.rows) ? data.rows : []).filter((r) => {
+      if (leagueCode !== "all" && r.league_code !== leagueCode) return false;
+      if (status !== "All" && r.status !== status) return false;
+      if (pos === "F" && (r.position === "D" || r.position === "G")) return false;
+      if (pos !== "all" && pos !== "F" && r.position !== pos) return false;
+      if (needle && !String(r.name || "").toLowerCase().includes(needle) && !String(r.club || "").toLowerCase().includes(needle)) return false;
+      return true;
+    });
+    const key = sort;
+    return [...list].sort((a, b) => Number(b[key] || 0) - Number(a[key] || 0) || Number(b.pts || 0) - Number(a.pts || 0));
+  }, [data.rows, leagueCode, status, pos, sort, q]);
+
+  if (state.loading) return <div className="sc-po-empty">Loading prospect ledger…</div>;
+  if (state.error) return <div className="sc-po-empty">{state.error}</div>;
+
+  const leagues = Array.isArray(data.leagues) ? data.leagues : [];
+  const sortBtn = (k, label) => (
+    <button type="button" className={sort === k ? "is-active" : ""} onClick={() => setSort(k)}>{label}</button>
+  );
+
+  return (
+    <div className="sc-pl">
+      <div className="sc-pl-filters">
+        <select value={leagueCode} onChange={(e) => setLeagueCode(e.target.value)} aria-label="League">
+          <option value="all">All leagues ({leagues.length})</option>
+          {leagues.map((l) => (
+            <option key={l.code} value={l.code}>{l.name}</option>
+          ))}
+        </select>
+        <select value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Status">
+          {PROSPECT_STATUS.map((s) => (
+            <option key={s} value={s}>{s === "Exceptional" ? "Exceptional (15–16)" : s === "Draft eligible" ? `Draft eligible ${data.draft_year || ""}` : s}</option>
+          ))}
+        </select>
+        <select value={pos} onChange={(e) => setPos(e.target.value)} aria-label="Position">
+          <option value="all">All positions</option>
+          <option value="F">Forwards</option>
+          <option value="C">C</option>
+          <option value="LW">LW</option>
+          <option value="RW">RW</option>
+          <option value="D">D</option>
+          <option value="G">G</option>
+        </select>
+        <input type="search" placeholder="Search player or club" value={q} onChange={(e) => setQ(e.target.value)} />
+        <div className="sc-po-toggle">
+          {sortBtn("pts", "Points")}
+          {sortBtn("g", "Goals")}
+          {sortBtn("a", "Assists")}
+          {sortBtn("ppg", "P/GP")}
+        </div>
+      </div>
+      <p className="sc-pl-count">{rows.length} of {data.count || 0} prospects · real-world prospects show their NHL rights; their real careers are not simulated</p>
+      <div className="sc-po-tablewrap">
+        <table className="sc-po-table">
+          <thead>
+            <tr><th>#</th><th className="l">Player</th><th>Age</th><th>Pos</th><th className="l">League</th><th className="l">Club</th><th>NHL rights</th><th>GP</th><th>G</th><th>A</th><th>PTS</th><th>P/GP</th><th className="l">Status</th></tr>
+          </thead>
+          <tbody>
+            {rows.slice(0, 300).map((r, i) => (
+              <tr key={r.player_id || i}>
+                <td>{i + 1}</td>
+                <td className="l">{r.name}</td>
+                <td>{r.age}</td>
+                <td>{r.position}</td>
+                <td className="l">{r.league}</td>
+                <td className="l">{r.club}</td>
+                <td className="sc-pl-aff">
+                  {r.rights_team_abbr || r.rights_team ? (
+                    <span title={`Rights: ${r.rights_team}`}>
+                      {getTeamLogoSrc(r.rights_team_abbr || r.rights_team) ? (
+                        <img src={getTeamLogoSrc(r.rights_team_abbr || r.rights_team)} alt="" />
+                      ) : null}
+                      <b>{r.rights_team_abbr || r.rights_team}</b>
+                    </span>
+                  ) : (
+                    <i>—</i>
+                  )}
+                </td>
+                <td>{r.real ? "—" : r.gp}</td>
+                <td>{r.real ? "—" : r.g}</td>
+                <td>{r.real ? "—" : r.a}</td>
+                <td className="b">{r.real ? "—" : r.pts}</td>
+                <td>{r.real ? "—" : Number(r.ppg || 0).toFixed(2)}</td>
+                <td className="l">
+                  <span className={`sc-pl-tag is-${String(r.status || "").toLowerCase().replace(/\s+/g, "-")}`}>
+                    {r.status}
+                    {r.status !== "Drafted" && r.draft_year ? ` · ${r.draft_year} draft` : ""}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

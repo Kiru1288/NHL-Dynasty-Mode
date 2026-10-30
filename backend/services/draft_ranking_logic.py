@@ -2876,6 +2876,27 @@ def apply_goalie_ranking_adjustments(
     # score clears it qualifies for the top-band exception even without the
     # generational_goalie flag.
     gen_cut = float(generational_cut) if generational_cut else None
+    # Goalie draft scores came out on a lower scale than skaters', so even the best
+    # goalie in a class fell past round 7. Re-anchor each goalie to the skater score
+    # at the same potential percentile, so talent — not position — sets the slot.
+    try:
+        skaters = [r for r in prospects if not _is_goalie_row(r)]
+        goalies = [r for r in prospects if _is_goalie_row(r)]
+        if skaters and goalies:
+            sk_pairs = sorted(((_true_pot(r), float(r.get("_score", 0))) for r in skaters), key=lambda t: t[0])
+            sk_pots = [t[0] for t in sk_pairs]
+            sk_scores = sorted(t[1] for t in sk_pairs)
+            import bisect
+
+            for g in goalies:
+                gp = _true_pot(g)
+                pct = bisect.bisect_left(sk_pots, gp) / max(1, len(sk_pots))
+                idx = min(len(sk_scores) - 1, max(0, int(pct * len(sk_scores))))
+                peer = sk_scores[idx] - 0.6  # small scarcity discount
+                if peer > float(g.get("_score", 0)):
+                    g["_score"] = peer
+    except Exception:
+        pass
     for row in prospects:
         row["_goalie_penalized"] = False
         if not _is_goalie_row(row):

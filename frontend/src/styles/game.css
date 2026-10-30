@@ -79291,3 +79291,52 @@ html:not(#_) .sc-overview-team-header-chips > *{min-width:max-content}
 html:not(#_) .sc-team-profile-headline{display:flex!important;flex-wrap:wrap;gap:12px 32px!important}
 html:not(#_) .sc-team-profile-headline > div{min-width:max-content}
 html:not(#_) .sc-team-profile-headline strong{white-space:nowrap}
+
+/* Roster OVR: no beige pill — cartoon theme was re-adding it over the plain number (2026-10-29) */
+html.cartoon-ui:not(#_) .nhlrost-ovr-pill{background:none!important;box-shadow:none!important;border:0!important;padding:0!important}
+html.cartoon-ui:not(#_) .nhlrost-ovr-pill .nhlrost-ovr-pill__value{color:#fff!important;font-size:24px!important;text-shadow:0 2px 0 #0a1638,0 3px 8px rgba(0,0,0,.55)!important}
+html.cartoon-ui:not(#_) .nhlrost-ovr-pill.is-franchise .nhlrost-ovr-pill__value{color:#ffd24a!important}
+html.cartoon-ui:not(#_) .nhlrost-ovr-pill .nhlrost-ovr-pill__delta.is-up{color:#7dffb0!important}
+html.cartoon-ui:not(#_) .nhlrost-ovr-pill .nhlrost-ovr-pill__delta.is-down{color:#ff8a8a!important}
+html.cartoon-ui:not(#_) .nhlrost-ovr-pill .nhlrost-ovr-pill__mod{color:#d4a24c!important}
+
+/* Entry draft: trade for a pick (2026-10-29) */
+.edraft-slot{position:relative}
+.edraft-slot-trade{margin-left:6px;padding:2px 8px;border-radius:999px;border:1px solid rgba(255,210,74,.6);background:rgba(255,210,74,.12);color:#ffd24a;font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;cursor:pointer;opacity:.75;transition:opacity .15s,background .15s}
+.edraft-slot:hover .edraft-slot-trade,.edraft-slot-trade:focus-visible{opacity:1;background:rgba(255,210,74,.25)}
+.edraft-tradeup{position:fixed;inset:0;z-index:4000;display:grid;place-items:center;background:rgba(4,10,30,.6);backdrop-filter:blur(2px)}
+.edraft-tradeup__card{width:min(420px,92vw);background:linear-gradient(160deg,#13265e,#0b1740);border:2px solid #ffd24a;border-radius:16px;padding:18px 20px;color:#e7eeff;box-shadow:0 18px 40px rgba(0,0,0,.5)}
+.edraft-tradeup__card header{display:grid;grid-template-columns:1fr auto;align-items:center;gap:2px 10px;margin-bottom:10px}
+.edraft-tradeup__card header span{grid-column:1;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#8fb0ff}
+.edraft-tradeup__card header strong{grid-column:1;font-size:22px;color:#fff;text-shadow:0 2px 0 #0a1638}
+.edraft-tradeup__x{grid-column:2;grid-row:1/3;background:none;border:0;color:#cfdcff;font-size:26px;cursor:pointer}
+.edraft-tradeup__card ul{margin:8px 0 14px;padding:0;list-style:none;display:grid;gap:6px}
+.edraft-tradeup__card li{padding:8px 12px;border-radius:10px;background:rgba(255,255,255,.06);font-weight:800}
+.edraft-tradeup__err{color:#ff9d9d}
+.edraft-tradeup__actions{display:flex;justify-content:flex-end;gap:10px}
+.edraft-tradeup__actions button{padding:9px 16px;border-radius:999px;border:1px solid rgba(255,255,255,.25);background:transparent;color:#e7eeff;font-weight:800;cursor:pointer}
+.edraft-tradeup__actions button.is-go{background:#ffd24a;border-color:#ffd24a;color:#14213d}
+.edraft-tradeup__actions button:disabled{opacity:.6;cursor:wait}
+
+/* Stats Central — prospect ledger (2026-10-30) */
+.sc-pl{padding:16px;color:#e7eeff}
+.sc-pl-filters{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px}
+.sc-pl-filters select,.sc-pl-filters input{background:#0b1740;color:#e7eeff;border:1px solid rgba(120,160,255,.3);border-radius:10px;padding:7px 10px;font-weight:700}
+.sc-pl-filters input{min-width:200px;flex:1}
+.sc-pl-filters .sc-po-toggle{margin:0}
+.sc-pl-count{margin:0 0 8px;font-size:12px;color:#8fb0ff}
+.sc-pl-tag{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:800;background:rgba(255,255,255,.08)}
+.sc-pl-tag.is-draft-eligible{background:rgba(63,208,220,.18);color:#7ff0ff}
+.sc-pl-tag.is-exceptional{background:rgba(255,210,74,.2);color:#ffd24a}
+.sc-pl-tag.is-drafted{background:rgba(125,255,176,.15);color:#7dffb0}
+.sc-pl-aff span{display:inline-flex;align-items:center;gap:8px}
+.sc-pl-aff img{width:38px;height:38px;object-fit:contain;filter:drop-shadow(0 2px 4px rgba(0,0,0,.5))}
+.sc-pl-aff b{font-size:12px;color:#fff}
+.sc-pl-aff i{color:rgba(255,255,255,.3);font-style:normal}
+.sc-pl-tag.is-undrafted{background:rgba(255,138,138,.14);color:#ff9d9d}
+.sc-pl-tag.is-future-class{background:rgba(143,176,255,.14);color:#b8ccff}
+
+/* Roster board: long lists (Rights Held 30+) must scroll, not clip (2026-10-30) */
+html:not(#_) .nhlrost-board{overflow-y:auto!important;max-height:calc(100vh - 220px)}
+html:not(#_) .nhlrost-board-sheet,html:not(#_) .nhlrost-board-list{overflow:visible!important;max-height:none!important}
+.sc-pl-tag.is-overage{background:rgba(255,170,90,.16);color:#ffc08a}

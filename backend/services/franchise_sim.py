@@ -3679,9 +3679,13 @@ def _row_team_slices(row: Dict[str, Any]) -> List[Tuple[str, Dict[str, int]]]:
     by = row.get("by_team") or {}
     out: List[Tuple[str, Dict[str, int]]] = []
     prior: Dict[str, int] = {}
+    cur_tid = str(row.get("team_id") or "")
     if isinstance(by, dict):
         for tid, sl in by.items():
             if not isinstance(sl, dict):
+                continue
+            if str(tid) == cur_tid:
+                # The current club is the row minus earlier clubs; a slice for it is stale.
                 continue
             counts = {k: int(sl.get(k) or 0) for k in _TEAM_SLICE_KEYS}
             out.append((str(tid), counts))
@@ -4144,6 +4148,9 @@ def _merge_franchise_stat_scratch(
             continue
         old_tid = str(dst.get("team_id") or "")
         new_tid = str(row.get("team_id") or "")
+        _by = dst.get("by_team")
+        if isinstance(_by, dict) and new_tid in _by and new_tid == old_tid:
+            _by.pop(new_tid, None)  # repair: a current-club slice is never a frozen past club
         if old_tid and new_tid and old_tid != new_tid:
             _freeze_team_slice(dst, old_tid)
         for k in _ALWAYS_OVERWRITE:
@@ -9520,6 +9527,8 @@ def _rows_from_players_list(
 
 def _minor_season_line(p: Any) -> Optional[Dict[str, Any]]:
     """This season's junior / college / European line, so prospect growth has receipts."""
+    if bool(getattr(p, "real_nhl_import", False)):
+        return None
     ps = getattr(p, "_prospect_season_stats", None)
     if not isinstance(ps, dict):
         return None
@@ -12330,6 +12339,8 @@ def _trade_popup_season_stats(
 
     # 2) Minor-league / junior model line for the current stint (prospects and AHL/ECHL players).
     ps = getattr(player, "_prospect_season_stats", None) if player is not None else None
+    if player is not None and bool(getattr(player, "real_nhl_import", False)):
+        ps = None
     if isinstance(ps, dict) and int(_trade_popup_num(ps.get("gp"), 0) or 0) > 0:
         stint = getattr(player, "_prospect_stint", None)
         league_key = str((stint or {}).get("league_key") or "").upper() if isinstance(stint, dict) else ""
@@ -19534,6 +19545,14 @@ def _auto_resolve_pending_decisions(session: FranchiseSession) -> None:
             continue
 
         first = opts[0] if isinstance(opts[0], dict) else {"id": str(opts[0])}
+        if str(d.get("kind") or d.get("type") or "") == "retirement_decision":
+            # Silence is not "let him retire": a veteran you never answered plays on.
+            stay = next(
+                (o for o in opts if isinstance(o, dict) and str(o.get("id") or "") == "one_more_year"),
+                None,
+            )
+            if stay is not None:
+                first = stay
         choice_id = str(first.get("id") or first.get("choice_id") or "")
 
         if not choice_id:
@@ -25909,10 +25928,99 @@ def _build_gm_world_payload(session: FranchiseSession) -> Dict[str, Any]:
     }
 
 
+def _repair_minor_deals_in_rights_pool(session: FranchiseSession) -> None:
+    """Players on AHL / ECHL contracts belong on the farm roster, not the Rights Held pool."""
+    league = getattr(getattr(session, "sim", None), "league", None)
+    for team in list(getattr(league, "teams", None) or []):
+        pool = list(getattr(team, "prospect_pool", None) or [])
+        if not pool:
+            continue
+        keep = []
+        moved = False
+        for p in pool:
+            if bool(getattr(p, "real_nhl_import", False)):
+                keep.append(p)  # real prospects keep their real assignment
+                continue
+            c = getattr(p, "contract", None)
+            ctype = ""
+            if isinstance(c, dict):
+                ctype = str(c.get("contract_type") or c.get("type") or "").upper()
+            if ctype in ("AHL", "ECHL", "AHL_ECHL"):
+                key = "echl_roster" if ctype == "ECHL" else "ahl_roster"
+                farm = list(getattr(team, key, None) or [])
+                if p not in farm:
+                    farm.append(p)
+                    setattr(team, key, farm)
+                try:
+                    p.in_minors = True
+                    p.roster_location = key.split("_")[0]
+                except Exception:
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
+                moved = True
+            else:
+                keep.append(p)
+        if moved:
+            team.prospect_pool = keep
+
+
+def _strip_bootstrap_fake_rights(session: FranchiseSession) -> None:
+    """Real-NHL saves: generated juniors that startup handed to NHL clubs (no draft record)
+    are free agents of the junior system, not fake prospects in an org's Rights Held."""
+    if getattr(session, "_fake_rights_stripped", False):
+        return
+    if str(getattr(session, "player_universe", "") or "") != "real_nhl":
+        session._fake_rights_stripped = True
+        return
+    league = getattr(getattr(session, "sim", None), "league", None)
+    n = 0
+    for block in list(getattr(league, "development_leagues", None) or []):
+        for tm in block.get("teams") or []:
+            for p in tm.get("players") or []:
+                if getattr(p, "real_nhl_import", False):
+                    continue
+                rights = getattr(p, "nhl_rights_team_id", None) or getattr(p, "rights_team_id", None)
+                # Only juniors the startup filler explicitly tagged — never real or drafted prospects.
+                if not rights or not getattr(p, "_bootstrap_fake_rights", False):
+                    continue
+                for k in ("nhl_rights_team_id", "rights_team_id"):
+                    try:
+                        setattr(p, k, None)
+                    except Exception:
+                        pass
+                try:
+                    p.drafted = False
+                    p.passed_over_draft = True
+                except Exception:
+                    pass
+                n += 1
+    session._fake_rights_stripped = True
+    if n:
+        invalidate_session_payload_caches(session, reason="fake_rights")
+
+
 def build_state_payload(session: FranchiseSession, *, include_heavy: bool = False, crisis_tick: bool = False) -> Dict[str, Any]:
     from services.perf_profiler import span
 
+    try:
+        _strip_bootstrap_fake_rights(session)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+
     _ensure_gp_repair_v3(session)
+    try:
+        _repair_minor_deals_in_rights_pool(session)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    if bool(getattr(session, "free_agency_open", False)) and not getattr(session, "_unqualified_rfa_swept", None) == getattr(session, "season_calendar_year", None):
+        # Saves already past July 1: unqualified RFAs stuck on the hidden rights list go to the market.
+        try:
+            from services.franchise_offseason import release_unqualified_user_rfas
+
+            if release_unqualified_user_rfas(session):
+                invalidate_session_payload_caches(session, reason="unqualified_rfa")
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+        session._unqualified_rfa_swept = getattr(session, "season_calendar_year", None)
     if not include_heavy and not crisis_tick:
         with span("state.build", heavy=False):
             return _assemble_lean_state_payload(session, crisis_tick=crisis_tick)

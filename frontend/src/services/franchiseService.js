@@ -225,6 +225,11 @@ export async function getProspectRightsDesk() {
   return data;
 }
 
+export async function getProspectLedger() {
+  const { data } = await api.get("/api/franchise/prospects/stats");
+  return data;
+}
+
 export async function getPlayoffStats() {
   const { data } = await api.get("/api/franchise/playoffs/stats");
   return data;
@@ -754,6 +759,19 @@ export async function completeEntryDraft() {
 
 export async function acceptEntryDraftTrade(offer) {
   const { data } = await api.post("/api/franchise/entry-draft/accept-trade", { offer: offer || {} });
+  return data;
+}
+
+export async function quoteEntryDraftPickTrade(targetOverall) {
+  const { data } = await api.post("/api/franchise/entry-draft/trade-quote", { target_overall: targetOverall });
+  return data;
+}
+
+export async function tradeForEntryDraftPick(targetOverall, givePickIds) {
+  const { data } = await api.post("/api/franchise/entry-draft/trade-for-pick", {
+    target_overall: targetOverall,
+    give_pick_ids: givePickIds || [],
+  });
   return data;
 }
 

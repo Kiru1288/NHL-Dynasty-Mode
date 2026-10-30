@@ -246,8 +246,12 @@ def _mark_overage_juniors_off_open_board(league: Any, rng: random.Random, season
                     rights_p = 0.62 if age == 19 else 0.86
                 elif code.startswith("CHL_") or code in ("OHL", "WHL", "QMJHL"):
                     rights_p = 0.84 if age >= 20 else 0.72
+                # Real-NHL universes carry the real prospect pools; never invent rights holders.
+                if getattr(league, "real_nhl_import_meta", None) or getattr(league, "player_universe", "") == "real_nhl":
+                    rights_p = 0.0
                 if rng.random() < rights_p:
                     org = rng.choice(teams)
+                    setattr(p, "_bootstrap_fake_rights", True)
                     tid = str(getattr(org, "team_id", "") or "")
                     try:
                         p.nhl_rights_team_id = tid
@@ -1253,7 +1257,39 @@ def _assign_residual_dev_potential(
         pot = rng.randint(60, 70)
         setattr(player, "pipeline_tier", "pool")
 
-    pot = int(max(ovr99 + 2, min(99, pot + depth_shift)))
+    pot = int(min(99, pot + depth_shift))
+    # A year of junior growth left many draft-age kids at or above this ceiling, so
+    # "pot = max(ovr + 2, pot)" stamped potential right on top of overall and the
+    # class read as capped. Re-base them to a draft-age overall under the ceiling,
+    # the same way the shaped tiers rebuild ratings to a target.
+    if ovr99 > pot - 6:
+        target99 = max(36.0, min(ovr99, pot - rng.randint(8, 18)))
+        try:
+            from app.sim_engine.engine import build_role_shaped_ratings
+
+            ident = getattr(player, "identity", None)
+            pos = getattr(ident, "position", None)
+            if pos is not None:
+                keep_pot = ratings.get("dev_potential")
+                new_r = build_role_shaped_ratings(position=pos, target_ovr=target99 / 99.0, rng=rng)
+                if isinstance(new_r, dict) and new_r:
+                    player.ratings = new_r
+                    ratings = new_r
+                    if keep_pot is not None:
+                        ratings["dev_potential"] = keep_pot
+                    inval = getattr(player, "_invalidate_ovr_memo", None)
+                    if callable(inval):
+                        inval()
+                    try:
+                        from app.sim_engine.entities.player import persist_recomputed_ovr
+
+                        persist_recomputed_ovr(player)
+                    except Exception:
+                        _swallowed_log.debug("suppressed exception", exc_info=True)
+                    ovr99 = _player_ovr_frac(player) * 99.0
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    pot = int(max(ovr99 + 4, pot))
     ratings["dev_potential"] = pot
     try:
         from app.sim_engine.progression.development import assign_prospect_realization

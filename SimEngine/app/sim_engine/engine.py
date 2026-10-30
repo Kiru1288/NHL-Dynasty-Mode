@@ -13447,8 +13447,11 @@ class SimEngine:
             row["team_id"] = tid_s
             row.pop("team_name", None)
             row.pop("team", None)
+        # Per-club splits are kept by the franchise merge (_freeze_team_slice: previous
+        # clubs only). Writing the current club here put a one-game slice in by_team that
+        # Stats Central / the roster then showed as the whole season.
         split = None
-        if tid_s:
+        if False and tid_s:
             split = row.setdefault("by_team", {}).setdefault(tid_s, {})
             if "abbr" not in split:
                 amap = getattr(self, "_gm_team_abbr_map", None)

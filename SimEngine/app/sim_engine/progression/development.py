@@ -2712,13 +2712,20 @@ def calculate_season_growth_budget(
     perf_f = _clamp(1.0 + float(overperf) * 1.10, 0.55, 1.45)
     coeff = perf_f * morale_f * fit_f * _clamp(ice_mod, 0.70, 1.20) * noise
     if age <= 21:
-        close = 0.16
+        close = 0.22
     elif age <= 25:
-        close = 0.12
+        close = 0.15
     elif age <= 29:
         close = 0.08
     else:
         close = 0.04
+    # A random "regression" roll is not a reason for a young player to drop:
+    # under 28 it only stalls growth; real drops need a cause (production, morale, age).
+    # Drops need a cause. Before 33 a "regression" roll only bites after a poor year
+    # (production, morale, environment); a solid season turns it into a stall.
+    _bad_year = coeff < 0.90
+    if phase == "REGRESSION" and (age < 28 or (age < 33 and not _bad_year)):
+        phase = "STALL"
     if phase == "SPIKE":
         close *= 1.35
     elif phase == "REGRESSION":
@@ -2736,7 +2743,10 @@ def calculate_season_growth_budget(
         )
 
     over_pot = current - expected
-    if over_pot > 0.008:
+    if over_pot > 0.008 and age < 33 and not _bad_year:
+        # Playing above his ceiling and producing like it: he keeps the rating.
+        budget = 0.0
+    elif over_pot > 0.008:
         # Overall ran past potential. It comes back a couple of points a year.
         # A good year slows that; a bad year does not dump a whole tier at once.
         hold = _clamp(coeff, 0.75, 1.40)
@@ -2745,7 +2755,8 @@ def calculate_season_growth_budget(
     elif phase == "REGRESSION":
         budget = -min(0.030, 0.008 + gap_exp * 0.15) * under
     elif gap_exp <= 0.008:
-        budget = -0.006 * max(0.0, 0.85 - coeff)
+        # At his ceiling: holds through his prime, only a poor year costs a little after 28.
+        budget = 0.0 if age < 28 else -0.006 * max(0.0, 0.85 - coeff)
     else:
         # STALL slows a rise. It does not shrink a decline budget.
         used_close = close * (0.45 if phase == "STALL" else 1.0)

@@ -6794,15 +6794,33 @@ def sign_minor_or_tryout_contract(
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
 
-    # Place on affiliate / prospect pool — not NHL roster
-    pool = list(_get(team, "prospect_pool", None) or [])
+    # Minor-league deals go on the farm roster they were signed for — not the
+    # prospect pool (that list is the Rights Held screen) and not the NHL roster.
     roster = list(_get(team, "roster", None) or [])
     if player in roster:
         roster.remove(player)
         team.roster = roster
-    if player not in pool:
-        pool.append(player)
+    pool = list(_get(team, "prospect_pool", None) or [])
+    if player in pool:
+        pool.remove(player)
         team.prospect_pool = pool
+    farm_key = "echl_roster" if dest == "ECHL" else "ahl_roster"
+    other_key = "ahl_roster" if farm_key == "echl_roster" else "echl_roster"
+    other = list(_get(team, other_key, None) or [])
+    if player in other:
+        other.remove(player)
+        setattr(team, other_key, other)
+    farm = list(_get(team, farm_key, None) or [])
+    if player not in farm:
+        farm.append(player)
+        setattr(team, farm_key, farm)
+    try:
+        player.in_minors = True
+        player.is_buried = False
+        player.roster_location = dest.lower()
+        player.team_id = _get(team, "team_id", None) or _get(team, "id", None)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     # Remove from FA pool if present
     try:
