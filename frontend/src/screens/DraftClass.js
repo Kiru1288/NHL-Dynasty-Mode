@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect, useCallback, useRef } from "react";
+import React, { useMemo, useState, useEffect, useCallback, useRef, startTransition } from "react";
 import { useGameUI } from "../game/GameUIContext";
 import { SCREENS } from "../game/constants";
 import PlayerHeadshot from "../components/PlayerHeadshot";
@@ -2174,6 +2174,10 @@ function DraftClassHeadshot({ player, size = "md", board = false }) {
   );
 }
 
+const StatsWorkspaceMemo = React.memo((props) => <StatsWorkspace {...props} />);
+const ScoutingOpsMemo = React.memo((props) => <ScoutingOps {...props} />);
+const ProspectBoardPanelMemo = React.memo((props) => <ProspectBoardPanel {...props} />);
+
 const DK_TABS = [
   ["board", "Scout board"],
   ["ops", "Scouting ops"],
@@ -3122,6 +3126,8 @@ function StatsWorkspace({
   const sectionMeta = LEADER_MODE_META[leaderMode] || LEADER_MODE_META.points;
   const heroMetricKey = resolveHeroMetricKey(leaderMode, metricSort?.key);
   const sortLabel = metricSort?.key ? (LEADER_METRICS[metricSort.key]?.label || metricSort.key) : null;
+  const [statsLimit, setStatsLimit] = useState(50);
+  useEffect(() => { setStatsLimit(50); }, [leaderMode, metricSort?.key, metricSort?.dir]);
 
   return (
     <div className="dc-stats-workspace dc-scroll-surface dc-leaders-modal-sc dkl-root">
@@ -3176,7 +3182,7 @@ function StatsWorkspace({
         {!leaders.length ? (
           <p className="dc-empty-note">Not enough tracked data for this view yet.</p>
         ) : (
-          leaders.map((row, index) => (
+          leaders.slice(0, statsLimit).map((row, index) => (
             <LeaderModalRow
               key={row.id}
               row={row}
@@ -3190,6 +3196,11 @@ function StatsWorkspace({
             />
           ))
         )}
+        {leaders.length > statsLimit ? (
+          <button type="button" className="dkl-more" onClick={() => setStatsLimit((n) => n + 50)}>
+            Show 50 more ({leaders.length - statsLimit} left)
+          </button>
+        ) : null}
       </div>
     </div>
   );
@@ -3392,7 +3403,12 @@ export default function DraftClass() {
   const [boardSource, setBoardSource] = useState("scout");
   const [showConsensus, setShowConsensus] = useState(false);
   const [pyramidMode, setPyramidMode] = useState(false);
-  const [workspace, setWorkspace] = useState("board");
+  const [workspace, setWorkspaceRaw] = useState("board");
+  const [visitedWs, setVisitedWs] = useState({ board: true });
+  const setWorkspace = useCallback((next) => {
+    setVisitedWs((v) => (v[next] ? v : { ...v, [next]: true }));
+    startTransition(() => setWorkspaceRaw(next));
+  }, []);
   const [leaderMode, setLeaderMode] = useState("points");
   const [leadersModalOpen, setLeadersModalOpen] = useState(false);
   const [scoutingStore, setScoutingStore] = useState({});
@@ -3409,6 +3425,10 @@ export default function DraftClass() {
   const [scoutActionNote, setScoutActionNote] = useState("");
   const refetchOpenProfileRef = useRef(null);
   const [scoutStaff, setScoutStaff] = useState([]);
+  const scoutStaffRef = useRef([]);
+  scoutStaffRef.current = scoutStaff;
+  const rawProspectsRef = useRef([]);
+  const selectedProspectIdRef = useRef(null);
   const scoutBudgetRef = useRef(null);
   useEffect(() => {
     let live = true;
@@ -3580,6 +3600,35 @@ export default function DraftClass() {
     setBulkNote("");
     try {
       let res;
+      const prospectById = new Map((rawProspectsRef.current || []).map((pp) => [String(pp.id), pp]));
+      const bestScoutFor = (pid) => {
+        const pp = prospectById.get(String(pid));
+        const region = regionForCountry(pp?.country || pp?.nationality);
+        const staff = scoutStaffRef.current || [];
+        const inRegion = staff.filter((sc) => sc.id && sc.region && region && sc.region.toLowerCase().includes(region.toLowerCase().split(" ")[0]));
+        const pool = (inRegion.length ? inRegion : staff.filter((sc) => sc.id));
+        return pool.slice().sort((x, y) => (y.quality - x.quality) || (x.load - y.load))[0]?.id || "auto";
+      };
+      // Older API builds don't know the bulk forms: fall back to one call per prospect.
+      const post = async (body) => {
+        try { return await api.post(SCOUTING_ENDPOINTS.focus, body); }
+        catch (e) {
+          const d = e?.response?.data;
+          if (d) return { data: { ok: false, message: d.detail || d.message || e.message } };
+          throw e;
+        }
+      };
+      const legacyMiss = (d) => d && d.ok === false && /requires prospect_id|No prospects matched/i.test(String(d.message || ""));
+      const perProspect = async (fn) => {
+        let done = 0; let lastMsg = "";
+        for (const pid of list) {
+          try {
+            const r = await fn(pid);
+            if (r?.ok !== false) done += 1; else lastMsg = r?.message || lastMsg;
+          } catch (e) { lastMsg = e?.message || lastMsg; }
+        }
+        return { data: { ok: done > 0, message: `Updated ${done} of ${list.length} prospect${list.length === 1 ? "" : "s"}.${done < list.length && lastMsg ? ` ${lastMsg}` : ""}` } };
+      };
       if (kind === "shortlist" || kind === "unshortlist") {
         const on = kind === "shortlist";
         setScoutingStore((prev) => {
@@ -3587,11 +3636,33 @@ export default function DraftClass() {
           list.forEach((id) => { next[id] = { ...getScoutingMeta(prev, id), watchlist: on }; });
           return next;
         });
-        res = await api.post(SCOUTING_ENDPOINTS.focus, { context: { meta_only: true, meta_patch: { watchlist: on }, prospect_ids: list } });
+        res = list.length === 1
+          ? { data: await patchScoutingMeta(list[0], { watchlist: on }) }
+          : await post({ context: { meta_only: true, meta_patch: { watchlist: on }, prospect_ids: list } });
+        if (legacyMiss(res?.data)) res = await perProspect((pid) => patchScoutingMeta(pid, { watchlist: on }));
       } else if (kind === "assign") {
-        res = await api.post(SCOUTING_ENDPOINTS.focus, { context: { meta_only: true, meta_patch: { assigned_scout: "auto" }, prospect_ids: list } });
+        const picks = {};
+        list.forEach((pid) => { picks[pid] = bestScoutFor(pid); });
+        setScoutingStore((prev) => {
+          const next = { ...prev };
+          list.forEach((id) => { if (picks[id] !== "auto") next[id] = { ...getScoutingMeta(prev, id), assignedScout: picks[id] }; });
+          return next;
+        });
+        const allKnown = list.every((pid) => picks[pid] !== "auto");
+        res = allKnown
+          ? await perProspect((pid) => patchScoutingMeta(pid, { assigned_scout: picks[pid] }))
+          : await post({ context: { meta_only: true, meta_patch: { assigned_scout: "auto" }, prospect_ids: list } });
+        if (legacyMiss(res?.data)) res = await perProspect((pid) => patchScoutingMeta(pid, { assigned_scout: picks[pid] }));
       } else {
-        res = await api.post(SCOUTING_ENDPOINTS.focus, { action: "player_focus", target_type: "players", intensity: "normal", context: { target_ids: list.slice(0, 40) } });
+        res = list.length === 1
+          ? { data: await runProspectScoutAction(list[0], "player_focus", { intensity: "normal" }) }
+          : await post({ action: "player_focus", target_type: "players", intensity: "normal", context: { target_ids: list.slice(0, 40) } });
+        if (list.length > 1 && legacyMiss(res?.data)) {
+          res = await perProspect((pid) => runProspectScoutAction(pid, "player_focus", { intensity: "normal" }));
+        }
+      }
+      if (list.some((pid) => selectedProspectIdRef.current && String(pid) === String(selectedProspectIdRef.current))) {
+        refetchOpenProfileRef.current?.(selectedProspectIdRef.current);
       }
       const data = res?.data || {};
       if (Array.isArray(data.prospects)) {
@@ -3624,6 +3695,8 @@ export default function DraftClass() {
     const withProfiles = mapped.map((p) => ({ ...p, profile: profiles[p.id] || null }));
     return enrichProspectsForWarRoom(withProfiles, profiles);
   }, [franchiseState?.draft_class_rankings?.entries, franchiseState?.draft_class_hud?.prospect_profiles_by_id, dateContext]);
+  rawProspectsRef.current = rawProspects;
+  selectedProspectIdRef.current = selectedProspect?.id || null;
 
   useEffect(() => {
     // Prefer local board + franchise scouting overlays. Hitting /scouting/prospects
@@ -3758,31 +3831,8 @@ export default function DraftClass() {
             onOpenWjc={handleOpenWjc}
           />
 
-          {workspace === "stats" ? (
-            <StatsWorkspace
-              prospects={filteredProspects}
-              dateContext={dateContext}
-              leaderMode={leaderMode}
-              setLeaderMode={setLeaderMode}
-              profilesById={franchiseState?.draft_class_hud?.prospect_profiles_by_id || {}}
-              onSelectPlayer={openProspect}
-            />
-          ) : workspace === "ops" ? (
-            <ScoutingOps
-              prospects={rawProspects}
-              scoutingStore={scoutingStore}
-              activeDeployments={activeDeployments}
-              onDeploy={handleDeployCoverage}
-              deployBusy={deployBusy}
-              deployNotice={deployNotice}
-              onBulk={runBulk}
-              bulkBusy={bulkBusy}
-              bulkNote={bulkNote}
-              onOpenProspect={openProspect}
-              franchiseState={franchiseState}
-            />
-          ) : (
-            <ProspectBoardPanel
+          <div className={`dk-pane${workspace === "board" ? " is-on" : ""}`} aria-hidden={workspace !== "board"}>
+            <ProspectBoardPanelMemo
               prospects={filteredProspects}
               selectedProspectId={selectedProspectId}
               onOpenProspect={openProspect}
@@ -3805,7 +3855,36 @@ export default function DraftClass() {
               bulkBusy={bulkBusy}
               bulkNote={bulkNote}
             />
-          )}
+          </div>
+          {visitedWs.ops ? (
+            <div className={`dk-pane${workspace === "ops" ? " is-on" : ""}`} aria-hidden={workspace !== "ops"}>
+              <ScoutingOpsMemo
+              prospects={rawProspects}
+              scoutingStore={scoutingStore}
+              activeDeployments={activeDeployments}
+              onDeploy={handleDeployCoverage}
+              deployBusy={deployBusy}
+              deployNotice={deployNotice}
+              onBulk={runBulk}
+              bulkBusy={bulkBusy}
+              bulkNote={bulkNote}
+              onOpenProspect={openProspect}
+              franchiseState={franchiseState}
+            />
+            </div>
+          ) : null}
+          {visitedWs.stats ? (
+            <div className={`dk-pane${workspace === "stats" ? " is-on" : ""}`} aria-hidden={workspace !== "stats"}>
+              <StatsWorkspaceMemo
+              prospects={filteredProspects}
+              dateContext={dateContext}
+              leaderMode={leaderMode}
+              setLeaderMode={setLeaderMode}
+              profilesById={franchiseState?.draft_class_hud?.prospect_profiles_by_id || {}}
+              onSelectPlayer={openProspect}
+            />
+            </div>
+          ) : null}
 
           <IntelFeed prospects={filteredProspects} />
         </main>

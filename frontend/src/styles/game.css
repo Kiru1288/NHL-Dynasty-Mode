@@ -82512,3 +82512,22 @@ html:not(#_) .edraft-pick-modal .edraft-seg button { font-size: 12px !important;
 html:not(#_) .edraft-pick-modal .edraft-pick-detail :is(summary, a, .edraft-evidence, details > summary) { color: #2348c7 !important; font-weight: 900 !important; }
 html:not(#_) .edraft-pick-modal .edraft-pick-detail :is(span, em, small, label) { text-shadow: none !important; }
 html:not(#_) .edraft-pick-modal .edraft-pick-detail [class*="outcome"] span { color: #15112b !important; }
+
+/* Draft room fixes: stats rows must not shrink inside the flex stack */
+html:not(#_) .dk-root .dkl-root .dc-lm-row-stack { flex: 0 0 auto !important; min-height: auto !important; }
+html:not(#_) .dk-root .dkl-row { flex: 0 0 auto !important; min-height: 54px !important; overflow: visible !important; }
+html:not(#_) .dk-root .dkl-more {
+  align-self: center; margin: 8px 0 0; font-family: var(--kd-display); font-size: 16px; color: var(--kd-ink);
+  background: linear-gradient(180deg, #fff17a, var(--kd-yellow) 55%, #f2b400); border: 3px solid var(--kd-ink); border-radius: 12px; box-shadow: 0 3px 0 var(--kd-ink); padding: 6px 16px 4px; cursor: pointer;
+}
+/* Draft room tabs stay mounted; hidden panes keep their rendering cache (fast switching) */
+html:not(#_) .dk-root > .dk-pane { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; min-width: 0; }
+html:not(#_) .dk-root > .dk-pane:not(.is-on) {
+  content-visibility: hidden; position: absolute; left: 0; top: 0; width: 100%; height: 0; overflow: hidden; pointer-events: none;
+}
+/* Paint cost: no filters on the 100+ small headshots in board/stats rows */
+html:not(#_) .dk-root :is(.dkb-row, .dkl-row) :is(.player-headshot, .ph-nhl-image, .ph-flag__img, img) { filter: none !important; }
+html:not(#_) .dk-root :is(.dkb-row, .dkl-row) { contain: layout paint; }
+html:not(#_) .dk-root .dkl-row .dc-lm-row__draft { flex-direction: row !important; flex-wrap: nowrap !important; align-items: center !important; gap: 5px !important; }
+html:not(#_) .dk-root .dkl-row .dc-lm-row__draft > * { margin: 0 !important; }
+html:not(#_) .dk-root .dkl-row { min-height: 0 !important; padding: 5px 10px !important; }

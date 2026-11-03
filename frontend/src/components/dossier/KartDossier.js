@@ -588,7 +588,10 @@ export default function KartDossier({
   const watch = Boolean(meta?.watchlist || war?.file?.watchlist);
   const target = Boolean(meta?.target || war?.file?.target);
   const dnd = Boolean(meta?.doNotDraft || war?.file?.do_not_draft);
-  const recId = war?.file?.recommended_scout_id || "auto";
+  const recId = war?.file?.recommended_scout_id
+    || (war?.scouts || []).find((sc) => sc.recommended)?.id
+    || (war?.scouts || []).slice().sort((x, y) => (Number(y.quality) || 0) - (Number(x.quality) || 0))[0]?.id
+    || "auto";
 
   return (
     <div className="kdd-shell">
