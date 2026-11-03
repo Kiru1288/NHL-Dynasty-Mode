@@ -3291,6 +3291,10 @@ def _race_card(row: Mapping[str, Any], metrics: Sequence[Optional[Dict[str, Any]
         "gp": _gp(row),
         "metrics": shown,
     }
+    if row.get("_race_score") is not None:
+        card["race_score"] = row.get("_race_score")
+        if isinstance(row, dict):
+            row.pop("_race_score", None)
     for key in (
         "nhl_headshot_url",
         "headshot_url",
@@ -3307,7 +3311,20 @@ def _race_card(row: Mapping[str, Any], metrics: Sequence[Optional[Dict[str, Any]
 
 def _top_race(rows: Sequence[Mapping[str, Any]], score_fn: Any, limit: int = 5) -> List[Mapping[str, Any]]:
     ranked = sorted(rows, key=score_fn, reverse=True)
-    return ranked[:limit]
+    top = ranked[:limit]
+    # Stamp the ballot score so the UI can show gaps to the leader. Cards for one
+    # board are built right after this call, before the next board re-stamps.
+    for row in top:
+        if not isinstance(row, dict):
+            continue
+        try:
+            raw = score_fn(row)
+            if isinstance(raw, (tuple, list)):
+                raw = raw[0] if raw else 0
+            row["_race_score"] = round(float(raw), 3)
+        except Exception:
+            row.pop("_race_score", None)
+    return top
 
 
 def build_live_awards_race(

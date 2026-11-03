@@ -35,6 +35,7 @@ import {
   writeFranchiseHubSnapshot,
 } from "../services/api";
 import { markNavigation, record as perfRecord } from "../services/perfProfiler";
+import { isAbortError, isSimBusyError, startSimStallWatchdog, waitForSimIdle } from "./simRecovery";
 import { HUB_MENU, SCREENS, buildDefaultFranchiseTeamList } from "./constants";
 import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
 import {
@@ -408,6 +409,19 @@ function mergeNarrativeUniverse(prior, incoming) {
   return next;
 }
 
+/** Saved lines only move forward: a state response that started before a lines save
+ *  (older lines_revision) must not put the previous sheet back on screen. */
+function pickNewerLines(prior, incoming) {
+  const next = incoming?.lines;
+  if (!next || typeof next !== "object") return { lines: prior?.lines, rev: prior?.lines_revision };
+  const pr = Number(prior?.lines_revision);
+  const nr = Number(incoming?.lines_revision);
+  if (Number.isFinite(pr) && Number.isFinite(nr) && nr < pr && prior?.lines) {
+    return { lines: prior.lines, rev: pr };
+  }
+  return { lines: next, rev: Number.isFinite(nr) ? nr : prior?.lines_revision };
+}
+
 function mergeFranchisePayload(prev, incoming) {
   if (!incoming || typeof incoming !== "object") return prev;
   const prior = prev && typeof prev === "object" ? prev : {};
@@ -427,7 +441,9 @@ function mergeFranchisePayload(prev, incoming) {
       flags: incoming.flags ?? prior.flags,
     };
     if (incoming.lines && typeof incoming.lines === "object") {
-      merged.lines = incoming.lines;
+      const pick = pickNewerLines(prior, incoming);
+      merged.lines = pick.lines;
+      merged.lines_revision = pick.rev;
     }
     return applyLeanProgressFields(merged, incoming);
   }
@@ -446,7 +462,8 @@ function mergeFranchisePayload(prev, incoming) {
     ...prior,
     ...incoming,
     roster: incoming?.roster ?? prior.roster,
-    lines: incoming?.lines ?? prior.lines,
+    lines: pickNewerLines(prior, incoming).lines,
+    lines_revision: pickNewerLines(prior, incoming).rev,
     roster_browser: incoming?.roster_browser ?? (revisionChanged ? undefined : prior.roster_browser),
     draft_class_rankings: incoming?.draft_class_rankings ?? (draftStale ? undefined : prior.draft_class_rankings),
     draft_class_hud: incoming?.draft_class_hud ?? (draftStale ? undefined : prior.draft_class_hud),
@@ -620,6 +637,9 @@ export function GameUIProvider({ children }) {
   const [advancingLabel, setAdvancingLabel] = useState("Simulating league day…");
   const [advancingCanStop, setAdvancingCanStop] = useState(false);
   const advancingDepthRef = useRef(0);
+  const simResumeRef = useRef(null);
+  const franchiseStateRef = useRef(null);
+  franchiseStateRef.current = franchiseState;
   const advancingSafetyTimerRef = useRef(null);
   const [franchiseEventForceOpen, setFranchiseEventForceOpen] = useState(false);
   const [franchisePhaseTransition, setFranchisePhaseTransition] = useState({
@@ -1196,7 +1216,11 @@ export function GameUIProvider({ children }) {
           if (res?.state) mergeFranchiseState(res.state);
           return res;
         } catch (e) {
-          handleFranchiseApiError(e);
+          // The market tick may still have finished server-side: resync instead of
+          // leaving the hub on pre-sim state (used to need a manual browser refresh).
+          await waitForSimIdle({ maxMs: 60000 });
+          await refreshFranchise();
+          if (!isSimBusyError(e)) handleFranchiseApiError(e);
           return null;
         } finally {
           endAdvancing();
@@ -1214,6 +1238,10 @@ export function GameUIProvider({ children }) {
       const effectiveAuto = autoResolve === undefined ? Boolean(bulkSim) : Boolean(autoResolve);
       beginAdvancing(advancingLabelFor({ mode: m, count: c, targetIso }), { canStop: Boolean(bulkSim) });
       setError(null);
+      // A new sim supersedes any sim waiting to resume after a popup.
+      simResumeRef.current = null;
+      const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+      const stopWatchdog = controller ? startSimStallWatchdog(controller) : () => {};
       let res = null;
       try {
         if (bulkSim) {
@@ -1235,6 +1263,7 @@ export function GameUIProvider({ children }) {
             auto_resolve: effectiveAuto,
             auto_fill_lines: effectiveAuto,
             ...(targetMode === "to_date" ? { target_iso: String(targetIso) } : {}),
+            signal: controller?.signal,
           });
           mergeFranchiseState(res?.state);
         } else {
@@ -1243,6 +1272,7 @@ export function GameUIProvider({ children }) {
             count: 1,
             auto_resolve: effectiveAuto,
             auto_fill_lines: effectiveAuto,
+            signal: controller?.signal,
           });
           mergeFranchiseState(res?.state);
         }
@@ -1253,6 +1283,26 @@ export function GameUIProvider({ children }) {
         const completed = step?.bulk ? Number(step?.steps_completed || 0) : status === "ok" ? 1 : 0;
         const pending = (step?.pending_decisions || lastStep?.pending_decisions || [])[0];
         const pausedForDesk = step?.bulk && (stopped === "user_action" || stopped === "trade_demand");
+        // Remember what is left of the sim so Continue on the interrupting popup resumes it.
+        let resumable = false;
+        if (step?.bulk && stopped === "user_action") {
+          let resume = null;
+          if (m === "to_date") resume = { mode: "to_date", count: 1, target_iso: String(targetIso) };
+          else if (seasonBlock) resume = { mode: "season", count: 1 };
+          else if (m === "next_game") {
+            if (completed < Number(step?.target_days || 0)) resume = { mode: "next_game", count: 1 };
+          } else if (c - completed > 0) resume = { mode: m === "games" ? "games" : "days", count: c - completed };
+          if (resume) {
+            const st = res?.state || {};
+            simResumeRef.current = {
+              ...resume,
+              auto_resolve: autoResolve,
+              cursor: st.calendar_cursor ?? null,
+              iso: st.franchise_today_iso ?? null,
+            };
+            resumable = true;
+          }
+        }
         const stalled =
           status === "blocked"
           || (step?.bulk && completed <= 0 && Boolean(stopped) && stopped !== "count" && stopped !== "user_stop");
@@ -1265,22 +1315,59 @@ export function GameUIProvider({ children }) {
               || (pausedForDesk
                 ? stopped === "trade_demand"
                   ? "Sim stopped. A player on your team has demanded a trade."
-                  : "Sim paused. A player meeting, waiver, or press availability is waiting on the desk."
+                  : resumable
+                    ? "Sim paused for an alert. Press Continue on it to keep simming."
+                    : "Sim paused. A player meeting, waiver, or press availability is waiting on the desk."
                 : "Sim stopped. Resolve the alert on the desk, then try again.")
             )
           );
         }
       } catch (e) {
         // Never rethrow — Axios Network Error must not open the React crash overlay.
-        handleFranchiseApiError(e);
+        // Recover: the sim may have finished (or still be finishing) server-side, so
+        // wait for it to go idle, then resync instead of freezing on stale state.
+        stopWatchdog();
+        await waitForSimIdle({ maxMs: isAbortError(e) ? 20000 : 120000 });
+        await refreshFranchise();
+        if (isAbortError(e)) {
+          setError("The sim response was lost — your franchise has been resynced.");
+        } else if (!isSimBusyError(e)) {
+          handleFranchiseApiError(e);
+        }
         return null;
       } finally {
+        stopWatchdog();
         endAdvancing();
       }
       return res;
     },
-    [franchiseState, handleFranchiseApiError, beginAdvancing, endAdvancing]
+    [franchiseState, handleFranchiseApiError, beginAdvancing, endAdvancing, refreshFranchise]
   );
+
+  const onAdvanceFranchiseRef = useRef(onAdvanceFranchise);
+  useEffect(() => {
+    onAdvanceFranchiseRef.current = onAdvanceFranchise;
+  }, [onAdvanceFranchise]);
+
+  /** Called when the last interrupting popup is dismissed with Continue. */
+  const resumeInterruptedSim = useCallback(() => {
+    const r = simResumeRef.current;
+    simResumeRef.current = null;
+    if (!r) return false;
+    const st = franchiseStateRef.current || {};
+    // Stale resume (the calendar moved since the stop): drop it.
+    if (r.cursor != null && st.calendar_cursor != null && Number(st.calendar_cursor) !== Number(r.cursor)) return false;
+    if (r.cursor == null && r.iso && st.franchise_today_iso && st.franchise_today_iso !== r.iso) return false;
+    const { cursor, iso, ...opts } = r;
+    window.setTimeout(() => {
+      onAdvanceFranchiseRef.current?.(opts);
+    }, 300);
+    return true;
+  }, []);
+
+  const cancelSimResume = useCallback(() => {
+    simResumeRef.current = null;
+  }, []);
 
   const onAdvanceDay = useCallback(async () => {
     await onAdvanceFranchise({ mode: "day", count: 1, auto_resolve: true });
@@ -1658,6 +1745,8 @@ export function GameUIProvider({ children }) {
       onResolveDecision,
       onResolveStorylineChoice,
       onDismissShowcasePopups,
+      resumeInterruptedSim,
+      cancelSimResume,
       openHubMenu,
       goNewFranchise,
       capLedgerTab,
@@ -1728,6 +1817,8 @@ export function GameUIProvider({ children }) {
       onResolveDecision,
       onResolveStorylineChoice,
       onDismissShowcasePopups,
+      resumeInterruptedSim,
+      cancelSimResume,
       openHubMenu,
       goNewFranchise,
       capLedgerTab,

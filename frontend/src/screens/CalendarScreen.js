@@ -1986,10 +1986,9 @@ function CalendarScreen(props = {}) {
           gameUI?.openFranchiseEvent?.();
         }
 
-        const wjcTriggered =
-          Boolean(findPendingWjcPopup(nextState)) ||
-          isWorldJuniorsWindowActive(nextState) ||
-          isDateInWorldJuniorsWindow(landedIso, nextState?.season_year || nextState?.seasonYear);
+        // Only the backend's throttled WJC overlays (tournament start, final result)
+        // open the desk. Opening it on every sim day inside the window was the spam.
+        const wjcTriggered = Boolean(findPendingWjcPopup(nextState));
 
         if (wjcTriggered) {
           const wjcPop = findPendingWjcPopup(nextState);

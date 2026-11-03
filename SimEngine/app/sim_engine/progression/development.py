@@ -2522,6 +2522,139 @@ def nudge_prospect_realization(player: Any, season: Any = None) -> float:
     return float(delta)
 
 
+def record_season_form(player: Any, overperf: float, ovr99: float) -> None:
+    """Store one offseason's form (production vs. what his rating and minutes should
+    produce) once per development season. Keeps the last four."""
+    season = str(getattr(player, "_active_dev_season", None) or "")
+    hist = getattr(player, "_dev_form_history", None)
+    if not isinstance(hist, list):
+        hist = []
+    if season and hist and str(hist[-1].get("season")) == season:
+        hist[-1] = {"season": season, "form": round(float(overperf), 4)}
+    else:
+        hist.append({"season": season, "form": round(float(overperf), 4)})
+    try:
+        setattr(player, "_dev_form_history", hist[-4:])
+        peak = float(getattr(player, "_dev_peak_ovr99", 0.0) or 0.0)
+        if ovr99 > peak:
+            setattr(player, "_dev_peak_ovr99", float(ovr99))
+    except Exception:
+        pass
+
+
+def rolling_form_score(player: Any, current: Optional[float] = None) -> Tuple[float, int]:
+    """Weighted multi-season form: this season 0.5, last 0.3, the one before 0.2.
+
+    ``current`` is this season's form when it is not stored yet. Returns (score, seasons).
+    One season is shrunk toward neutral, so a single bad year never reads as a trend.
+    """
+    hist = getattr(player, "_dev_form_history", None)
+    vals: List[float] = []
+    if isinstance(hist, list):
+        season = str(getattr(player, "_active_dev_season", None) or "")
+        for row in hist:
+            if current is not None and season and str(row.get("season")) == season:
+                continue
+            try:
+                vals.append(float(row.get("form", 0.0)))
+            except (TypeError, ValueError, AttributeError):
+                continue
+    if current is not None:
+        vals.append(float(current))
+    vals = vals[-3:]
+    if not vals:
+        return 0.0, 0
+    weights = (0.2, 0.3, 0.5)[-len(vals):]
+    score = sum(w * v for w, v in zip(weights, vals)) / sum(weights)
+    if len(vals) == 1:
+        score *= 0.55
+    elif len(vals) == 2:
+        score *= 0.85
+    return float(score), len(vals)
+
+
+def development_outlook(player: Any, context: Optional[Any] = None) -> Dict[str, Any]:
+    """F15: expected OVR change next season (range) plus the levers that move it.
+
+    Runs the real offseason budget three times without side effects: a stalled year,
+    a normal year and a spike year. The levers are the deterministic inputs the GM
+    can influence (ice time, level, role, morale, development focus, form).
+    """
+    out: Dict[str, Any] = {"ok": True}
+    try:
+        setattr(player, "_dev_outlook_probe", True)
+        vals = {}
+        for ph in ("STALL", "NORMAL", "SPIKE"):
+            vals[ph] = calculate_season_growth_budget(player, context, rng=random.Random(7), dev_phase=ph) * 99.0
+    finally:
+        try:
+            setattr(player, "_dev_outlook_probe", False)
+        except Exception:
+            pass
+    lo, mid, hi = sorted(vals.values())
+    age = _get_player_age(player)
+    # The age roll (career lifecycle) runs on top of the budget from 29: expected loss.
+    if age >= 29:
+        try:
+            from app.sim_engine.engine import _aging_v3_base_decline_chance  # noqa: WPS433
+
+            p_dec = float(_aging_v3_base_decline_chance(age))
+            amt = 0.7 if age <= 30 else (1.0 if age <= 33 else (1.9 if age <= 36 else 2.7))
+            mid -= p_dec * amt
+            lo -= amt
+        except Exception:
+            pass
+    ovr = _player_ovr99(player)
+    pot = _scout_potential99(player)
+    morale = _get_player_morale(player)
+    ice = _clamp(_ice_time_modifier(player), 0.55, 1.22)
+    league = str(getattr(player, "_dev_growth_league", "") or "NHL").upper() or "NHL"
+    form, n_form = rolling_form_score(player)
+    role_mult = getattr(player, "_role_accept_growth_mult", None)
+    focus = []
+    try:
+        from app.sim_engine.franchise.player_directives import active_directives  # noqa: WPS433
+
+        focus = [str((r or {}).get("label") or (r or {}).get("id") or "") for r in (active_directives(player) or {}).values()
+                 if isinstance(r, dict) and str(r.get("id") or "").startswith("habit_develop")]
+    except Exception:
+        focus = []
+
+    def lever(key: str, label: str, value: str, effect: str, tone: str) -> Dict[str, str]:
+        return {"key": key, "label": label, "value": value, "effect": effect, "tone": tone}
+
+    levers = [
+        lever("runway", "Room to potential", f"{max(0.0, pot - ovr):.0f} OVR (pot {pot:.0f})",
+              "More room = faster growth; growth slows near the ceiling.", "good" if pot - ovr >= 6 else "neutral"),
+        lever("age", "Age", str(age),
+              "Biggest gains 18-23, steady to 26, holds through ~29, gentle slide after 30.",
+              "good" if age <= 23 else ("neutral" if age <= 29 else "bad")),
+        lever("ice_time", "Ice time", f"{ice:.2f}x",
+              "Real minutes speed growth. 23-and-under NHL depth minutes are not penalised.",
+              "good" if ice >= 1.0 else ("bad" if ice < 0.85 else "neutral")),
+        lever("level", "Level", league,
+              "NHL or a top AHL role both develop; production is judged at NHL-equivalent rates.", "neutral"),
+        lever("production", "Production vs. his rating", f"{form:+.2f} (rolling, {n_form} seasons)",
+              "Out-producing his rating earns growth even past potential (any level, 26 and under); "
+              "a 3-season slump is what drives regression, not one bad year.",
+              "good" if form > 0.03 else ("bad" if form < -0.03 else "neutral")),
+        lever("morale", "Morale", f"{morale * 100:.0f}/100", "Low morale slows growth and can speed decline.",
+              "good" if morale >= 0.65 else ("bad" if morale < 0.4 else "neutral")),
+        lever("role", "Role acceptance",
+              "accepted" if role_mult else "none", "An accepted role removes the usage penalty on growth.",
+              "good" if role_mult else "neutral"),
+        lever("focus", "Development focus", ", ".join(f for f in focus if f) or "none set",
+              "A focus steers which attributes the year's growth goes into.", "good" if focus else "neutral"),
+    ]
+    out.update({
+        "age": age, "overall": round(ovr, 1), "potential": round(pot, 1),
+        "expected": round(mid, 1), "range_low": round(lo, 1), "range_high": round(hi, 1),
+        "summary": (f"Expect {mid:+.1f} OVR next season (range {lo:+.1f} to {hi:+.1f})."),
+        "levers": levers,
+    })
+    return out
+
+
 def calculate_season_growth_budget(
     player: Any,
     context: Optional[Any] = None,
@@ -2595,6 +2728,10 @@ def calculate_season_growth_budget(
     played_a_year = gp >= 40 or (growth_league not in ("", "NHL"))
     if age <= 23 and scratches < 10 and played_a_year:
         ice_mod = max(float(ice_mod), 0.95)
+    # F14: NHL games are development. A 23-and-under regular in a bottom-six or
+    # third-pair role is not docked for usage (depth minutes still beat the AHL).
+    if age <= 23 and growth_league in ("", "NHL") and gp >= 10 and scratches < 20:
+        ice_mod = max(float(ice_mod), 1.0)
 
     rate = _clamp(float(profile.get("development_rate", _development_rate(player))), 0.15, 0.95)
     vol = _clamp(float(profile.get("volatility", 0.3)), 0.05, 0.95)
@@ -2694,7 +2831,8 @@ def calculate_season_growth_budget(
         mod *= 0.78
 
     phase = str(dev_phase or "NORMAL").upper()
-    noise = 1.0 + rng.uniform(-0.08, 0.10) * vol
+    # F15: less dice, more cause. (Was -0.08..+0.10 x volatility.)
+    noise = 1.0 + rng.uniform(-0.04, 0.05) * vol
     # Potential is the destination. Performance, morale, and fit decide how much
     # of the remaining gap closes this season. There is no age ceiling.
     fit_raw = getattr(player, "development_fit_score", None)
@@ -2711,19 +2849,29 @@ def calculate_season_growth_budget(
         morale_f = _clamp(0.55 + float(morale) * 0.70, 0.55, 1.30)
     perf_f = _clamp(1.0 + float(overperf) * 1.10, 0.55, 1.45)
     coeff = perf_f * morale_f * fit_f * _clamp(ice_mod, 0.70, 1.20) * noise
+    # Share of the gap to potential one season closes. 22-26 used to close 15%
+    # (an 8-point runway was +1 a year), so growth died after a player's 2nd season.
     if age <= 21:
-        close = 0.22
-    elif age <= 25:
-        close = 0.15
+        close = 0.28
+    elif age <= 23:
+        close = 0.25
+    elif age <= 26:
+        close = 0.19
     elif age <= 29:
-        close = 0.08
+        close = 0.09
     else:
         close = 0.04
     # A random "regression" roll is not a reason for a young player to drop:
     # under 28 it only stalls growth; real drops need a cause (production, morale, age).
     # Drops need a cause. Before 33 a "regression" roll only bites after a poor year
     # (production, morale, environment); a solid season turns it into a stall.
-    _bad_year = coeff < 0.90
+    # Regression is cumulative: one poor season inside a good run is not a trend.
+    # A "bad year" needs this season under par AND a weak 3-season rolling form.
+    _form, _form_n = rolling_form_score(player, None if for_in_season else float(overperf))
+    if not for_in_season:
+        if not getattr(player, "_dev_outlook_probe", False):
+            record_season_form(player, float(overperf), float(current * 99.0 if current <= 1.5 else current))
+    _bad_year = coeff < 0.90 and (_form < -0.02 or _form_n <= 1 and coeff < 0.80)
     if phase == "REGRESSION" and (age < 28 or (age < 33 and not _bad_year)):
         phase = "STALL"
     if phase == "SPIKE":
@@ -2756,7 +2904,7 @@ def calculate_season_growth_budget(
         budget = -min(0.030, 0.008 + gap_exp * 0.15) * under
     elif gap_exp <= 0.008:
         # At his ceiling: holds through his prime, only a poor year costs a little after 28.
-        budget = 0.0 if age < 28 else -0.006 * max(0.0, 0.85 - coeff)
+        budget = 0.0 if age < 28 else -0.006 * max(0.0, 0.85 - coeff) * (0.0 if _form > 0.02 else 1.0)
     else:
         # STALL slows a rise. It does not shrink a decline budget.
         used_close = close * (0.45 if phase == "STALL" else 1.0)
@@ -2765,18 +2913,41 @@ def calculate_season_growth_budget(
         step_cap = 0.042 if age <= 25 else 0.024
         budget = min(budget, gap_exp * (0.45 if phase == "SPIKE" else 0.35), step_cap)
 
+    # F13: out-producing his rating is growth for a young player at any level (AHL,
+    # ECHL, junior included: production is the NHL-equivalent line), even at or past
+    # the ceiling the scouts gave him. The ceiling then follows (ensure_potential_floor).
+    if not for_in_season and age <= 26 and overperf > 0.04 and _form > -0.02:
+        earned = min(0.026 if age <= 23 else 0.018, float(overperf) * (0.055 if age <= 23 else 0.04))
+        budget = max(budget, earned * _clamp(fit_f, 0.8, 1.15))
+
     if injury_days >= 40 and budget > 0:
         budget *= 0.62
     elif injury_days >= 20 and budget > 0:
         budget *= 0.78
 
+    # Bounce-back: a player who has slid from his peak and has strung together strong
+    # form earns rating back, even past the "expected" ceiling, until about 33.
+    peak99 = float(getattr(player, "_dev_peak_ovr99", 0.0) or 0.0)
+    now99 = current * 99.0 if current <= 1.5 else current
+    if _form > 0.04 and age <= 33 and not for_in_season:
+        slid = max(0.0, peak99 - now99) / 99.0
+        if slid > 0.008:
+            budget = max(budget, min(slid * 0.55, 0.010 + _form * 0.10))
+        elif age >= 24:
+            budget = max(budget, min(0.008, _form * 0.06))
+
     decline = str(profile.get("decline_state") or "none")
-    if age >= 33:
-        decline = "late_decline" if age >= 36 else "early_decline"
+    # Age-driven forced decline starts at 34 (was 33) and is smaller; strong rolling
+    # form softens it further. 28-35 year-olds were shedding OVR far too fast.
+    if age >= 34:
+        decline = "late_decline" if age >= 37 else "early_decline"
+    elif decline in ("early_decline", "late_decline"):
+        decline = "aging"
+    _form_soft = _clamp(1.0 - _form * 4.0, 0.45, 1.25)
     if decline == "late_decline":
-        budget = min(budget, -0.016 * under)
+        budget = min(budget, -0.012 * under * _form_soft)
     elif decline == "early_decline":
-        budget = min(budget, -0.010 * under)
+        budget = min(budget, -0.006 * under * _form_soft)
     elif decline == "aging" and budget > 0.004:
         budget = min(budget, 0.004)
     elif decline != "none" and budget > 0:
@@ -2794,6 +2965,11 @@ def calculate_season_growth_budget(
     if budget > 0:
         ovr99 = current * 99.0 if current <= 1.5 else current
         budget *= _elite_growth_scale(ovr99)
+        # Accepted his role in a GM meeting (franchise/role_acceptance.py): no growth
+        # penalty from it and a development boost while he's in it.
+        _role_mult = getattr(player, "_role_accept_growth_mult", None)
+        if _role_mult:
+            budget *= max(1.0, min(1.30, float(_role_mult)))
 
     return float(budget)
 
@@ -2891,6 +3067,14 @@ def allocate_growth_to_attributes(
         )
         if not seed:
             seed = {k: 1.0 for k in skill_keys}
+        if total_growth_scale >= 0 and phase_up != "REGRESSION":
+            # GM development focus from a player meeting (e.g. Develop Playmaking).
+            try:
+                from app.sim_engine.franchise.player_directives import dev_focus_seed_bias  # noqa: WPS433
+
+                seed = dev_focus_seed_bias(player, seed, skill_keys)
+            except Exception:
+                pass
 
         # Concentrate on fewer archetype-weighted skills (design §7).
         ranked = sorted(seed.items(), key=lambda kv: abs(float(kv[1])), reverse=True)
@@ -3820,14 +4004,17 @@ def apply_in_season_development_pulse(
     # 1.55-2.2x) moved the in-season cap around and scattered same-age players
     # from +1 to +16. The archetype now picks the phase, as for prospects.
     decline_now = str(profile.get("decline_state") or "none")
-    if age >= 36:
+    if age >= 37:
         decline_now = "late_decline"
-    elif age >= 33:
+    elif age >= 34:
         decline_now = "early_decline"
+    elif decline_now in ("early_decline", "late_decline"):
+        decline_now = "aging"
     # A declining veteran keeps a negative pulse only while he is under his
-    # production line. Producing at or above it holds him (STALL) instead.
-    must_decline = (age >= 33 or decline_now in ("early_decline", "late_decline")) and (
-        rel_pulse < 0.35 or perf_gap < 0.0
+    # production line AND his multi-season form is weak. Producing holds him (STALL).
+    _rf, _rn = rolling_form_score(player)
+    must_decline = (age >= 34 or decline_now in ("early_decline", "late_decline")) and (
+        rel_pulse < 0.35 or (perf_gap < 0.0 and _rf < 0.02)
     )
     plan = getattr(player, "_nhl_season_plan", None)
     if not isinstance(plan, dict):
@@ -4018,11 +4205,19 @@ def prospect_year_cap(player: Any, phase: str = "NORMAL") -> float:
     if realized is not None:
         pot99 = float(realized)
     gap = max(0.0, pot99 - ovr99)
+    share = 0.40
+    age = _get_player_age(player)
+    if 18 <= age <= 22 and gap > 0.0:
+        # 18-22: spread the remaining gap over the years left to ~23 instead of a flat
+        # 40% a year. 40% front-loaded the whole climb into two seasons (a 10-point
+        # gap paid +4, +2.4, +1.4, ...), which read as "nobody grows after year 2".
+        years_left = max(1.25, 23.5 - float(age))
+        share = max(0.33, min(0.55, 1.6 / years_left))
     if realized is not None:
         # Pay toward the hidden ceiling, and do not step past it.
-        cap = min(0.07, 0.40 * gap / 99.0, gap / 99.0)
+        cap = min(0.07, share * gap / 99.0, gap / 99.0)
     else:
-        cap = max(0.015, min(0.07, 0.40 * gap / 99.0))
+        cap = max(0.015, min(0.07, share * gap / 99.0))
     pick = 99
     ident = getattr(player, "identity", None)
     sources = (
@@ -4083,9 +4278,14 @@ def _prospect_payment_multiplier(player: Any) -> float:
             else:
                 raw = 1.0
         try:
-            mult *= float(raw or 1.0)
+            raw_f = float(raw or 1.0)
         except (TypeError, ValueError):
-            pass
+            raw_f = 1.0
+        # The 20-22 junior weight (0.85 -> 0.75) is a stat-conversion weight; as a pay
+        # cut it stacked on the age-scaled year in prospect_year_cap.
+        if 18 <= _get_player_age(player) <= 22:
+            raw_f = max(raw_f, 0.92)
+        mult *= raw_f
     return max(0.35, min(1.35, mult))
 
 
@@ -4101,6 +4301,18 @@ def _sync_prospect_plan_payment(player: Any, plan: Dict[str, Any]) -> None:
         base = plan["base_annual"]
     base_f = float(base or 0.0)
     annual = base_f * _prospect_payment_multiplier(player) if base_f > 0 else base_f
+    if annual > 0:
+        # Producing prospects grow faster, slumping ones slower (once a few GP of evidence;
+        # junior lines only reach ~12 GP by season's end).
+        try:
+            evidence, gp = prospect_performance_evidence(player)
+            if gp >= 4:
+                annual *= max(0.80, min(1.35, 1.0 + 0.45 * float(evidence) * min(1.0, gp / 12.0)))
+                room = _realization_room99(player)
+                if room is not None:
+                    annual = min(annual, max(base_f, max(0.0, room) / 99.0))
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     plan["annual"] = annual
     plan["total"] = annual * _PROSPECT_IN_SEASON_SHARE
 

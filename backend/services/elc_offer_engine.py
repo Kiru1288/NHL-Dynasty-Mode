@@ -557,8 +557,25 @@ def evaluate_offer_acceptance(
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
 
+    # Signing interest with the user's club (prospect_rights_talk.py): character, club
+    # strength, depth at his position, relationship/talks, agent. Rare NCAA refusals cap it.
+    try:
+        from services.prospect_rights_talk import elc_signing_adjustment  # noqa: WPS433
+
+        _si = elc_signing_adjustment(player, team)
+    except Exception:
+        _si = {}
+    if _si:
+        score += float(_si.get("score_delta") or 0.0)
+        if _si.get("positive"):
+            positives.insert(0, str(_si["positive"]))
+        if _si.get("concern"):
+            concerns.insert(0, str(_si["concern"]))
+        if _si.get("cap") is not None:
+            score = min(score, float(_si["cap"]))
+
     score = max(0.0, min(1.0, score))
-    if "NCAA" in path and age <= 20 and readiness < 68 and (expiry is None or int(expiry) > season_year + 1):
+    if "NCAA" in path and age <= 20 and skill < 68 and (expiry is None or int(expiry) > season_year + 1):
         score = min(score, 0.42)
         concerns.append("chose to remain in NCAA")
 

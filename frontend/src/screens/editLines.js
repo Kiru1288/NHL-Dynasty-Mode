@@ -7,6 +7,7 @@ import { CHEMISTRY_HIGH, CHEMISTRY_MID, chemistryLabel } from "../utils/chemistr
 import { getAhlLines, getFranchiseChemistry, previewFranchiseChemistry, saveAhlLines, saveFranchiseLines } from "../services/franchiseService";
 import { getFranchiseSessionId, readSessionLineupCache, writeSessionLineupCache } from "../services/api";
 import TeamLinesViewer from "../components/franchise/lines/TeamLinesViewer";
+import StrategyBoard from "../components/franchise/lines/StrategyBoard";
 import PlayerHeadshot from "../components/PlayerHeadshot";
 import { ensurePlayerHeadshotFields } from "../utils/playerHeadshots";
 import { getBaseOverall, getOverallDrop, getOverallTooltip, getUniversalOverall } from "../utils/playerOverall";
@@ -641,6 +642,7 @@ function backendChemistry(chemReport, players) {
     handednessFit: percentOrNull(scheme.handedness_fit),
     factors: Array.isArray(match.factors) ? match.factors : [],
     concerns: Array.isArray(match.concerns) ? match.concerns : [],
+    fitRead: match.fit_read && match.fit_read.verdict ? match.fit_read : null,
     projected: false,
   };
 }
@@ -724,7 +726,8 @@ export function teamIdentity(franchiseState, props) {
   const name = team?.name || team?.team_name || franchiseState?.user_team_name || "";
   return {
     abbreviation: String(team?.abbreviation || team?.abbr || franchiseState?.user_team_abbreviation || franchiseState?.user_team_abbr || teamNameToNhlAbbr(name) || "TEAM").slice(0, 4),
-    logo: team?.logo || team?.logo_url || team?.logoUrl || team?.team_logo || resolveFranchiseTeamLogo(team, name) || null,
+    // Bundled transparent logos first; remote team.logo URLs can be JPGs on a white plate.
+    logo: resolveFranchiseTeamLogo(team, name) || team?.logo || team?.logo_url || team?.logoUrl || team?.team_logo || null,
   };
 }
 
@@ -923,7 +926,7 @@ function LinkBadges({ links }) {
 }
 
 function FormationCard({ descriptor, geo, player, tier, pips, locked, selected, targetState, fresh, onSelect, onDrop, onDragStart, onRemove, onToggleLock, onKeyDown, registerRef, showPips = true }) {
-  const flag = player?.availability?.key === "injured" ? "MED" : player?.scratched ? "SCR" : !player?.availability?.placeable && player ? "OUT" : null;
+  const flag = player?.availability?.key === "injured" ? "MED" : player?.availability?.key === "suspended" || player?.availability?.key === "leave" ? "SUSP" : player?.scratched ? "SCR" : !player?.availability?.placeable && player ? "OUT" : null;
   const classes = [
     "fm-card",
     player ? tier || "" : "empty",
@@ -1412,6 +1415,27 @@ function LineInspector({
               </div>
             )) : <div className="lb-note"><span className="lb-note-text">Fill the unit to score its links.</span></div>}
           </div>}
+          {chemistry?.fitRead ? (
+            <div className={`lb-block lb-fitread lb-fitread--${String(chemistry.fitRead.verdict || "").toLowerCase()}`}>
+              <div className="lb-fitread-head">
+                <span className="lb-fitread-label">Chemistry</span>
+                <span className="lb-fitread-verdict">{chemistry.fitRead.verdict}</span>
+              </div>
+              {(chemistry.fitRead.reasons || []).slice(0, 4).map((r, i) => (
+                <div className="lb-note" key={`fr-${i}`}><span className="lb-note-mark good">+</span><span className="lb-note-text">{r}</span></div>
+              ))}
+              {(chemistry.fitRead.concerns || []).slice(0, 3).map((r, i) => (
+                <div className="lb-note" key={`fc-${i}`}><span className="lb-note-mark warn">!</span><span className="lb-note-text">{r}</span></div>
+              ))}
+              {(chemistry.fitRead.players || []).some((pl) => (pl.tags || []).length) ? (
+                <div className="lb-fitread-tags">
+                  {(chemistry.fitRead.players || []).map((pl) => (
+                    <span key={pl.name} className="lb-fitread-tag"><b>{pl.name}</b> {(pl.tags || []).join(", ") || "balanced"}</span>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           <div className="lb-block">
             <div className="lb-block-title">Read on this unit</div>
             {strongLinks.length ? <div className="lb-note"><span className="lb-note-mark good">+</span><span className="lb-note-text">{strongLinks.length} strong complementary link{strongLinks.length > 1 ? "s" : ""} — roles on this unit fit together.</span></div> : null}
@@ -2134,7 +2158,7 @@ export function EvenStrengthLines(props) {
     }
     try {
       const response = await saveFranchiseLines({ unit_type: "even_strength", lines: lineState });
-      if (response?.lines) setFranchiseState((previous) => ({ ...(previous || {}), lines: response.lines }));
+      if (response?.lines) setFranchiseState((previous) => ({ ...(previous || {}), lines: response.lines, ...(response?.lines_revision != null ? { lines_revision: response.lines_revision } : {}) }));
       writeSessionLineupCache(LINEUP_KIND, lineState, sessionId);
       props.onSaveEditLines?.(lineState);
       props.onSave?.({ type: "editLines", lines: lineState });
@@ -2213,6 +2237,19 @@ export function EvenStrengthLines(props) {
         disabled={!players.length}
       />
       <LineStatusStrip metrics={ahl ? statusMetrics.filter((m) => !/chem|new pairs/i.test(m.label)) : statusMetrics} meter={ahl ? null : chemMeter} />
+      {!ahl && players.length ? (
+        <StrategyBoard
+          franchiseState={franchiseState}
+          lineState={lineState}
+          playerMap={playerMap}
+          chemistryByUnit={chemistryByUnit}
+          chemReport={chemReport}
+          onDeploy={onDeploy}
+          onShareSet={onShareSet}
+          onCoach={onCoach}
+          shareTotals={shareTotals}
+        />
+      ) : null}
       <div className="lb-workspace">
         {rosterLoading
           ? <section className="lb-region lb-pool-region"><div className="lb-region-head"><h2 className="lb-region-title">Player pool</h2></div><div className="lb-loading"><div className="lb-skeleton" /></div></section>
@@ -2750,7 +2787,7 @@ function SpecialTeamsLines({ kind, ...props }) {
     props.onSave?.({ type: isPP ? "powerPlay" : "penaltyKill", lines });
     try {
       const res = await saveFranchiseLines({ unit_type: kind, lines });
-      if (res?.lines) setFranchiseState((prev) => ({ ...(prev || {}), lines: res.lines }));
+      if (res?.lines) setFranchiseState((prev) => ({ ...(prev || {}), lines: res.lines, ...(res?.lines_revision != null ? { lines_revision: res.lines_revision } : {}) }));
       setUnsaved(false);
       const fallout = Array.isArray(res?.storyline_events) ? res.storyline_events : [];
       if (fallout.length) {

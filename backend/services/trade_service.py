@@ -413,6 +413,75 @@ def evaluate_franchise_trade(
     return public
 
 
+def user_cap_overage_reason(evaluation: Dict[str, Any], ctx: Dict[str, Any]) -> Optional[str]:
+    """Hard guard: never let a trade finish with the user's club over the salary cap.
+
+    Uses the full-season cap hit after the trade (no in-season proration), against the
+    upper limit — or the LTIR effective limit when the rules engine said LTIR relief
+    backs the deal. The game has no offseason 10% overage allowance, so the cap is strict.
+    A deal that sheds salary (net cap change <= 0) is always allowed: that is how an
+    over-cap club gets compliant.
+    """
+    try:
+        utid = str(ctx.get("user_team_id") or "")
+        imp = dict((evaluation.get("cap_impact") or {}).get(utid) or {})
+        delta_full = float(imp.get("delta_full", imp.get("delta", 0.0)) or 0.0)
+        if delta_full <= 0.001:
+            return None
+        team = (ctx.get("team_by_id") or {}).get(utid)
+        if team is None:
+            return None
+        from app.sim_engine.economy.cap_engine import calculate_team_cap_snapshot
+        from app.sim_engine.trades.trade_rules import _season_label
+
+        snap = calculate_team_cap_snapshot(
+            team,
+            league=ctx.get("league"),
+            season_label=_season_label(ctx),
+            calendar_cursor=int(ctx.get("calendar_cursor", 0) or 0),
+            regular_season_last_index=int(ctx.get("regular_season_last_index", 192) or 192),
+        )
+        upper = float(snap.get("upperLimit", 0.0) or 0.0)
+        if upper <= 0:
+            return None
+        limit = upper
+        if imp.get("ltir_relief_used"):
+            limit = max(upper, float(snap.get("effectiveCapLimit", upper) or upper))
+        after = float(snap.get("totalCapHit", 0.0) or 0.0) + delta_full
+        if after <= limit + 0.01:
+            return None
+        over = after - limit
+        return (
+            f"Your team would be ${over:.2f}M over the salary cap after this trade. "
+            f"Send back at least ${over:.2f}M in cap hit, ask them to retain salary, or remove an incoming contract."
+        )
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+        return None
+
+
+def apply_user_cap_guard(public: Dict[str, Any], ctx: Dict[str, Any]) -> Optional[str]:
+    """Mark an evaluation illegal when it leaves the user over the cap; returns the reason."""
+    reason = user_cap_overage_reason(public, ctx)
+    if not reason:
+        return None
+    public["accepted"] = False
+    public["can_execute"] = False
+    public["verdict"] = "cap_illegal"
+    reasons = [str(r) for r in list(public.get("rejection_reasons") or []) if r]
+    try:
+        from app.sim_engine.trades.trade_rules import _team_label
+
+        utid = str(ctx.get("user_team_id") or "")
+        label = _team_label((ctx.get("team_by_id") or {}).get(utid), utid)
+        # The engine's terse "TOR: Trade would exceed usable cap space" says the same thing.
+        reasons = [r for r in reasons if not (r.startswith(f"{label}:") and "cap" in r.lower())]
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    public["rejection_reasons"] = [reason] + [r for r in reasons if r != reason]
+    return reason
+
+
 def _evaluate_franchise_trade_core(
     session: Any,
     *,
@@ -478,6 +547,7 @@ def _evaluate_franchise_trade_core(
         public["rejection_reasons"] = [str(r) for r in reasons if r]
     cap_impact = dict(public.get("cap_impact") or {})
     public["cap_impact"] = {str(tid): dict(payload or {}) for tid, payload in cap_impact.items()}
+    apply_user_cap_guard(public, ctx)
     try:
         from services.franchise_sim import preview_trade_fan_reaction  # noqa: WPS433
 
@@ -670,6 +740,9 @@ def execute_franchise_trade(
         context=ctx,
         user_team_id=ctx["user_team_id"],
     )
+    _cap_block = user_cap_overage_reason(evaluation, ctx)
+    if _cap_block:
+        raise ValueError(_cap_block)
     if not bool(evaluation.get("accepted")):
         # Trade rumor fallout only applies to real rejected proposals.
         try:

@@ -8,7 +8,8 @@ import React, {
 } from "react";
 import { getAhlLedger, getPlayoffStats, getProspectLedger, getStatsCentral, peekStatsCentral } from "../services/franchiseService";
 import { formatFranchiseApiError, isExpiredFranchiseSessionError } from "../services/api";
-import { useGameUI } from "../game/GameUIContext";
+import { useGameUI, useFranchiseState } from "../game/GameUIContext";
+import { AnyPlayerDossier, UniversalPlayerSearch } from "./RosterScreen";
 import { SCREENS, teamNameToNhlAbbr } from "../game/constants";
 import {
   getBaseOverall,
@@ -8594,7 +8595,16 @@ function buildStandingsRows(teamRows, standings) {
   return out.sort((a, b) => (ordered ? a._order - b._order : standingsFallbackCompare(a, b)));
 }
 
+const CLINCH_TITLES = {
+  p: "Clinched Presidents' Trophy",
+  z: "Clinched conference",
+  y: "Clinched division",
+  x: "Clinched playoff spot",
+  e: "Eliminated",
+};
+
 function StandingsGroupTable({ title, rows, data, cutAfter = 0, note }) {
+  const hasClinch = rows.some((t) => t && t.clinch);
   return (
     <section className="sc-standings-block">
       <header>
@@ -8633,6 +8643,11 @@ function StandingsGroupTable({ title, rows, data, cutAfter = 0, note }) {
                 <td>{i + 1}</td>
                 <td className="is-team">
                   <TeamLogoMark team={t} size="table" />
+                  {t.clinch ? (
+                    <span className={`sc-clinch-mark sc-clinch-mark--${t.clinch}`} title={CLINCH_TITLES[t.clinch] || ""}>
+                      {t.clinch}
+                    </span>
+                  ) : null}
                   <span>{teamDisplayLabel(t)}</span>
                 </td>
                 <td>{t.gp}</td>
@@ -8651,6 +8666,11 @@ function StandingsGroupTable({ title, rows, data, cutAfter = 0, note }) {
           })}
         </tbody>
       </table>
+      {hasClinch ? (
+        <p className="sc-clinch-legend">
+          p – Presidents' Trophy · z – conference · y – division · x – playoff spot · e – eliminated
+        </p>
+      ) : null}
     </section>
   );
 }
@@ -11227,6 +11247,8 @@ function PlayoffStatsPage() {
 const PROSPECT_STATUS = ["All", "Draft eligible", "Overage", "Future class", "Exceptional", "Drafted", "Undrafted"];
 
 function ProspectLedgerPage() {
+  const franchiseState = useFranchiseState();
+  const [dossierRow, setDossierRow] = useState(null);
   const [state, setState] = useState({ loading: true, error: "", data: null });
   const [leagueCode, setLeagueCode] = useState("all");
   const [status, setStatus] = useState("All");
@@ -11290,6 +11312,7 @@ function ProspectLedgerPage() {
           <option value="G">G</option>
         </select>
         <input type="search" placeholder="Search player or club" value={q} onChange={(e) => setQ(e.target.value)} />
+        <UniversalPlayerSearch franchiseState={franchiseState} placeholder="Any player, any league…" />
         <div className="sc-po-toggle">
           {sortBtn("pts", "Points")}
           {sortBtn("g", "Goals")}
@@ -11305,9 +11328,22 @@ function ProspectLedgerPage() {
           </thead>
           <tbody>
             {rows.slice(0, 300).map((r, i) => (
-              <tr key={r.player_id || i}>
+              <tr
+                key={r.player_id || i}
+                className="sc-pl-row is-clickable"
+                role="button"
+                tabIndex={0}
+                title={`Open ${r.name}'s dossier`}
+                onClick={() => r.player_id && setDossierRow(r)}
+                onKeyDown={(e) => {
+                  if ((e.key === "Enter" || e.key === " ") && r.player_id) {
+                    e.preventDefault();
+                    setDossierRow(r);
+                  }
+                }}
+              >
                 <td>{i + 1}</td>
-                <td className="l">{r.name}</td>
+                <td className="l"><span className="sc-pl-name-link">{r.name}</span></td>
                 <td>{r.age}</td>
                 <td>{r.position}</td>
                 <td className="l">{r.league}</td>
@@ -11340,6 +11376,14 @@ function ProspectLedgerPage() {
           </tbody>
         </table>
       </div>
+      {dossierRow ? (
+        <AnyPlayerDossier
+          key={dossierRow.player_id}
+          playerId={dossierRow.player_id}
+          franchiseState={franchiseState}
+          onClose={() => setDossierRow(null)}
+        />
+      ) : null}
     </div>
   );
 }

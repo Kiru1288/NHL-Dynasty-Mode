@@ -36,6 +36,8 @@ function isImportantPopup(pop, userTeamId) {
   if (!pop) return false;
   const kind = String(pop.kind || "").toLowerCase();
   if (IMPORTANT_POPUP_KINDS.has(kind)) return true;
+  // Own-club GM alerts (suspension / return, playoff clinch, trade deadline).
+  if (pop.gm_alert) return true;
   const pt = String(pop.presentation_type || "").toLowerCase();
   if (pt.startsWith("trade_") || pt.includes("stability") || pt.includes("morale")) return true;
   const actions = Array.isArray(pop.actions) ? pop.actions : [];
@@ -219,7 +221,7 @@ function TradePickChip({ asset }) {
     <div className="trade-wire__pick">
       <span className="trade-wire__pick-label">{asset?.display_name || "Draft Pick"}</span>
       {asset?.trade_value != null ? (
-        <span className="trade-wire__pick-val"> · TV {formatStat(asset.trade_value, 1)}</span>
+        <span className="trade-wire__pick-val"> · Trade Value {formatStat(asset.trade_value, 1)}</span>
       ) : null}
     </div>
   );
@@ -577,7 +579,7 @@ function StorylineBody({ pop, onDismiss, onDismissAllTrades, onAction, queuedTra
           ? "Locker-room disruptor"
           : "Trade demand"
         : pop.kind === "waiver"
-          ? "On waivers"
+          ? pop.waiver_result?.status_label || "On waivers"
           : hasGames
           ? "Away from team"
           : pop.legal_severity === "major"
@@ -585,6 +587,11 @@ function StorylineBody({ pop, onDismiss, onDismissAllTrades, onAction, queuedTra
             : "Active",
     },
   ];
+  if (pop.waiver_result && Array.isArray(pop.waiver_result.facts)) {
+    for (const f of pop.waiver_result.facts) {
+      if (f && f.label) stats.push({ label: f.label, value: f.value, sub: f.sub || "" });
+    }
+  }
   if (demand) {
     stats.push({
       label: "Trade value",
@@ -874,6 +881,20 @@ function WjcBody({ pop }) {
       ) : (
         <p className="showcase-popup__muted">Medals are awarded after the gold medal game (Jan 5).</p>
       )}
+      {Array.isArray(pop.user_highlights) && pop.user_highlights.length ? (
+        <div className="showcase-popup__wjc-yours">
+          <h4 className="showcase-popup__h">{complete ? "Your prospects — tournament totals" : "Your prospects at the tournament"}</h4>
+          <ul>
+            {pop.user_highlights.map((h) => (
+              <li key={h.player_id || h.name}>
+                <b>{h.name}</b> <span>{h.country || ""}{h.position ? ` · ${h.position}` : ""}</span>
+                {h.gp ? <em>{h.gp} GP · {h.g}G {h.a}A · {h.pts} PTS</em> : <em>Dressing for his country</em>}
+              </li>
+            ))}
+          </ul>
+          {!complete ? <p className="showcase-popup__muted">No more daily pop-ups — follow along on the World Juniors desk. You'll get one recap at the final.</p> : null}
+        </div>
+      ) : null}
       <h4 className="showcase-popup__h">Round robin — standings to date</h4>
       <div className="showcase-popup__table-wrap">
         <table className="showcase-popup__table">
@@ -950,7 +971,7 @@ function ShowcasePopupStyles() {
 }
 
 export function ShowcasePopupLayer() {
-  const { franchiseState, onDismissShowcasePopups, setScreen } = useGameUI();
+  const { franchiseState, onDismissShowcasePopups, setScreen, resumeInterruptedSim, cancelSimResume, setStatsCentralTab } = useGameUI();
   const userTeamId = franchiseState?.user_team_id || franchiseState?.team?.team_id || "";
   const rawQueue = (franchiseState?.pending_ui_popups || []).filter(
     (p) => p && !isFranchiseCinematicPopup(p) && isImportantPopup(p, userTeamId)
@@ -975,15 +996,15 @@ export function ShowcasePopupLayer() {
     return () => window.clearTimeout(t);
   }, [flash]);
 
+  const queueLen = visiblePopups.length;
   const dismiss = useCallback(() => {
     if (!first) return;
     const pid = String(first.id || first.popup_id || "").trim();
-    if (pid) {
-      onDismissShowcasePopups([pid]);
-      return;
-    }
-    onDismissShowcasePopups([`__drop_first__:${String(first.kind || "popup")}`]);
-  }, [first, onDismissShowcasePopups]);
+    if (pid) onDismissShowcasePopups([pid]);
+    else onDismissShowcasePopups([`__drop_first__:${String(first.kind || "popup")}`]);
+    // Continue on the last alert of an interrupted multi-day sim resumes the remaining days.
+    if (queueLen <= 1) resumeInterruptedSim?.();
+  }, [first, onDismissShowcasePopups, queueLen, resumeInterruptedSim]);
 
   useEffect(() => {
     if (!first) return undefined;
@@ -1006,8 +1027,10 @@ export function ShowcasePopupLayer() {
   const kind = first.kind;
   const dismissAll = () => {
     const ids = visiblePopups.map((p) => String(p.id || p.popup_id || "").trim()).filter(Boolean);
-    if (ids.length) onDismissShowcasePopups(ids);
-    else dismiss();
+    if (ids.length) {
+      onDismissShowcasePopups(ids);
+      resumeInterruptedSim?.();
+    } else dismiss();
   };
   const theme = resolveAlertTheme(first);
 
@@ -1017,6 +1040,9 @@ export function ShowcasePopupLayer() {
   };
 
   const handleAction = (act) => {
+    // Going to another screen to act on the alert ends the paused sim; a waiver claim
+    // is answered in place, so the sim may still resume.
+    if (act.id !== "waiver_claim") cancelSimResume?.();
     dismiss();
     if (act.id === "waiver_claim") {
       const pid = act.player_id || first.player_id;
@@ -1038,6 +1064,10 @@ export function ShowcasePopupLayer() {
     else if (act.id === "tradehub") setScreen?.(SCREENS.TRADE);
     else if (act.id === "lines") setScreen?.(SCREENS.EDIT_LINES);
     else if (act.id === "freeagency") setScreen?.(SCREENS.FREE_AGENCY);
+    else if (act.id === "standings") {
+      setStatsCentralTab?.("standings");
+      setScreen?.(SCREENS.STATS);
+    }
   };
 
   const isObituary = kind === "player_death";

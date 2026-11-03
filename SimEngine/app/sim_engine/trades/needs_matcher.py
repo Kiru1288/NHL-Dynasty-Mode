@@ -39,6 +39,7 @@ from app.sim_engine.trades.team_assessment import (
     player_rating,
     player_pid,
     position_group,
+    slot_for_player,
 )
 from app.sim_engine.trades.trade_asset import team_id_of
 import logging as _logging_swallow
@@ -292,6 +293,8 @@ _REASON_BY_MOTIVE = {
     "locker_room": "LOCKER_ROOM_DISRUPTOR_MOVED",
     "cap_dump": "CAP_RELIEF",
     "depth_add": "PLAYOFF_DEPTH",
+    "upgrade_buy": "LINEUP_UPGRADE",
+    "all_in_push": "ALL_IN_PUSH",
 }
 
 _CATEGORY_BY_MOTIVE = {
@@ -304,6 +307,8 @@ _CATEGORY_BY_MOTIVE = {
     "locker_room": "locker_room_trade",
     "cap_dump": "cap_trade",
     "depth_add": "depth_trade",
+    "upgrade_buy": "hockey_trade",
+    "all_in_push": "deadline_push",
 }
 
 
@@ -336,6 +341,10 @@ def _reason_text(plan: DealPlan, tools: MatcherTools, buyer_a: TeamAssessment, s
         return f"{s} bought cap room by attaching a pick to {name}; {b} had space to absorb him."
     if m == "depth_add":
         return f"{b} added {name} as {slot} insurance for the stretch run."
+    if m == "all_in_push":
+        return f"{b} went all-in for a run, prying {name} loose from {s} to upgrade their {slot}{over}."
+    if m == "upgrade_buy":
+        return f"{b} had no hole to fill but saw a clear upgrade: {name} takes over their {slot} from {s}."
     ret = str(getattr(plan.return_player, "name", None) or "")
     ret2 = str(getattr(plan.return_player_2, "name", None) or "")
     tail = f" for {ret} and {ret2}" if ret and ret2 else (f" for {ret}" if ret else "")
@@ -610,6 +619,91 @@ def _depth_market_plans(
     return plans
 
 
+#: Upgrade market: OVR a player must add over the buyer's weakest regular in his slot.
+UPGRADE_MIN_GAIN = 3.0
+UPGRADE_MIN_GAIN_OFFSEASON = 2.5
+UPGRADE_PLANS_PER_BUYER = 2
+
+
+def _motive_market_plans(
+    team_by_tid: Dict[str, Any],
+    assessments: Dict[str, TeamAssessment],
+    market: List[Tuple[Any, TeamAssessment, SurplusItem]],
+    *,
+    ctx: Dict[str, Any],
+    rng: Any,
+    taste: Callable[[str, Any], float],
+    deadline_phase: float,
+) -> List[DealPlan]:
+    """Deals that do not need a roster hole (rosters from year 2 on rarely have one).
+
+    - upgrade_buy: a buyer replaces its weakest regular in a slot with a clear upgrade.
+    - all_in_push: a contender (or a bubble club late in the year) goes for it at the deadline.
+    - rebuild sell-offs / expiring vets reach any club they upgrade, not only clubs with holes.
+    - offseason re-tools: every non-tanking club looks for upgrades in the summer windows.
+    """
+    offseason = bool(ctx.get("offseason_trade"))
+    min_gain = UPGRADE_MIN_GAIN_OFFSEASON if offseason else UPGRADE_MIN_GAIN
+    out: List[DealPlan] = []
+    for bid, buyer in team_by_tid.items():
+        ba = assessments.get(bid)
+        if ba is None or ba.status == STATUS_TANK:
+            continue
+        all_in = ba.is_buyer and deadline_phase >= 0.6
+        eligible = ba.is_buyer or offseason or (ba.status == STATUS_BUBBLE and deadline_phase >= 0.45)
+        if not eligible:
+            continue
+        cands: List[DealPlan] = []
+        for seller, sa, item in market:
+            if team_id_of(seller) == bid:
+                continue
+            p = item.player
+            if player_rating(p) < 74.0:
+                continue
+            slot, gain = slot_for_player(p, ba)
+            if gain < min_gain:
+                continue
+            hit = cap_hit_m(p)
+            if ba.cap_space_m + (2.5 if sa.is_seller else 1.5) < hit:
+                continue  # can't fit him even with retention / salary back
+            status_fit = _status_fit(ba, sa, item)
+            if sa.is_seller:
+                motive = _motive_for(ba, sa, item, deadline_phase=deadline_phase)
+            elif all_in:
+                motive = "all_in_push"
+            else:
+                motive = "upgrade_buy"
+            score = (
+                0.20
+                + min(0.32, gain * 0.045)
+                + status_fit * 0.30
+                + item.priority * 0.20
+                + (0.22 * deadline_phase if ba.is_buyer else 0.0)
+                + (0.08 if all_in else 0.0)
+                + taste(bid, p)
+                + _daily_jitter(rng)
+            )
+            cands.append(
+                DealPlan(
+                    motive=motive,
+                    buyer=buyer,
+                    seller=seller,
+                    target=p,
+                    score=round(score, 3),
+                    need_slot=slot,
+                    need_fill=round(min(1.0, gain / 6.0), 3),
+                    premium=buyer_premium(
+                        ba, deadline_phase=deadline_phase,
+                        days_to_deadline=int(ctx.get("days_to_deadline", 99) or 99), rental=is_rental(p),
+                    ) + (0.06 if all_in else 0.0),
+                    motivated_seller=sa.status == STATUS_TANK or sa.late_seller,
+                )
+            )
+        cands.sort(key=lambda d: -d.score)
+        out.extend(cands[: UPGRADE_PLANS_PER_BUYER * (2 if all_in else 1)])
+    return out
+
+
 def generate_plans(
     league: Any,
     *,
@@ -708,9 +802,10 @@ def generate_plans(
         plans.extend(cands[: MAX_PLANS_PER_BUYER * (3 if deadline_week else 1)])
 
     # 2) Cap dumps: tight club + bad contract → club with room that is not trying to win now.
+    #    In the summer any club over ~97% of the cap with a bad deal tries to clear it.
     for sid, seller in team_by_tid.items():
         sa = assessments.get(sid)
-        if sa is None or not sa.cap_tight:
+        if sa is None or not (sa.cap_tight or (ctx.get("offseason_trade") and sa.cap_space_m < 2.5)):
             continue
         for item in sa.surplus:
             if item.reason != "bad_contract" or player_pid(item.player) in used_players:
@@ -743,6 +838,14 @@ def generate_plans(
     # 4) Deadline-week depth/insurance adds.
     if 0 <= days_left <= 7:
         plans.extend(_depth_market_plans(team_by_tid, assessments, rng=rng, used_players=excluded, taste=taste))
+    # 5) Upgrades / all-in pushes / summer re-tools: no roster hole required.
+    _have = {(team_id_of(p.buyer), player_pid(p.target)) for p in plans}
+    plans.extend(
+        p for p in _motive_market_plans(
+            team_by_tid, assessments, market, ctx=ctx, rng=rng, taste=taste, deadline_phase=deadline_phase,
+        )
+        if (team_id_of(p.buyer), player_pid(p.target)) not in _have
+    )
 
     # Seller patience: rentals and sell-offs fetch the most at the deadline, so sellers
     # mostly hold their veterans until then (a few sell early).
@@ -973,7 +1076,26 @@ def build_package_for_plan(
                 tools, buyer_a=ba, seller_a=sa, buyer=plan.buyer, seller=plan.seller,
                 target_value=pay, used=used_players,
             )
-            if ret is None:
+            if ret is None and plan.motive in ("upgrade_buy", "all_in_push"):
+                # Upgrade: the buyer pays with youth (prospect / young spare) and picks.
+                young = _young_currency(tools, plan, ba, pay * 0.7, used_players)
+                rv = 0.0
+                if young is not None:
+                    ret, rv = young
+                    plan.return_player = ret
+                picks, ptot = _pick_bundle(
+                    tools, league, plan.buyer, ctx, target=max(0.0, pay - rv), protect_first=ba.protects_first,
+                    acquirer=plan.seller, max_firsts=1 if (firsts_ok or plan.motive == "all_in_push") else 0,
+                    max_picks=2 if plan.motive == "upgrade_buy" else 3,
+                )
+                if not picks and ret is None:
+                    plan.fail_reason = "upgrade_cant_pay"
+                    return False
+                if rv + ptot < 0.8 * pay:
+                    plan.fail_reason = "cant_afford"
+                    return False
+                plan.buyer_picks = picks
+            elif ret is None:
                 # Contender/bubble clubs will still move genuine surplus for futures.
                 pay_left = pay - tools.filler_value(plan.seller, plan.buyer, plan.target, None)
                 picks, _ = _pick_bundle(

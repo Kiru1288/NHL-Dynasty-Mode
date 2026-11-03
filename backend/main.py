@@ -879,6 +879,48 @@ def post_legacy_retire_number(body: dict[str, Any] = Body(default=None), x_franc
     return json_safe(out)
 
 
+@app.get("/api/franchise/cap-growth")
+def get_franchise_cap_growth(x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    """F11: why the cap is moving (factor breakdown), its history, and the TV deal table."""
+    from services.cap_growth_model import tv_deal_options
+    from services.json_safe import json_safe
+    from services.league_operations import build_league_operations_payload
+
+    s = _session_or_404(x_franchise_session)
+    ops = build_league_operations_payload(s) or {}
+    cap = ops.get("cap") or {}
+    return json_safe({
+        "ok": True,
+        "salary_cap": cap.get("salary_cap"),
+        "projected_salary_cap": cap.get("projected_salary_cap"),
+        "projection_source": cap.get("cap_projection_source"),
+        "model": cap.get("cap_growth_model") or {},
+        "history": list(getattr(s, "cap_growth_history", None) or [])[-10:],
+        "tv_deal": tv_deal_options(s),
+    })
+
+
+@app.post("/api/franchise/tv-deal")
+def post_franchise_tv_deal(body: dict[str, Any] = Body(default=None), x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    """F11: sign the national TV deal when the 10-year negotiation is open."""
+    from services.cap_growth_model import choose_tv_deal, tv_deal_options
+    from services.json_safe import json_safe
+
+    s = _session_or_404(x_franchise_session)
+    try:
+        deal = choose_tv_deal(s, str((body or {}).get("option") or ""))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    try:
+        from services.league_operations import invalidate_league_ops_cache
+
+        invalidate_league_ops_cache(s)
+    except Exception:
+        pass
+    save_session(s)
+    return json_safe({"ok": True, "deal": deal, "tv_deal": tv_deal_options(s)})
+
+
 @app.get("/api/franchise/contract-office")
 def get_franchise_contract_office(x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
     from services.contract_economy import get_cached_contract_office
@@ -1300,8 +1342,7 @@ def get_franchise_chemistry(x_franchise_session: Optional[str] = Header(default=
     return get_franchise_chemistry_report(s)
 
 
-@app.post("/api/franchise/advance")
-def post_franchise_advance(
+def _post_franchise_advance_impl(
     body: Optional[FranchiseAdvanceBody] = Body(default=None),
     x_franchise_session: Optional[str] = Header(default=None),
 ) -> dict[str, Any]:
@@ -1386,6 +1427,19 @@ def post_franchise_advance(
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
     return {"step": step, "state": state}
+
+
+@app.post("/api/franchise/advance")
+def post_franchise_advance(
+    body: Optional[FranchiseAdvanceBody] = Body(default=None),
+    x_franchise_session: Optional[str] = Header(default=None),
+) -> dict[str, Any]:
+    from services.sim_guard import exclusive_sim
+
+    with exclusive_sim(x_franchise_session) as owned:
+        if not owned:
+            raise HTTPException(status_code=409, detail="A sim is already running for this franchise.")
+        return _post_franchise_advance_impl(body=body, x_franchise_session=x_franchise_session)
 
 
 @app.post("/api/franchise/advance/stop")
@@ -1654,8 +1708,7 @@ def post_franchise_fa_sim_to_season(
     return json_safe({**result, "state": state})
 
 
-@app.post("/api/franchise/free-agency/advance-day")
-def post_franchise_fa_advance_day(
+def _post_franchise_fa_advance_day_impl(
     body: dict[str, Any] = Body(default_factory=dict),
     x_franchise_session: Optional[str] = Header(default=None),
 ) -> dict[str, Any]:
@@ -1671,6 +1724,19 @@ def post_franchise_fa_advance_day(
     save_session(s)
     state = franchise_sim.build_state_payload_safe(s, include_heavy=False)
     return json_safe({**result, "state": state})
+
+
+@app.post("/api/franchise/free-agency/advance-day")
+def post_franchise_fa_advance_day(
+    body: dict[str, Any] = Body(default_factory=dict),
+    x_franchise_session: Optional[str] = Header(default=None),
+) -> dict[str, Any]:
+    from services.sim_guard import exclusive_sim
+
+    with exclusive_sim(x_franchise_session) as owned:
+        if not owned:
+            raise HTTPException(status_code=409, detail="A sim is already running for this franchise.")
+        return _post_franchise_fa_advance_day_impl(body=body, x_franchise_session=x_franchise_session)
 
 
 @app.post("/api/franchise/contracts/advance-day")
@@ -1852,6 +1918,39 @@ def post_franchise_ntc_waive(
         raise HTTPException(status_code=400, detail=str(e)) from e
     save_session(s)
     return {"ok": True, "decision": decision}
+
+
+@app.post("/api/franchise/trade/counter")
+def post_franchise_trade_counter(
+    body: FranchiseTradeBody,
+    x_franchise_session: Optional[str] = Header(default=None),
+) -> dict[str, Any]:
+    """Greedy evaluator search for what would make a rejected package work (no patience cost)."""
+    from services.trade_asset_market import find_counter_offers
+
+    s = _session_or_404(x_franchise_session)
+    try:
+        return find_counter_offers(s, assets_by_team=dict(body.assets_by_team or {}))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.get("/api/franchise/trade/asset-intel")
+def get_franchise_trade_asset_intel(
+    asset_type: str,
+    asset_id: str,
+    team_id: str,
+    limit: int = 8,
+    x_franchise_session: Optional[str] = Header(default=None),
+) -> dict[str, Any]:
+    """Interested clubs, demand level and market price for one asset (Trade Hub intel)."""
+    from services.trade_asset_market import asset_market_intel
+
+    s = _session_or_404(x_franchise_session)
+    try:
+        return asset_market_intel(s, asset_type=asset_type, asset_id=asset_id, team_id=team_id, limit=max(1, min(16, int(limit))))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @app.get("/api/franchise/trade/history")
@@ -2045,6 +2144,42 @@ def post_entry_draft_trade_for_pick(body: dict[str, Any] = Body(default=None), x
         raise HTTPException(status_code=400, detail=str(e)) from e
     save_session(s)
     return json_safe({**result, "state": franchise_sim.build_state_payload(s, include_heavy=False)})
+
+
+@app.get("/api/franchise/search/players")
+def search_franchise_players(q: str = "", limit: int = 40, x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    """Unified player search: NHL, AHL/ECHL, prospect pools, junior leagues, free agents."""
+    from services.json_safe import json_safe
+    from services.player_search import search_players
+
+    s = _session_or_404(x_franchise_session)
+    return json_safe(search_players(s, q, limit=limit))
+
+
+@app.get("/api/franchise/player/{player_id}/development-outlook")
+def get_player_development_outlook(player_id: str, x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    """F15: expected growth range next season and the levers that move it."""
+    from app.sim_engine.progression.development import development_outlook
+    from services.json_safe import json_safe
+    from services.player_search import find_player_entry
+
+    s = _session_or_404(x_franchise_session)
+    entry = find_player_entry(s, player_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Player not found")
+    out = development_outlook(entry[0])
+    out["level"] = entry[1]
+    return json_safe(out)
+
+
+@app.get("/api/franchise/player/{player_id}/dossier-row")
+def get_player_dossier_row(player_id: str, x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    """Dossier-ready row for any player anywhere (junior, AHL, FA...) so one click opens the dossier."""
+    from services.json_safe import json_safe
+    from services.player_search import player_dossier_row
+
+    s = _session_or_404(x_franchise_session)
+    return json_safe(player_dossier_row(s, player_id))
 
 
 @app.get("/api/franchise/prospects/stats")
@@ -2399,6 +2534,63 @@ try:
 except ImportError:
     pass
 
+_HEADSHOT_PROXY_HOSTS = {"assets.nhle.com", "cms.nhl.bamgrid.com"}
+_HEADSHOT_PROXY_MEM: dict[str, tuple[bytes, str]] = {}
+
+
+@app.get("/api/headshot-proxy")
+def headshot_proxy(url: str = Query(..., max_length=600)):
+    """Same-origin copy of an NHL.com headshot so the UI can restyle its pixels on a canvas.
+
+    Only NHL image hosts are allowed. Images are cached in memory and on disk
+    (backend/data/headshot_cache) so each mug is fetched once.
+    """
+    import hashlib
+    import urllib.request
+    from urllib.parse import urlparse
+
+    from fastapi.responses import Response
+
+    parsed = urlparse(str(url or ""))
+    if parsed.scheme != "https" or (parsed.hostname or "").lower() not in _HEADSHOT_PROXY_HOSTS:
+        raise HTTPException(status_code=400, detail="unsupported headshot host")
+    key = hashlib.sha1(parsed.geturl().encode("utf-8")).hexdigest()
+    headers = {"Cache-Control": "public, max-age=604800, immutable"}
+    hit = _HEADSHOT_PROXY_MEM.get(key)
+    if hit:
+        return Response(content=hit[0], media_type=hit[1], headers=headers)
+    cache_dir = Path(__file__).resolve().parent / "data" / "headshot_cache"
+    disk = cache_dir / f"{key}.img"
+    media = "image/png"
+    try:
+        if disk.is_file():
+            body = disk.read_bytes()
+            if body[:3] == b"\xff\xd8\xff":
+                media = "image/jpeg"
+            _HEADSHOT_PROXY_MEM[key] = (body, media)
+            return Response(content=body, media_type=media, headers=headers)
+    except OSError:
+        pass
+    try:
+        req = urllib.request.Request(parsed.geturl(), headers={"User-Agent": "NHL-Dynasty-Mode/1.0"})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            body = resp.read(4_000_000)
+            media = (resp.headers.get_content_type() or media) if resp.headers else media
+    except Exception:
+        raise HTTPException(status_code=502, detail="headshot fetch failed")
+    if not media.startswith("image/"):
+        raise HTTPException(status_code=502, detail="not an image")
+    if len(_HEADSHOT_PROXY_MEM) > 1500:
+        _HEADSHOT_PROXY_MEM.clear()
+    _HEADSHOT_PROXY_MEM[key] = (body, media)
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        disk.write_bytes(body)
+    except OSError:
+        _swallowed_log.debug("headshot cache write failed", exc_info=True)
+    return Response(content=body, media_type=media, headers=headers)
+
+
 @app.get("/api/health")
 def health(x_franchise_session: Optional[str] = Header(default=None)) -> dict:
     root = Path(__file__).resolve().parent.parent / "SimEngine"
@@ -2418,3 +2610,14 @@ def health(x_franchise_session: Optional[str] = Header(default=None)) -> dict:
         "run_sim_on_disk": (root / "run_sim.py").is_file(),
         "code": fp,
     }
+
+
+# Setup loading notepad: league creation facts (live during /start, then from the session).
+from services.creation_report import router as _creation_report_router  # noqa: E402
+
+app.include_router(_creation_report_router)
+
+# Rights-held prospect talks + signing interest (services/prospect_rights_talk.py).
+from services.prospect_rights_talk_api import router as _prospect_talk_router  # noqa: E402
+
+app.include_router(_prospect_talk_router)

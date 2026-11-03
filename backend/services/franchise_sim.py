@@ -7106,6 +7106,10 @@ def _build_stats_central_payload(session: FranchiseSession) -> Dict[str, Any]:
                 season_length=season_len,
                 sealed=race_sealed,
             )
+            try:
+                _stamp_awards_race_momentum(session, enriched["awards_race"], cursor, season_year)
+            except Exception:
+                logging.getLogger(__name__).debug("awards race momentum failed", exc_info=True)
         except Exception:
             logging.getLogger(__name__).exception("Relative stats / awards race attach failed")
         all_results = [g for g in list(getattr(session, "game_results", None) or []) if isinstance(g, dict)]
@@ -8667,6 +8671,25 @@ def _serialize_player_row(
             "return_date": ret_iso,
         }
     )
+    try:
+        # Cheap suspension flag on every row (light rows too) so Roster / Edit Lines can
+        # show a SUSP badge where injuries show.
+        from app.sim_engine.franchise.storyline_conduct import (  # noqa: WPS433
+            get_conduct_games_remaining as _cgr_fn,
+            is_under_conduct_suspension as _susp_fn,
+        )
+
+        if _susp_fn(p):
+            _league_susp = str(getattr(p, "_world_conduct_status", "") or "") in ("", "league_suspended") or not getattr(
+                p, "_conduct_incident_id", None
+            )
+            row["suspended"] = True
+            row["conduct_eligible_to_play"] = False
+            row["conduct_games_remaining"] = int(_cgr_fn(p) or 0)
+            row["availability_status"] = "Suspended" if _league_susp else "Leave"
+            row["status_badge"] = "SUSP"
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     if not light:
         try:
             from app.sim_engine.franchise.conduct_incidents import (  # noqa: WPS433
@@ -9016,11 +9039,18 @@ def _serialize_player_row(
                 )
             if visible:
                 row["career_awards"] = visible
+        if session is not None and not light:
+            try:
+                from services.season_carryover import restore_archived_nhl_lines
+
+                restore_archived_nhl_lines(session, p, pid)
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
         career = getattr(p, "career_stats", None)
         if isinstance(career, dict) and career:
             seasons = career.get("seasons") or career.get("by_season") or career.get("history")
             if isinstance(seasons, list) and seasons:
-                career_rows = [dict(s) for s in seasons if isinstance(s, dict)][-16:]
+                career_rows = [dict(s) for s in seasons if isinstance(s, dict)][-24:]
                 if session is not None:
                     try:
                         from services.season_carryover import _franchise_first_season
@@ -9492,8 +9522,19 @@ def _merge_current_season_into_career_seasons(
         )
         != dedup_key
     ]
+    # A stale current-season row from a previous club (traded / signed elsewhere) must not
+    # survive beside the new one: drop other current-season rows in the same league.
+    seasons = [
+        s
+        for s in seasons
+        if not (
+            s.get("is_current_season")
+            and str(s.get("season") or "") == str(entry["season"])
+            and str(s.get("league") or "NHL").upper() == str(entry["league"])
+        )
+    ]
     seasons.append(entry)
-    row["career_seasons"] = seasons[-16:]
+    row["career_seasons"] = seasons  # every season (no cap): careers are kept whole
 
 
 def _rows_from_players_list(
@@ -15765,6 +15806,9 @@ def _actionable_interrupt_ids(session: FranchiseSession):
         elif str(p.get("presentation_type") or "") == "trade_opportunity":
             # Another club's player whose demand has cut his price: stop so it can be acted on.
             pops.append("o:" + str(p.get("id") or ""))
+        elif p.get("interrupt_sim"):
+            # GM alerts that must be seen before simming on (trade deadline approaching).
+            pops.append("a:" + str(p.get("id") or ""))
     meetings = []
     day = int(getattr(session, "calendar_cursor", 0) or 0)
     for r in list(getattr(session, "universe_interaction_queue", None) or []):
@@ -18178,6 +18222,112 @@ def _wjc_distribute_goalie_line(
     }
 
 
+def _awards_recent_form(session: Any, season_year: int, pid: str, last_n: int = 10) -> Optional[Dict[str, Any]]:
+    """Last-N-games form from the stored box-score book (no sim): skaters P and G,
+    goalies SV%, each next to the season rate so the UI can say hot / cold."""
+    try:
+        from app.sim_engine.franchise.serialization import _BOX_IDX
+    except Exception:
+        return None
+    book = getattr(session, "box_score_book", None)
+    if not isinstance(book, dict):
+        return None
+    bucket = ((book.get("seasons") or {}).get(str(int(season_year or 0))) or {})
+    gids = list((bucket.get("players") or {}).get(str(pid)) or [])
+    games = bucket.get("games") or {}
+    if not gids:
+        return None
+    gi, ai, svi, sai = _BOX_IDX["g"], _BOX_IDX["a"], _BOX_IDX["saves"], _BOX_IDX["shots_against"]
+
+    def _tot(ids):
+        g = a = sv = sa = n = 0
+        for gid in ids:
+            row = ((games.get(gid) or {}).get("lines") or {}).get(str(pid))
+            if not row:
+                continue
+            try:
+                g += int(row[gi] or 0)
+                a += int(row[ai] or 0)
+                sv += int(row[svi] or 0) if len(row) > svi else 0
+                sa += int(row[sai] or 0) if len(row) > sai else 0
+                n += 1
+            except (IndexError, TypeError, ValueError):
+                continue
+        return g, a, sv, sa, n
+
+    rg, ra, rsv, rsa, rn = _tot(gids[-last_n:])
+    sg, sa_, ssv, ssa, sn = _tot(gids)
+    if rn <= 0 or sn <= 0:
+        return None
+    out: Dict[str, Any] = {"games": rn}
+    if ssa > 0:
+        r_sv = (rsv / rsa) if rsa else None
+        s_sv = ssv / ssa
+        out.update({"kind": "goalie", "recent_sv": round(r_sv, 3) if r_sv is not None else None, "season_sv": round(s_sv, 3)})
+        diff = (r_sv - s_sv) if r_sv is not None else 0.0
+        out["trend"] = "hot" if diff >= 0.008 else ("cold" if diff <= -0.008 else "steady")
+    else:
+        r_ppg = (rg + ra) / rn
+        s_ppg = (sg + sa_) / sn
+        out.update({"kind": "skater", "recent_g": rg, "recent_a": ra, "recent_p": rg + ra, "recent_ppg": round(r_ppg, 2), "season_ppg": round(s_ppg, 2)})
+        diff = r_ppg - s_ppg
+        out["trend"] = "hot" if diff >= max(0.15, s_ppg * 0.2) else ("cold" if diff <= -max(0.15, s_ppg * 0.2) else "steady")
+    return out
+
+
+def _stamp_awards_race_momentum(session: Any, race: Any, cursor: int, season_year: int) -> None:
+    """Rank movement vs ~a week ago plus last-10 form, stamped onto each leader card.
+
+    Keeps a short per-day history of board rankings on the session so the
+    Storylines awards desk can show who is climbing and who is fading."""
+    if not isinstance(race, dict) or race.get("sealed"):
+        return
+    boards = [b for b in list(race.get("boards") or []) if isinstance(b, dict)]
+    if not boards:
+        return
+    hist = list(getattr(session, "awards_race_history", None) or [])
+    hist = [h for h in hist if isinstance(h, dict) and int(h.get("season") or 0) == int(season_year)]
+    snap = {
+        str(b.get("id")): [str(l.get("player_id") or "") for l in list(b.get("leaders") or []) if isinstance(l, dict)]
+        for b in boards
+    }
+    if not hist or int(hist[-1].get("cursor") or -1) != int(cursor):
+        hist.append({"season": int(season_year), "cursor": int(cursor), "boards": snap})
+    hist = hist[-45:]
+    try:
+        session.awards_race_history = hist
+    except Exception:
+        pass
+    base = None
+    for h in hist:
+        if int(h.get("cursor") or 0) <= int(cursor) - 7:
+            base = h
+    if base is None and len(hist) > 1:
+        base = hist[0]
+    days_back = (int(cursor) - int(base.get("cursor") or 0)) if base else 0
+    race["momentum_window_days"] = days_back
+    form_cache: Dict[str, Any] = {}
+    for b in boards:
+        prev = list(((base or {}).get("boards") or {}).get(str(b.get("id"))) or [])
+        for rank, leader in enumerate(list(b.get("leaders") or []), start=1):
+            if not isinstance(leader, dict):
+                continue
+            pid = str(leader.get("player_id") or "")
+            if base is not None and pid:
+                if pid in prev:
+                    leader["prev_rank"] = prev.index(pid) + 1
+                    leader["rank_delta"] = leader["prev_rank"] - rank
+                else:
+                    leader["prev_rank"] = None
+                    leader["rank_delta"] = None
+                    leader["new_entry"] = True
+            if pid and str(leader.get("position") or "") != "HC":
+                if pid not in form_cache:
+                    form_cache[pid] = _awards_recent_form(session, season_year, pid)
+                if form_cache[pid]:
+                    leader["form"] = form_cache[pid]
+
+
 def _build_wjc_game_box_score(
     rng: random.Random,
     game: Dict[str, Any],
@@ -18645,6 +18795,37 @@ def _strip_wjc_live_pending(session: FranchiseSession) -> None:
     session.pending_ui_popups = [p for p in (session.pending_ui_popups or []) if not p.get("wjc_live")]
 
 
+def _wjc_user_highlights(pl: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Batched user-prospect lines for the start / final WJC overlay."""
+    users = [u for u in (pl.get("user_prospects") or []) if isinstance(u, dict)]
+    ids = {str(u.get("player_id") or "") for u in users}
+    stats = {
+        str(r.get("player_id") or ""): r
+        for r in (pl.get("player_stats") or [])
+        if isinstance(r, dict) and str(r.get("player_id") or "") in ids
+    }
+    out: List[Dict[str, Any]] = []
+    for u in users:
+        pid = str(u.get("player_id") or "")
+        st = stats.get(pid) or {}
+        g = int(st.get("g") or st.get("goals") or 0)
+        a = int(st.get("a") or st.get("assists") or 0)
+        out.append(
+            {
+                "player_id": pid,
+                "name": u.get("name") or st.get("name"),
+                "country": u.get("country") or u.get("wjc_country") or st.get("country"),
+                "position": u.get("position") or st.get("position"),
+                "gp": int(st.get("gp") or 0),
+                "g": g,
+                "a": a,
+                "pts": int(st.get("pts") or st.get("points") or (g + a)),
+            }
+        )
+    out.sort(key=lambda r: (-r["pts"], -r["g"]))
+    return out[:12]
+
+
 def _push_wjc_live_popup(session: FranchiseSession, payload: Dict[str, Any]) -> None:
     """Replace any previous WJC live overlay so bulk sims only surface the latest day."""
     _strip_wjc_live_pending(session)
@@ -18758,7 +18939,59 @@ def _wjc_live_tournament_payload(session: FranchiseSession, iso: str, d_idx: int
     }
 
 
+def _wjc_user_loan_guidance_rows(session: FranchiseSession) -> List[Dict[str, Any]]:
+    """Send-to-WJC vs leave-in-NHL call for every U20-eligible player on the user's NHL roster."""
+    ut = (getattr(session, "team_by_id", None) or {}).get(str(getattr(session, "user_team_id", "") or ""))
+    if ut is None:
+        return []
+    sy = int(session.season_calendar_year)
+    loans = getattr(session, "wjc_nhl_u20_loan", None) or {}
+    rng = session.sim.rng if getattr(session, "sim", None) else random.Random(sy)
+    out: List[Dict[str, Any]] = []
+    for p in list(getattr(ut, "roster", None) or []):
+        if getattr(p, "retired", False) or getattr(p, "identity", None) is None:
+            continue
+        try:
+            if not _wjc_age_eligible(p, sy):
+                continue
+            nat = _wjc_resolve_country(p, rng)
+            if not _country_in_wjc_pool(nat):
+                continue
+            g = _wjc_loan_guidance(session, ut, p)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+            continue
+        pid = str(getattr(p, "id", "") or "")
+        mode = loans.get(pid)
+        out.append(
+            {
+                "player_id": pid,
+                "name": str(getattr(p.identity, "name", "") or "?"),
+                "position": str(getattr(getattr(p.identity, "position", None), "value", getattr(p.identity, "position", "")) or ""),
+                "age": int(getattr(p.identity, "age", 0) or 0),
+                "ovr": round(float(_player_ovr99(p))),
+                "country": nat,
+                "country_label": _wjc_country_label(nat),
+                "decision": ("loan" if mode in (True, "full", "loan") else "loan_partial" if mode in ("partial", "loan_partial") else ("keep" if mode in (False, "keep", "none") else None)),
+                **g,
+            }
+        )
+    out.sort(key=lambda r: -float(r.get("score") or 0))
+    return out
+
+
 def _build_wjc_client_payload(session: FranchiseSession) -> Optional[Dict[str, Any]]:
+    payload = _build_wjc_client_payload_core(session)
+    if isinstance(payload, dict):
+        try:
+            payload["user_loan_guidance"] = _wjc_user_loan_guidance_rows(session)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+            payload["user_loan_guidance"] = []
+    return payload
+
+
+def _build_wjc_client_payload_core(session: FranchiseSession) -> Optional[Dict[str, Any]]:
     """Persistent WJC snapshot for Calendar / Hub menus (survives popup dismiss)."""
     sy = int(session.season_calendar_year)
     now_iso = (
@@ -18859,6 +19092,103 @@ def _build_wjc_client_payload(session: FranchiseSession) -> Optional[Dict[str, A
     }
 
 
+def _wjc_loan_guidance(session: FranchiseSession, team: Any, p: Any) -> Dict[str, Any]:
+    """Send to WJC vs leave in the NHL: NHL role / ice time, development upside,
+    injury risk and where the club sits in the standings. Returns a recommendation
+    ("loan" | "loan_partial" | "keep") with the reasons behind it."""
+    pid = str(getattr(p, "id", "") or "")
+    reasons: List[str] = []
+    score = 0.0
+    row = (getattr(session, "player_season_stats", None) or {}).get(pid)
+    if not isinstance(row, dict):
+        row = (getattr(session, "player_season_stats", None) or {}).get(f"NHL_{pid}") if pid.isdigit() else None
+    gp = int((row or {}).get("gp") or 0)
+    toi_min = (float((row or {}).get("toi_sec") or 0.0) / 60.0 / gp) if gp else 0.0
+    pts = int((row or {}).get("g") or 0) + int((row or {}).get("a") or 0)
+    pos = str(getattr(getattr(getattr(p, "identity", None), "position", None), "value", getattr(getattr(p, "identity", None), "position", "")) or "").upper()
+    is_g = pos.startswith("G")
+    is_d = pos.startswith("D")
+    rec = _team_record_snapshot_for_direction(session, str(getattr(team, "team_id", None) or getattr(team, "id", "") or ""))
+    team_gp = int(rec.get("gp") or 0)
+    pts_pct = float(rec.get("pts_pct") or 0.0)
+    # NHL role
+    if gp == 0:
+        score += 2.0
+        reasons.append("Hasn't dressed for an NHL game yet — the WJC gives him real minutes.")
+    elif team_gp and gp < team_gp * 0.6:
+        score += 1.2
+        reasons.append(f"Only {gp} of {team_gp} games played — he's a part-time NHLer right now.")
+    if gp and not is_g:
+        big = 18.0 if is_d else 16.5
+        small = 14.0 if is_d else 12.0
+        if toi_min >= big:
+            score -= 2.2
+            reasons.append(f"Logs {toi_min:.1f} min a night — a core piece of your lineup.")
+        elif toi_min <= small:
+            score += 1.0
+            reasons.append(f"Sheltered usage ({toi_min:.1f} min/GP) — he'd be a go-to player for his country.")
+        else:
+            reasons.append(f"Middle-of-the-lineup role ({toi_min:.1f} min/GP, {pts} pts).")
+    # Development benefit
+    try:
+        ovr = float(_player_ovr99(p))
+    except Exception:
+        ovr = 0.0
+    dr = getattr(p, "draft_value_range", None)
+    pot = None
+    try:
+        if dr and len(dr) >= 2:
+            pot = (float(dr[0]) + float(dr[1])) / 2.0 * 99.0
+    except (TypeError, ValueError):
+        pot = None
+    if pot and pot - ovr >= 8:
+        score += 0.8
+        reasons.append(f"Lots of runway (OVR {ovr:.0f}, ceiling ~{pot:.0f}): top-line international reps accelerate development.")
+    elif ovr >= 80:
+        score -= 0.8
+        reasons.append(f"Already an {ovr:.0f}-OVR NHL player — little left to learn against U20s.")
+    # Injury risk
+    inj = getattr(p, "injury_proneness", None) or getattr(p, "injury_prone", None)
+    try:
+        inj_f = float(inj) if inj is not None else 0.0
+    except (TypeError, ValueError):
+        inj_f = 0.0
+    if bool(getattr(p, "injured", False)) or int(getattr(p, "injury_games_remaining", 0) or 0) > 0:
+        score -= 3.0
+        reasons.append("Currently injured — keep him home to recover.")
+    elif inj_f >= 0.6:
+        score -= 0.7
+        reasons.append("Injury-prone: an extra two weeks of hard games adds risk.")
+    else:
+        reasons.append("Normal injury risk (~2 weeks of tournament hockey).")
+    # Team standing
+    if team_gp >= 10:
+        if pts_pct >= 0.6 and score < 1.0:
+            score -= 0.6
+            reasons.append(f"You're contending ({pts_pct:.3f} pts%) — every regular matters for seeding.")
+        elif 0.5 <= pts_pct < 0.56:
+            score -= 0.8 if toi_min >= 15 else 0.2
+            reasons.append(f"Playoff bubble ({pts_pct:.3f} pts%) — losing him for ~6 games could cost points.")
+        elif pts_pct < 0.45:
+            score += 0.9
+            reasons.append(f"Out of the race ({pts_pct:.3f} pts%) — development beats a few December points.")
+    if score >= 1.0:
+        rec_id, label = "loan", "Send to WJC"
+    elif score >= 0.0:
+        rec_id, label = "loan_partial", "Partial release (round-robin)"
+    else:
+        rec_id, label = "keep", "Leave in NHL"
+    return {
+        "recommendation": rec_id,
+        "recommendation_label": label,
+        "score": round(score, 2),
+        "reasons": reasons[:5],
+        "nhl_gp": gp,
+        "toi_per_gp": round(toi_min, 1),
+        "team_pts_pct": round(pts_pct, 3),
+    }
+
+
 def _maybe_enqueue_wjc_loan_decisions(session: FranchiseSession, day_meta: Dict[str, Any]) -> None:
     """After Christmas Day, before the first WJC calendar date, offer NHL U20 loan releases (national teams)."""
     iso_done = str(day_meta.get("iso") or "")
@@ -18892,6 +19222,11 @@ def _maybe_enqueue_wjc_loan_decisions(session: FranchiseSession, day_meta: Dict[
         cap_hit = _player_cap_hit_millions(p)
         storyline_id = f"story_wjc_loan_{pid}"
         dec_id = f"dec_{uuid.uuid4().hex[:12]}"
+        try:
+            guidance = _wjc_loan_guidance(session, ut, p)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+            guidance = {}
         session.pending_decisions.append(
             {
                 "id": dec_id,
@@ -18901,7 +19236,14 @@ def _maybe_enqueue_wjc_loan_decisions(session: FranchiseSession, day_meta: Dict[
                 "description": (
                     f"{nm} ({age}) is U20-eligible for {nat_lab} through Jan 4. "
                     "Release him for the full tournament, a round-robin-only loan, or keep him on your NHL roster."
+                    + (
+                        f" Staff recommendation: {guidance.get('recommendation_label')} — "
+                        + " ".join(guidance.get("reasons") or [])[:280]
+                        if guidance.get("recommendation_label")
+                        else ""
+                    )
                 ),
+                "recommended_option": guidance.get("recommendation"),
                 "options": [
                     {
                         "id": "keep",
@@ -18936,9 +19278,17 @@ def _maybe_enqueue_wjc_loan_decisions(session: FranchiseSession, day_meta: Dict[
                     "team_id": str(session.user_team_id),
                     "cap_hit_m": round(float(cap_hit), 3),
                     "cause": "National team requested U20 availability during World Juniors.",
+                    "wjc_guidance": guidance,
                 },
             }
         )
+        try:
+            for opt in session.pending_decisions[-1].get("options") or []:
+                if opt.get("id") == guidance.get("recommendation"):
+                    opt["recommended"] = True
+                    opt["label"] = f"{opt.get('label')} (recommended)"
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         offered = True
     session.wjc_loan_prompts_enqueued = True
     if offered:
@@ -19012,7 +19362,20 @@ def _maybe_enqueue_showcase_popups(session: FranchiseSession, day_meta: Dict[str
         if d_idx is not None:
             n_days = len(_wjc_calendar_dates(sy))
             pl = _wjc_live_tournament_payload(session, iso, d_idx, n_days)
-            _push_wjc_live_popup(session, pl)
+            # Throttled: one overlay when the tournament opens, one with the final
+            # result. Your prospects' daily lines are batched into those two cards
+            # (the WJC desk stays one click away on the calendar in between).
+            complete = pl.get("wjc_phase") == "complete" or bool(pl.get("medals_final"))
+            pop_key = f"wjc_pop_final_{sy}" if complete else (f"wjc_pop_start_{sy}" if d_idx == 0 else "")
+            if pop_key and pop_key not in session.shown_event_keys:
+                session.shown_event_keys.add(pop_key)
+                try:
+                    pl = dict(pl)
+                    pl["user_highlights"] = _wjc_user_highlights(pl)
+                    pl["popup_stage"] = "final" if complete else "start"
+                except Exception:
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
+                _push_wjc_live_popup(session, pl)
             if pl.get("wjc_phase") == "complete" and f"wjc_final_arch_{sy}" not in session.shown_event_keys:
                 session.shown_event_keys.add(f"wjc_final_arch_{sy}")
                 snap = {k: v for k, v in pl.items() if k not in ("wjc_live",)}
@@ -19528,7 +19891,17 @@ def _auto_resolve_pending_decisions(session: FranchiseSession) -> None:
     Manual Advance Day should not call this.
     This is intentionally conservative and logs every forced choice.
     """
+    # Hard cap: a decision whose effect spawns a fresh decision (or one that
+    # apply_decision cannot remove) used to spin this loop forever and freeze
+    # the advance request until the browser was refreshed.
+    budget = max(16, 4 * len(getattr(session, "pending_decisions", None) or []))
     while getattr(session, "pending_decisions", None):
+        budget -= 1
+        if budget < 0:
+            session.timeline.append(
+                f"AUTO-RESOLVE: stopped after too many decisions; {len(session.pending_decisions)} left on the desk."
+            )
+            break
         d = session.pending_decisions[0]
 
         if not isinstance(d, dict):
@@ -19553,6 +19926,10 @@ def _auto_resolve_pending_decisions(session: FranchiseSession) -> None:
             )
             if stay is not None:
                 first = stay
+        # Decisions that carry a staff recommendation (WJC loans) follow it on auto-sim.
+        rec_opt = next((o for o in opts if isinstance(o, dict) and o.get("recommended")), None)
+        if rec_opt is not None:
+            first = rec_opt
         choice_id = str(first.get("id") or first.get("choice_id") or "")
 
         if not choice_id:
@@ -19584,6 +19961,16 @@ def _auto_resolve_pending_decisions(session: FranchiseSession) -> None:
                 for item in list(getattr(session, "pending_decisions", None) or [])
                 if not isinstance(item, dict) or str(item.get("id") or "") != did
             ]
+        else:
+            # The same id still at the front means it was not consumed: drop it so the
+            # loop always makes progress.
+            rest = list(getattr(session, "pending_decisions", None) or [])
+            if rest and isinstance(rest[0], dict) and str(rest[0].get("id") or "") == did:
+                session.pending_decisions = [
+                    item for item in rest if not isinstance(item, dict) or str(item.get("id") or "") != did
+                ]
+
+
 def _apply_injury_decision_effect(
     session: FranchiseSession,
     decision: Dict[str, Any],
@@ -20546,6 +20933,14 @@ def advance_franchise_day(session: FranchiseSession) -> Dict[str, Any]:
         day_ordinal=day_ordinal,
     )
     try:
+        # GM alerts: own-player suspensions (and lineup return), playoff clinch,
+        # trade deadline approaching. One cheap pass over the user's club.
+        from services.user_season_alerts import after_user_day
+
+        after_user_day(session)
+    except Exception:
+        _startup_log.exception("user season alerts failed")
+    try:
         # The feed keeps pace with the sim: this day's finals, lines and player posts.
         from services.social_feed_engine import social_feed_after_day
 
@@ -20720,6 +21115,9 @@ def advance_franchise_bulk(
     guard = 0
     max_iter = 6000
     stopped: Optional[str] = None
+    # A day that keeps blocking on a decision regenerated every attempt used to
+    # retry up to max_iter times (minutes of frozen sim). Three retries per day.
+    blocked_retries = 0
 
     # Progress + stop flag (plain values only: sessions are pickled).
     start_cursor = int(getattr(session, "calendar_cursor", 0) or 0)
@@ -20804,6 +21202,7 @@ def advance_franchise_bulk(
                 prog = session._sim_progress
                 prog["done"] = len(steps)
                 prog["iso"] = _calendar_iso_for_day(session, int(getattr(session, "calendar_cursor", 0) or 0))
+                prog["updated_at"] = time.time()
             except Exception:
                 _swallowed_log.debug("suppressed exception", exc_info=True)
 
@@ -20819,12 +21218,18 @@ def advance_franchise_bulk(
             st = str(step.get("status") or "")
 
             if st == "blocked":
-                if auto_resolve_decisions and getattr(session, "pending_decisions", None):
+                blocked_retries += 1
+                if (
+                    blocked_retries <= 3
+                    and auto_resolve_decisions
+                    and getattr(session, "pending_decisions", None)
+                ):
                     _auto_resolve_pending_decisions(session)
                     if not getattr(session, "pending_decisions", None):
                         continue
                 stopped = str(step.get("reason") or "blocked")
                 break
+            blocked_retries = 0
 
             if st != "ok":
                 stopped = st
@@ -20890,6 +21295,8 @@ def advance_franchise_bulk(
         session._sim_stop_requested = False
         try:
             session._sim_progress["active"] = False
+            session._sim_progress["finalizing"] = True
+            session._sim_progress["updated_at"] = time.time()
             session._sim_progress["stopped_reason"] = str(stopped or "")
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
@@ -20912,7 +21319,12 @@ def advance_franchise_bulk(
                 eff_mode=eff_mode,
                 stopped=stopped,
             )
-            _run_bulk_finalize_catchup(session, steps_n=steps_n, full=full_finalize)
+            try:
+                _run_bulk_finalize_catchup(session, steps_n=steps_n, full=full_finalize)
+            except Exception:
+                # Never let a catch-up failure skip restoring the session flags below:
+                # a stuck _defer_payload_invalidation froze the hub on stale payloads.
+                _startup_log.exception("bulk finalize catch-up failed")
             try:
                 _sync_prospect_stats_to_calendar(session, force=True)
             except Exception:
@@ -20928,6 +21340,11 @@ def advance_franchise_bulk(
         session._eligible_sparse_storyline_backfill = bool(
             use_light_bulk and steps_n > 0 and (full_finalize or steps_n >= BULK_INCREMENTAL_CATCHUP_EVERY_STEPS)
         )
+        try:
+            session._sim_progress["finalizing"] = False
+            session._sim_progress["updated_at"] = time.time()
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     last = steps[-1] if steps else {
         "status": "blocked" if getattr(session, "pending_decisions", None) else "noop",
@@ -21138,6 +21555,7 @@ def auto_fill_user_lines(session: FranchiseSession) -> Dict[str, Any]:
         "unfillable": list(report.get("unfillable") or []),
         "shortage": dict(report.get("shortage") or {}),
         "lines": dict(getattr(session, "lines", None) or {}),
+        "lines_revision": int(getattr(session, "_lines_revision", 0) or 0),
     }
 
 
@@ -25998,11 +26416,61 @@ def _strip_bootstrap_fake_rights(session: FranchiseSession) -> None:
         invalidate_session_payload_caches(session, reason="fake_rights")
 
 
+def _repair_flat_potential_v1(session: FranchiseSession) -> None:
+    """One-time load repair: young AHL depth and startup rights juniors were generated
+    with potential ~= overall and could never grow. Headroom is deterministic per id."""
+    if getattr(session, "_flat_potential_repair_v1_done", False):
+        return
+    league = getattr(getattr(session, "sim", None), "league", None)
+    if league is None:
+        return
+    from app.sim_engine.league_hierarchy_bootstrap import (
+        _ident_age,
+        _player_ovr_frac,
+        apply_minor_league_headroom,
+        shape_bootstrap_rights_prospect,
+    )
+    from app.sim_engine.progression.development import _scout_potential99
+
+    n = 0
+    for team in list(getattr(league, "teams", None) or []):
+        for p in list(getattr(team, "ahl_roster", None) or []):
+            if getattr(p, "retired", False) or _ident_age(p) > 24:
+                continue
+            try:
+                if apply_minor_league_headroom(p, only_if_flat=True):
+                    n += 1
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+    if str(getattr(session, "player_universe", "") or "") != "real_nhl":
+        for block in list(getattr(league, "development_leagues", None) or []):
+            for tm in block.get("teams") or []:
+                for p in tm.get("players") or []:
+                    if not getattr(p, "_bootstrap_fake_rights", False):
+                        continue
+                    if not (getattr(p, "nhl_rights_team_id", None) or getattr(p, "rights_team_id", None)):
+                        continue
+                    try:
+                        if _scout_potential99(p) > _player_ovr_frac(p) * 99.0 + 2.0:
+                            continue
+                        if shape_bootstrap_rights_prospect(p, rebuild=False):
+                            n += 1
+                    except Exception:
+                        _swallowed_log.debug("suppressed exception", exc_info=True)
+    session._flat_potential_repair_v1_done = True
+    if n:
+        invalidate_session_payload_caches(session, reason="flat_potential_repair")
+
+
 def build_state_payload(session: FranchiseSession, *, include_heavy: bool = False, crisis_tick: bool = False) -> Dict[str, Any]:
     from services.perf_profiler import span
 
     try:
         _strip_bootstrap_fake_rights(session)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    try:
+        _repair_flat_potential_v1(session)
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
 
@@ -26166,6 +26634,7 @@ def _build_lean_core_section(
         "last_gm_result": dict(getattr(session, "last_gm_result", None) or {}),
         "showcase_archive": list(getattr(session, "showcase_archive", None) or [])[-24:],
         "lines": dict(getattr(session, "lines", None) or {}),
+        "lines_revision": int(getattr(session, "_lines_revision", 0) or 0),
         "financials_status": str(getattr(session, "financials_status", "") or ""),
         "wjc_nations": [{"code": c, "label": lab} for c, lab in _wjc_countries_meta()],
         "team_base": {
@@ -26731,6 +27200,7 @@ def _build_state_payload_impl(session: FranchiseSession, *, include_heavy: bool 
         "last_gm_result": dict(getattr(session, "last_gm_result", None) or {}),
         "showcase_archive": list(getattr(session, "showcase_archive", None) or [])[-24:],
         "lines": dict(getattr(session, "lines", None) or {}),
+        "lines_revision": int(getattr(session, "_lines_revision", 0) or 0),
         "financials_status": str(getattr(session, "financials_status", "") or ""),
         "wjc_nations": [{"code": c, "label": lab} for c, lab in _wjc_countries_meta()],
     }
@@ -27050,6 +27520,9 @@ def save_franchise_lines(session: FranchiseSession, payload: Dict[str, Any]) -> 
         "warnings": warnings,
         "last_saved": _today_iso(session),
         "source": "user",
+        # GM-authored sheet: automatic passes (roster sync, pregame guard, injury
+        # call-ups, suspension returns) may only patch individual slots, never rebuild it.
+        "user_lines_locked": True,
     }
     session._cached_chemistry_report = None
     if unit_type == "even_strength":
@@ -27087,6 +27560,7 @@ def save_franchise_lines(session: FranchiseSession, payload: Dict[str, Any]) -> 
         "unit_type": unit_type,
         "warnings": warnings,
         "lines": session.lines,
+        "lines_revision": int(getattr(session, "_lines_revision", 0) or 0),
         "storyline_events": storyline_events,
     }
 
@@ -27596,6 +28070,13 @@ def _apply_nhl_standings_fields(standings: Any, rows: List[Dict[str, Any]]) -> N
         row.setdefault("ties", int(getattr(rec, "ties", 0) or 0))
         row["standings_order"] = order.get(str(row.get("team_id")), 999) + 1
     rows.sort(key=lambda x: (x.get("standings_order", 999), -int(x.get("pts") or 0)))
+    try:
+        # Mathematical clinch / elimination marks (x / y / z / p / e) for every table.
+        from services.user_season_alerts import annotate_clinch_rows
+
+        annotate_clinch_rows(rows, int(getattr(standings, "season_games", 0) or 0))
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _build_standings_rows(session: FranchiseSession) -> List[Dict[str, Any]]:
@@ -28156,22 +28637,21 @@ def preview_franchise_chemistry(session: FranchiseSession, payload: Dict[str, An
         raise ValueError("Preview payload missing 'lines'")
     unit_type = str(payload.get("unit_type") or "even_strength")
     original = session.lines
-    cached = getattr(session, "_cached_chemistry_report", None)
     preview = dict(original) if isinstance(original, dict) else {}
     unit = dict(preview.get(unit_type) or {})
     unit["lines"] = lines
     preview[unit_type] = unit
-    try:
-        session.lines = preview
-        session._cached_chemistry_report = None
-        report = build_public_chemistry_report(session)
-        if isinstance(report, dict):
-            report = dict(report)
-            report["preview"] = True
-        return report
-    finally:
-        session.lines = original
-        session._cached_chemistry_report = cached
+    # Score the preview through an overlay instead of swapping ``session.lines``.
+    # The swap/restore raced with POST /lines (both run on the threadpool): a save
+    # that landed while a preview was scoring wrote into the temporary dict and was
+    # then thrown away by the restore, so saved lines "reverted" to the old sheet.
+    from services.lineup_preview_overlay import LinesPreviewSession
+
+    report = build_public_chemistry_report(LinesPreviewSession(session, preview))
+    if isinstance(report, dict):
+        report = dict(report)
+        report["preview"] = True
+    return report
 
 
 def get_franchise_chemistry_report(session: FranchiseSession) -> Dict[str, Any]:
@@ -28180,7 +28660,7 @@ def get_franchise_chemistry_report(session: FranchiseSession) -> Dict[str, Any]:
     stats_rev = int(getattr(session, "_stats_revision", 0) or 0)
     lines_blob = getattr(session, "lines", None) or {}
     lines_key = str(_stable_hash(repr(lines_blob)))
-    cache_key = f"{stats_rev}|{lines_key}|chem_v4"
+    cache_key = f"{stats_rev}|{lines_key}|chem_v5"
     cached = getattr(session, "_cached_chemistry_report", None)
     if isinstance(cached, dict) and str(cached.get("key") or "") == cache_key:
         payload = cached.get("payload")

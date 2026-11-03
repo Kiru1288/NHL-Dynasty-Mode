@@ -1388,13 +1388,15 @@ def _age_value_mult(age: int, val_ovr: float, pos: str) -> float:
     """Decline curve. Teams buy the next five years, so a 33-year-old is a short window
     no matter how good he is today. Goalies age a little more gracefully."""
     a = int(age or 0)
-    table = {30: 0.93, 31: 0.86, 32: 0.78, 33: 0.70, 34: 0.62, 35: 0.55}
+    # Softened (was 0.93/0.86/0.78/0.70/0.62/0.55 from 30): a productive 31-32 year-old
+    # still has real seasons left, and the curve crushed his market well before his game.
+    table = {30: 0.98, 31: 0.94, 32: 0.89, 33: 0.83, 34: 0.76, 35: 0.68, 36: 0.60}
     if a < 30:
         return 1.0
-    mult = table.get(a, 0.48)
+    mult = table.get(a, 0.52)
     if pos == "G":
-        return min(1.0, mult + 0.06)
-    if val_ovr >= 90:
+        return min(1.0, mult + 0.05)
+    if val_ovr >= 88:
         mult = min(1.0, mult + 0.05)
     return mult
 
@@ -1563,9 +1565,9 @@ def _evaluate_player_asset_value_impl(
         age_mod = 1.0
     elif age <= 33:
         # Elite stars still in their window; do not dump them solely for age 31–33.
-        age_mod = -0.5 if val_ovr >= 88 else (-1.0 if val_ovr >= 84 else -2.0)
+        age_mod = 0.0 if val_ovr >= 88 else (-0.5 if val_ovr >= 84 else -1.25)
     else:
-        age_mod = -5.0 - (age - 33) * 0.8
+        age_mod = -3.5 - (age - 34) * 0.8
         if val_ovr >= 90:
             age_mod = max(age_mod, -3.5)
         elif val_ovr >= 86:

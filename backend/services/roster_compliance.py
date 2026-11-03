@@ -493,6 +493,12 @@ def fill_team_ahl_minimum(team: Any, rng: Any) -> int:
             league_players=[],
             pool_context="ahl",
         )
+        try:
+            from app.sim_engine.league_hierarchy_bootstrap import apply_minor_league_headroom
+
+            apply_minor_league_headroom(player)
+        except Exception:
+            pass
         aav = 0.80
         player.contract = {
             "type": "AHL",

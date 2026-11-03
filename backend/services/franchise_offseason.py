@@ -2361,6 +2361,9 @@ def _advance_salary_cap(session: FranchiseSession) -> Dict[str, Any]:
             f"({_growth:+.1f}% trend, {_ops.get('losing_teams_count', 0)} clubs losing money)."
             if _growth is not None else None
         )
+        _gm_model = (_ops.get("cap") or {}).get("cap_growth_model") or {}
+        if _gm_model.get("headline") and str(_ops.get("cap_projection_source") or (_ops.get("cap") or {}).get("cap_projection_source") or "") == "model":
+            target_reason = str(_gm_model["headline"])
         if _board_adj:
             # This note used to be overwritten by the revenue-model line right after it.
             target_reason = (
@@ -2373,6 +2376,14 @@ def _advance_salary_cap(session: FranchiseSession) -> Dict[str, Any]:
         cap_row = advance_league_salary_cap(
             league, sim.rng, season_year=sy + 1, target_cap_m=target_cap, target_reason=target_reason,
         )
+        try:
+            from services.cap_growth_model import record_cap_explanation
+
+            _gm = ((locals().get("_ops") or {}).get("cap") or {}).get("cap_growth_model") or {}
+            if _gm:
+                record_cap_explanation(session, _gm, cap_row)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         try:
             from services.contract_economy import refresh_offer_sheet_compensation_tiers
 
@@ -3681,6 +3692,41 @@ def _run_user_org_depth_progression(session: FranchiseSession, season_id: int) -
             _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
+def _run_league_minor_progression(session: FranchiseSession, season_id: int) -> int:
+    """F12/F13: CPU clubs' AHL / ECHL players get their offseason development too.
+
+    Only the NHL rosters and the user's own organization were run, so a CPU prospect
+    could dominate the AHL for years and never move. Each player's merged season line
+    (AHL points translated to NHL-equivalent) is stamped first, so production vs. his
+    rating drives the budget the same way it does in the NHL.
+    """
+    from app.sim_engine.progression import run_player_progression
+
+    rng = session.sim.rng
+    uid = str(getattr(session, "user_team_id", "") or "")
+    league = getattr(getattr(session, "sim", None), "league", None)
+    n = 0
+    for team in list(getattr(league, "teams", None) or []):
+        if str(getattr(team, "team_id", "") or "") == uid:
+            continue  # user org runs in _run_user_org_depth_progression
+        for attr, pool in (("ahl_roster", "ahl"), ("echl_roster", "echl")):
+            for player in list(getattr(team, attr, None) or []):
+                if player is None or getattr(player, "retired", False):
+                    continue
+                led = getattr(player, "development_ledger", None)
+                if isinstance(led, dict) and led.get("development_applied") and str(led.get("season")) == str(season_id):
+                    continue
+                try:
+                    _dev_stamp_season_production(session, player)
+                    setattr(player, "_active_dev_season", season_id)
+                    setattr(player, "_dev_source_path", f"cpu_{pool}")
+                    run_player_progression(player, rng, season_id=season_id, source_path=f"cpu_{pool}")
+                    n += 1
+                except Exception:
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
+    return n
+
+
 def _dev_reset_season_production(player: Any) -> None:
     """No games anywhere this year: neutral, not last year's NHL call-up."""
     for key, value in (
@@ -4071,6 +4117,11 @@ def _run_offseason_development(session: FranchiseSession) -> Dict[str, Any]:
 
     try:
         _run_user_org_depth_progression(session, season_id)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+
+    try:
+        _run_league_minor_progression(session, season_id)
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
 
@@ -7862,6 +7913,36 @@ def _roll_development_league_draft_class(session: FranchiseSession, season_year:
                     except Exception:
                         _swallowed_log.debug("suppressed exception", exc_info=True)
                 kept.append(p)
+
+            # CHL overage rule: at most three 20-year-olds per club. Undrafted, lowest-rated
+            # overagers beyond the limit are released (drafted ones belong to their NHL org).
+            if code.upper().startswith("CHL_"):
+                def _jr_age(pl: Any) -> int:
+                    try:
+                        idn = getattr(pl, "identity", None)
+                        return int(getattr(idn, "age", None) or getattr(pl, "age", 0) or 0)
+                    except (TypeError, ValueError):
+                        return 0
+
+                def _jr_ovr(pl: Any) -> float:
+                    f = getattr(pl, "ovr", None)
+                    try:
+                        return float(f() if callable(f) else f or 0.0)
+                    except Exception:
+                        return 0.0
+
+                def _jr_drafted(pl: Any) -> bool:
+                    return bool(getattr(pl, "drafted", False)) or bool(
+                        getattr(pl, "nhl_rights_team_id", None) or getattr(pl, "rights_team_id", None)
+                    )
+
+                twenties = [pl for pl in kept if _jr_age(pl) >= 20]
+                excess = len(twenties) - 3
+                if excess > 0:
+                    cut = sorted((pl for pl in twenties if not _jr_drafted(pl)), key=_jr_ovr)[:excess]
+                    cut_ids = {id(pl) for pl in cut}
+                    kept = [pl for pl in kept if id(pl) not in cut_ids]
+                    culled += len(cut)
 
             # Target ~18 skaters + 2 goalies per junior club; refill with new draft-age kids.
             goalies = sum(

@@ -1,4 +1,6 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { ensurePs2CssFilter, peekPs2Photo, requestPs2Photo } from "../utils/ps2Pixel";
+import { cssColorToHex, renderLowPolyFace } from "../utils/lowPolyFace";
 import { resolvePlayerHeadshot } from "../utils/playerHeadshots";
 import { resolveCountryCode, flagApiUrl } from "../utils/countryFlags";
 
@@ -69,6 +71,83 @@ export default function PlayerHeadshot({
   const resolved = portrait.player;
   const [failedNhlSrc, setFailedNhlSrc] = useState("");
   const showNhlPhoto = Boolean(preferPhoto && portrait.src && failedNhlSrc !== portrait.src);
+  const rootRef = useRef(null);
+
+  // PS2 restyle of real photos: cached canvas pass, CSS posterize until ready / if blocked.
+  const photoSrc = showNhlPhoto ? portrait.src : "";
+  const [ps2Photo, setPs2Photo] = useState(() => (photoSrc ? peekPs2Photo(photoSrc) || "" : ""));
+  useEffect(() => {
+    if (!photoSrc) return undefined;
+    ensurePs2CssFilter();
+    const hit = peekPs2Photo(photoSrc);
+    if (hit !== undefined) {
+      setPs2Photo(hit || "");
+      return undefined;
+    }
+    setPs2Photo("");
+    let live = true;
+    let io = null;
+    const go = () => {
+      requestPs2Photo(photoSrc).then((url) => {
+        if (live && url) setPs2Photo(url);
+      });
+    };
+    const el = rootRef.current;
+    if (el && typeof IntersectionObserver !== "undefined") {
+      io = new IntersectionObserver(
+        (entries) => {
+          if (entries.some((e) => e.isIntersecting)) {
+            io.disconnect();
+            io = null;
+            go();
+          }
+        },
+        { rootMargin: "300px" }
+      );
+      io.observe(el);
+    } else {
+      go();
+    }
+    return () => {
+      live = false;
+      if (io) io.disconnect();
+    };
+  }, [photoSrc]);
+
+  const headshotIdKey = resolved.headshot_id || resolved.face_variant || "";
+  // Generated players: low-poly PS2 face in the headshot's jersey colours.
+  const [cssJersey, setCssJersey] = useState(null);
+  const useIsoLayout = typeof window !== "undefined" ? useLayoutEffect : useEffect;
+  useIsoLayout(() => {
+    if (showNhlPhoto || (teamColors && teamColors.primary)) return;
+    const el = rootRef.current;
+    if (!el || typeof getComputedStyle !== "function") return;
+    try {
+      const cs = getComputedStyle(el);
+      const primary = cssColorToHex(cs.getPropertyValue("--jersey"));
+      const secondary = cssColorToHex(cs.getPropertyValue("--jersey2"));
+      if (!cssJersey || cssJersey.primary !== (primary || undefined) || cssJersey.secondary !== (secondary || undefined)) {
+        setCssJersey({ primary: primary || undefined, secondary: secondary || undefined });
+      }
+    } catch {
+      if (!cssJersey) setCssJersey({});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showNhlPhoto, teamColors && teamColors.primary, className, variant, size, roleClass(resolved), headshotIdKey, style && style["--team-primary"], style && style["--jersey"]]);
+  const faceColors = useMemo(() => {
+    if (teamColors && teamColors.primary) {
+      return {
+        primary: cssColorToHex(teamColors.primary) || undefined,
+        secondary: cssColorToHex(teamColors.secondary) || cssColorToHex(teamColors.accent) || undefined,
+      };
+    }
+    return cssJersey || {};
+  }, [teamColors, cssJersey]);
+  const lowPolySrc = useMemo(
+    // Wait for the jersey colours (read in a layout effect, before paint) so each face renders once.
+    () => (showNhlPhoto || !((teamColors && teamColors.primary) || cssJersey) ? "" : renderLowPolyFace(resolved, faceColors)),
+    [showNhlPhoto, resolved, faceColors, teamColors, cssJersey]
+  );
 
   const headshotId = useMemo(
     () => clampHeadshotId(resolved.headshot_id || resolved.face_variant, resolved.avatar_seed),
@@ -124,6 +203,8 @@ export default function PlayerHeadshot({
     animate ? `animate-${animate}` : "",
     teamColors ? "team-branded" : "",
     showNhlPhoto ? "has-nhl-headshot photo-only" : "",
+    showNhlPhoto ? (ps2Photo ? "ph-ps2-ready" : "ph-ps2-pending") : "",
+    !showNhlPhoto && lowPolySrc ? "photo-only ph-lowpoly" : "",
     className,
   ]
     .filter(Boolean)
@@ -144,6 +225,7 @@ export default function PlayerHeadshot({
 
   return (
     <div
+      ref={rootRef}
       className={classes}
       style={mergedStyle}
       title={title || resolved.name || [resolved.firstName, resolved.lastName].filter(Boolean).join(" ")}
@@ -153,7 +235,7 @@ export default function PlayerHeadshot({
       {showNhlPhoto ? (
         <img
           className="ph-nhl-image ph-nhl-image--solo"
-          src={portrait.src}
+          src={ps2Photo || portrait.src}
           alt=""
           loading="lazy"
           decoding="async"
@@ -162,6 +244,14 @@ export default function PlayerHeadshot({
             event.currentTarget.style.display = "none";
             setFailedNhlSrc(portrait.src);
           }}
+        />
+      ) : lowPolySrc ? (
+        <img
+          className="ph-nhl-image ph-nhl-image--solo ph-lowpoly-img"
+          src={lowPolySrc}
+          alt=""
+          decoding="async"
+          draggable={false}
         />
       ) : (
         <>

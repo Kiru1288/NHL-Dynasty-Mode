@@ -868,6 +868,34 @@ def infer_role_satisfaction_from_deployment(
     *,
     deploy: Optional[PlayerDeploymentSnapshot] = None,
 ) -> Optional[float]:
+    """Role satisfaction from deployment, floored while he has accepted his role in a
+    GM meeting (role_acceptance.py: no morale penalty from the role he signed up for)."""
+    val = _infer_role_satisfaction_raw(player, team, session, deploy=deploy)
+    # F14: a 23-and-under player is happy just to be in the NHL. Depth minutes or the
+    # odd scratch do not read as a role complaint at that age.
+    try:
+        _age = int(getattr(getattr(player, "identity", None), "age", None) or getattr(player, "age", 30) or 30)
+    except (TypeError, ValueError):
+        _age = 30
+    if val is not None and _age <= 23 and any(p is player for p in (getattr(team, "roster", None) or [])):
+        val = max(float(val), 72.0 if _age <= 21 else 66.0)
+    if getattr(player, "_role_accepted_until_day", None) is None:
+        return val
+    try:
+        from app.sim_engine.franchise.role_acceptance import apply_role_satisfaction_floor  # noqa: WPS433
+
+        return apply_role_satisfaction_floor(player, session, val)
+    except Exception:
+        return val
+
+
+def _infer_role_satisfaction_raw(
+    player: Any,
+    team: Any,
+    session: Any,
+    *,
+    deploy: Optional[PlayerDeploymentSnapshot] = None,
+) -> Optional[float]:
     """Derive role satisfaction from franchise stats + saved lines (0–100)."""
     deploy = deploy or resolve_player_deployment(session, player, team)
     avg_toi = deploy.avg_toi_min

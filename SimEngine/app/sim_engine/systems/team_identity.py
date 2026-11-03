@@ -232,7 +232,7 @@ IDENTITIES: Dict[str, Dict[str, Any]] = {
     "goaltending_fortress": {
         "label": "Goaltending Fortress",
         "blurb": "Built from the crease out: elite netminding, low-risk hockey.",
-        "weights": {"goaltending": 1.6, "defense": 0.4},
+        "weights": {"goaltending": 1.2, "defense": 0.4},
         "star_styles": {"goalie": 1.0},
         "coach": {"goaltending": 0.5},
         "targets": ["defensive_d", "two_way_d", "two_way"],
@@ -389,11 +389,131 @@ def score_identities(
         if tags:
             drivers.append("Draft room: " + ", ".join(tags[:2]))
 
-    # Small stable personality so near-identical rosters don't all read the same.
+    # Tiny stable tiebreak only (was +/-0.15, which made labels feel random).
     tid = str(getattr(team, "team_id", "") or getattr(team, "id", ""))
     for key in scores:
-        scores[key] += (_stable_u("identity-flavour", tid, key) - 0.5) * 0.3
+        scores[key] += (_stable_u("identity-flavour", tid, key) - 0.5) * 0.06
     return scores, z, drivers
+
+
+# ---------------------------------------------------------------------------
+# How the club actually plays (season stats)
+# ---------------------------------------------------------------------------
+
+#: metric key -> (label, unit, higher_is "more")
+PLAY_METRICS: Dict[str, Tuple[str, str]] = {
+    "gf_pg": ("Goals for", "/game"),
+    "ga_pg": ("Goals against", "/game"),
+    "sf_pg": ("Shots for", "/game"),
+    "events_pg": ("Shot attempts (both teams)", "/game"),
+    "cf_pct": ("Possession (CF%)", "%"),
+    "xgf_pg": ("Expected goals for", "/game"),
+    "xga_pg": ("Expected goals against", "/game"),
+    "xgf_pct": ("Expected-goal share (xGF%)", "%"),
+    "hits_pg": ("Hits", "/game"),
+    "pim_pg": ("Penalty minutes", "/game"),
+    "sv_pct": ("Save %", ""),
+}
+
+#: identity -> {metric: weight on the metric's league z-score}
+PLAY_EVIDENCE: Dict[str, Dict[str, float]] = {
+    "run_and_gun": {"gf_pg": 0.9, "ga_pg": 0.5, "events_pg": 0.8, "sf_pg": 0.5},
+    "speed_transition": {"xgf_pg": 0.8, "events_pg": 0.4, "gf_pg": 0.4, "hits_pg": -0.4},
+    "heavy_forecheck": {"hits_pg": 1.3, "pim_pg": 0.35, "cf_pct": 0.3},
+    "defensive_structure": {"ga_pg": -0.8, "xga_pg": -0.9, "events_pg": -0.6},
+    "skill_possession": {"cf_pct": 1.2, "xgf_pct": 0.7, "hits_pg": -0.35},
+    "goaltending_fortress": {"sv_pct": 1.0, "ga_pg": -0.45},
+}
+
+
+def team_play_metrics(row: Dict[str, Any]) -> Optional[Dict[str, float]]:
+    """Per-game play-style metrics from a team analytics row (None before ~10 games)."""
+    def f(*keys: str) -> float:
+        for k in keys:
+            v = row.get(k)
+            if v is not None:
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    continue
+        return 0.0
+
+    gp = f("gp", "games_played")
+    if gp < 10:
+        return None
+    cf, ca, xgf, xga = f("cf", "corsi_for"), f("ca", "corsi_against"), f("xgf"), f("xga")
+    sa = f("sa", "shots_against")
+    ga = f("ga", "goals_against")
+    return {
+        "gp": gp,
+        "gf_pg": f("gf", "goals_for") / gp,
+        "ga_pg": ga / gp,
+        "sf_pg": f("sf", "sog", "shots_for") / gp,
+        "events_pg": (cf + ca) / gp,
+        "cf_pct": 100.0 * cf / (cf + ca) if cf + ca > 0 else 50.0,
+        "xgf_pg": xgf / gp,
+        "xga_pg": xga / gp,
+        "xgf_pct": 100.0 * xgf / (xgf + xga) if xgf + xga > 0 else 50.0,
+        "hits_pg": f("hits") / gp,
+        "pim_pg": f("pim") / gp,
+        "sv_pct": (1.0 - ga / sa) if sa > 0 else 0.905,
+    }
+
+
+def _play_layer(
+    metrics: Dict[str, Dict[str, float]]
+) -> Tuple[Dict[str, Dict[str, float]], Dict[str, Dict[str, Tuple[float, int]]], Dict[str, Tuple[float, float]]]:
+    """League z-scores per metric, plus each value's league rank (1 = most)."""
+    stats: Dict[str, Tuple[float, float]] = {}
+    zs: Dict[str, Dict[str, float]] = {tid: {} for tid in metrics}
+    ranks: Dict[str, Dict[str, Tuple[float, int]]] = {tid: {} for tid in metrics}
+    for m in PLAY_METRICS:
+        vals = [(tid, float(v[m])) for tid, v in metrics.items()]
+        if not vals:
+            continue
+        mu = sum(x for _, x in vals) / len(vals)
+        sd = math.sqrt(sum((x - mu) ** 2 for _, x in vals) / len(vals)) or 1.0
+        stats[m] = (mu, sd)
+        order = sorted(vals, key=lambda kv: -kv[1])
+        for i, (tid, x) in enumerate(order):
+            zs[tid][m] = (x - mu) / sd
+            ranks[tid][m] = (x, i + 1)
+    return zs, ranks, stats
+
+
+def _fmt_metric(m: str, v: float) -> str:
+    if m == "sv_pct":
+        return f"{v:.3f}"
+    if PLAY_METRICS[m][1] == "%":
+        return f"{v:.1f}%"
+    return f"{v:.1f}"
+
+
+def _why_rows(key: str, tid: str, zs: Dict[str, Dict[str, float]], ranks: Dict[str, Dict[str, Tuple[float, int]]],
+              stats: Dict[str, Tuple[float, float]], n: int) -> List[Dict[str, Any]]:
+    spec = PLAY_EVIDENCE.get(key) or {}
+    contrib = sorted(((m, w * zs.get(tid, {}).get(m, 0.0)) for m, w in spec.items()), key=lambda kv: -kv[1])
+    out: List[Dict[str, Any]] = []
+    for m, c in contrib[:3]:
+        if m not in ranks.get(tid, {}):
+            continue
+        v, rank = ranks[tid][m]
+        label, unit = PLAY_METRICS[m]
+        low = float(spec.get(m, 0.0)) < 0
+        r = (n + 1 - rank) if low else rank
+        sfx = "th" if 10 <= r % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(r % 10, "th")
+        out.append({
+            "rank_text": f"{r}{sfx} {'fewest' if low else 'most'} of {n}",
+            "metric": m,
+            "label": label,
+            "value": round(v, 3),
+            "display": _fmt_metric(m, v) + ("" if unit == "%" or not unit else unit),
+            "league_avg": _fmt_metric(m, stats[m][0]),
+            "rank": rank,
+            "of": n,
+            "supports": c > 0.15,
+        })
+    return out
 
 
 def _secondary_traits(z: Dict[str, float], profile: Dict[str, Any], stats: Dict[str, Tuple[float, float]]) -> List[str]:
@@ -483,19 +603,59 @@ def compute_league_identities(
     prev_scores: Optional[Dict[str, Dict[str, float]]] = None,
     draft_identities: Optional[Dict[str, Dict[str, Any]]] = None,
     momentum: float = 0.65,
+    play_rows: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Dict[str, Dict[str, Any]]:
-    """Identity for every club, normalized against this league."""
+    """Identity for every club, normalized against this league.
+
+    ``play_rows`` (team_id -> season analytics row) adds how the club actually plays:
+    shot volume, possession, xG, hits, goals for/against, save %. Its weight grows with
+    games played (full weight from ~40 GP), so by midseason the label is mostly earned
+    on the ice, and every identity carries the metrics behind it in ``why``.
+    """
     profiles = {str(getattr(t, "team_id", "") or getattr(t, "id", "")): team_raw_profile(t) for t in teams}
     stats = _league_stats(list(profiles.values()))
+    metrics: Dict[str, Dict[str, float]] = {}
+    for tid, row in (play_rows or {}).items():
+        mm = team_play_metrics(row) if isinstance(row, dict) else None
+        if mm is not None:
+            metrics[str(tid)] = mm
+    use_play = len(metrics) >= max(4, int(0.75 * len(profiles)))
+    zs, ranks, pstats = _play_layer(metrics) if use_play else ({}, {}, {})
     out: Dict[str, Dict[str, Any]] = {}
     for t in teams:
         tid = str(getattr(t, "team_id", "") or getattr(t, "id", ""))
         prof = profiles[tid]
         scores, z, drivers = score_identities(t, prof, stats, draft_identity=(draft_identities or {}).get(tid))
+        play_w = 0.0
+        if use_play and tid in metrics:
+            play_w = min(1.0, metrics[tid]["gp"] / 40.0) * 1.3
+            for key, spec in PLAY_EVIDENCE.items():
+                ev = sum(w * zs[tid].get(m, 0.0) for m, w in spec.items()) / (sum(abs(w) for w in spec.values()) or 1.0)
+                scores[key] = scores.get(key, 0.0) * (1.0 - 0.45 * min(1.0, play_w)) + play_w * ev * 1.4
         raw = dict(scores)
         scores = blend_scores((prev_scores or {}).get(tid), scores, momentum)
         ident = build_identity(t, scores, z, prof, stats, drivers)
         ident["raw_scores"] = {k: round(v, 3) for k, v in raw.items()}
+        pk = (ident.get("primary") or {}).get("key")
+        why: Dict[str, Any] = {"roster": list(drivers[:3]), "on_ice": [], "games": 0, "basis": "roster"}
+        if play_w > 0 and pk:
+            if pk == "balanced":
+                why["on_ice"] = [
+                    {"metric": m, "label": PLAY_METRICS[m][0],
+                     "display": _fmt_metric(m, ranks[tid][m][0]) + ("" if PLAY_METRICS[m][1] in ("%", "") else PLAY_METRICS[m][1]),
+                     "league_avg": _fmt_metric(m, pstats[m][0]), "rank": ranks[tid][m][1], "of": len(metrics),
+                     "supports": True}
+                    for m in ("cf_pct", "events_pg", "hits_pg") if m in ranks[tid]
+                ]
+            else:
+                why["on_ice"] = _why_rows(pk, tid, zs, ranks, pstats, len(metrics))
+            why["games"] = int(metrics[tid]["gp"])
+            why["basis"] = "on_ice" if play_w >= 0.65 else "roster_and_on_ice"
+        else:
+            # Roster read only: say which attribute groups drive it.
+            why["roster"] += [f"{g.title()} rating: {_pct(z.get(g, 0.0))}th percentile" for g in
+                              sorted(GROUPS, key=lambda g: -abs(z.get(g, 0.0)))[:2]]
+        ident["why"] = why
         out[tid] = ident
     return out
 

@@ -8,15 +8,18 @@ import ChapterAttributeProfile from "../components/ChapterAttributeProfile";
 import { formatAverageTOI, getAverageTOIMinutes } from "../utils/toiFormat";
 import { chapterAttributeRows } from "../utils/chapterAttributes";
 import { formatProspectLeague, formatProspectTeam } from "../events/prospectDevelopment/prospectDevelopmentHelpers";
+import DevelopmentOutlook from "../components/dossier/DevelopmentOutlook";
 import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
 import { lookupHumanDossier, playerRoomLine } from "../utils/lockerRoomPulse";
 import { api } from "../services/api";
 import { nationalityCode, ensurePlayerHeadshotFields } from "../utils/playerHeadshots";
 import { nearestFlagApiSize } from "../utils/countryFlags";
 import { getBaseOverall, getOverallDrop, getOverallModifierBadge, getUniversalOverall } from "../utils/playerOverall";
-import { getRosterMoves, moveRosterPlayer, getStatsCentral, previewElcOffer, submitElcOffer, getBoxScore, getPlayerGameLog } from "../services/franchiseService";
+import { getRosterMoves, moveRosterPlayer, getStatsCentral, previewElcOffer, submitElcOffer, getBoxScore, getPlayerGameLog, searchAllPlayers, getPlayerDossierRow } from "../services/franchiseService";
 import { BoxScoreModal, PlayerPerformanceLog } from "../components/dossier/ProspectVisuals";
 import { resolveWjcDossierBlock } from "./prospectDossierHelpers";
+import ProspectTalkModal from "../components/game/ProspectTalkModal";
+import { getProspectSigningInterest } from "../services/franchiseService";
 
 /**
  * RosterScreen.js
@@ -3572,6 +3575,14 @@ function RosterPlayerFlag({ player }) {
   return null;
 }
 
+/** "SUSP · 2g" / "LEAVE" for players who cannot dress (shown where injuries show). */
+function suspBadgeText(player) {
+  const health = normalizeHealth(player);
+  if (!health.isConductLeave) return "";
+  const tag = health.conductLabel === "Leave" ? "LEAVE" : "SUSP";
+  return health.gamesRemaining > 0 ? `${tag} · ${health.gamesRemaining}g` : tag;
+}
+
 function PremiumPlayerRow({ player, selected, onSelect, showTeam = false }) {
   const healthBand = getHealthBand(player);
   const concernLevel = Number(player?.tradeStabilityConcern?.escalationLevel ?? 0);
@@ -3633,7 +3644,11 @@ function PremiumPlayerRow({ player, selected, onSelect, showTeam = false }) {
       <span className="nhlrost-board-row__contract">{capHitDisplay(player)}</span>
 
       <span className="nhlrost-board-row__status">
-        <MiniBadge text={player.status} tone={healthBand.tone} />
+        {suspBadgeText(player) ? (
+          <MiniBadge text={suspBadgeText(player)} tone="bad" title={healthBand.label} />
+        ) : (
+          <MiniBadge text={player.status} tone={healthBand.tone} />
+        )}
       </span>
 
       <span className="nhlrost-board-row__role">{player.roleLabel || player.role || "—"}</span>
@@ -3650,7 +3665,29 @@ function PremiumPlayerRow({ player, selected, onSelect, showTeam = false }) {
   );
 }
 
-function RosterBoardView({ players, selectedPlayerKey, onSelectPlayer, showTeam = false }) {
+/** Rights Held row extras: signing-interest chip + Talk button (sibling of the row button). */
+function RightsTalkExtras({ player, interest, onTalk }) {
+  const id = getPlayerId(player, "");
+  const si = interest?.[id];
+  return (
+    <span className="rtalk-extras">
+      {si ? (
+        <span
+          className={`rtalk-chip is-${si.tone || "warn"}`}
+          title={si.warning || `Signing interest ${Math.round(Number(si.interest) || 0)} · ${si.label}`}
+        >
+          {si.leaning_no ? "⚠ " : ""}
+          {Math.round(Number(si.interest) || 0)}
+        </span>
+      ) : null}
+      <button type="button" className="rtalk-btn" onClick={() => onTalk(player)} title="Talk to him">
+        Talk
+      </button>
+    </span>
+  );
+}
+
+function RosterBoardView({ players, selectedPlayerKey, onSelectPlayer, showTeam = false, rightsTalk = null }) {
   if (!players.length) {
     return (
       <EmptyPanel
@@ -3677,15 +3714,27 @@ function RosterBoardView({ players, selectedPlayerKey, onSelectPlayer, showTeam 
         <span>Avail</span>
       </div>
       <div className="nhlrost-board-list">
-        {players.map((player, index) => (
-          <PremiumPlayerRow
-            key={player.key || `${player.name}-${index}`}
-            player={player}
-            selected={player.key === selectedPlayerKey}
-            onSelect={onSelectPlayer}
-            showTeam={showTeam}
-          />
-        ))}
+        {players.map((player, index) =>
+          rightsTalk ? (
+            <div className="rtalk-wrap" key={player.key || `${player.name}-${index}`}>
+              <PremiumPlayerRow
+                player={player}
+                selected={player.key === selectedPlayerKey}
+                onSelect={onSelectPlayer}
+                showTeam={showTeam}
+              />
+              <RightsTalkExtras player={player} interest={rightsTalk.interest} onTalk={rightsTalk.onTalk} />
+            </div>
+          ) : (
+            <PremiumPlayerRow
+              key={player.key || `${player.name}-${index}`}
+              player={player}
+              selected={player.key === selectedPlayerKey}
+              onSelect={onSelectPlayer}
+              showTeam={showTeam}
+            />
+          )
+        )}
       </div>
     </div>
   );
@@ -4284,6 +4333,7 @@ function buildCurrentSeasonCareerRow(player, stats, { isGoalie, seasonLabel }) {
     season: seasonLabel || safeStr(pickFirstDefined(stats.season, stats.seasonLabel), "Current"),
     team: safeStr(
       pickFirstDefined(
+        stats._current_team,
         stats.team_name,
         stats.team,
         player?.affiliate_team_name,
@@ -4316,8 +4366,22 @@ function buildCurrentSeasonCareerRow(player, stats, { isGoalie, seasonLabel }) {
   return row;
 }
 
-function mergeCareerSeasonsWithCurrent(player, stats, options) {
+// The club he plays for NOW. season_stats.team_name is stamped when the line opens
+// and is not rewritten on a trade/signing, so the dossier kept the old club.
+function currentClubLabel(player, stats) {
+  const lg = safeStr(pickFirstDefined(stats?.league, stats?.league_code), "NHL").toUpperCase();
+  if (lg !== "NHL") return null;
+  const abbr = pickFirstDefined(player?.team_abbr, player?.teamAbbr, player?.team_abbreviation);
+  if (typeof abbr === "string" && abbr.trim() && abbr !== "—") return abbr.trim();
+  const name = pickFirstDefined(player?.teamName, player?.team_name);
+  if (typeof name === "string" && name.trim() && name !== "—" && !/free agent|draft|rights/i.test(name)) return name.trim();
+  return null;
+}
+
+function mergeCareerSeasonsWithCurrent(player, rawStats, options) {
   const existing = Array.isArray(player?.career_seasons) ? player.career_seasons : EMPTY_ARRAY;
+  const club = currentClubLabel(player, rawStats);
+  const stats = club ? { ...rawStats, _current_team: club } : rawStats;
   const currentRow = buildCurrentSeasonCareerRow(player, stats, options);
   if (!currentRow) return existing;
   // Traded mid-season: one line per club this season, newest club last (as NHL.com shows it).
@@ -4336,7 +4400,7 @@ function mergeCareerSeasonsWithCurrent(player, stats, options) {
     if (less.pts == null || prior.some(([, sp]) => sp?.pts == null)) less.pts = Number(less.g || 0) + Number(less.a || 0);
     const splitRows = [
       ...prior.map(([tid, sp]) => {
-        const row = buildCurrentSeasonCareerRow(player, { ...stats, ...sp, pts: sp.pts ?? Number(sp.g || 0) + Number(sp.a || 0), team_name: sp.abbr || tid, team: sp.abbr || tid }, options);
+        const row = buildCurrentSeasonCareerRow(player, { ...stats, ...sp, _current_team: null, pts: sp.pts ?? Number(sp.g || 0) + Number(sp.a || 0), team_name: sp.abbr || tid, team: sp.abbr || tid }, options);
         if (row) row.is_current_season = false;
         return row;
       }),
@@ -4347,12 +4411,12 @@ function mergeCareerSeasonsWithCurrent(player, stats, options) {
     return [...others, ...splitRows];
   }
 
-  const dedupKey = `${currentRow.season}__${safeStr(currentRow.league, "NHL").toUpperCase()}__${currentRow.team}`;
+  const dedupKey = `${currentRow.season}__${safeStr(currentRow.league, "NHL").toUpperCase()}`;
   const filtered = existing.filter((row) => {
     const key = `${safeStr(pickFirstDefined(row?.season, row?.year), "")}__${safeStr(
       pickFirstDefined(row?.league, "NHL"),
       "NHL"
-    ).toUpperCase()}__${safeStr(pickFirstDefined(row?.team, row?.team_name, row?.teamName), "")}`;
+    ).toUpperCase()}`;
     return key !== dedupKey;
   });
   return [...filtered, currentRow];
@@ -4801,6 +4865,7 @@ function DevelopmentPanel({ player }) {
           <DossierTile label="Age" value={player.age || "—"} />
           <DossierTile label="Rating confidence" value={humanizeDossierValue(player.overallConfidence)} />
         </DossierTiles>
+        <DevelopmentOutlook playerId={player.player_id || player.id} />
       </DossierCard>
 
       <DossierCard
@@ -6008,6 +6073,128 @@ function DossierRatingBadge({ label, value, sub, subTone, tone }) {
       <span className="pdx-rating__label">{label}</span>
       <strong className="pdx-rating__value">{value}</strong>
       {sub ? <span className={`pdx-rating__sub ${subTone || ""}`.trim()}>{sub}</span> : null}
+    </div>
+  );
+}
+
+// Opens the Player Dossier for ANY player id (NHL, AHL/ECHL, junior, prospect, FA).
+// `seed` (a row already on screen) renders instantly; the backend row replaces it.
+export function AnyPlayerDossier({ playerId, seed = null, franchiseState, onClose }) {
+  const [row, setRow] = useState(seed);
+  const [tab, setTab] = useState("overview");
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    setFailed(false);
+    if (!playerId) return undefined;
+    getPlayerDossierRow(playerId)
+      .then((res) => {
+        if (!alive) return;
+        if (res?.found && res.player) setRow(res.player);
+        else if (!seed) setFailed(true);
+      })
+      .catch(() => alive && !seed && setFailed(true));
+    return () => {
+      alive = false;
+    };
+  }, [playerId]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (!row) {
+    return (
+      <div className="any-dossier-loading" role="dialog" onClick={onClose}>
+        <div className="any-dossier-loading-card">{failed ? "Player not found in this save." : "Opening dossier…"}</div>
+      </div>
+    );
+  }
+  const norm = normalizeRosterBrowserPlayer(row, franchiseState, 0);
+  return (
+    <PlayerProfileModal
+      player={norm}
+      players={[norm]}
+      playerIndex={0}
+      onSelectPlayer={() => {}}
+      activeTab={tab}
+      setActiveTab={setTab}
+      storylines={[]}
+      franchiseState={franchiseState}
+      onClose={onClose}
+    />
+  );
+}
+
+const UPS_LEVEL_CLASS = { NHL: "nhl", AHL: "ahl", ECHL: "echl", PROSPECT: "prospect", JUNIOR: "junior", FA: "fa", "FA-EU": "fa" };
+
+// League-wide search: NHL, AHL/ECHL, prospect pools, junior leagues, free agents.
+export function UniversalPlayerSearch({ franchiseState, placeholder = "Find any player…" }) {
+  const [q, setQ] = useState("");
+  const [res, setRes] = useState({ loading: false, rows: [], count: 0 });
+  const [open, setOpen] = useState(false);
+  const [pick, setPick] = useState(null);
+  useEffect(() => {
+    const needle = q.trim();
+    if (needle.length < 2) {
+      setRes({ loading: false, rows: [], count: 0 });
+      return undefined;
+    }
+    let alive = true;
+    setRes((r) => ({ ...r, loading: true }));
+    const timer = setTimeout(() => {
+      searchAllPlayers(needle, 30)
+        .then((d) => alive && setRes({ loading: false, rows: Array.isArray(d?.results) ? d.results : [], count: d?.count || 0 }))
+        .catch(() => alive && setRes({ loading: false, rows: [], count: 0 }));
+    }, 220);
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, [q]);
+  return (
+    <div className="ups">
+      <input
+        type="search"
+        className="ups-input"
+        value={q}
+        placeholder={placeholder}
+        aria-label="Search every player in the league"
+        onChange={(e) => {
+          setQ(e.target.value);
+          setOpen(true);
+        }}
+        onFocus={() => setOpen(true)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") setOpen(false);
+          if (e.key === "Enter" && res.rows[0]) {
+            setPick(res.rows[0]);
+            setOpen(false);
+          }
+        }}
+      />
+      {open && q.trim().length >= 2 ? (
+        <div className="ups-drop" onMouseDown={(e) => e.preventDefault()}>
+          {res.loading && !res.rows.length ? <div className="ups-empty">Searching…</div> : null}
+          {!res.loading && !res.rows.length ? <div className="ups-empty">No player matches “{q.trim()}”.</div> : null}
+          {res.rows.map((r) => (
+            <button
+              type="button"
+              key={`${r.player_id}-${r.level}`}
+              className="ups-row"
+              onClick={() => {
+                setPick(r);
+                setOpen(false);
+              }}
+            >
+              <span className={`ups-tag is-${UPS_LEVEL_CLASS[r.level] || "junior"}`}>{r.level === "JUNIOR" ? r.league || "JR" : r.level === "PROSPECT" ? "RIGHTS" : r.level}</span>
+              <b className="ups-name">{r.name}</b>
+              <span className="ups-meta">{r.position} · {r.age || "—"}</span>
+              <span className="ups-club">{r.club}{r.org_abbr && r.org_abbr !== r.club ? ` · ${r.org_abbr}` : ""}</span>
+              <span className="ups-ovr">{Math.round(Number(r.ovr || 0)) || "—"}</span>
+            </button>
+          ))}
+          {res.count > res.rows.length ? <div className="ups-empty">{res.count - res.rows.length} more — keep typing to narrow.</div> : null}
+        </div>
+      ) : null}
+      {pick ? (
+        <AnyPlayerDossier playerId={pick.player_id} franchiseState={franchiseState} onClose={() => setPick(null)} />
+      ) : null}
     </div>
   );
 }
@@ -7314,6 +7501,30 @@ export function RosterScreen() {
     return "nhl";
   }, [searchMode, browseSource, orgLevel]);
 
+  // Rights Held: signing interest per prospect + Talk conversations (prospect_rights_talk.py).
+  const [talkTarget, setTalkTarget] = useState(null);
+  const [signingInterest, setSigningInterest] = useState({});
+  const rightsTalkOn = leaguePoolFilter === "rights" && viewingUserOrg;
+  useEffect(() => {
+    if (!rightsTalkOn) return undefined;
+    let alive = true;
+    getProspectSigningInterest()
+      .then((res) => {
+        if (alive) setSigningInterest(res?.players || {});
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [rightsTalkOn]);
+  const rightsTalk = useMemo(
+    () =>
+      rightsTalkOn
+        ? { interest: signingInterest, onTalk: (player) => setTalkTarget({ id: getPlayerId(player, ""), name: player?.name }) }
+        : null,
+    [rightsTalkOn, signingInterest]
+  );
+
   const handleSearchModeChange = useCallback((value) => {
     setTablePage(0);
     setSearchMode(value);
@@ -7506,6 +7717,8 @@ export function RosterScreen() {
               </>
             ) : null}
 
+            <UniversalPlayerSearch franchiseState={franchiseState} />
+
             <ToolbarInput
               id="roster-search"
               label="Search"
@@ -7558,6 +7771,7 @@ export function RosterScreen() {
                 selectedPlayerKey={selectedPlayerKey}
                 onSelectPlayer={handleSelectPlayer}
                 showTeam={showTeamColumn}
+                rightsTalk={rightsTalk}
               />
             )}
           </div>
@@ -7612,6 +7826,17 @@ export function RosterScreen() {
           />
         ) : null}
       </main>
+
+      {talkTarget?.id ? (
+        <ProspectTalkModal
+          playerId={talkTarget.id}
+          playerName={talkTarget.name}
+          onClose={() => setTalkTarget(null)}
+          onChanged={(si) => {
+            if (si?.player_id) setSigningInterest((prev) => ({ ...prev, [String(si.player_id)]: si }));
+          }}
+        />
+      ) : null}
 
       {drawerOpen ? (
         <RosterCommandDrawer

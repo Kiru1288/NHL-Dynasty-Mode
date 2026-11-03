@@ -217,6 +217,178 @@ def _stamp_pipeline_shaped(player: Any, draft_year: int) -> None:
         _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
+def _player_hash_rng(player: Any, salt: str) -> random.Random:
+    """Deterministic per-player RNG (does not consume the league RNG stream)."""
+    pid = str(getattr(player, "id", "") or getattr(player, "player_id", "") or id(player))
+    n = 2166136261
+    for ch in f"{salt}|{pid}":
+        n ^= ord(ch)
+        n = (n * 16777619) & 0xFFFFFFFF
+    return random.Random(n)
+
+
+def _set_display_potential(player: Any, pot: int) -> None:
+    pot = int(max(1, min(99, pot)))
+    ratings = getattr(player, "ratings", None)
+    if isinstance(ratings, dict):
+        ratings["dev_potential"] = pot
+    try:
+        cur = getattr(player, "potential", None)
+        if cur is not None and float(cur) <= 1.5:
+            player.potential = pot / 99.0
+        elif cur is not None:
+            player.potential = pot
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+
+
+def minor_league_headroom(age: int, rng: random.Random) -> int:
+    """Points of potential above overall for AHL depth, weighted by age.
+
+    20-21: +7..15, 22: +5..13, 23: +4..11, 24: +3..9, 25-26: +1..5, 27+: +0..2.
+    """
+    a = int(age)
+    if a <= 21:
+        lo, hi = 7, 15
+    elif a == 22:
+        lo, hi = 5, 13
+    elif a == 23:
+        lo, hi = 4, 11
+    elif a == 24:
+        lo, hi = 3, 9
+    elif a <= 26:
+        lo, hi = 1, 5
+    else:
+        lo, hi = 0, 2
+    # Most land in the lower half; a few young AHLers carry real upside.
+    u = rng.random() ** 1.6
+    return int(round(lo + u * (hi - lo)))
+
+
+def apply_minor_league_headroom(player: Any, rng: Optional[random.Random] = None, *, only_if_flat: bool = False) -> bool:
+    """Give an AHL depth skater potential above his overall (deterministic per player id)."""
+    ratings = getattr(player, "ratings", None)
+    if not isinstance(ratings, dict) or not ratings:
+        return False
+    ovr99 = _player_ovr_frac(player) * 99.0
+    try:
+        cur_pot = float(ratings.get("dev_potential")) if ratings.get("dev_potential") is not None else None
+        if cur_pot is not None and cur_pot <= 1.5:
+            cur_pot *= 99.0
+    except (TypeError, ValueError):
+        cur_pot = None
+    if only_if_flat and cur_pot is not None and cur_pot > ovr99 + 1.0:
+        return False
+    r = rng if isinstance(rng, random.Random) else _player_hash_rng(player, "ahl_headroom")
+    pot = int(round(ovr99)) + minor_league_headroom(_ident_age(player), r)
+    if cur_pot is not None and cur_pot >= pot:
+        return False
+    _set_display_potential(player, pot)
+    for k in ("_dev_realization", "_dev_real_ceiling", "_dev_realization_base_ovr", "_dev_realization_pot"):
+        if hasattr(player, k):
+            try:
+                delattr(player, k)
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+    if _ident_age(player) <= 23:
+        try:
+            from app.sim_engine.progression.development import assign_prospect_realization
+
+            assign_prospect_realization(player, force=True)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    return True
+
+
+def _rights_prospect_profile(age: int, rng: random.Random) -> Tuple[int, int]:
+    """(potential, headroom) for a junior whose rights an NHL club already holds."""
+    roll = rng.random()
+    if roll < 0.05:
+        pot = rng.randint(82, 90)
+    elif roll < 0.20:
+        pot = rng.randint(76, 83)
+    elif roll < 0.50:
+        pot = rng.randint(71, 77)
+    elif roll < 0.82:
+        pot = rng.randint(66, 72)
+    else:
+        pot = rng.randint(60, 67)
+    if roll >= 0.82:
+        head = rng.randint(3, 7)
+    elif age <= 19:
+        head = rng.randint(9, 16)
+    elif age == 20:
+        head = rng.randint(7, 13)
+    else:
+        head = rng.randint(5, 10)
+    return pot, head
+
+
+def shape_bootstrap_rights_prospect(player: Any, code: str = "", *, rebuild: bool = True) -> bool:
+    """A startup junior handed to an NHL club needs a drafted prospect's ceiling.
+
+    They were plain junior filler (~46 OVR, potential ~= OVR), so they never grew.
+    New leagues rebuild them to a drafted-prospect level; old saves only get headroom.
+    """
+    ratings = getattr(player, "ratings", None)
+    if not isinstance(ratings, dict) or not ratings:
+        return False
+    age = _ident_age(player)
+    if age < 18 or age > 22:
+        return False
+    rng = _player_hash_rng(player, "rights_shape")
+    pot, head = _rights_prospect_profile(age, rng)
+    ovr99 = _player_ovr_frac(player) * 99.0
+    target99 = float(pot - head)
+    if rebuild and abs(ovr99 - target99) > 3.0:
+        try:
+            from app.sim_engine.engine import build_role_shaped_ratings
+
+            pos = getattr(getattr(player, "identity", None), "position", None)
+            if pos is not None:
+                new_r = build_role_shaped_ratings(position=pos, target_ovr=max(36.0, target99) / 99.0, rng=rng)
+                if isinstance(new_r, dict) and new_r:
+                    player.ratings = new_r
+                    ratings = new_r
+                    inval = getattr(player, "_invalidate_ovr_memo", None)
+                    if callable(inval):
+                        inval()
+                    try:
+                        from app.sim_engine.entities.player import persist_recomputed_ovr
+
+                        persist_recomputed_ovr(player)
+                    except Exception:
+                        _swallowed_log.debug("suppressed exception", exc_info=True)
+                    ovr99 = _player_ovr_frac(player) * 99.0
+                    if code and isinstance(getattr(player, "_prospect_projected_stats", None), dict):
+                        try:
+                            from app.sim_engine.generation.prospect_league_scoring import initialize_prospect_season
+
+                            initialize_prospect_season(player, code, rng=rng, force=True, preserve_actual=True)
+                        except Exception:
+                            _swallowed_log.debug("suppressed exception", exc_info=True)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    if not rebuild:
+        # Old saves: keep today's overall, give it the headroom.
+        pot = int(round(ovr99)) + head
+    pot = int(max(round(ovr99) + 3, pot))
+    _set_display_potential(player, pot)
+    for k in ("_dev_realization", "_dev_real_ceiling", "_dev_realization_base_ovr", "_dev_realization_pot"):
+        if hasattr(player, k):
+            try:
+                delattr(player, k)
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+    try:
+        from app.sim_engine.progression.development import assign_prospect_realization
+
+        assign_prospect_realization(player, force=True)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    return True
+
+
 def _mark_overage_juniors_off_open_board(league: Any, rng: random.Random, season_year: int) -> int:
     """At bootstrap, most 19+ juniors already belong to an NHL org (or are passed over)."""
     teams = list(getattr(league, "teams", None) or [])
@@ -257,6 +429,10 @@ def _mark_overage_juniors_off_open_board(league: Any, rng: random.Random, season
                         p.nhl_rights_team_id = tid
                         p.rights_team_id = tid
                         p.drafted = True
+                    except Exception:
+                        _swallowed_log.debug("suppressed exception", exc_info=True)
+                    try:
+                        shape_bootstrap_rights_prospect(p, code)
                     except Exception:
                         _swallowed_log.debug("suppressed exception", exc_info=True)
                 else:
@@ -484,6 +660,98 @@ def _init_chars(league: Any, rng: random.Random, players: Sequence[Any]) -> None
         assign_development_profile(p, rng)
 
 
+# Real junior rosters carry overagers on top of the draft-age core: a CHL club may
+# dress up to three 20-year-olds and usually has several 19s (often its best players).
+# The age-table core alone produced ~0.6 twenty-year-olds and ~2 nineteens per club.
+_OVERAGE_EXTRAS: Dict[str, Tuple[Tuple[int, int], Tuple[int, int]]] = {
+    # code prefix: ((min 20s, max 20s), (min extra 19s, max extra 19s))
+    "CHL_": ((2, 3), (2, 3)),
+    "EU_J": ((0, 1), (1, 2)),
+    "USHL": ((0, 0), (1, 2)),
+}
+CHL_OVERAGE_LIMIT = 3
+
+
+def _overage_extras_for(code: str) -> Optional[Tuple[Tuple[int, int], Tuple[int, int]]]:
+    c = str(code or "").upper()
+    for prefix, spec in _OVERAGE_EXTRAS.items():
+        if c.startswith(prefix):
+            return spec
+    return None
+
+
+def _add_overage_juniors(
+    dev: List[Dict[str, Any]],
+    rng: random.Random,
+    used_names: set,
+    league_players: List[Any],
+    *,
+    init_stats: bool = True,
+) -> int:
+    """Top junior clubs up with 19- and 20-year-old overagers (deterministic per rng)."""
+    try:
+        from app.sim_engine.generation.prospect_league_teams import (
+            choose_nationality_for_league,
+            validate_prospect_league_fit,
+        )
+    except Exception:
+        return 0
+    added = 0
+    for block in dev or []:
+        code = str(block.get("league_code") or "")
+        spec = _overage_extras_for(code)
+        if not spec:
+            continue
+        (lo20, hi20), (lo19, hi19) = spec
+        for tm in block.get("teams") or []:
+            roster = tm.get("players")
+            if not isinstance(roster, list):
+                continue
+            have20 = sum(1 for p in roster if _ident_age(p) == 20)
+            n20 = max(0, rng.randint(lo20, hi20) - have20)
+            n19 = rng.randint(lo19, hi19)
+            for age in [20] * n20 + [19] * n19:
+                pos = rng.choice([Position.C, Position.LW, Position.RW, Position.D, Position.D])
+                nat = choose_nationality_for_league(rng, code)
+                p = None
+                for _attempt in range(6):
+                    p = _spawn_player(
+                        rng,
+                        pos=pos,
+                        # Overagers are usually a club's veterans and top scorers.
+                        ovr_lo=0.38,
+                        ovr_hi=0.55,
+                        age_lo=age,
+                        age_hi=age,
+                        used_names=used_names,
+                        league_players=league_players,
+                        pool_context=_pool_context_for_level("junior", code),
+                        nationality=nat,
+                        league_code=code,
+                    )
+                    bc = str(getattr(getattr(p, "identity", None), "birth_country", "") or "")
+                    if validate_prospect_league_fit(bc, code):
+                        break
+                    nat = choose_nationality_for_league(rng, code)
+                if p is None:
+                    continue
+                try:
+                    p.context.current_team_id = str(tm.get("team_id") or "")
+                except Exception:
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
+                _set_assignment(p, level="junior", league_code=code, club=str(tm.get("name") or ""))
+                if init_stats:
+                    try:
+                        from app.sim_engine.generation.prospect_league_scoring import initialize_prospect_season
+
+                        initialize_prospect_season(p, code, rng=rng)
+                    except Exception:
+                        _swallowed_log.debug("suppressed exception", exc_info=True)
+                roster.append(p)
+                added += 1
+    return added
+
+
 def _positions_for_block(
     rng: random.Random,
     *,
@@ -614,6 +882,7 @@ def ensure_development_leagues_for_draft_board(
     if not dev:
         return False
 
+    _add_overage_juniors(dev, rng, used_names, league_players)
     league.development_leagues = dev
     league.players = league_players
     _mark_overage_juniors_off_open_board(league, rng, year)
@@ -766,6 +1035,11 @@ def bootstrap_full_league_hierarchy(
                 continue
             lo, hi = (0.42, 0.62) if pos != Position.G else (0.48, 0.68)
             p = _spawn_player(rng, pos=pos, ovr_lo=lo, ovr_hi=hi, age_lo=20, age_hi=28, used_names=used_names, league_players=league_players, pool_context="ahl")
+            # Generated AHL depth came out with potential ~= overall and could never grow.
+            try:
+                apply_minor_league_headroom(p)
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             p.context.current_team_id = f"AHL_{tid}"
             _set_assignment(p, org_nhl_team_id=tid, level="ahl", club=_team_label(team))
             team.ahl_roster.append(p)
@@ -1002,6 +1276,7 @@ def bootstrap_full_league_hierarchy(
         label = str(LEAGUE_REGISTRY.get(code, {}).get("display") or code)
         _add_league(code, label, 5, 3, 1, 16, 20, 0.30, 0.50)
 
+    _add_overage_juniors(dev, rng, used_names, league_players, init_stats=not fast_depth)
     league.development_leagues = dev
     league.players = league_players
 

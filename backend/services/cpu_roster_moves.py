@@ -161,7 +161,19 @@ def _prospect_pool_callup_eligible(session: Any, p: Any, nhl: List[Any], tried: 
 
     if not (_healthy(p) and player_holds_nhl_spc(p) and id(p) not in tried):
         return False
-    if _season_jump(p) >= 4.0:
+    team = _team_of_pool_player(session, p)
+    rules = _devp_rules(team)
+    age = _age(p)
+    # Patient/Balanced clubs leave non-elite teenagers in junior even on a hot streak.
+    if team is not None:
+        try:
+            from app.sim_engine.team_dev_personality import promotion_allowed  # noqa: WPS433
+
+            if not promotion_allowed(team, age, _potential(p), int(getattr(p, "development_years_remaining", 0) or 0)):
+                return False
+        except Exception:
+            _log.debug("dev personality gate failed", exc_info=True)
+    if _season_jump(p) >= 4.0 + max(0.0, rules["callup_margin"]):
         return True
     b = _bucket(p)
     same = [x for x in nhl if _bucket(x) == b]
@@ -170,8 +182,48 @@ def _prospect_pool_callup_eligible(session: Any, p: Any, nhl: List[Any], tried: 
         return ovr >= (72 if b == "F" else 74)
     weakest = min(_value(session, x, nhl=True)[0] for x in same)
     up_val, _ = _value(session, p, nhl=False)
-    margin = 1.0 if b == "F" else 1.5
+    margin = (1.0 if b == "F" else 1.5) + rules["callup_margin"]
     return up_val >= weakest + margin
+
+
+_DEFAULT_DEVP = {"callup_margin": 0.5, "young_penalty": 0.8, "min_age": 19, "elite": 0.81, "score_mult": 1.0}
+
+
+def _devp_rules(team: Any) -> Dict[str, float]:
+    if team is None:
+        return dict(_DEFAULT_DEVP)
+    try:
+        from app.sim_engine.team_dev_personality import rules_for  # noqa: WPS433
+
+        return dict(rules_for(team))
+    except Exception:
+        return dict(_DEFAULT_DEVP)
+
+
+def _age(p: Any) -> int:
+    try:
+        return int(getattr(getattr(p, "identity", None), "age", None) or getattr(p, "age", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _potential(p: Any) -> float:
+    dr = getattr(p, "draft_value_range", None)
+    try:
+        if dr and len(dr) >= 2:
+            return (float(dr[0]) + float(dr[1])) / 2.0
+    except (TypeError, ValueError):
+        pass
+    return 0.55
+
+
+def _team_of_pool_player(session: Any, p: Any) -> Any:
+    league = getattr(getattr(session, "sim", None), "league", None)
+    for t in list(getattr(league, "teams", None) or []):
+        for attr in ("prospect_pool", "ahl_roster"):
+            if any(x is p for x in list(getattr(t, attr, None) or [])):
+                return t
+    return None
 
 
 def _value(session: Any, p: Any, *, nhl: bool) -> tuple:
@@ -274,9 +326,14 @@ def _team_moves(session: Any, team: Any, league: Any) -> int:
         # Rating + form: AHL production and in-season jumps count, and so does a
         # slumping NHL regular. Ratings alone never rewarded a hot farmhand.
         cand = sorted(ahl + juniors, key=lambda p: _value(session, p, nhl=False)[0], reverse=True)[:10]
+        devp = _devp_rules(team)
         for up in cand:
             b = _bucket(up)
             up_val, why = _value(session, up, nhl=False)
+            # Development personality: a patient club wants a clearer edge before it
+            # pulls a 20-or-under kid out of a top-line AHL/junior role.
+            if _age(up) <= 20:
+                up_val -= float(devp.get("young_penalty", 0.0))
             same = sorted([p for p in nhl if _bucket(p) == b], key=lambda p: _value(session, p, nhl=True)[0])
             if not same:
                 continue

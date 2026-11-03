@@ -18,6 +18,7 @@ import {
 } from "../game/constants";
 import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
 import { ClubBallBoard } from "./setupClubBalls";
+import CreationNotepad from "../components/setup/CreationNotepad";
 
 const APP_STAGE = Object.freeze({
   CONFIGURE: "configure",
@@ -474,86 +475,27 @@ function SetupLoadingScreen({
   onBack,
 }) {
   const facts = useMemo(() => shuffleArray(NHL_FUN_FACTS), []);
-  const [factIndex, setFactIndex] = useState(0);
-
-  useEffect(() => {
-    const id = window.setInterval(() => {
-      setFactIndex((current) => (current + 1) % facts.length);
-    }, 8500);
-    return () => window.clearInterval(id);
-  }, [facts.length]);
-
   const failed = Boolean(error);
-  const categories = useMemo(
-    () =>
-      Object.entries(HUB_WARMUP_LABELS).map(([key, label]) => ({
-        key,
-        label,
-        status: warmup?.[key] || "waiting",
-      })),
-    [warmup]
-  );
   const crestSrc =
     selected?.logo ||
     resolveFranchiseTeamLogo(selected?.raw || selected, selected?.name || teamDisplayName(selected));
 
   return (
-    <div className="setup-loading-screen" role="status" aria-live="polite">
-      <div className="setup-loading-panel">
-        {crestSrc ? (
-          <div className="setup-loading-crest" aria-hidden="true">
-            <span><img src={crestSrc} alt="" /></span>
-          </div>
-        ) : null}
-        <h2>{selected?.name || "NHL"}</h2>
-        <p>
-          {failed
-            ? error
-            : playerUniverse === "real_nhl"
-              ? "Opening the real NHL player universe."
-              : `${gmName?.trim() || "General Manager"} is taking over hockey operations.`}
-        </p>
-        {!failed ? (
-          <div className="setup-loading-meta">
-            <span>{injuriesEnabled ? "Injuries on" : "Injuries off"}</span>
-            <span>{playerUniverse === "real_nhl" ? "Real NHL" : "Generated"}</span>
-          </div>
-        ) : null}
-        {!failed ? (
-          <>
-            <ul className="setup-loading-tasks">
-              {categories.map(({ key, label, status }) => (
-                <li key={key} className={`is-${status}`}>
-                  <i aria-hidden="true" />
-                  <span>{label}</span>
-                  <em>{status === "ready" ? "Ready" : status === "loading" ? "Arriving" : "Queued"}</em>
-                </li>
-              ))}
-            </ul>
-            <div className="setup-loading-word" aria-hidden="true">
-              {"LOADING".split("").map((ch, i) => (
-                <b key={i} style={{ animationDelay: `${i * 0.08}s` }}>{ch}</b>
-              ))}
-            </div>
-          </>
-        ) : null}
-        {failed ? (
-          <div className="setup-loading-actions">
-            {typeof onRetry === "function" ? (
-              <button type="button" className="setup-loading-retry" onClick={onRetry} disabled={loading && !failed}>
-                Retry
-              </button>
-            ) : null}
-            {typeof onBack === "function" ? (
-              <button type="button" className="setup-loading-back" onClick={onBack}>
-                Back to setup
-              </button>
-            ) : null}
-          </div>
-        ) : null}
-        {!failed ? <blockquote>{facts[factIndex]}</blockquote> : null}
-      </div>
-    </div>
+    <CreationNotepad
+      teamName={selected?.name || "NHL"}
+      crestSrc={crestSrc}
+      gmName={gmName}
+      playerUniverse={playerUniverse}
+      injuriesEnabled={injuriesEnabled}
+      warmup={warmup}
+      warmupLabels={HUB_WARMUP_LABELS}
+      facts={facts}
+      failed={failed}
+      error={error}
+      loading={loading}
+      onRetry={onRetry}
+      onBack={onBack}
+    />
   );
 }
 

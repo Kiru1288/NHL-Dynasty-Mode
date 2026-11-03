@@ -128,6 +128,12 @@ def player_career_history(session: Any, pid: str, *, fetch: bool = True) -> Dict
                 ensure_prospect_draft_from_nhl(p, league=league)
         except Exception:
             log.debug("career landing fetch failed", exc_info=True)
+    try:
+        from services.season_carryover import restore_archived_nhl_lines
+
+        restore_archived_nhl_lines(session, p, str(pid))
+    except Exception:
+        log.debug("archived line restore failed", exc_info=True)
     cs = getattr(p, "career_stats", None)
     seasons: List[Dict[str, Any]] = []
     totals: Dict[str, Any] = {}

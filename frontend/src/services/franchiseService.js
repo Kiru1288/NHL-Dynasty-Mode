@@ -79,7 +79,7 @@ export async function getFranchiseAdvanceProgress() {
 
 /** @param {{ mode?: string, count?: number, auto_resolve?: boolean, auto_fill_lines?: boolean, target_iso?: string }} [opts] */
 export async function advanceFranchise(opts = {}) {
-  const { mode = "day", count = 1, auto_resolve = true, auto_fill_lines = false, target_iso } = opts;
+  const { mode = "day", count = 1, auto_resolve = true, auto_fill_lines = false, target_iso, signal } = opts;
   const m = String(mode || "day").toLowerCase();
   const heavy =
     m === "season" ||
@@ -99,10 +99,11 @@ export async function advanceFranchise(opts = {}) {
         auto_fill_lines,
         ...(target_iso ? { target_iso } : {}),
       },
-      { timeout: heavy ? 600000 : 180000 }
+      { timeout: heavy ? 600000 : 180000, ...(signal ? { signal } : {}) }
     );
     return data;
   } catch (e) {
+    if (e?.code === "ERR_CANCELED" || e?.response?.status === 409) throw e;
     if (isTimeoutError(e)) {
       const err = new Error(
         heavy
@@ -222,6 +223,16 @@ export async function setExpansionSchedule(everyNSeasons) {
 
 export async function getProspectRightsDesk() {
   const { data } = await api.get("/api/franchise/prospect-rights/desk");
+  return data;
+}
+
+export async function searchAllPlayers(q, limit = 40) {
+  const { data } = await api.get("/api/franchise/search/players", { params: { q, limit } });
+  return data;
+}
+
+export async function getPlayerDossierRow(playerId) {
+  const { data } = await api.get(`/api/franchise/player/${encodeURIComponent(String(playerId || ""))}/dossier-row`);
   return data;
 }
 
@@ -417,6 +428,21 @@ export async function getFranchiseStateHeavy(options = {}) {
   return inflightFranchiseStateHeavyPromise;
 }
 
+export async function getPlayerDevelopmentOutlook(playerId) {
+  const { data } = await api.get(`/api/franchise/player/${encodeURIComponent(playerId)}/development-outlook`);
+  return data;
+}
+
+export async function getCapGrowth() {
+  const { data } = await api.get("/api/franchise/cap-growth");
+  return data;
+}
+
+export async function signTvDeal(option) {
+  const { data } = await api.post("/api/franchise/tv-deal", { option });
+  return data;
+}
+
 export async function getContractOffice() {
   const { data } = await api.get("/api/franchise/contract-office");
   return data;
@@ -545,14 +571,17 @@ export function settleArbitration(payload) {
 }
 
 export async function simFreeAgencyToSeasonStart() {
-  const { data } = await api.post("/api/franchise/free-agency/sim-to-season");
+  // Bounded: an unanswered request used to leave the FA desk busy forever.
+  const { data } = await api.post("/api/franchise/free-agency/sim-to-season", null, { timeout: 600000 });
   return data;
 }
 
 export async function advanceFreeAgencyDay(days = 1) {
-  const { data } = await api.post("/api/franchise/free-agency/advance-day", {
-    days: Math.max(1, Number(days) || 1),
-  });
+  const { data } = await api.post(
+    "/api/franchise/free-agency/advance-day",
+    { days: Math.max(1, Number(days) || 1) },
+    { timeout: 300000 }
+  );
   return data;
 }
 
@@ -716,6 +745,20 @@ export async function getTradeHistory(params = {}) {
   return data;
 }
 
+/** Evaluator-backed counter suggestions for a rejected package. */
+export async function getTradeCounter(payload) {
+  const { data } = await api.post("/api/franchise/trade/counter", payload || {});
+  return data;
+}
+
+/** Interested clubs + demand level for one asset (Trade Hub Asset Intel). */
+export async function getTradeAssetIntel({ assetType, assetId, teamId, limit = 8 } = {}) {
+  const { data } = await api.get("/api/franchise/trade/asset-intel", {
+    params: { asset_type: assetType, asset_id: assetId, team_id: teamId, limit },
+  });
+  return data;
+}
+
 export async function getTradeMarket() {
   const { data } = await api.get("/api/franchise/trade/market");
   return data;
@@ -821,3 +864,15 @@ export async function postBurnerMessage(text, marketKey, sessionId) {
   return data;
 }
 
+
+/** Signing interest for every rights-held prospect: { players: { [id]: {interest,label,tone,warning,...} } }. */
+export async function getProspectSigningInterest() {
+  const { data } = await api.get("/api/franchise/prospect-talk/interest");
+  return data;
+}
+
+/** Rights-held prospect check-in. { player_id, topic?, approach? } (no topic = overview). */
+export async function prospectTalk(payload) {
+  const { data } = await api.post("/api/franchise/prospect-talk", payload || {});
+  return data;
+}

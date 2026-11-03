@@ -1050,54 +1050,111 @@ function WjcTodayGamesModule({ payload, onSelectGame }) {
   );
 }
 
+function WjcYourProspectsCard({ prospects, onSelectProspect }) {
+  const rows = asArray(prospects)
+    .filter(isUserOrgProspect)
+    .sort((a, b) => safeNumber(b.pts ?? b.points, 0) - safeNumber(a.pts ?? a.points, 0));
+  return (
+    <section className="wjc-page-card wjcx-yours">
+      <header className="wjc-page-card__header">
+        <div>
+          <span>Your Organization</span>
+          <h2>Your Prospects</h2>
+        </div>
+        <strong>{rows.length}</strong>
+      </header>
+      {!rows.length ? (
+        <div className="wjc-page-empty">None of your prospects made a U20 roster.</div>
+      ) : (
+        <ul className="wjcx-list">
+          {rows.map((r) => {
+            const gp = safeNumber(r.gp, 0);
+            const g = safeNumber(r.g ?? r.goals, 0);
+            const a = safeNumber(r.a ?? r.assists, 0);
+            return (
+              <li key={r.player_id || r.name}>
+                <button type="button" className="wjcx-row" onClick={() => onSelectProspect?.(r)}>
+                  <CountryFlag code={r.country || r.wjc_country} payload={null} size={22} />
+                  <b>{r.name}</b>
+                  <span className="wjcx-pos">{r.position || ""}</span>
+                  <em>{gp ? `${g}G ${a}A · ${g + a} PTS` : "Yet to play"}</em>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+const WJC_REC_TONE = { loan: "go", loan_partial: "mid", keep: "stay" };
+
+function WjcLoanGuidanceCard({ rows }) {
+  const list = asArray(rows);
+  if (!list.length) return null;
+  return (
+    <section className="wjc-page-card wjcx-guide">
+      <header className="wjc-page-card__header">
+        <div>
+          <span>Staff Recommendation</span>
+          <h2>Send to WJC or keep in NHL?</h2>
+        </div>
+        <strong>{list.length} eligible</strong>
+      </header>
+      <ul className="wjcx-guide-list">
+        {list.map((r) => (
+          <li key={r.player_id} className={`is-${WJC_REC_TONE[r.recommendation] || "mid"}`}>
+            <div className="wjcx-guide-top">
+              <b>{r.name}</b>
+              <span>
+                {r.position} · {r.age} · {r.ovr} OVR · {r.country_label || r.country}
+              </span>
+              <i className="wjcx-rec">{r.recommendation_label}</i>
+            </div>
+            <div className="wjcx-guide-facts">
+              <span>NHL GP {r.nhl_gp ?? 0}</span>
+              <span>TOI {r.toi_per_gp ? `${r.toi_per_gp}m` : "—"}</span>
+              <span>Team pts% {r.team_pts_pct ? Number(r.team_pts_pct).toFixed(3) : "—"}</span>
+              {r.decision ? (
+                <span className="wjcx-decided">
+                  Your call: {r.decision === "loan" ? "Full loan" : r.decision === "loan_partial" ? "Round-robin loan" : "Kept in NHL"}
+                </span>
+              ) : null}
+            </div>
+            <ul className="wjcx-why">
+              {asArray(r.reasons).map((why, i) => (
+                <li key={i}>{why}</li>
+              ))}
+            </ul>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 function WjcOverviewSection({
   payload,
-  showcaseCards,
+  prospects,
   onSelectProspect,
   onSelectGame,
-  userProspectCount,
-  gamesCount,
 }) {
   return (
-    <div className="wjc-page-section-stack">
-      <div className="wjc-ops-stat-strip wjc-overview-summary">
-        <WjcOpsStat
-          label="Stage"
-          value={getTournamentPhaseLabel(payload.wjc_day, payload.medals_final)}
-          tone="gold"
-        />
-        <WjcOpsStat
-          label="Day"
-          value={
-            payload.wjc_day != null
-              ? `${payload.wjc_day}/${payload.wjc_days_total}`
-              : "—"
-          }
-          tone="cyan"
-        />
-        <WjcOpsStat label="Games" value={gamesCount} tone="cyan" />
-        <WjcOpsStat
-          label="Your Prospects"
-          value={userProspectCount}
-          tone="green"
-        />
-      </div>
-
+    <div className="wjc-page-section-stack wjcx-overview">
       <WjcProgressStrip payload={payload} />
       <WjcMedalPanel payload={payload} />
-      <WjcStandingsTable
-        standings={payload.standings}
-        payload={payload}
-      />
-      <WjcTodayGamesModule
-        payload={payload}
-        onSelectGame={onSelectGame}
-      />
-      <WjcShowcaseGrid
-        cards={showcaseCards}
-        payload={payload}
-        onSelectProspect={onSelectProspect}
-      />
+      <div className="wjcx-grid">
+        <div className="wjcx-col wjcx-col--main">
+          <WjcStandingsTable standings={payload.standings} payload={payload} />
+          <WjcPlayoffsSection payload={payload} onSelectGame={onSelectGame} />
+        </div>
+        <aside className="wjcx-col wjcx-col--side">
+          <WjcYourProspectsCard prospects={prospects} onSelectProspect={onSelectProspect} />
+          <WjcTodayGamesModule payload={payload} onSelectGame={onSelectGame} />
+          <WjcLoanGuidanceCard rows={payload.user_loan_guidance} />
+        </aside>
+      </div>
     </div>
   );
 }
@@ -1735,14 +1792,15 @@ export default function WorldJuniorsMenu({
       ? "Sim Day"
       : "Sim Next Day";
 
-  const heroCompact = activeSection !== "overview";
+  // One slim status band; the big hero image pushed standings below the fold.
+  const heroCompact = activeSection !== "overview" || !payload.isPreTournament;
   const completedGames = tournamentGames.filter(
     (g) => g?.home_goals != null && g?.away_goals != null
   ).length;
 
   return (
     <section
-      className={`wjc-page-root wjc-ops-desk wjc-page-root--${activeSection}`}
+      className={`wjc-page-root wjc-ops-desk wjcx-root wjc-page-root--${activeSection}`}
       data-register="ops"
       aria-label="World Juniors tournament centre"
     >
@@ -1807,11 +1865,9 @@ export default function WorldJuniorsMenu({
             {activeSection === "overview" ? (
               <WjcOverviewSection
                 payload={payload}
-                showcaseCards={showcaseCards}
+                prospects={leagueNhlProspects}
                 onSelectProspect={handleSelectProspect}
                 onSelectGame={setSelectedGame}
-                userProspectCount={leagueNhlProspects.length}
-                gamesCount={tournamentGames.length}
               />
             ) : null}
 
@@ -1867,6 +1923,11 @@ export default function WorldJuniorsMenu({
                   leaders={statLeaders}
                   ownerByPlayerId={prospectOwnerMap}
                   layout="main"
+                />
+                <WjcShowcaseGrid
+                  cards={showcaseCards}
+                  payload={payload}
+                  onSelectProspect={handleSelectProspect}
                 />
               </section>
             ) : null}

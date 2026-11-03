@@ -138,7 +138,9 @@ def test_fourth_liner_budget_is_a_couple_of_points_and_a_veteran_is_not():
     vet_budget = calculate_season_growth_budget(
         vet, profile=resolve_development_profile(vet), rng=random.Random(3), dev_phase="NORMAL"
     )
-    assert 0.018 <= kid_budget <= 0.040, kid_budget
+    # F6/F14: 22-26 close more of the gap and NHL depth minutes at 23 and under are not
+    # docked, so a 21-year-old 78 with 92 potential lands ~+4 (was capped at +4.0).
+    assert 0.018 <= kid_budget <= 0.050, kid_budget
     assert vet_budget < kid_budget
     assert vet_budget < 0.016, vet_budget
 
@@ -409,4 +411,5 @@ def test_growth_above_84_slows_down():
     below_cap = prospect_year_cap(below, "NORMAL") * 99.0
     above_cap = prospect_year_cap(above, "NORMAL") * 99.0
     assert below_cap > above_cap
-    assert abs(above_cap - (8 * 0.40 * _elite_growth_scale(87))) < 0.2
+    # 18-22 pay min(0.55, 1.6 / (23.5 - age)) of the gap a year (0.55 at 22), not a flat 0.40.
+    assert abs(above_cap - (8 * 0.55 * _elite_growth_scale(87))) < 0.2

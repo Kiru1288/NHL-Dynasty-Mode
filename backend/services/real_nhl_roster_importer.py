@@ -1323,10 +1323,22 @@ def drop_nhl_import_from_franchise_open(
     for s in seasons:
         if not isinstance(s, dict):
             continue
+        # Lines this save simulated and archived at rollover (season_carryover
+        # archive_player_lines, AHL/junior archives) are the save's own history.
+        # Dropping them here (and writing the result back to career_stats) erased
+        # every simulated season after the opener from the dossier.
+        if str(s.get("source") or "").lower() in _FRANCHISE_SIM_LINE_SOURCES:
+            out.append(dict(s))
+            continue
         if _season_start_year_from_label(s.get("season")) >= cutoff:
             continue
         out.append(dict(s))
     return out
+
+
+_FRANCHISE_SIM_LINE_SOURCES = frozenset(
+    {"sim", "simulated", "franchise", "franchise_sim", "ahl_sim", "junior_sim", "prospect_sim", "development_sim"}
+)
 
 
 def drop_nhl_awards_from_franchise_open(

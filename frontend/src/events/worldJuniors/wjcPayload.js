@@ -103,6 +103,7 @@ export function normalizeWjcFields(raw) {
     medals_final: medalsFinal,
 
     user_prospects: asArray(source.user_prospects),
+    user_loan_guidance: asArray(source.user_loan_guidance),
     tournament_prospects: asArray(source.tournament_prospects),
     player_stats: asArray(source.player_stats),
 

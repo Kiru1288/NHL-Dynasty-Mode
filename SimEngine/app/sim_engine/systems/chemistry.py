@@ -1187,7 +1187,18 @@ def calculate_forward_line_chemistry(players: List[Any], context: Optional[Dict[
         "factors": factors,
         "concerns": concerns,
         "scheme_fit": scheme,
+        "fit_read": _fit_read(line, "forward"),
     }
+
+
+def _fit_read(players: List[Any], unit: str) -> Dict[str, Any]:
+    """On-ice fit (D9): archetype/attribute complementarity with plain-language reasons."""
+    try:
+        from app.sim_engine.systems.line_fit import line_fit_read
+
+        return line_fit_read(players, unit)
+    except Exception:
+        return {}
 
 
 def calculate_defense_pair_chemistry(players: List[Any], context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -1241,6 +1252,7 @@ def calculate_defense_pair_chemistry(players: List[Any], context: Optional[Dict[
         "factors": factors,
         "concerns": concerns,
         "scheme_fit": dict(p.get("scheme_fit") or {}),
+        "fit_read": _fit_read(pair, "defense"),
     }
 
 

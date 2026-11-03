@@ -21,6 +21,16 @@ import PS1PlayerPortrait from "../components/portraits/PS1PlayerPortrait";
 import { getTeamPortraitColors } from "../components/portraits/ps1PortraitUtils";
 import { normalizeRosterBrowserPlayer } from "./RosterScreen";
 import {
+  AssetIntelPanel,
+  GmNegotiationPanel,
+  MarketIntelPanel,
+  MarketableAssets,
+  PackageList,
+  TradeAnalysisBoard,
+  TradeValueHero,
+  useAssetIntel,
+} from "../components/tradehub/TradeWarRoom";
+import {
   getBaseOverall,
   getOverallDrop,
   getOverallModifierBadge,
@@ -1948,6 +1958,13 @@ function TradeLogo({ team, size = 168 }) {
   );
 }
 
+const renderTradeLogo = (team, size) => <TradeLogo team={team} size={size} />;
+
+function assetValueNumber(asset) {
+  const v = Number(asset?.tradeValue ?? asset?.value_hint);
+  return Number.isFinite(v) ? (Math.round(v * 10) / 10).toFixed(1) : "—";
+}
+
 function PositionIcon({ pos }) {
   const p = String(pos || "F").toUpperCase();
   const cls =
@@ -2043,11 +2060,6 @@ function AssetCard({
       <div className="trade-asset-ovr-focus" title={getOverallTooltip(asset)}>
         <span className="trade-asset-ovr-label">OVR</span>
         <strong className="trade-asset-ovr-number">{displayOvr(asset)}</strong>
-        {rumorMod && (
-          <span className="trade-asset-cap-impact bad">
-            {`Rumors ${rumorMod.amount}`} · {`${rumorMod.gamesRemaining} GP left`} · Trade Heat
-          </span>
-        )}
       </div>
       <div className="trade-asset-card-body">
         <div className="trade-asset-card-name trade-asset-card-name-row">
@@ -2057,6 +2069,11 @@ function AssetCard({
         </div>
         {protectedWarning ? (
           <div className="trade-asset-protected-warn">{protectedWarning}</div>
+        ) : null}
+        {rumorMod ? (
+          <div className="trade-asset-rumor-chip" title={`Storyline: trade rumours ${rumorMod.amount} OVR for ${rumorMod.gamesRemaining} more games`}>
+            Rumours {rumorMod.amount} · {rumorMod.gamesRemaining} GP
+          </div>
         ) : null}
         <div className="trade-asset-card-meta trade-asset-card-meta-tiny">
           <PositionIcon pos={asset.pos} />
@@ -2134,8 +2151,7 @@ function TradeSlot({
         />
       ) : (
         <div className="trade-slot-placeholder">
-          <span>DROP ASSET</span>
-          <small>Player · Pick · Prospect</small>
+          <small>Empty</small>
         </div>
       )}
     </div>
@@ -3127,7 +3143,7 @@ function FacingTradeValueBars({
         <div className={`trade-clear-side trade-clear-left ${comparison.leftTone}`}>
           <div className="trade-clear-side-label">
             <span>YOU</span>
-            <strong>TV {comparison.leftLabel}</strong>
+            <strong>Trade Value {comparison.leftLabel}</strong>
           </div>
           <div className="trade-clear-track">
             <div
@@ -3140,7 +3156,7 @@ function FacingTradeValueBars({
         <div className={`trade-clear-side trade-clear-right ${comparison.rightTone}`}>
           <div className="trade-clear-side-label">
             <span>{partnerAbbr || "THEY"}</span>
-            <strong>TV {comparison.rightLabel}</strong>
+            <strong>Trade Value {comparison.rightLabel}</strong>
           </div>
           <div className="trade-clear-track">
             <div
@@ -3481,7 +3497,10 @@ function AssetDetailDrawer({
   franchiseState,
   tradeMarket,
   tradeHistory,
+  meta: detailMeta = null,
+  intelTeamId = "",
 }) {
+  const detailIntel = useAssetIntel(asset, intelTeamId || asset?.teamId);
   if (!asset) return null;
   const isPick = asset.type === "pick";
   const valueItem = { tradeValue: asset.tradeValue ?? asset.value_hint, valueTier: asset.valueTier };
@@ -3535,6 +3554,7 @@ function AssetDetailDrawer({
                   : `${asset.pos} · ${asset.age}Y${handLabel ? ` · ${handLabel}` : ""}`}
               </span>
             </div>
+            <TradeValueHero asset={asset} meta={detailMeta} intel={detailIntel} />
             <div className="trade-asset-hero-tiles">
               {!isPick && (
                 <div className="trade-asset-hero-tile tile-ovr">
@@ -5953,7 +5973,7 @@ function FinderOfferCard({ offer, team, onLoad }) {
           ) : (
             <span className="th-offer-rating is-val">
               <b className="th-num">{Number(a.value).toFixed(0)}</b>
-              <i>VAL</i>
+              <i>Trade Value</i>
             </span>
           )}
         </li>
@@ -6004,7 +6024,7 @@ function FinderOfferCard({ offer, team, onLoad }) {
   );
 }
 
-function TradeFinder({ meta, partnerId, onLoadOffer }) {
+function TradeFinder({ meta, partnerId, onLoadOffer, tradeHistory = [], onOpenTalks }) {
   const [mode, setMode] = useState("sell");
   const [kind, setKind] = useState("player");
   const [targetTeam, setTargetTeam] = useState(partnerId || "");
@@ -6077,6 +6097,11 @@ function TradeFinder({ meta, partnerId, onLoadOffer }) {
 
   const offers = safeArray(result?.offers);
   const near = safeArray(result?.near_misses);
+  const selectedFinderAsset = assetId
+    ? list.find((a) => String(a.id || a.pick_id) === String(assetId)) ||
+      (kind === "player" ? players : picks).find((a) => String(a.id || a.pick_id) === String(assetId)) ||
+      null
+    : null;
 
   return (
     <div className="th-tfinder">
@@ -6161,12 +6186,39 @@ function TradeFinder({ meta, partnerId, onLoadOffer }) {
         <p className="th-section-meta">
           Every offer below was run through the partner GM's real trade evaluation. They accept it as-is right now.
         </p>
-        {status === "idle" && !result && (
+        {status === "idle" && !result && !selectedFinderAsset && (
           <div className="th-tfinder-empty">
             <strong>{mode === "sell" ? "Shop a player or pick to the whole league." : "Pick a target and we'll price it from your organization."}</strong>
             <span>Offers respect cap room, roster limits, clauses, and each GM's needs and direction.</span>
           </div>
         )}
+        <div className="twr-finder-intel">
+          {selectedFinderAsset ? (
+            <AssetIntelPanel
+              asset={selectedFinderAsset}
+              teamId={sourceTid}
+              meta={meta}
+              tradeHistory={tradeHistory}
+              renderLogo={renderTradeLogo}
+              onOpenTalks={onOpenTalks}
+              title={mode === "sell" ? "Who wants him" : "Target intel"}
+            />
+          ) : mode === "sell" ? (
+            <MarketableAssets
+              meta={meta}
+              teamId={meta?.userTeamId}
+              onPick={(p) => { setKind("player"); setAssetId(String(p.id)); setResult(null); setStatus("idle"); }}
+            />
+          ) : null}
+          {!selectedFinderAsset ? (
+            <MarketIntelPanel meta={meta} tradeHistory={tradeHistory} renderLogo={renderTradeLogo} onOpenTalks={onOpenTalks} />
+          ) : null}
+        </div>
+        {result && Number(result.filtered_illegal) > 0 ? (
+          <p className="th-section-meta twr-filtered-note">
+            {result.filtered_illegal} impossible package{Number(result.filtered_illegal) === 1 ? " was" : "s were"} hidden (cap, roster or contract limits).
+          </p>
+        ) : null}
         {status === "loading" && <div className="th-tfinder-empty"><strong>Calling around the league…</strong></div>}
         {status === "error" && <div className="th-tfinder-empty is-error"><strong>{error}</strong></div>}
         {result?.note && <div className="th-tfinder-empty"><strong>{result.note}</strong></div>}
@@ -7345,21 +7397,21 @@ export default function TradeHub() {
       safeArray(userOutgoing).length > 0 &&
       safeArray(partnerOutgoing).length > 0;
     if (protectedConflict.length > 0) {
-      return `${partnerTeam?.abbr || "Partner"} will not trade ${playerLastName(protectedConflict[0])}.`;
+      return `${partnerTeam?.abbr || "Partner"} will not trade ${playerLastName(protectedConflict[0])}. Fix: remove him from your ask.`;
     }
     if (!pickOnly && Number.isFinite(partnerAfterCap) && partnerAfterCap < -0.05) {
-      return `${partnerTeam?.abbr || "Partner"} would be −${formatMoneyShort(Math.abs(partnerAfterCap))} under the cap.`;
+      return `${partnerTeam?.abbr || "Partner"} would be ${formatMoneyShort(Math.abs(partnerAfterCap))} over the salary cap. Fix: take salary back from them, retain salary on a player you send, or swap in a cheaper contract.`;
     }
     if (!pickOnly && Number.isFinite(userAfterCap) && userAfterCap < -0.05) {
-      return `You would be −${formatMoneyShort(Math.abs(userAfterCap))} under the cap.`;
+      return `Would put you ${formatMoneyShort(Math.abs(userAfterCap))} over the salary cap. Fix: send back at least ${formatMoneyShort(Math.abs(userAfterCap))} in cap hit, ask them to retain salary, or remove an incoming contract.`;
     }
     // The NHL 23-man limit is not a trade blocker: overflow is assigned to the AHL as
     // part of the deal. The organizational limit that matters is 50 contracts (below).
     if (!pickOnly && partnerSlotsAfter && partnerSlotsAfter.used > partnerSlotsAfter.limit) {
-      return `${partnerTeam?.abbr || "Partner"} would exceed 50 SPCs (${partnerSlotsAfter.used}/50).`;
+      return `${partnerTeam?.abbr || "Partner"} would exceed the 50-contract limit (${partnerSlotsAfter.used}/50). Fix: ask for one more of their contracts back or send a pick instead of a player.`;
     }
     if (!pickOnly && userSlotsAfter && userSlotsAfter.used > userSlotsAfter.limit) {
-      return `You would exceed 50 SPCs (${userSlotsAfter.used}/50).`;
+      return `Would exceed your 50-contract limit (${userSlotsAfter.used}/50). Fix: add one of your NHL contracts to the deal or remove an incoming contract.`;
     }
     if (evaluation?.can_execute === false && hasProposed) {
       const detail = evaluation?.trade_review?.block_detail || evaluation?.block_detail;
@@ -7392,8 +7444,18 @@ export default function TradeHub() {
 
   const proposeHoverReason =
     hardIllegalReason ||
-    (!bothSidesHaveAssets
-      ? "Add assets to both packages before proposing."
+    (!partnerId
+      ? "No trade partner selected. Fix: pick a club from the partner menu."
+      : submitting
+        ? "Waiting for their GM's answer…"
+        : !bothSidesHaveAssets
+      ? userOutgoing.length === 0 && partnerOutgoing.length === 0
+        ? "Nothing on the table. Fix: add at least one asset you send and one you receive."
+        : userOutgoing.length === 0
+          ? "You aren't sending anything. Fix: use + Add Asset under Assets You Send."
+          : "You aren't asking for anything. Fix: use + Add Asset under Assets You Receive."
+      : !assetsPayload
+        ? "Package could not be built. Fix: remove and re-add the last asset."
       : softProtectedConflict.length
         ? `${playerLastName(softProtectedConflict[0])} is core — partner may reject.`
         : "");
@@ -7744,6 +7806,64 @@ export default function TradeHub() {
   };
 
   const leftPadded = padSlots(leftAssets);
+  const deskValues = hasProposed && evaluation
+    ? packageValuesFromEvaluation(evaluation, userOutgoing, partnerOutgoing)
+    : {
+      userGive: Math.round(packageDisplayValue(userOutgoing) * 10) / 10,
+      partnerGive: Math.round(packageDisplayValue(partnerOutgoing) * 10) / 10,
+    };
+  const deskFocusAsset =
+    selectedAsset || partnerOutgoing[partnerOutgoing.length - 1] || userOutgoing[userOutgoing.length - 1] || null;
+  const deskFocusTeamId = selectedAsset
+    ? selectedAssetTeamId
+    : deskFocusAsset?.teamId || (partnerOutgoing.length ? partnerId : meta?.userTeamId);
+  const dropIntoPackage = (e, side, teamId) => {
+    const current = side === "left" ? leftAssets : rightAssets;
+    const payload = parseDragPayload(e);
+    // Re-dropping a card already in this list keeps its place.
+    if (payload?.source === "slot" && payload?.side === side) {
+      e.preventDefault();
+      return;
+    }
+    const idx = current.findIndex((a) => !a);
+    if (idx < 0) {
+      e.preventDefault();
+      setToast("PACKAGE FULL");
+      setTimeout(() => setToast(""), 1800);
+      return;
+    }
+    handleDropOnSlot(e, side, idx, teamId);
+  };
+  const applyCounterSuggestion = (sugg) => {
+    const uid = String(meta?.userTeamId || "");
+    const pool = [
+      ...safeArray(meta?.players?.[uid]),
+      ...safeArray(meta?.affiliates?.[uid]),
+      ...safeArray(meta?.picks?.[uid]),
+    ];
+    const adds = safeArray(sugg?.add)
+      .map((a) => pool.find((p) => (a.type === "pick") === (p.type === "pick") && String(p.type === "pick" ? p.pick_id || p.id : p.id) === String(a.id)))
+      .filter(Boolean)
+      .map((item) => prepareAssetForSide(item, "left", uid))
+      .filter(Boolean);
+    if (adds.length) {
+      setLeftAssets((prev) => {
+        const next = [...prev];
+        adds.forEach((item) => {
+          if (next.some((x) => x && x.type === item.type && String(x.id) === String(item.id))) return;
+          const idx = next.findIndex((x) => !x);
+          if (idx >= 0) next[idx] = item;
+        });
+        return next;
+      });
+    }
+    const drops = safeArray(sugg?.drop).map((a) => String(a.id));
+    if (drops.length) {
+      setRightAssets((prev) => prev.map((x) => (x && drops.includes(String(x.id)) ? null : x)));
+    }
+    setToast(adds.length || drops.length ? "COUNTER APPLIED — PROPOSE AGAIN" : "ASSET NO LONGER AVAILABLE");
+    setTimeout(() => setToast(""), 1800);
+  };
   const rightPadded = padSlots(rightAssets);
 
   const slotDragProps = (side, slotIndex, teamId) => ({
@@ -7816,7 +7936,7 @@ export default function TradeHub() {
 
       {hubView === "finder" ? (
         <main className="trade-hub-main th-market-main">
-          <TradeFinder meta={meta} partnerId={partnerId} onLoadOffer={loadFinderOffer} />
+          <TradeFinder meta={meta} partnerId={partnerId} onLoadOffer={loadFinderOffer} tradeHistory={tradeHistory} onOpenTalks={openTalks} />
         </main>
       ) : hubView === "needs" ? (
         <main className="trade-hub-main th-market-main">
@@ -7833,14 +7953,23 @@ export default function TradeHub() {
         </main>
       ) : hubView === "market" || !partnerId ? (
         <main className="trade-hub-main th-market-main">
-          <MarketBoard
-            teams={meta.teams}
-            userTeamId={meta.userTeamId}
-            partnerId={partnerId}
-            tradeMarket={tradeMarket}
-            needsIndex={needsIndex}
-            onOpenTalks={openTalks}
-          />
+          <div className="twr-market-wrap">
+            <MarketBoard
+              teams={meta.teams}
+              userTeamId={meta.userTeamId}
+              partnerId={partnerId}
+              tradeMarket={tradeMarket}
+              needsIndex={needsIndex}
+              onOpenTalks={openTalks}
+            />
+            <MarketIntelPanel
+              meta={meta}
+              tradeHistory={tradeHistory}
+              tradeMarket={tradeMarket}
+              renderLogo={renderTradeLogo}
+              onOpenTalks={openTalks}
+            />
+          </div>
         </main>
       ) : (
         <main className="trade-hub-main trade-hub-war-room-layout th-deal-layout">
@@ -7872,71 +8001,79 @@ export default function TradeHub() {
           />
 
           <section className="trade-hub-centre trade-hub-centre-focus th-deal-table">
-            <div className="trade-construction-grid">
-              <div className="trade-package-col">
-                <div className="trade-package-header">
-                  <TradeLogo team={userTeam} size={44} />
-                  <div className="trade-package-header-main">
-                    <span>You send</span>
-                    <small>{userOutgoing.length} of {SLOTS}</small>
+            <div className="trade-construction-grid twr-construction">
+              <PackageList
+                title="Assets You Send"
+                side="left"
+                team={userTeam}
+                slots={leftPadded}
+                maxSlots={SLOTS}
+                totalValue={deskValues.userGive}
+                renderLogo={renderTradeLogo}
+                emptyHint="Drag a player or pick here, or use + Add Asset."
+                onAdd={() => setTeamPlayersMenu({ teamId: meta.userTeamId, side: "left" })}
+                onDropAsset={(e) => dropIntoPackage(e, "left", meta.userTeamId)}
+                renderAsset={(asset, i) => (
+                  <div className="twr-pkg-card" onClick={() => handleAssetClick(asset, "left", meta.userTeamId)}>
+                    <AssetCard
+                      asset={asset}
+                      side="left"
+                      slotIndex={i}
+                      accentHue={userTeam.hue}
+                      onRemove={(e) => { e?.stopPropagation?.(); removeFromSide("left", i); }}
+                      onRetained={asset?.type === "player" ? () => setRetMenu({ side: "left", slot: i }) : undefined}
+                      onDragStart={(e) => handleDragStart(e, asset, "slot", "left", i, meta.userTeamId)}
+                    />
+                    <span className="twr-pkg-tv">Trade Value <b>{assetValueNumber(asset)}</b></span>
                   </div>
-                </div>
-                {leftPadded.map((asset, i) => (
-                  <TradeSlot
-                    key={`L-${i}`}
-                    slotIndex={i}
-                    asset={asset}
-                    side="left"
-                    teamId={meta.userTeamId}
-                    accentHue={userTeam.hue}
-                    onRemove={() => removeFromSide("left", i)}
-                    onRetained={asset?.type === "player" ? () => setRetMenu({ side: "left", slot: i }) : undefined}
-                    {...slotDragProps("left", i, meta.userTeamId)}
-                  />
-                ))}
-              </div>
+                )}
+              />
 
-              <div className="trade-package-divider">
+              <div className="trade-package-divider twr-divider">
                 <span>⇄</span>
               </div>
 
-              <div className="trade-package-col">
-                <div className="trade-package-header">
-                  <TradeLogo team={partnerTeam} size={44} />
-                  <div className="trade-package-header-main">
-                    <span>{partnerTeam?.abbr || "Partner"} sends</span>
-                    <small>{partnerOutgoing.length} of {SLOTS}</small>
+              <PackageList
+                title="Assets You Receive"
+                side="right"
+                team={partnerTeam}
+                slots={rightPadded}
+                maxSlots={SLOTS}
+                totalValue={deskValues.partnerGive}
+                renderLogo={renderTradeLogo}
+                emptyHint={`Pick what you want from ${partnerTeam?.abbr || "their"} roster.`}
+                onAdd={() => setTeamPlayersMenu({ teamId: partnerId, side: "right" })}
+                onDropAsset={(e) => dropIntoPackage(e, "right", partnerId)}
+                renderAsset={(asset, i) => (
+                  <div className="twr-pkg-card" onClick={() => handleAssetClick(asset, "right", partnerId)}>
+                    <AssetCard
+                      asset={asset}
+                      side="right"
+                      slotIndex={i}
+                      accentHue={partnerTeam?.hue || 200}
+                      protectedWarning={protectedWarningForAsset(asset)}
+                      onRemove={(e) => { e?.stopPropagation?.(); removeFromSide("right", i); }}
+                      onRetained={asset?.type === "player" ? () => setRetMenu({ side: "right", slot: i }) : undefined}
+                      onDragStart={(e) => handleDragStart(e, asset, "slot", "right", i, partnerId)}
+                    />
+                    <span className="twr-pkg-tv">Trade Value <b>{assetValueNumber(asset)}</b></span>
                   </div>
-                </div>
-                {rightPadded.map((asset, i) => (
-                  <TradeSlot
-                    key={`R-${i}`}
-                    slotIndex={i}
-                    asset={asset}
-                    side="right"
-                    teamId={partnerId}
-                    accentHue={partnerTeam?.hue || 200}
-                    protectedWarning={protectedWarningForAsset(asset)}
-                    onRemove={() => removeFromSide("right", i)}
-                    onRetained={asset?.type === "player" ? () => setRetMenu({ side: "right", slot: i }) : undefined}
-                    {...slotDragProps("right", i, partnerId)}
-                  />
-                ))}
-              </div>
+                )}
+              />
             </div>
 
             <div className="trade-hub-centre-foot">
-            <DynamicTradeAnalysis
-              partnerAbbr={partnerTeam?.abbr}
-              hasProposed={hasProposed}
-              evaluation={hasProposed ? evaluation : null}
+            <TradeAnalysisBoard
+              userGive={deskValues.userGive}
+              partnerGive={deskValues.partnerGive}
               userOutgoing={userOutgoing}
               partnerOutgoing={partnerOutgoing}
-              fanMeter={fanMeter}
+              partnerAbbr={partnerTeam?.abbr}
               fanData={fanMeter}
+              userAfterCap={userAfterCap}
+              evaluation={hasProposed ? evaluation : null}
+              hasProposed={hasProposed}
               onReviewClick={() => setSelectedTradeReview(true)}
-              userTeamId={meta?.userTeamId || ""}
-              partnerId={partnerId || ""}
             />
 
             {tradeRumorGroups.length ? (
@@ -7985,6 +8122,36 @@ export default function TradeHub() {
                   </div>
                 ) : null}
               </div>
+              {proposeDisabled && proposeHoverReason ? (() => {
+                const [why, fix] = String(proposeHoverReason).split(/\s*Fix:\s*/);
+                return (
+                  <p className="twr-propose-why" role="status">
+                    <strong>Can&apos;t propose yet:</strong> {why}
+                    {fix ? <span className="twr-propose-fix">How to fix: {fix}</span> : null}
+                  </p>
+                );
+              })() : null}
+            </div>
+
+            <div className="twr-desk-intel">
+              <GmNegotiationPanel
+                evaluation={hasProposed ? evaluation : null}
+                hasProposed={hasProposed}
+                partnerTeam={partnerTeam}
+                partnerId={partnerId}
+                assetsPayload={assetsPayload}
+                onApplySuggestion={applyCounterSuggestion}
+                renderLogo={renderTradeLogo}
+              />
+              <AssetIntelPanel
+                asset={deskFocusAsset}
+                teamId={deskFocusTeamId}
+                meta={meta}
+                tradeHistory={tradeHistory}
+                renderLogo={renderTradeLogo}
+                onOpenTalks={(tid) => { if (String(tid) !== String(partnerId)) openTalks(tid); }}
+                emptyText="Add or click an asset to see its Trade Value, who is calling, and comparable deals."
+              />
             </div>
 
             {shortReason && submitStatus !== "accepted" && !(decisionToast?.modal) && (
@@ -8178,6 +8345,8 @@ export default function TradeHub() {
           franchiseState={franchiseState}
           tradeMarket={tradeMarket}
           tradeHistory={tradeHistory}
+          meta={meta}
+          intelTeamId={selectedAssetTeamId || detailAsset?.teamId}
         />
       )}
 

@@ -13796,6 +13796,12 @@ def build_free_agent_detail(session: Any, player_id: str) -> Dict[str, Any]:
 
     detail = _build_free_agent_row(player, season_year, session, detail=True)
     detail = _attach_free_agent_stats_central(session, player, detail)
+    try:
+        from services.fa_player_analytics import attach_fa_analytics  # D7: stats + analytics panel
+
+        detail = attach_fa_analytics(session, player, detail)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     cap_space = None
     open_slots = None
     if user_team is not None:

@@ -2584,7 +2584,11 @@ def store_compact_box_score(session: Any, box: Dict[str, Any], lines: Optional[D
     hs = int(box.get("home_sog", box.get("home_shots", 0)) or 0)
     as_ = int(box.get("away_sog", box.get("away_shots", 0)) or 0)
     goals: List[List[Any]] = []
-    for lg in list(box.get("light_goals") or []):
+    # Light sims return the same goal list as both ``light_goals`` and ``scoring_events``;
+    # read only one of them so every goal is stored once.
+    _sev = [ev for ev in list(box.get("scoring_events") or []) if isinstance(ev, dict)]
+    _timed = any(int(ev.get("period") or 0) > 0 for ev in _sev)
+    for lg in ([] if _timed else list(box.get("light_goals") or _sev)):
         if not isinstance(lg, dict):
             continue
         goals.append([
@@ -2596,8 +2600,8 @@ def store_compact_box_score(session: Any, box: Dict[str, Any], lines: Optional[D
             str(lg.get("strength") or "EV"),
             1 if lg.get("empty_net") else 0,
         ])
-    for ev in list(box.get("scoring_events") or []):
-        if not isinstance(ev, dict):
+    for ev in (_sev if _timed else []):
+        if not str(ev.get("scorer_id") or "").strip():
             continue
         goals.append([
             int(ev.get("period") or 0),
@@ -2616,6 +2620,9 @@ def store_compact_box_score(session: Any, box: Dict[str, Any], lines: Optional[D
             row = ledger.get(pid) or {}
             people[pid] = [str(row.get("name") or "Player"), str(row.get("position") or "")]
     scope = str(box.get("stat_scope") or "regular_season")
+    if goals and lines and not any(int(gl[0] or 0) > 0 for gl in goals):
+        # Untimed light goals: rebuild a timed timeline from the same ledger deltas.
+        goals = []
     if not goals and lines and (hg or ag):
         goals = _box_light_timeline(
             gid, hid, aid, hp, ap, lines, str(box.get("first_goal_team_id") or ""),
@@ -2753,6 +2760,8 @@ def expand_box_score(session: Any, compact: Dict[str, Any]) -> Dict[str, Any]:
             "hit": int(d["hit"] or 0), "blk": int(d["blk"] or 0),
             "ppg": int(d["ppg"] or 0), "shg": int(d["shg"] or 0),
             "cf_pct": round(cf / (cf + ca), 3) if (cf + ca) > 0 else None,
+            "cf": int(round(cf)), "ca": int(round(ca)),
+            "ppp": int(d["ppg"] or 0) + int(d.get("ppa") or 0), "shp": int(d["shg"] or 0) + int(d.get("sha") or 0),
             "ixg": round(float(d.get("ixg") or 0), 2),
             "fow": fow, "fol": fol, "fo_pct": round(fow / (fow + fol), 3) if (fow + fol) else None,
             "tk": int(d.get("tk") or 0), "gv": int(d.get("gv") or 0),
@@ -2765,7 +2774,23 @@ def expand_box_score(session: Any, compact: Dict[str, Any]) -> Dict[str, Any]:
     gwg_tid = (hid if hg > ag else aid) if (hg != ag and not compact.get("so")) else ""
     gwg_n = min(hg, ag) + 1
     goal_tags = compact.get("goal_tags") or {}
-    for gi, (per, clock, tid, scorer, assists, strength, en) in enumerate(compact.get("goals") or []):
+    # Older boxes stored light-sim goals twice and could carry rows without a scorer.
+    # Keep only real goals: one per (team, scorer, assists) when an untimed copy repeats,
+    # and never more than a team actually scored.
+    _raw_goals = [g for g in (compact.get("goals") or []) if isinstance(g, (list, tuple)) and len(g) >= 7]
+    _raw_goals = [g for g in _raw_goals if str(g[3] or "").strip() and str(g[2] or "") in (hid, aid)]
+    if any(int(g[0] or 0) > 0 for g in _raw_goals):
+        _raw_goals = [g for g in _raw_goals if int(g[0] or 0) > 0]
+    _cap = {hid: phg, aid: pag}
+    _seen_n = {hid: 0, aid: 0}
+    _clean_goals = []
+    for g in _raw_goals:
+        t = str(g[2] or "")
+        if _seen_n[t] >= max(0, int(_cap.get(t) or 0)):
+            continue
+        _seen_n[t] += 1
+        _clean_goals.append(g)
+    for gi, (per, clock, tid, scorer, assists, strength, en) in enumerate(_clean_goals):
         if tid == hid:
             run_h += 1
         else:
@@ -2775,7 +2800,8 @@ def expand_box_score(session: Any, compact: Dict[str, Any]) -> Dict[str, Any]:
             "period": per, "clock": clock, "team_id": tid,
             "scorer": {"id": scorer, "name": _nm(scorer)},
             "assists": [{"id": a, "name": _nm(a)} for a in assists],
-            "strength": strength, "empty_net": bool(en), "overtime": int(per or 0) >= 4,
+            "strength": ("EV" if str(strength or "").upper() == "OT" else strength),
+            "empty_net": bool(en), "overtime": int(per or 0) >= 4 or str(strength or "").upper() == "OT",
             "gwg": is_gwg, "score": f"{run_a}-{run_h}",
             # Goofy tag: fluke_ref_skate / fluke_broken_stick / fluke_boards / goalie_goal / penalty_shot
             "tag": str(goal_tags.get(str(gi)) or ""),
@@ -2855,7 +2881,41 @@ def expand_box_score(session: Any, compact: Dict[str, Any]) -> Dict[str, Any]:
         # Goofy on-ice moments (hat-trick rain, mascot race, brawl, EBUG, ...).
         "fun_events": list(compact.get("fun") or []),
         "user_team_id": str(getattr(session, "user_team_id", "") or ""),
+        # Portrait identity (NHL photo / generated face traits) for stars, scorers and goalies.
+        "portraits": _box_portraits(
+            team_by_id,
+            (hid, aid),
+            [str(r.get("player_id") or "") for r in star_rows]
+            + [str((g.get("scorer") or {}).get("id") or "") for g in goals_out]
+            + [str(r.get("player_id") or "") for side in ("home", "away") for r in goalies[side]],
+        ),
     }
+
+
+def _box_portraits(team_by_id: Dict[str, Any], team_ids: Any, pids: List[str]) -> Dict[str, Dict[str, Any]]:
+    """Headshot fields for the players a box score shows with a face (best effort)."""
+    wanted = {p for p in pids if p}
+    out: Dict[str, Dict[str, Any]] = {}
+    if not wanted:
+        return out
+    try:
+        from app.sim_engine.generation.player_headshots import headshot_fields_from_player
+    except Exception:
+        return out
+    for tid in team_ids:
+        tm = team_by_id.get(str(tid))
+        if tm is None:
+            continue
+        for p in list(getattr(tm, "roster", None) or []):
+            pid = str(getattr(p, "id", "") or "")
+            if pid in wanted and pid not in out:
+                try:
+                    fields = headshot_fields_from_player(p)
+                    fields["position"] = str(getattr(p, "position", "") or "")
+                    out[pid] = {k: v for k, v in fields.items() if v not in (None, "", 0)}
+                except Exception:
+                    continue
+    return out
 
 
 def get_box_score_payload(session: Any, game_id: str) -> Optional[Dict[str, Any]]:

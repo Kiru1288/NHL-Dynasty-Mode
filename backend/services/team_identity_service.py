@@ -58,7 +58,22 @@ def _roster_signature(session: Any, teams: List[Any]) -> str:
             if p is not None
         )
         h.update("|".join(ids).encode())
+    # On-ice stats feed the identity too: refresh every ~2 league game days.
+    h.update(str(len(getattr(session, "game_results", None) or []) // 32).encode())
     return h.hexdigest()
+
+
+def _play_rows(session: Any) -> Dict[str, Dict[str, Any]]:
+    """Season team analytics (shots, CF, xG, hits, GF/GA) keyed by team id."""
+    if len(getattr(session, "game_results", None) or []) < 32 * 5:
+        return {}
+    try:
+        from services.franchise_sim import _build_team_analytics_rows
+
+        return {str(r.get("team_id")): r for r in _build_team_analytics_rows(session) if isinstance(r, dict)}
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+        return {}
 
 
 def _draft_identities(session: Any, teams: List[Any]) -> Dict[str, Dict[str, Any]]:
@@ -101,6 +116,7 @@ def refresh_team_identities(session: Any, *, force: bool = False) -> Dict[str, D
             prev_scores=anchor,
             draft_identities=_draft_identities(session, teams),
             momentum=0.65 if anchor else 0.0,
+            play_rows=_play_rows(session),
         )
     except Exception:
         log.exception("team identity refresh failed")
@@ -114,6 +130,12 @@ def refresh_team_identities(session: Any, *, force: bool = False) -> Dict[str, D
         ident["is_user"] = _tid(t) == user_tid
         ident["team_name"] = str(getattr(t, "name", "") or "")
         ident["abbreviation"] = str(getattr(t, "abbreviation", None) or getattr(t, "abbrev", "") or "")
+        try:
+            from app.sim_engine.team_dev_personality import dev_personality_payload
+
+            ident["dev_personality"] = dev_personality_payload(t)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         try:
             setattr(t, "team_identity", ident)
         except Exception:
@@ -131,7 +153,7 @@ def team_identity_for(session: Any, team_id: Any) -> Optional[Dict[str, Any]]:
 def _public(ident: Dict[str, Any]) -> Dict[str, Any]:
     keep = (
         "team_id", "team_name", "abbreviation", "is_user", "label", "primary", "secondary", "traits",
-        "strength", "profile_pct", "avg_age", "star", "target_labels", "drivers",
+        "strength", "profile_pct", "avg_age", "star", "target_labels", "drivers", "dev_personality", "why",
     )
     return {k: ident.get(k) for k in keep}
 

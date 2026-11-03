@@ -237,7 +237,8 @@ def waiver_wire_payload(session: Any) -> Dict[str, Any]:
                 continue
             rows.append({k: v for k, v in e.items() if k != "player_ref"})
     rows.sort(key=lambda r: -int(r.get("overall") or 0))
-    return {"ok": True, "wire": rows, "today": _cursor(session)}
+    results = list(getattr(session, "waiver_claim_results", None) or [])[:10]
+    return {"ok": True, "wire": rows, "today": _cursor(session), "claim_results": results}
 
 
 def _claim_room(team: Any, league: Any, entry: Dict[str, Any], cache: Optional[Dict[str, Any]] = None) -> bool:
@@ -299,12 +300,21 @@ def _resolve_entry(session: Any, entry: Dict[str, Any], cache: Optional[Dict[str
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
     winner = None
+    user_invalid = ""
+    user_team_obj = teams.get(user_tid)
     for team in order:
         tid = _tid(team)
         if tid == user_tid:
-            if entry.get("user_claim") and _claim_room(team, league, entry, cache):
-                winner = team
-                break
+            if entry.get("user_claim"):
+                if _claim_room(team, league, entry, cache):
+                    winner = team
+                    break
+                try:
+                    from services.waiver_outcomes import claim_invalid_reason
+
+                    user_invalid = claim_invalid_reason(team, league, entry) or "no cap space or contract slot"
+                except Exception:
+                    user_invalid = "no cap space or contract slot"
             continue
         try:
             row = cache.get(tid) if cache is not None else None
@@ -330,21 +340,31 @@ def _resolve_entry(session: Any, entry: Dict[str, Any], cache: Optional[Dict[str
             cache.pop(str(entry.get("original_team_id") or ""), None)
         entry["claimed_by"] = _tid(winner)
         entry["waiver_status"] = "claimed"
-        try:
-            from app.sim_engine.trades.roster_balance import auto_send_down_overflow
+        from services import waiver_outcomes as _wo
 
-            auto_send_down_overflow(winner, protect_ids=[str(entry.get("player_id"))])
-        except Exception:
-            _swallowed_log.debug("suppressed exception", exc_info=True)
-        sync_team_cap_fields(winner, league)
+        user_prio = _wo.priority_of(order, user_team_obj) if user_team_obj is not None else None
+        win_prio = _wo.priority_of(order, winner)
+        assignment = None
         if _tid(winner) == user_tid:
-            _popup(session, f"waiver_won:{entry['player_id']}", {
-                "kind": "breaking_news", "source_label": "Waiver Wire", "theme": "positive",
-                "headline": f"Claim awarded: {name} joins your club",
-                "summary": f"You won the waiver claim on {name} from {entry.get('original_team_name')}. He's on your NHL roster.",
-                "actions": [{"id": "roster", "label": "Open roster", "primary": True}],
-                **portrait,
-            })
+            # D6: follow roster rules instead of silently overloading the NHL roster.
+            try:
+                assignment = _wo.place_user_claim(session, winner, player, league)
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+        else:
+            try:
+                from app.sim_engine.trades.roster_balance import auto_send_down_overflow
+
+                auto_send_down_overflow(winner, protect_ids=[str(entry.get("player_id"))])
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+        sync_team_cap_fields(winner, league)
+        entry["claim_priority"] = win_prio
+        if _tid(winner) == user_tid:
+            res = _wo.build_result(session, entry, success=True, user_priority=user_prio, winner=winner,
+                                   winner_priority=win_prio, assignment=assignment)
+            _wo.record_result(session, res)
+            _popup(session, f"waiver_won:{entry['player_id']}:{_cursor(session)}", _wo.popup_payload(res, portrait))
         elif str(entry.get("original_team_id")) == user_tid:
             _popup(session, f"waiver_lost:{entry['player_id']}", {
                 "kind": "breaking_news", "source_label": "Waiver Wire", "theme": "warning",
@@ -353,12 +373,10 @@ def _resolve_entry(session: Any, entry: Dict[str, Any], cache: Optional[Dict[str
                 **portrait,
             })
         elif entry.get("user_claim"):
-            _popup(session, f"waiver_beat:{entry['player_id']}", {
-                "kind": "breaking_news", "source_label": "Waiver Wire", "theme": "info",
-                "headline": f"{_team_name(winner)} had priority on {name}",
-                "summary": "A club lower in the standings put in a claim and had first dibs.",
-                **portrait,
-            })
+            res = _wo.build_result(session, entry, success=False, user_priority=user_prio, winner=winner,
+                                   winner_priority=win_prio, invalid_reason=user_invalid)
+            _wo.record_result(session, res)
+            _popup(session, f"waiver_beat:{entry['player_id']}:{_cursor(session)}", _wo.popup_payload(res, portrait))
         return
 
     # Cleared: report to the original club's AHL affiliate.
@@ -389,12 +407,13 @@ def _resolve_entry(session: Any, entry: Dict[str, Any], cache: Optional[Dict[str
             **portrait,
         })
     elif entry.get("user_claim"):
-        _popup(session, f"waiver_noroom:{entry['player_id']}", {
-            "kind": "breaking_news", "source_label": "Waiver Wire", "theme": "warning",
-            "headline": f"Your claim on {name} didn't go through",
-            "summary": "You need cap space and an open contract slot when the window closes.",
-            **portrait,
-        })
+        from services import waiver_outcomes as _wo
+
+        user_prio = _wo.priority_of(order, user_team_obj) if user_team_obj is not None else None
+        res = _wo.build_result(session, entry, success=False, user_priority=user_prio,
+                               invalid_reason=user_invalid or "no cap space or contract slot")
+        _wo.record_result(session, res)
+        _popup(session, f"waiver_noroom:{entry['player_id']}:{_cursor(session)}", _wo.popup_payload(res, portrait))
 
 
 def _cpu_waiver_moves(session: Any, rng: random.Random) -> int:

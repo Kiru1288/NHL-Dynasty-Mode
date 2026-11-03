@@ -60,6 +60,24 @@ export function TeamIdentityCard({ identity }) {
         {identity.secondary?.label ? <span>+ {identity.secondary.label}</span> : null}
       </div>
       {identity.primary?.blurb ? <p className="tid-card-blurb">{identity.primary.blurb}</p> : null}
+      {Array.isArray(identity.why?.on_ice) && identity.why.on_ice.length ? (
+        <div className="tid-why">
+          <p className="tid-card-line">
+            <span>Why</span> how they have played ({identity.why.games} GP)
+          </p>
+          <ul>
+            {identity.why.on_ice.map((w) => (
+              <li key={w.metric} className={w.supports ? "is-for" : "is-against"}>
+                <b>{w.label}</b> {w.display} <em>({w.rank_text || `#${w.rank} of ${w.of}`}, avg {w.league_avg})</em>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : Array.isArray(identity.why?.roster) && identity.why.roster.length ? (
+        <p className="tid-card-line">
+          <span>Why</span> roster read: {identity.why.roster.slice(0, 3).join(" · ")}
+        </p>
+      ) : null}
       <div className="tid-bars">
         {PROFILE_ROWS.map(([key, label]) => {
           const v = Math.max(0, Math.min(100, Number(pct[key] ?? 50)));
@@ -88,6 +106,11 @@ export function TeamIdentityCard({ identity }) {
       {Array.isArray(identity.traits) && identity.traits.length ? (
         <p className="tid-card-line">
           <span>Traits</span> {identity.traits.join(" · ")}
+        </p>
+      ) : null}
+      {identity.dev_personality?.label ? (
+        <p className={`tid-card-line tid-devp is-${String(identity.dev_personality.label).toLowerCase()}`}>
+          <span>Prospects</span> <b>{identity.dev_personality.label}</b> · {identity.dev_personality.blurb}
         </p>
       ) : null}
       <p className="tid-card-foot">League percentile vs. the other 31 clubs</p>

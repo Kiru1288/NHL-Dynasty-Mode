@@ -188,6 +188,20 @@ def prime_franchise_game_stat_modifiers(
 ) -> Dict[str, Any]:
     """Attach storyline/universe modifiers to the live SimEngine for one game."""
     context = build_franchise_game_stat_context(session, home_team_id, away_team_id, game_meta)
+    try:
+        # GM meeting directives (shoot more, play physical, ...) -> per-player stat levers.
+        from app.sim_engine.franchise.player_directives import merge_into_game_context  # noqa: WPS433
+
+        context = merge_into_game_context(session, context)
+    except Exception:
+        pass
+    try:
+        # Accepted roles (role_acceptance.py) run out on their own.
+        from app.sim_engine.franchise.role_acceptance import sweep_role_pacts  # noqa: WPS433
+
+        sweep_role_pacts(session)
+    except Exception:
+        pass
     home_mods = dict((context.get("home") or {}).get("player_modifiers") or {})
     away_mods = dict((context.get("away") or {}).get("player_modifiers") or {})
     fn = getattr(sim, "set_franchise_game_stat_modifiers", None)

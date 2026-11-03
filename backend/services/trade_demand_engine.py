@@ -2262,7 +2262,7 @@ def _enqueue_demand_surfaces(session: Any, row: Dict[str, Any], team: Any) -> No
                 "id": row.get("demand_id"),
                 "type": "trade_demand",
                 "headline": row.get("headline"),
-                "body": f"CRISIS {timer_label} · TV {row.get('value_before')} → {row.get('value_after')} · {dest_label}",
+                "body": f"CRISIS {timer_label} · Trade Value {row.get('value_before')} → {row.get('value_after')} · {dest_label}",
                 "priority": "CRITICAL",
                 "date": row.get("opened_iso") or "",
                 "team_id": tid,

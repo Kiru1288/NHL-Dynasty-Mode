@@ -42,6 +42,26 @@ CPU_TEAM_COOLDOWN_DEADLINE_WEEK = 2
 CPU_TEAM_FATIGUE_SCORE_PER_TRADE = 0.07  # plan-score penalty per trade the club made this season
 CPU_TEAM_FATIGUE_EXEMPT = ("panic_buy", "locker_room", "cap_dump")
 CPU_PLAYER_TRADES_2_SEASONS = 2  # a player moved twice in two seasons is off the CPU market
+# League-wide per-season budgets (season = the trade-history season key, summer included).
+# Swaps and surplus sales were ~35 of ~70 CPU trades a season (target 25-40 total); the
+# deadline-week sell-off kinds are trimmed lightly. All-in pushes, rentals, demands,
+# locker-room and cap-dump deals are not budgeted.
+CPU_SEASON_MOTIVE_CAPS = {
+    "hockey_swap": 3,
+    "surplus_sale": 3,
+    "depth_add": 2,
+    "upgrade_buy": 4,
+    "panic_buy": 3,
+    "seller_futures": 8,
+    "tank_selloff": 6,
+}
+# Before the deadline week, keep most of that budget back for the deadline.
+CPU_SEASON_MOTIVE_CAPS_EARLY = {
+    "hockey_swap": 2,
+    "surplus_sale": 2,
+    "seller_futures": 3,
+    "tank_selloff": 2,
+}
 
 # Motives produced by the needs matcher (+ demand path).
 PACKAGE_MOTIVES = (
@@ -1098,6 +1118,10 @@ def propose_and_execute_cpu_trades(
         partner_memory["season_pair_counts"] = {}
         partner_memory["season_team_trades"] = {}
         partner_memory["season_lopsided_losses"] = {}
+        partner_memory["season_motive_counts"] = {}
+        # Per-buyer panic budget is per season; it was never reset, so after a few
+        # seasons no club could ever go all-in again.
+        partner_memory["season_panic_buys"] = {}
         partner_memory["counts_season"] = _season_key
     season_pair_counts = partner_memory.get("season_pair_counts")
     if not isinstance(season_pair_counts, dict):
@@ -1743,6 +1767,15 @@ def propose_and_execute_cpu_trades(
             selloff_cap = 1  # sellers hold inventory for deadline day
         selloffs_done = 0
         panic_counts = partner_memory.setdefault("season_panic_buys", {})
+        season_motive_counts = partner_memory.setdefault("season_motive_counts", {})
+
+        def _motive_budget_spent(motive: str) -> bool:
+            cap = CPU_SEASON_MOTIVE_CAPS.get(motive)
+            if cap is None:
+                return False
+            if not (0 <= days_left_ctx <= 7) and not ctx.get("cpu_offseason_market"):
+                cap = min(cap, CPU_SEASON_MOTIVE_CAPS_EARLY.get(motive, cap))
+            return int(season_motive_counts.get(motive, 0) or 0) >= cap
         # GMs who just dealt with each other talk again quickly in the deadline crunch.
         pair_cooldown = 0 if days_left_ctx == 0 else (3 if 0 <= days_left_ctx <= 7 else CPU_PAIR_COOLDOWN_DAYS)
         for plan in plans:
@@ -1773,6 +1806,10 @@ def propose_and_execute_cpu_trades(
             if plan.motive == "panic_buy" and int(panic_counts.get(bid, 0) or 0) >= CPU_PANIC_BUYS_PER_SEASON:
                 _funnel(plan.motive, "panic_budget_spent")
                 continue
+            _mcap = CPU_SEASON_MOTIVE_CAPS.get(plan.motive)
+            if _motive_budget_spent(plan.motive):
+                _funnel(plan.motive, "season_motive_budget")
+                continue
             pk = tuple(sorted((sid, bid)))
             pair_mem_key = f"{pk[0]}|{pk[1]}"
             if int(season_pair_counts.get(pair_mem_key, 0) or 0) >= CPU_SEASON_PAIR_SOFT_CAP + (1 if days_left_ctx == 0 else 0):
@@ -1788,6 +1825,10 @@ def propose_and_execute_cpu_trades(
                 plan, league, assessments=assessments, ctx=ctx, tools=tools, used_players=used_players,
             ):
                 _funnel(plan.motive, plan.fail_reason or "no_package")
+                continue
+            # Packaging can relabel a swap as a surplus sale; check that budget too.
+            if _motive_budget_spent(plan.motive):
+                _funnel(plan.motive, "season_motive_budget")
                 continue
             # Only packages that reach the other GM's desk count against the pass budget.
             _funnel(plan.motive, "attempt")
@@ -1861,6 +1902,8 @@ def propose_and_execute_cpu_trades(
                     selloffs_done += 1
                 if plan.motive == "panic_buy":
                     panic_counts[bid] = int(panic_counts.get(bid, 0) or 0) + 1
+                if plan.motive in CPU_SEASON_MOTIVE_CAPS:
+                    season_motive_counts[plan.motive] = int(season_motive_counts.get(plan.motive, 0) or 0) + 1
                 used_pairs.add((sid, bid))
                 if plan.need_slot:
                     filled_needs.add((bid, plan.need_slot))

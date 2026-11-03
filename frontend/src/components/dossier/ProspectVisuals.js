@@ -13,6 +13,7 @@
 
 import React, { createContext, useContext } from "react";
 import { createPortal } from "react-dom";
+import { ArcadeScoreboard, GoalCards, PeriodStrip, ShotBattle, StatTugOfWar, ThreeStars } from "../boxscore/BoxScoreArcade";
 
 /* ------------------------------------------------------------------ */
 /* Class pool context (for percentiles)                                 */
@@ -661,6 +662,60 @@ function BoxSkaterTable({ rows, onOpenPlayer }) {
   );
 }
 
+/** Advanced per-skater sheet: deployment, possession, chance quality. */
+function BoxAdvancedTable({ rows }) {
+  if (!rows || !rows.length) return <p className="bxs-empty">No skater lines stored.</p>;
+  const sorted = [...rows].sort((a, b) => (b.toi_sec || 0) - (a.toi_sec || 0));
+  return (
+    <div className="bxs-table-wrap">
+      <table className="bxs-table bxs-adv">
+        <thead>
+          <tr>
+            <th className="bxs-l">Skater</th>
+            <th title="Total time on ice">TOI</th>
+            <th title="Even-strength time on ice">EV</th>
+            <th title="Power-play time on ice">PP</th>
+            <th title="Penalty-kill time on ice">SH</th>
+            <th title="Shot attempts for while on ice">CF</th>
+            <th title="Shot attempts against while on ice">CA</th>
+            <th title="Share of shot attempts while on ice">CF%</th>
+            <th title="Individual expected goals">ixG</th>
+            <th title="Goals above expected (G - ixG)">G-xG</th>
+            <th title="Shots on goal">SOG</th>
+            <th title="Faceoff win rate">FO%</th>
+            <th title="Power-play points">PPP</th>
+            <th title="Shorthanded points">SHP</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((r) => {
+            const ev = Math.max(0, (r.toi_sec || 0) - (r.pp_toi_sec || 0) - (r.pk_toi_sec || 0));
+            const gax = r.ixg != null ? Number(r.g || 0) - Number(r.ixg || 0) : null;
+            return (
+              <tr key={r.player_id}>
+                <td className="bxs-l">{r.name}<em>{r.pos}</em></td>
+                <td className="bxs-strong">{fmtClock(r.toi_sec)}</td>
+                <td>{fmtClock(ev)}</td>
+                <td>{r.pp_toi_sec ? fmtClock(r.pp_toi_sec) : "—"}</td>
+                <td>{r.pk_toi_sec ? fmtClock(r.pk_toi_sec) : "—"}</td>
+                <td>{r.cf ?? "—"}</td>
+                <td>{r.ca ?? "—"}</td>
+                <td className={r.cf_pct >= 0.55 ? "bxs-good" : r.cf_pct != null && r.cf_pct < 0.45 ? "bxs-bad" : ""}>{fmtPct(r.cf_pct, 0)}</td>
+                <td>{fmtNum(r.ixg, 2)}</td>
+                <td className={gax > 0.4 ? "bxs-good" : gax != null && gax < -0.4 ? "bxs-bad" : ""}>{gax == null ? "—" : `${gax > 0 ? "+" : ""}${gax.toFixed(2)}`}</td>
+                <td>{r.sog}</td>
+                <td>{r.fow + r.fol ? fmtPct(r.fo_pct, 0) : "—"}</td>
+                <td>{r.ppp ?? r.ppg ?? 0}</td>
+                <td>{r.shp ?? r.shg ?? 0}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function BoxGoalieTable({ rows }) {
   if (!rows || !rows.length) return null;
   return (
@@ -701,6 +756,7 @@ function BoxGoalieTable({ rows }) {
 /** Full box score sheet. Pass `box` directly or a `gameId` to fetch. */
 export function BoxScoreView({ box }) {
   const [side, setSide] = React.useState("away");
+  const [sheet, setSheet] = React.useState("basic");
   if (!box) return null;
   const { home, away } = box;
   const labels = box.period_labels || ["1st", "2nd", "3rd"];
@@ -722,127 +778,35 @@ export function BoxScoreView({ box }) {
     ["Giveaways", away.giveaways ?? "—", home.giveaways ?? "—"],
   ];
   const byPeriod = {};
-  (box.goals || []).forEach((g) => {
+  // Scoring summary lists goals only: a scorer and a team that played in this game.
+  const realGoals = (box.goals || []).filter(
+    (g) => g && g.scorer && (g.scorer.id || g.scorer.name) && [String(home.id), String(away.id)].includes(String(g.team_id))
+  );
+  realGoals.forEach((g) => {
     const key = g.period ? (g.period >= 4 ? "OT" : labels[g.period - 1] || `P${g.period}`) : "Scoring";
     (byPeriod[key] = byPeriod[key] || []).push(g);
   });
   const sel = side === "home" ? home : away;
   return (
-    <div className="bxs-sheet">
-      <section className="bxs-hero">
-        {[away, home].map((t, i) => (
-          <div key={t.id} className={`bxs-hero-team ${t.goals > (i ? away.goals : home.goals) ? "is-winner" : ""}`}>
-            <span className="bxs-hero-abbr">{t.abbr || t.id}</span>
-            <span className="bxs-hero-name">{t.name}</span>
-            <strong className="bxs-hero-score">{t.goals}</strong>
-          </div>
-        ))}
-        <div className="bxs-hero-meta">
-          <span>{box.shootout ? "Final / SO" : box.overtime ? "Final / OT" : "Final"}</span>
-          <span>{box.date}</span>
-          {box.scope && box.scope !== "regular_season" ? <span>{String(box.scope).replace(/_/g, " ")}</span> : null}
-        </div>
-      </section>
+    <div className="bxs-sheet bxa-sheet">
+      <ArcadeScoreboard box={box} />
+      <PeriodStrip box={box} />
 
-      <section className="bxs-grid-2">
-        <div className="bxs-card">
-          <h4>Scoring by period</h4>
-          <table className="bxs-table bxs-compact">
-            <thead>
-              <tr>
-                <th className="bxs-l">Team</th>
-                {labels.map((l) => (
-                  <th key={l}>{l}</th>
-                ))}
-                <th>T</th>
-              </tr>
-            </thead>
-            <tbody>
-              {[away, home].map((t) => (
-                <tr key={t.id}>
-                  <td className="bxs-l">{t.abbr || t.name}</td>
-                  {labels.map((l, i) => (
-                    <td key={l}>{t.periods?.[i] ?? 0}</td>
-                  ))}
-                  <td className="bxs-strong">{t.goals}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <h4>Shots by period</h4>
-          <table className="bxs-table bxs-compact">
-            <tbody>
-              {[away, home].map((t) => (
-                <tr key={t.id}>
-                  <td className="bxs-l">{t.abbr || t.name}</td>
-                  {labels.map((l, i) => (
-                    <td key={l}>{t.shots?.[i] ?? 0}</td>
-                  ))}
-                  <td className="bxs-strong">{t.sog}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <div className="bxs-card">
-          <h4>Team stats</h4>
-          <div className="bxs-teamstats">
-            <div className="bxs-teamstats-head">
-              <span>{away.abbr || away.name}</span>
-              <span />
-              <span>{home.abbr || home.name}</span>
-            </div>
-            {teamStats.map(([label, a, h]) => (
-              <div key={label} className="bxs-teamstats-row">
-                <b>{a}</b>
-                <span>{label}</span>
-                <b>{h}</b>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
+      <div className="bxa-split">
+        <ShotBattle box={box} />
+        <StatTugOfWar
+          box={box}
+          rows={teamStats.map(([label, a, h]) => {
+            if (label === "Power play") return [label, a, h, Number(away.pp_goals) || 0, Number(home.pp_goals) || 0];
+            if (label === "Faceoffs") return [label, a, h, Number(away.faceoffs?.won) || 0, Number(home.faceoffs?.won) || 0];
+            return [label, a, h];
+          })}
+        />
+      </div>
 
-      <section className="bxs-card">
-        <h4>Scoring summary</h4>
-        {!box.event_detail ? (
-          <p className="bxs-note">Simmed in bulk: scorers are recorded, goal times are not.</p>
-        ) : null}
-        {Object.keys(byPeriod).length === 0 ? <p className="bxs-empty">No goals.</p> : null}
-        {Object.entries(byPeriod).map(([period, goals]) => (
-          <div key={period} className="bxs-period">
-            <div className="bxs-period-label">{period}</div>
-            {goals.map((g, i) => (
-              <div key={i} className="bxs-goal">
-                <span className="bxs-goal-time">{g.clock || "—"}</span>
-                <span className="bxs-goal-team">{teamName(g.team_id)}</span>
-                <span className="bxs-goal-who">
-                  <strong>{g.scorer?.name}</strong>
-                  {g.assists?.length ? <small> ({g.assists.map((a) => a.name).join(", ")})</small> : <small> (unassisted)</small>}
-                </span>
-                <span className="bxs-goal-tags">
-                  {g.strength && g.strength !== "EV" ? <em className="bxs-tag">{g.strength}</em> : null}
-                  {g.empty_net ? <em className="bxs-tag">EN</em> : null}
-                  {g.overtime ? <em className="bxs-tag">OT</em> : null}
-                  {g.gwg ? <em className="bxs-tag is-gold">GWG</em> : null}
-                  {g.tag ? (
-                    <em className="bxs-tag is-gold" title="Rink oddity">
-                      {{
-                        goalie_goal: "GOALIE GOAL",
-                        penalty_shot: "PENALTY SHOT",
-                        fluke_ref_skate: "OFF REF'S SKATE",
-                        fluke_broken_stick: "BROKEN STICK",
-                        fluke_boards: "BOARDS BOUNCE",
-                      }[g.tag] || "FLUKE"}
-                    </em>
-                  ) : null}
-                </span>
-                {g.score ? <span className="bxs-goal-score">{g.score}</span> : null}
-              </div>
-            ))}
-          </div>
-        ))}
-      </section>
+      <ThreeStars box={box} teamName={teamName} />
+
+      <GoalCards box={box} byPeriod={byPeriod} total={realGoals.length} />
 
       {box.fun_events?.length ? (
         <section className="bxs-card">
@@ -852,23 +816,6 @@ export function BoxScoreView({ box }) {
               <strong>{ev.headline}</strong> {ev.text}
             </p>
           ))}
-        </section>
-      ) : null}
-
-      {box.stars?.length ? (
-        <section className="bxs-card">
-          <h4>Three stars</h4>
-          <div className="bxs-stars">
-            {box.stars.map((s) => (
-              <div key={s.player_id} className="bxs-star">
-                <span className="bxs-star-rank">{"★".repeat(s.rank)}</span>
-                <strong>{s.name}</strong>
-                <small>
-                  {teamName(s.team_id)} · {s.line}
-                </small>
-              </div>
-            ))}
-          </div>
         </section>
       ) : null}
 
@@ -883,7 +830,17 @@ export function BoxScoreView({ box }) {
             </button>
           ))}
         </div>
-        <BoxSkaterTable rows={box.skaters?.[side]} />
+        <div className="bxs-tabs bxs-sheet-tabs" role="tablist" aria-label="Skater sheet">
+          {[["basic", "Standard"], ["adv", "Advanced"]].map(([k, l]) => (
+            <button key={k} type="button" role="tab" aria-selected={sheet === k} className={sheet === k ? "is-active" : ""} onClick={() => setSheet(k)}>
+              {l}
+            </button>
+          ))}
+        </div>
+        {sheet === "adv" ? <BoxAdvancedTable rows={box.skaters?.[side]} /> : <BoxSkaterTable rows={box.skaters?.[side]} />}
+        {sheet === "adv" ? (
+          <p className="bxs-note">Shift counts and zone starts are not recorded by the game sim; deployment is shown as EV / PP / SH ice time instead.</p>
+        ) : null}
         <BoxGoalieTable rows={box.goalies?.[side]} />
         {unitIceLine(sel.unit_toi) ? <p className="bxs-note">Even-strength unit ice: {unitIceLine(sel.unit_toi)}</p> : null}
         <p className="bxs-note">{sel.name}: {sel.hits} hits, {sel.blocks} blocks.</p>

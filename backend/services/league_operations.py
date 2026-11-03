@@ -1354,6 +1354,7 @@ def _known_cap(session: FranchiseSession, year: int) -> Optional[float]:
 def calculate_salary_cap_projection(
     session: FranchiseSession,
     league_state: Dict[str, Any],
+    team_rows: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Next season's cap: the announced range when one exists (2027-28 $113.5M,
     2028-29 est. $127.5M), otherwise the revenue model. The old version ignored the
@@ -1364,6 +1365,18 @@ def calculate_salary_cap_projection(
     sy = int(getattr(session, "season_calendar_year", 2025) or 2025)
     known = _known_cap(session, sy + 1)
     growth = _model_cap_growth(league_state) + _gov(session, "cap_growth") / 100.0
+    # F11: ~30-factor cap growth model (revenue, markets, TV deal, economy...) with
+    # an explanation per factor. The old one-line formula is the fallback.
+    growth_model: Dict[str, Any] = {}
+    try:
+        from services.cap_growth_model import compute_cap_growth  # noqa: WPS433
+
+        growth_model = compute_cap_growth(
+            session, league_state, team_rows, gov_growth_pts=_gov(session, "cap_growth"),
+        )
+        growth = float(growth_model.get("growth", growth))
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     board_adjust = 0.0
     try:
         from services.league_governance import pending_cap_adjust  # noqa: WPS433
@@ -1406,6 +1419,7 @@ def calculate_salary_cap_projection(
         "cap_projection_source": source,
         "board_cap_adjust_m": round(board_adjust, 2),
         "model_growth_pct": round(growth * 100.0, 1),
+        "cap_growth_model": growth_model,
         "cap_tags": _CAP_TAGS.get(cap_change_type, ["Flat Risk"]),
         "cap_gauge_position": _CAP_GAUGE_POSITION.get(cap_change_type, 48),
     }
@@ -1739,7 +1753,7 @@ def _build_league_operations_payload_impl(session: FranchiseSession) -> Dict[str
     league_state.update(escrow)
     league_state["cba_pressure"] = calculate_cba_pressure(league_state)
 
-    cap = calculate_salary_cap_projection(session, league_state)
+    cap = calculate_salary_cap_projection(session, league_state, team_rows)
     cap_forecast = build_cap_forecast_series(session, cap)
     cba = _build_cba_block(session, league_state["cba_pressure"])
 

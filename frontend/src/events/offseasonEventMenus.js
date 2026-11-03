@@ -11,6 +11,7 @@ import { ensurePlayerHeadshotFields } from "../utils/playerHeadshots";
 import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
 import CapContractNegotiation from "../components/contracts/CapContractNegotiation";
 import NegotiationMeetingPanel, { InterestFactors } from "../components/contracts/NegotiationMeetingPanel";
+import FaAnalyticsPanel from "../components/freeAgency/FaAnalyticsPanel";
 import { getContractOffice, qualifyRfa, releaseRfaRights, evaluateContractOffer, prospectRightsDecision, previewElcOffer, submitElcOffer, fileArbitration, settleArbitration, matchOfferSheet, declineOfferSheet, submitOfferSheet, advanceFreeAgencyDay, simFreeAgencyToSeasonStart, advanceContractNegotiationDay, signFreeAgent, getFreeAgentDetail, getFreeAgencyDesk, getSocialFeed } from "../services/franchiseService";
 import { useGameUI } from "../game/GameUIContext";
 import { projectNegotiationCap } from "../utils/contractNegotiation";
@@ -247,6 +248,8 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
   const [, setResponse] = React.useState(null);
   const [dayFlash, setDayFlash] = React.useState(null);
   const [dealPopup, setDealPopup] = React.useState(null);
+  // D8: players re-signed this visit stay in the list with a confirmation row.
+  const [resignedMap, setResignedMap] = React.useState({});
   const rowRefs = React.useRef({});
   const tableWrapRef = React.useRef(null);
 
@@ -448,7 +451,7 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
     };
 
     if (filter === "expiring") {
-      rows = rows.filter((r) => wasExpiring(r));
+      rows = rows.filter((r) => wasExpiring(r) || resignedMap[String(r.player_id || "")]);
     } else if (filter === "ufa") {
       rows = rows.filter(
         (r) =>
@@ -492,7 +495,7 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
       return String(a.name || "").localeCompare(String(b.name || ""));
     });
     return rows;
-  }, [contracts, filter, sortKey, sortDir, resignSeasonYear]);
+  }, [contracts, filter, sortKey, sortDir, resignSeasonYear, resignedMap]);
 
   const selectPlayer = (id, { openNegotiate = false } = {}) => {
     setSelectedId(String(id));
@@ -766,7 +769,14 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
                           );
                       const ovr = row.overall ?? row.ovr ?? getPlayerOverall(row);
                       const interest = resignInterestLabel(row);
+                      const resignedInfo = resignedMap[id]
+                        ? {
+                            aav: resignedMap[id].aav ?? row.phase_terms?.aav_m ?? row.pending_extension?.aav_m ?? null,
+                            years: resignedMap[id].years ?? row.phase_terms?.years ?? row.pending_extension?.years ?? null,
+                          }
+                        : null;
                       return (
+                        <React.Fragment key={id}>
                         <tr
                           key={id}
                           ref={(node) => {
@@ -828,6 +838,19 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
                             ) : null}
                           </td>
                         </tr>
+                        {resignedInfo ? (
+                          <tr className="resign-confirm-row" onClick={() => selectPlayer(id)}>
+                            <td colSpan={9}>
+                              <span className="resign-confirm-chip">
+                                <b>✓ Re-signed</b>
+                                {resignedInfo.years ? <span> · {resignedInfo.years} year{Number(resignedInfo.years) === 1 ? "" : "s"}</span> : null}
+                                {resignedInfo.aav != null ? <span> · {formatMoney(resignedInfo.aav)} AAV</span> : null}
+                                <span> · Player accepted</span>
+                              </span>
+                            </td>
+                          </tr>
+                        ) : null}
+                        </React.Fragment>
                       );
                     })}
                   </tbody>
@@ -1118,7 +1141,13 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
                         }
                         if (st === "accepted" || meta?.signed) {
                           setPanelMode("detail");
-                          if (selected?.player_id) setSelectedId(String(selected.player_id));
+                          if (selected?.player_id) {
+                            const sid = String(selected.player_id);
+                            const aav = result?.aav_m ?? result?.contract?.aav_m ?? result?.signed_aav_m ?? result?.terms?.aav_m ?? result?.phase_terms?.aav_m;
+                            const yrs = result?.years ?? result?.contract?.years ?? result?.signed_years ?? result?.terms?.years ?? result?.phase_terms?.years;
+                            setResignedMap((prev) => ({ ...prev, [sid]: { aav: aav ?? null, years: yrs ?? null } }));
+                            setSelectedId(sid);
+                          }
                         }
                       }}
                     />
@@ -2585,6 +2614,9 @@ export function FreeAgencyEventMenu({
                           />
                         )}
                       </details>
+                      {isOfferSheet ? null : (
+                        <FaAnalyticsPanel analytics={faDetail?.free_agent?.fa_analytics} loading={faDetailLoading} />
+                      )}
                       <details className="nd2-more">
                         <summary>Scouting report</summary>
                         {faDetailLoading ? <p className="nd2-note">Loading Stats Central…</p> : null}

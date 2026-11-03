@@ -330,7 +330,27 @@ def _fact_hook(mc: Dict[str, Any], topic: str) -> str:
     return ""
 
 
+def _voice_prep(mc: Dict[str, Any], ctx: Dict[str, Any], meeting: Dict[str, Any]) -> None:
+    try:
+        from app.sim_engine.franchise import meeting_voice as _mv  # noqa: WPS433
+
+        mc.update(_mv.voice_extras(ctx, meeting))
+        mc["voice"] = _mv.voice_of(mc)
+        mc["voice_label"] = _mv.VOICE_LABELS.get(mc["voice"], "")
+    except Exception:
+        pass
+
+
 def _opening_line(mc: Dict[str, Any], base_line: str, topic: str, seed: str) -> str:
+    if mc.get("voice"):
+        try:
+            from app.sim_engine.franchise import meeting_voice as _mv  # noqa: WPS433
+
+            line = _mv.opening_line(mc, topic, seed, base_line)
+            if line:
+                return line
+        except Exception:
+            pass
     # The template line may already quote his numbers; don't say them twice.
     hook = "" if any(ch.isdigit() for ch in str(base_line)) else _fact_hook(mc, topic)
     tier, tension = mc["tier"], mc["tension"]
@@ -544,6 +564,7 @@ def _add(outcome: Dict[str, Any], bucket: str, field: str, delta: float, sub: st
 def dress_opening(session: Any, ctx: Dict[str, Any], meeting: Dict[str, Any], topic: str, facts: Dict[str, Any]) -> Dict[str, Any]:
     """Beat 0: who's in the chair, how tense it is, his opening, and options cut for him."""
     mc = build_context(session, ctx, facts)
+    _voice_prep(mc, ctx, meeting)
     seed = f"{meeting.get('id')}"
     tension = mc["tension"]
     bucket = "calm" if tension < 25 else "uneasy" if tension < 45 else "tense" if tension < 65 else "hot"
@@ -581,6 +602,8 @@ def dress_opening(session: Any, ctx: Dict[str, Any], meeting: Dict[str, Any], to
         "stature": mc["tier"],
         "stature_label": mc["tier_label"],
         "stakes": _stakes_line(mc),
+        "voice": mc.get("voice"),
+        "voice_label": mc.get("voice_label"),
         "sensitivity": mc["sensitivity"],
         "topic": topic,
         "beats": 0,
@@ -680,6 +703,13 @@ def _context_jab(mc: Dict[str, Any], topic: str, reaction: str, seed: str, appro
 def _reaction_line(mc: Dict[str, Any], topic: str, reaction: str, seed: str, approach: str = "") -> str:
     pool = (_REACTION_LINES.get(topic) or _REACTION_LINES["room"]).get(reaction) or ("Okay.",)
     line = _pick(pool, seed, "rl")
+    if mc.get("voice") and (_rng(seed, "voice_mix").random() < 0.7 or str(mc.get("itype") or "").startswith("habit_")):
+        try:
+            from app.sim_engine.franchise import meeting_voice as _mv  # noqa: WPS433
+
+            line = _mv.reaction_line(mc, topic, reaction, seed, approach) or line
+        except Exception:
+            pass
     if "fourth line" in line and mc["tier"] not in ("depth",) and int(mc.get("line_rank") or 0) not in (3, 4):
         line = line.replace("rot on the fourth line", "watch my minutes disappear")
     jab = _context_jab(mc, topic, reaction, seed, approach)
@@ -764,6 +794,7 @@ def _followups(mc: Dict[str, Any], base_choice: Dict[str, Any], reaction: str, t
 def react(session: Any, ctx: Dict[str, Any], meeting: Dict[str, Any], choice: Dict[str, Any], topic: str, facts: Dict[str, Any]) -> Dict[str, Any]:
     """Beat 1: how he takes it, the tension shift, his line, and the follow-ups."""
     mc = build_context(session, ctx, facts)
+    _voice_prep(mc, ctx, meeting)
     conv = dict(meeting.get("conversation") or {})
     tension = _f(conv.get("tension"), mc["tension"])
     approach = str(choice.get("approach") or classify_approach(choice))

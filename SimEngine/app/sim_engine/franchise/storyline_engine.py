@@ -10367,6 +10367,59 @@ def _u_pending_meeting_actor_ids(session: Any, team_id: str) -> set:
     }
 
 
+def _u_player_in_contract_year(session: Any, player_id: str) -> bool:
+    player = _player_from_roster(session, str(player_id))
+    if player is None:
+        return False
+    try:
+        return bool(_gm_contract_info(player).get("expiring"))
+    except Exception:
+        return False
+
+
+def _u_player_in_user_org(session: Any, player_id: str) -> bool:
+    """Only current organization players (user NHL + AHL) can be in a meeting (D3)."""
+    pid = str(player_id or "")
+    if not pid:
+        return False
+    return any(row[0] == pid for row in _gm_user_org_players(session))
+
+
+def _u_purge_stale_meetings(session: Any) -> int:
+    """Drop queued/active meetings for players who left the organization
+    (traded, released, walked in free agency, retired) and contract-year asks from
+    players who have since signed long-term."""
+    utid = str(getattr(session, "user_team_id", "") or "")
+    org = {row[0] for row in _gm_user_org_players(session)}
+    if not org:
+        return 0
+    n = 0
+    for r in list(getattr(session, "universe_interaction_queue", None) or []):
+        if str(r.get("status") or "") != "pending" or str(r.get("team_id") or "") != utid:
+            continue
+        actor = str(r.get("actor_id") or r.get("player_id") or "")
+        target = str(r.get("target_id") or "")
+        ents = getattr(session, "universe_players", None) or {}
+        # Targets can be reporters; only a teammate target has to still be with us.
+        target_gone = bool(target) and target in ents and target not in org
+        if (actor and actor not in org) or target_gone:
+            r["status"] = "withdrawn"
+            r["withdrawn_reason"] = "left_organization"
+            n += 1
+            continue
+        if str(r.get("kind") or "") == "contract_clarity" and actor and not _u_player_in_contract_year(session, actor):
+            r["status"] = "withdrawn"
+            r["withdrawn_reason"] = "signed_long_term"
+            n += 1
+    active = getattr(session, "gm_active_meetings", None)
+    if isinstance(active, dict):
+        for mid, m in list(active.items()):
+            if isinstance(m, dict) and str(m.get("player_id") or "") and str(m.get("player_id")) not in org:
+                active.pop(mid, None)
+                n += 1
+    return n
+
+
 def _u_player_can_request_meeting(session: Any, player_id: str, day: int) -> bool:
     """Block repeat meeting requests from the same player too frequently."""
     pid = str(player_id or "").strip()
@@ -10456,7 +10509,13 @@ def _u_interaction_candidates(session: Any, team_id: str, rng: random.Random) ->
             kind = "request_starting_role" if pos == "G" else "request_pp_time" if offense_signal >= 78 and float(personality.get("ambition", 50)) >= 60 else "request_more_ice"
             candidates.append((80 - role_sat + float(personality.get("ambition", 50)) * 0.24, kind, player_id, ""))
         contract = concerns.get("contract") or {}
-        if float(contract.get("satisfaction", 60)) < 38 and float(contract.get("importance", 50)) >= 58:
+        # Contract / free-agency talk only from players in the final year of a deal
+        # with no extension signed: a guy locked up long-term has nothing to ask (D2).
+        if (
+            float(contract.get("satisfaction", 60)) < 38
+            and float(contract.get("importance", 50)) >= 58
+            and _u_player_in_contract_year(session, player_id)
+        ):
             candidates.append((72 - float(contract.get("satisfaction", 60)) + float(personality.get("money_focus", 45)) * 0.20, "contract_clarity", player_id, ""))
         winning = concerns.get("winning") or {}
         if float(winning.get("satisfaction", 60)) < 34 and float(personality.get("competitiveness", 50)) >= 65:
@@ -10883,6 +10942,10 @@ def _u_generate_daily_interactions_impl(session: Any, rng: random.Random) -> int
         team_ids.remove(user_team_id)
         team_ids.insert(0, user_team_id)
     _today = _u_current_meta(session)[0]
+    try:
+        _u_purge_stale_meetings(session)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     pending = len([
         row for row in (getattr(session, "universe_interaction_queue", None) or [])
         if str(row.get("status") or "") == "pending"
@@ -11989,6 +12052,70 @@ def build_universe_game_context(
     return context
 
 
+def _fallout_team_label(session: Any, team_id: Any) -> Dict[str, Any]:
+    tid = str(team_id or "")
+    by_id = getattr(session, "team_by_id", None) or {}
+    team = by_id.get(tid)
+    if team is None and tid.isdigit():
+        team = by_id.get(int(tid))
+    city = str(getattr(team, "city", "") or "") if team is not None else ""
+    nick = str(getattr(team, "name", "") or "") if team is not None else ""
+    name = f"{city} {nick}".strip() or tid
+    abbr = str(getattr(team, "abbreviation", "") or getattr(team, "abbr", "") or "") if team is not None else ""
+    return {"team_id": tid, "team_name": name, "team_abbr": abbr, "is_user": tid == str(getattr(session, "user_team_id", "") or "")}
+
+
+def _enrich_fallout_payload(session: Any, base: Dict[str, Any]) -> None:
+    """Fallout tab: names instead of raw ids, and which rows belong to the user's club."""
+    uplayers = getattr(session, "universe_players", None) or {}
+    sanctions = []
+    for row in list(base.get("team_sanctions") or []):
+        if not isinstance(row, dict):
+            continue
+        r = dict(row)
+        r.update(_fallout_team_label(session, r.get("team_id")))
+        sanctions.append(r)
+    base["team_sanctions"] = sanctions
+    picks = []
+    for row in list(base.get("forfeited_picks") or []):
+        if not isinstance(row, dict):
+            continue
+        r = dict(row)
+        r.update(_fallout_team_label(session, r.get("team_id")))
+        picks.append(r)
+    base["forfeited_picks"] = picks
+    caps = []
+    for tid, amt in dict(base.get("cap_penalties") or {}).items():
+        try:
+            val = float(amt or 0)
+        except (TypeError, ValueError):
+            continue
+        if val <= 0:
+            continue
+        r = {"amount_m": round(val, 2)}
+        r.update(_fallout_team_label(session, tid))
+        caps.append(r)
+    base["cap_penalty_rows"] = caps
+    avail: Dict[str, Any] = {}
+    for pid, row in dict(base.get("player_availability") or {}).items():
+        if not isinstance(row, dict):
+            continue
+        r = dict(row)
+        pobj = _player_from_roster(session, str(pid))
+        ent = uplayers.get(str(pid)) if isinstance(uplayers, dict) else None
+        ent = ent if isinstance(ent, dict) else {}
+        if not r.get("player_name"):
+            nm = ""
+            if pobj is not None:
+                nm = str(getattr(getattr(pobj, "identity", None), "name", None) or getattr(pobj, "name", "") or "")
+            r["player_name"] = nm or str(ent.get("name") or ent.get("player_name") or "")
+        tid = r.get("team_id") or ent.get("team_id") or (getattr(pobj, "team_id", None) if pobj is not None else None)
+        if tid:
+            r.update(_fallout_team_label(session, tid))
+        avail[str(pid)] = r
+    base["player_availability"] = avail
+
+
 # Extend the existing V2 payload instead of replacing its UI contract.
 _UNIVERSE_V2_PAYLOAD_BEFORE_V3 = build_narrative_universe_v2_payload
 
@@ -12020,6 +12147,10 @@ def build_narrative_universe_v2_payload(session: Any) -> Dict[str, Any]:
         base["human_dossiers"] = dossiers
         if not base.get("player_dossiers"):
             base["player_dossiers"] = list(dossiers.values())
+    try:
+        _enrich_fallout_payload(session, base)
+    except Exception as exc:
+        _log.warning("fallout enrich failed: %s", exc)
     try:
         base["player_meetings"] = build_player_meetings_payload(session)
     except Exception as exc:
@@ -12083,7 +12214,40 @@ def _gm_entity(session: Any, player_id: str) -> Dict[str, Any]:
     return entity
 
 
+def _gm_extension_years(player: Any) -> int:
+    """Years on an already-signed extension that starts after the current deal."""
+    try:
+        from services.contract_economy import normalize_contract_payload  # noqa: WPS433
+
+        c = normalize_contract_payload(player) or {}
+    except Exception:
+        c = getattr(player, "contract", None) or {}
+        c = c if isinstance(c, dict) else {}
+    pe = c.get("pending_extension") if isinstance(c, dict) else None
+    if not isinstance(pe, dict):
+        return 0
+    try:
+        if float(pe.get("aav_m") or pe.get("cap_hit_m") or 0) <= 0:
+            return 0
+        return max(0, int(pe.get("years_remaining") or pe.get("years") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _gm_contract_info(player: Any) -> Dict[str, Any]:
+    info = _gm_contract_info_base(player)
+    # A player who already signed his extension is not heading to free agency (D2).
+    ext = _gm_extension_years(player) if player is not None else 0
+    if ext > 0:
+        info["current_years_remaining"] = info.get("years_remaining")
+        info["years_remaining"] = float(info.get("years_remaining") or 0) + ext
+        info["expiring"] = False
+        info["has_extension"] = True
+        info["extension_years"] = ext
+    return info
+
+
+def _gm_contract_info_base(player: Any) -> Dict[str, Any]:
     try:
         from services.contract_economy import (  # noqa: WPS433
             _contract_years_remaining,
@@ -13345,6 +13509,22 @@ def _gm_build_interaction(session: Any, ctx: Dict[str, Any], interaction_type: s
         _gm_choice("deflect", "Minimize past issues", "Avoidance.", {"profile_changes": {"actor": {"state.gm_trust": -6, "state.morale": -3}}, "relationship": {"trust": -7, "grievance": 4}}),
     ], rel.get("label") in ("Strained", "Broken") or rel.get("broken_promises", 0) > 0)
 
+    if str(interaction_type).startswith("habit_"):
+        try:
+            from app.sim_engine.franchise.player_directives import build_templates as _dir_templates  # noqa: WPS433
+
+            for _t in _dir_templates(ctx, _gm_choice):
+                templates[_t["id"]] = _t
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    if str(interaction_type).startswith("rolepact_"):
+        try:
+            from app.sim_engine.franchise.role_acceptance import build_templates as _role_templates  # noqa: WPS433
+
+            for _t in _role_templates(ctx, _gm_choice):
+                templates[_t["id"]] = _t
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     tpl = templates.get(interaction_type)
     if tpl is None:
         return None
@@ -13409,6 +13589,12 @@ def get_available_gm_interactions(session: Any, player_id: str) -> List[Dict[str
         "ask_preferred_destinations", "discuss_ahl_assignment", "discuss_call_up", "address_trade_rumors",
         "ask_coaching_relationship", "ask_locker_room_concerns", "discuss_leadership", "ask_mentor_younger",
         "personal_wellbeing_check", "repair_relationship",
+        # On-ice habits / development focus (player_directives.py)
+        "habit_shoot_more", "habit_shoot_less", "habit_pass_more", "habit_pass_less",
+        "habit_play_physical", "habit_focus_defense", "habit_develop_playmaking",
+        # Role acceptance (role_acceptance.py)
+        "rolepact_bottom_six", "rolepact_third_pair", "rolepact_shutdown",
+        "rolepact_pp_specialist", "rolepact_backup_goalie",
     ]
     available: List[Dict[str, Any]] = []
     for iid in catalog_ids:
@@ -13457,6 +13643,8 @@ def _u_record_meeting_walkout(session: Any, ctx: Dict[str, Any], meeting: Dict[s
 def start_gm_player_meeting(session: Any, player_id: str, interaction_type: str) -> Dict[str, Any]:
     _ensure_gm_meeting_state(session)
     migrate_session_storyline_state(session)
+    if not _u_player_in_user_org(session, str(player_id)):
+        raise ValueError("He's no longer in your organization.")
     ctx = _gm_build_context(session, player_id)
     if not ctx.get("entity"):
         raise ValueError("Player not found in organization.")
@@ -13523,6 +13711,8 @@ def _soften_meeting_outcome(node: Any) -> None:
 def _gm_meeting_topic(interaction_type: str, category: str) -> str:
     iid = str(interaction_type or "")
     cat = str(category or "")
+    if iid.startswith("habit_"):
+        return "performance"
     if cat == "role" or any(bit in iid for bit in ("ice", "line", "promotion", "demotion", "pp_", "pk_", "scratch", "workload", "call_up", "ahl")):
         return "role"
     if cat == "performance" or any(bit in iid for bit in ("praise", "challenge", "struggle", "scoring", "defensive", "consistency", "ovr", "conditioning", "injury")):
@@ -13746,6 +13936,34 @@ def resolve_gm_player_meeting(session: Any, meeting_id: str, choice_id: str) -> 
                 result["message"] = str(hd["message"])
         except Exception as exc:
             result["hometown_discount"] = {"error": str(exc)}
+    if outcome.get("gm_directive"):
+        try:
+            from app.sim_engine.franchise.player_directives import apply_from_meeting as _apply_directive  # noqa: WPS433
+
+            dres = _apply_directive(session, ctx, outcome, scene)
+            if dres:
+                result["directive"] = dres
+                if dres.get("message"):
+                    result["message"] = str(dres["message"])
+                    imp = result.get("impact")
+                    if isinstance(imp, dict):
+                        imp.setdefault("notes", []).insert(0, str(dres["message"]))
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    if outcome.get("gm_role_pact"):
+        try:
+            from app.sim_engine.franchise.role_acceptance import apply_from_meeting as _apply_role  # noqa: WPS433
+
+            rres = _apply_role(session, ctx, outcome, scene)
+            if rres:
+                result["role_pact"] = rres
+                if rres.get("message"):
+                    result["message"] = str(rres["message"])
+                    imp = result.get("impact")
+                    if isinstance(imp, dict):
+                        imp.setdefault("notes", []).insert(0, str(rres["message"]))
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     meeting["status"] = "resolved"
     active.pop(str(meeting_id), None)
     session.gm_active_meetings = active
@@ -13777,6 +13995,16 @@ def resolve_player_meeting_interaction(session: Any, interaction_id: str, choice
         None,
     )
     choice_label = str((choice_pre or {}).get("label") or choice_id)
+    if (
+        interaction_pre is not None
+        and str(interaction_pre.get("status") or "pending") == "pending"
+        and player_id
+        and str(interaction_pre.get("team_id") or "") == str(getattr(session, "user_team_id", "") or "")
+        and not _u_player_in_user_org(session, player_id)
+    ):
+        interaction_pre["status"] = "withdrawn"
+        interaction_pre["withdrawn_reason"] = "left_organization"
+        raise ValueError("He's no longer in your organization — that request was withdrawn.")
     if interaction_pre is not None and str(interaction_pre.get("status") or "pending") != "pending":
         # M9: a request that already expired or was answered can't be reopened.
         raise ValueError(f"That meeting is already {interaction_pre.get('status')}.")
@@ -14166,6 +14394,10 @@ def build_player_meetings_payload(session: Any) -> Dict[str, Any]:
     """Full Player Meetings office payload for frontend."""
     _ensure_gm_meeting_state(session)
     migrate_session_storyline_state(session)
+    try:
+        _u_purge_stale_meetings(session)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     utid = str(getattr(session, "user_team_id", "") or "")
     # V3 narrative build already full-syncs entities; scope to user org only.
     _u_sync_player_entities(session, team_id=utid or None)
@@ -14589,4 +14821,21 @@ def get_player_meeting_detail(session: Any, player_id: str) -> Dict[str, Any]:
         "emotion": player_emotion(session, str(player_id), ctx.get("entity")),
         "life_feed": list(reversed(list(((ctx.get("entity") or {}).get("life_feed") or [])[-10:]))),
         "closest_teammates": player_closest_teammates(session, str(player_id)),
+        "directives": _gm_directives_view(ctx.get("player"), day),
     }
+
+
+def _gm_directives_view(player: Any, day: int) -> List[Dict[str, Any]]:
+    try:
+        from app.sim_engine.franchise.player_directives import directives_view  # noqa: WPS433
+
+        rows = directives_view(player, day) if player is not None else []
+    except Exception:
+        rows = []
+    try:
+        from app.sim_engine.franchise.role_acceptance import role_pact_view  # noqa: WPS433
+
+        rows = list(rows) + role_pact_view(player)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    return rows

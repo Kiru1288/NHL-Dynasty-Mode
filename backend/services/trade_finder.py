@@ -506,6 +506,74 @@ def _public_asset(a: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+_SLOT_CACHE: Dict[str, int] = {}  # contract slots used per team for the current request
+
+_ILLEGAL_REASON_RE = None
+
+
+def _is_illegal_reason(text: str) -> bool:
+    """Rule failures (not GM value calls): these trades are impossible, so the finder
+    must not list them as near misses."""
+    global _ILLEGAL_REASON_RE
+    if _ILLEGAL_REASON_RE is None:
+        import re as _re
+
+        _ILLEGAL_REASON_RE = _re.compile(
+            r"contract slot|contract limit|roster maximum|maximum roster|usable cap|cap space|"
+            r"salary cap|over the cap|cap limit|no nhl goalies|does not own|not found|already resolved|"
+            r"no-trade|no-movement|clause",
+            _re.I,
+        )
+    return bool(_ILLEGAL_REASON_RE.search(str(text or "")))
+
+
+def _slot_block(
+    user_tid: str,
+    partner_tid: str,
+    user_gives: List[Dict[str, Any]],
+    partner_gives: List[Dict[str, Any]],
+    ctx: Dict[str, Any],
+) -> Optional[str]:
+    """Pre-check of the 50-contract limit (same counter as the rules engine)."""
+    try:
+        from app.sim_engine.economy.cap_engine import (
+            CONTRACT_SLOTS_LIMIT,
+            _player_has_active_contract,
+            count_team_contract_slots,
+        )
+    except Exception:
+        return None
+    tb = ctx.get("team_by_id") or {}
+
+    def spc_count(assets) -> int:
+        n = 0
+        for a in assets:
+            if a.get("type") != "player":
+                continue
+            team = tb.get(str(a.get("team")))
+            found = _find_player(team, a.get("id")) if team is not None else None
+            if found and _player_has_active_contract(found[0]):
+                n += 1
+        return n
+
+    u_out, p_out = spc_count(user_gives), spc_count(partner_gives)
+    for tid, gives_n, gets_n in ((user_tid, u_out, p_out), (partner_tid, p_out, u_out)):
+        if gets_n <= gives_n:
+            continue
+        used = _SLOT_CACHE.get(str(tid))
+        if used is None:
+            team = tb.get(str(tid))
+            if team is None:
+                continue
+            used = int(count_team_contract_slots(team))
+            _SLOT_CACHE[str(tid)] = used
+        after = used - gives_n + gets_n
+        if after > CONTRACT_SLOTS_LIMIT:
+            who = "Your club" if str(tid) == str(user_tid) else _team_name(tb, str(tid))
+            return f"{who} would exceed the 50-contract limit ({after}/{CONTRACT_SLOTS_LIMIT})"
+    return None
+
+
 def _evaluate(
     user_tid: str,
     partner_tid: str,
@@ -513,6 +581,10 @@ def _evaluate(
     partner_gives: List[Dict[str, Any]],
     ctx: Dict[str, Any],
 ) -> Dict[str, Any]:
+    slot_reason = _slot_block(user_tid, partner_tid, user_gives, partner_gives, ctx)
+    if slot_reason:
+        # Impossible on contract count — never spend an evaluator run or list it.
+        return {"accepted": False, "can_execute": False, "rejection_reasons": [slot_reason], "_illegal": True}
     assets_by_team = {
         partner_tid: [_payload_asset(a) for a in user_gives],
         user_tid: [_payload_asset(a) for a in partner_gives],
@@ -527,6 +599,15 @@ def _evaluate(
         )
     except Exception as exc:  # malformed / stale asset — treat as rejected
         return {"accepted": False, "rejection_reasons": [str(exc)]}
+    try:
+        from services.trade_service import apply_user_cap_guard
+
+        if apply_user_cap_guard(result, ctx):
+            result["_illegal"] = True
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    if not result.get("can_execute", True):
+        result["_illegal"] = True
     return result
 
 
@@ -861,6 +942,7 @@ def find_trade_offers(
     ctx = _ensure_trade_infrastructure(session)
     league = ctx["league"]
     _RETENTION_LEAGUE["league"] = league
+    _SLOT_CACHE.clear()
     team_by_id = ctx["team_by_id"] or {}
     user_tid = str(ctx["user_team_id"])
     user_team = team_by_id.get(user_tid)
@@ -976,7 +1058,7 @@ def find_trade_offers(
                     if result.get("accepted"):
                         offers.append(row)
                     else:
-                        near.append({**row, "reasons": _clean_reasons(result, team_by_id)})
+                        near.append({**row, "reasons": _clean_reasons(result, team_by_id), "_illegal": bool(result.get("_illegal"))})
                 continue
             if offered <= 2.0:
                 continue
@@ -1043,7 +1125,7 @@ def find_trade_offers(
                     offers.append(row)
                     accepted_for_partner += 1
                 else:
-                    near.append({**row, "reasons": _clean_reasons(result, team_by_id)})
+                    near.append({**row, "reasons": _clean_reasons(result, team_by_id), "_illegal": bool(result.get("_illegal"))})
     else:
         partner_tid, partner = partners[0]
         price = anchor_value(user_team)
@@ -1114,7 +1196,7 @@ def find_trade_offers(
                 if result.get("accepted"):
                     offers.append(row)
                 else:
-                    near.append({**row, "reasons": _clean_reasons(result, team_by_id)})
+                    near.append({**row, "reasons": _clean_reasons(result, team_by_id), "_illegal": bool(result.get("_illegal"))})
 
         full_pool = _pool(user_team, user_tid, partner, league, ctx, exclude=exclude)
         pool = _pool(user_team, user_tid, partner, league, ctx, exclude=exclude, max_value=max(price, 0.0) * 1.6)
@@ -1145,7 +1227,7 @@ def find_trade_offers(
                 if result.get("accepted"):
                     offers.append(row)
                 else:
-                    near.append({**row, "reasons": _clean_reasons(result, team_by_id)})
+                    near.append({**row, "reasons": _clean_reasons(result, team_by_id), "_illegal": bool(result.get("_illegal"))})
 
     offers.sort(key=lambda o: o["user_gets_value"] - o["user_gives_value"], reverse=True)
     try:
@@ -1157,6 +1239,14 @@ def find_trade_offers(
         dsp = None
     if dsp:
         offers.insert(0, dsp)
+    # Impossible trades (contract limit, roster, cap, clauses) are not "near misses":
+    # drop them so the finder only lists deals that could actually be made.
+    illegal_dropped = sum(1 for o in near if o.get("_illegal") or any(_is_illegal_reason(r) for r in (o.get("reasons") or [])))
+    near = [
+        {k: v for k, v in o.items() if k != "_illegal"}
+        for o in near
+        if not (o.get("_illegal") or any(_is_illegal_reason(r) for r in (o.get("reasons") or [])))
+    ]
     near.sort(key=lambda o: float(o.get("interest") or 0.0), reverse=True)
     near_one_per_team: List[Dict[str, Any]] = []
     seen_partner: set = set()
@@ -1178,5 +1268,6 @@ def find_trade_offers(
         "offers": offers[:limit],
         "near_misses": near[:4] if not offers else [],
         "evaluated": evals,
+        "filtered_illegal": illegal_dropped,
         "note": note,
     }

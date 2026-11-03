@@ -1088,8 +1088,8 @@ def _event_headline(session: Any, lg: Dict[str, Any], ev: Dict[str, Any]) -> str
 # --------------------------------------------------------------------------- backfill (old saves)
 def _backfill_from_session_history(session: Any, lg: Dict[str, Any]) -> None:
     """Older saves: rebuild only what ``season_history`` actually recorded (standings,
-    champion, awards, draft). Player lines come from ``player_season_archive`` (last six
-    seasons). Everything else stays unknown and the season is flagged partial."""
+    champion, awards, draft). Player lines come from ``player_season_archive`` (every
+    simulated season). Everything else stays unknown and the season is flagged partial."""
     arch = getattr(session, "player_season_archive", None) or {}
     for h in list(getattr(session, "season_history", None) or []):
         if not isinstance(h, dict):

@@ -7,6 +7,7 @@ import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
 import PlayerHeadshot from "../components/PlayerHeadshot";
 import { ensurePlayerHeadshotFields } from "../utils/playerHeadshots";
 import CapContractNegotiation from "../components/contracts/CapContractNegotiation";
+import CapGrowthPanel from "../components/contracts/CapGrowthPanel";
 
 const NHL_ROSTER_LIMIT = 23;
 const AHL_ROSTER_LIMIT = 24;
@@ -1291,7 +1292,10 @@ export default function CapLedger() {
           ) : null}
 
           {tab === "cap" ? (
-            <CapTab data={data} slotSummary={slotSummary} />
+            <>
+              <CapTab data={data} slotSummary={slotSummary} />
+              <CapGrowthPanel />
+            </>
           ) : null}
         </main>
       ) : null}

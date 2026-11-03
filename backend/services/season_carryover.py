@@ -15,7 +15,22 @@ from typing import Any, Dict, List, Optional
 import logging as _logging_swallow
 _swallowed_log = _logging_swallow.getLogger(__name__)
 
-ARCHIVE_SEASONS = 6
+# Every simulated season is kept (no cap). Rows are compacted to the stat keys that
+# matter so a long save stays small: see ``_compact_archive_row``.
+ARCHIVE_SEASONS = None
+_ARCHIVE_DROP_KEYS = ("team_abbrev", "source", "league", "season", "ties")
+
+
+def _compact_archive_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Archive row without duplicated / derivable keys, None values or zero counters."""
+    out: Dict[str, Any] = {}
+    for k, v in row.items():
+        if k in _ARCHIVE_DROP_KEYS or v is None or v == "":
+            continue
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and v == 0 and k not in ("gp",):
+            continue
+        out[k] = v
+    return out
 
 
 def season_label(year: int) -> str:
@@ -118,7 +133,7 @@ def archive_player_lines(session: Any, season_year: int) -> int:
                 counts=row, team_label="TOT",
             ))
         line = lines_out[-1] if len(lines_out) > 1 else lines_out[0]
-        compact[str(pid)] = {**line, "name": row.get("name"), "position": pos, "team_id": str(row.get("team_id") or "")}
+        compact[str(pid)] = _compact_archive_row({**line, "name": row.get("name"), "position": pos, "team_id": str(row.get("team_id") or "")})
         p = players.get(str(pid))
         if p is None:
             continue
@@ -148,12 +163,126 @@ def archive_player_lines(session: Any, season_year: int) -> int:
             n += 1
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
+    try:
+        n += archive_minor_league_lines(session, season_year, players)
+    except Exception:
+        _swallowed_log.warning("minor-league career archive failed", exc_info=True)
     arch = dict(getattr(session, "player_season_archive", None) or {})
     arch[str(season_year)] = compact
-    for k in sorted(arch.keys())[:-ARCHIVE_SEASONS]:
-        arch.pop(k, None)
+    # No season cap: older blocks from saves made before compaction are slimmed in place.
+    for k, block in list(arch.items()):
+        if isinstance(block, dict) and any(isinstance(r, dict) and "team_abbrev" in r for r in block.values()):
+            arch[k] = {pid: _compact_archive_row(r) for pid, r in block.items() if isinstance(r, dict)}
     session.player_season_archive = arch
     return n
+
+
+def _append_career_line(p: Any, line: Dict[str, Any]) -> bool:
+    cs = getattr(p, "career_stats", None)
+    cs = dict(cs) if isinstance(cs, dict) else {}
+    seasons = [x for x in list(cs.get("seasons") or []) if isinstance(x, dict)]
+    key = (str(line.get("season")), str(line.get("league") or "").upper())
+    if any((str(x.get("season")), str(x.get("league") or "NHL").upper()) == key for x in seasons):
+        return False
+    seasons.append(line)
+    cs["seasons"] = seasons
+    try:
+        setattr(p, "career_stats", cs)
+    except Exception:
+        return False
+    return True
+
+
+def archive_minor_league_lines(session: Any, season_year: int, players: Optional[Dict[str, Any]] = None) -> int:
+    """AHL and junior/NCAA/Europe lines go into career_stats too, so the dossier keeps
+    every level a player skated at (they used to vanish at rollover)."""
+    label = season_label(season_year)
+    players = players if players is not None else _players_by_id(session)
+    try:
+        from services.ahl_league import get_player_ahl_season_line
+    except Exception:
+        get_player_ahl_season_line = None  # type: ignore
+    try:
+        from services.franchise_sim import _draft_league_display
+    except Exception:
+        _draft_league_display = lambda c, n="": str(c or n or "Junior")  # type: ignore
+    n = 0
+    for pid, p in players.items():
+        pos = str(getattr(getattr(getattr(p, "identity", None), "position", None), "value", "") or getattr(getattr(p, "identity", None), "position", "") or "").upper()
+        goalie = pos.startswith("G")
+        if get_player_ahl_season_line is not None:
+            try:
+                al = get_player_ahl_season_line(session, pid, season_year)
+            except Exception:
+                al = None
+            if isinstance(al, dict) and _i(al.get("gp")) > 0:
+                team = str(al.get("team") or al.get("team_name") or "AHL")
+                line: Dict[str, Any] = {"season": label, "team": team, "team_abbrev": team, "league": "AHL", "gp": _i(al.get("gp")), "source": "ahl_sim"}
+                if goalie:
+                    line.update({"wins": _i(al.get("wins")), "losses": _i(al.get("losses")), "otl": _i(al.get("ot_losses")),
+                                 "sv_pct": al.get("save_pct"), "gaa": al.get("gaa"), "shutouts": _i(al.get("shutouts"))})
+                else:
+                    g, a = _i(al.get("goals")), _i(al.get("assists"))
+                    line.update({"g": g, "a": a, "pts": g + a, "plus_minus": _i(al.get("plus_minus")), "pim": _i(al.get("pim"))})
+                if _append_career_line(p, line):
+                    n += 1
+        if getattr(p, "real_nhl_import", False) or getattr(p, "real_player", False):
+            continue
+        st = getattr(p, "_prospect_season_stats", None)
+        if not isinstance(st, dict) or _i(st.get("gp") or st.get("games_played")) <= 0:
+            continue
+        sy_line = _i(getattr(p, "_prospect_season_year", 0))
+        if sy_line and sy_line != int(season_year):
+            continue
+        asg = getattr(p, "_franchise_assignment", None) or {}
+        code = str((asg.get("league_code") if isinstance(asg, dict) else "") or st.get("league") or getattr(p, "current_league_id", "") or "")
+        if not code or code.upper() in ("NHL", "AHL", "ECHL"):
+            continue
+        club = str((asg.get("club") if isinstance(asg, dict) else "") or st.get("team") or "")
+        line = {"season": label, "team": club or code, "team_abbrev": club or code, "league": _draft_league_display(code), "league_code": code,
+                "gp": _i(st.get("gp") or st.get("games_played")), "source": "junior_sim"}
+        if goalie:
+            line.update({"wins": _i(st.get("wins")), "sv_pct": st.get("sv_pct") or st.get("save_pct"), "gaa": st.get("gaa")})
+        else:
+            g, a = _i(st.get("goals")), _i(st.get("assists"))
+            line.update({"g": g, "a": a, "pts": _i(st.get("points")) or g + a, "pim": _i(st.get("pim"))})
+        if _append_career_line(p, line):
+            n += 1
+    return n
+
+
+def restore_archived_nhl_lines(session: Any, p: Any, pid: str) -> int:
+    """Re-add NHL season lines from ``session.player_season_archive`` that an older build
+    stripped from career_stats (the dossier gap: 2025-26 and 2027-28 but no 2026-27)."""
+    arch = getattr(session, "player_season_archive", None) or {}
+    if not isinstance(arch, dict) or not arch:
+        return 0
+    keys = {str(pid), str(getattr(p, "id", "") or "")}
+    if str(pid).startswith("NHL_"):
+        keys.add(str(pid)[4:])
+    added = 0
+    for sy in sorted(arch.keys()):
+        block = arch.get(sy) or {}
+        row = next((block.get(k) for k in keys if isinstance(block.get(k), dict)), None)
+        if not row or _i(row.get("gp")) <= 0:
+            continue
+        line = {k: v for k, v in row.items() if k not in ("name", "position")}
+        try:
+            line.setdefault("season", season_label(int(sy)))
+        except (TypeError, ValueError):
+            continue
+        line.setdefault("team_abbrev", line.get("team") or "")
+        line.setdefault("league", "NHL")
+        if "g" in line or "a" in line or "pts" in line:
+            line.setdefault("pts", _i(line.get("g")) + _i(line.get("a")))
+        line["source"] = "sim"
+        if _append_career_line(p, line):
+            added += 1
+    if added:
+        cs = dict(getattr(p, "career_stats", None) or {})
+        cs["seasons"] = sorted(cs.get("seasons") or [], key=lambda x: str(x.get("season") or ""))
+        setattr(p, "career_stats", cs)
+    return added
 
 
 def team_season_analytics(session: Any) -> Dict[str, Dict[str, Any]]:
@@ -319,6 +448,13 @@ def calder_history(session: Any, season_year: int, base: Optional[Dict[str, Any]
             prior_gp = 0
             if isinstance(imp, dict):
                 prior_gp = _i(imp.get("gp") or imp.get("gamesPlayed") or imp.get("games"))
+                # The importer falls back to the CURRENT season's line when the player
+                # has no last-season NHL games (pick_stats_row secondary). Those are
+                # this season's games, not a prior season: a year-1 rookie (Celebrini
+                # in a 2024-25 save) was being disqualified by his own rookie year.
+                imp_season = _i(str(imp.get("seasonId") or imp.get("season_id") or imp.get("season") or "")[:4])
+                if imp_season and imp_season >= int(season_year):
+                    prior_gp = 0
             if prior_gp > 0:
                 by_season["import-rating-season"] = prior_gp
                 basis = "imported NHL games (rating-year stats)"

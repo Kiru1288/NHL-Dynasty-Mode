@@ -25,6 +25,8 @@ import { PlayerProfileModal, normalizeRosterBrowserPlayer } from "./RosterScreen
 import { collectLockerPulse, buildHubStoryTicker, isRoutineLeagueTrade } from "../utils/lockerRoomPulse";
 import { resolveChapterMap, chapterNumericValue } from "../utils/chapterAttributes";
 import PlayerRankings from "../components/storylines/PlayerRankings";
+import FalloutBoard from "../components/storylines/FalloutBoard";
+import AwardsRaceDesk from "../components/storylines/AwardsRaceDesk";
 
 /*
   StorylinesScreen — franchise narrative command center.
@@ -2366,7 +2368,7 @@ function TradeAssetChip({ asset, compact = false }) {
             {pos ? <em>{pos}</em> : null}
             {asset?.age ? <span>Age {asset.age}</span> : null}
             {asset?.cap_hit_m != null ? <span>${Number(asset.cap_hit_m).toFixed(2)}M{asset?.years_left ? ` × ${asset.years_left}y` : ""}</span> : null}
-            {tv != null ? <span className="sl-trade-asset__tv">TV {tv.toFixed(1)}</span> : null}
+            {tv != null ? <span className="sl-trade-asset__tv">Trade Value {tv.toFixed(1)}</span> : null}
           </div>
           {statLine ? <div className="sl-trade-asset__stats">{statLine}</div> : null}
         </div>
@@ -3358,6 +3360,14 @@ function PlayerMeetingsPanel({
 
         {playerTab === "promises" ? (
           <div className="sl-stack">
+            {asArray(playerDetail?.directives).map((d) => (
+              <div key={`dir-${str(d.slot)}`} className={`sl-promise is-directive is-${str(d.accepted || "accepted")}`}>
+                <strong>Directive: {str(d.label)}</strong>
+                <span>
+                  {str(d.accepted) === "partial" ? "Trying it (half effect)" : "Bought in"} · {Math.round((Number(d.strength) || 0) * 100)}% · {str(d.effect)}
+                </span>
+              </div>
+            ))}
             {asArray(playerDetail?.promises || promises.active)
               .filter((p) => str(p.player_id) === str(selected.player_id))
               .map((p) => (
@@ -4736,7 +4746,10 @@ export default function StorylinesScreen() {
             if (d.id === "front_page") count = narrativeStories.length;
             if (d.id === "trade_desk") count = tradeStories.length;
             if (d.id === "player_meetings") count = meetingAlertCount;
-            if (d.id === "consequences") count = asArray(narrativeUniverse?.team_sanctions).filter((s) => s.active !== false).length;
+            if (d.id === "consequences") {
+              const utid = String(franchiseState?.user_team_id ?? "");
+              count = asArray(narrativeUniverse?.team_sanctions).filter((s) => s && s.active !== false && (s.is_user != null ? s.is_user : String(s.team_id ?? "") === utid)).length;
+            }
             if (d.id === "press_room") count = pressQueue.length;
             if (d.id === "locker_room") {
               const pulse = collectLockerPulse(franchiseState, { limit: 24 });
@@ -4809,7 +4822,7 @@ export default function StorylinesScreen() {
         ) : department === "locker_room" ? (
           <LockerRoomDashboard narrativeUniverse={narrativeUniverse} franchiseState={franchiseState} stories={stories} />
         ) : department === "consequences" ? (
-          <ConsequencesPanel narrativeUniverse={narrativeUniverse} stories={stories} onOpenStory={openStory} />
+          <FalloutBoard narrativeUniverse={narrativeUniverse} stories={stories} onOpenStory={openStory} franchiseState={franchiseState} />
         ) : department === "social" ? (
           <div className="sl-two">
             <div>
@@ -5321,7 +5334,8 @@ export default function StorylinesScreen() {
             </aside>
           </div>
         ) : department === "awards_race" ? (
-          <AwardsRacePanel
+          <AwardsRaceDesk
+            windowDays={awardsRace?.momentum_window_days}
             boards={awardsRace?.boards}
             status={awardsStatus}
             sealed={Boolean(awardsRace?.sealed)}
