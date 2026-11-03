@@ -998,7 +998,6 @@ function formatPickClockSeconds(totalSeconds) {
   const s = Math.max(0, Math.floor(Number(totalSeconds) || 0));
   const m = Math.floor(s / 60);
   const r = s % 60;
-  if (m <= 0) return `${r}s`;
   return `${m}:${String(r).padStart(2, "0")}`;
 }
 
@@ -1065,31 +1064,40 @@ function PickClockDisplay({
   onTimeout,
 }) {
   if (draftDone || !clockEnabled) return null;
+  const duration = isUserPick ? USER_PICK_CLOCK_SECONDS : CPU_PICK_CLOCK_SECONDS;
   const urgent = isUserPick ? secondsLeft <= 60 : secondsLeft <= 5;
   const label = formatPickClockSeconds(secondsLeft);
-  const timerLabel = isUserPick ? "Your pick clock" : `${clockTeamLabel || "Team"} pick clock`;
+  const pct = Math.max(0, Math.min(1, (Number(secondsLeft) || 0) / Math.max(1, duration)));
+  const tone = pct > 0.5 ? "#2fc25b" : pct > 0.2 ? "#ffcf1f" : "#ee3b2f";
+  const timerLabel = isUserPick ? "Your pick" : `${clockTeamLabel || "Team"} on the clock`;
   return (
-    <div className={`${PREFIX}-pick-timer-wrap`}>
+    <div className={`${PREFIX}-clock${isUserPick ? " is-user" : " is-cpu"}${urgent ? " is-urgent" : ""}`}>
       <div
-        className={`${PREFIX}-pick-timer${isUserPick ? " is-user" : " is-cpu"}${urgent ? " is-urgent" : ""}`}
-        aria-live="polite"
+        className={`${PREFIX}-clock-ring`}
+        style={{ background: `conic-gradient(${tone} ${pct * 360}deg, #2b2550 0deg)` }}
         role="timer"
+        aria-live="polite"
         aria-label={`${timerLabel} ${label} remaining`}
       >
-        <span className={`${PREFIX}-pick-timer-label`}>{timerLabel}</span>
-        <span className={`${PREFIX}-pick-timer-time ${PREFIX}-tabular`}>{label}</span>
+        <span className={`${PREFIX}-clock-face`}>
+          <b className={`${PREFIX}-tabular`}>{label}</b>
+        </span>
       </div>
-      {isUserPick ? (
-        <button
-          type="button"
-          className={`nhlcal-quick-link ${PREFIX}-pick-timeout`}
-          disabled={loading || !canTimeout}
-          onClick={onTimeout}
-          title={canTimeout ? "Add two minutes (one timeout per pick)" : "Timeout already used this pick"}
-        >
-          {canTimeout ? "Timeout +2:00" : "Timeout used"}
-        </button>
-      ) : null}
+      <div className={`${PREFIX}-clock-text`}>
+        <em>{timerLabel}</em>
+        <span>{isUserPick ? "Make your selection" : "CPU deciding"}</span>
+        {isUserPick ? (
+          <button
+            type="button"
+            className={`${PREFIX}-clock-timeout`}
+            disabled={loading || !canTimeout}
+            onClick={onTimeout}
+            title={canTimeout ? "Add two minutes (one timeout per pick)" : "Timeout already used this pick"}
+          >
+            {canTimeout ? "Timeout +2:00" : "Timeout used"}
+          </button>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -1202,20 +1210,34 @@ function CommandBar({
       ? `Round ${Math.min(currentRound, ROUNDS)} · Your pick #${overallNow || "—"} · ${completedCount}/${totalPicks}`
       : `Round ${Math.min(currentRound, ROUNDS)} · Pick #${overallNow || "—"} · ${completedCount}/${totalPicks}`;
 
+  const progress = totalPicks ? Math.min(100, (completedCount / totalPicks) * 100) : 0;
   return (
     <header className={`${PREFIX}-command`}>
       <div className={`${PREFIX}-command-left`}>
-        <button type="button" className="nhlcal-quick-link" onClick={onBack}>
-          ← Hub
+        <button type="button" className={`${PREFIX}-back`} onClick={onBack}>
+          ◀ Hub
         </button>
+        <div className={`${PREFIX}-plate`} aria-hidden="true">
+          <span>ENTRY</span>
+          <b>DRAFT</b>
+        </div>
         <div className={`${PREFIX}-titles`}>
-          <h1>Entry Draft</h1>
-          <p>{[seasonLabel(franchiseState), draftYearLabel(draft), draft?.location].filter(Boolean).join(" · ")}</p>
+          <h1>{draftYearLabel(draft) || "NHL Entry Draft"}</h1>
+          <p>{[seasonLabel(franchiseState), draft?.location].filter(Boolean).join(" · ")}</p>
         </div>
       </div>
 
       <div className={`${PREFIX}-command-mid`}>
-        <p className={`${PREFIX}-phase${isUserPick && !draftDone ? "" : " is-cpu"}`}>{phaseLabel}</p>
+        <div className={`${PREFIX}-roundbar`}>
+          <span className={`${PREFIX}-roundbar-round`}>
+            {draftDone ? "Draft complete" : <>Round <b>{Math.min(currentRound, ROUNDS)}</b> of {ROUNDS}</>}
+          </span>
+          <span className={`${PREFIX}-roundbar-track`}><i style={{ width: `${progress}%` }} /></span>
+          <span className={`${PREFIX}-roundbar-count ${PREFIX}-tabular`}>
+            {draftDone ? `${completedCount} picks` : <>Pick <b>#{overallNow || "—"}</b> · {completedCount}/{totalPicks}</>}
+          </span>
+        </div>
+        {isUserPick && !draftDone ? <p className={`${PREFIX}-phase`}>You're on the clock</p> : null}
       </div>
 
       <div className={`${PREFIX}-command-right`}>
@@ -1330,8 +1352,9 @@ function OnDeckRail({ upcoming, userTeamId, onTrade }) {
                   className={`${PREFIX}-slot-trade`}
                   onClick={() => onTrade(slot)}
                   title={`Trade for pick #${slot.overall_pick}`}
+                  aria-label={`Trade for pick #${slot.overall_pick}`}
                 >
-                  Trade
+                  ⇄
                 </button>
               ) : null}
             </div>
@@ -1427,8 +1450,46 @@ function DraftedOvrChip({ pick }) {
   );
 }
 
-function LeftPane({ completed, selectedPick, onSelectPick, userTeamId, tweets, feedEnabled }) {
-  const [pane, setPane] = useState("log");
+function ShortlistPane({ rows, onOpenProspect, onSelectPick }) {
+  if (!rows.length) {
+    return (
+      <div className={`${PREFIX}-scroll`}>
+        <p className={`${PREFIX}-empty`}>No shortlist yet. Star prospects in the Draft Room before draft day and they show up here.</p>
+      </div>
+    );
+  }
+  const left = rows.filter((r) => !r.taken).length;
+  return (
+    <div className={`${PREFIX}-scroll ${PREFIX}-shortlist`}>
+      <p className={`${PREFIX}-shortlist-sum`}><b>{left}</b> of {rows.length} still on the board</p>
+      {rows.map(({ prospect: p, taken, id }) => (
+        <button
+          key={id}
+          type="button"
+          className={`${PREFIX}-sl-row${taken ? " is-taken" : ""}${p?.target ? " is-target" : ""}`}
+          onClick={() => (taken ? onSelectPick?.(taken) : onOpenProspect?.(p))}
+        >
+          <span className={`${PREFIX}-sl-rank ${PREFIX}-tabular`}>{getRank(p) ?? "—"}</span>
+          <span className={`${PREFIX}-sl-main`}>
+            <strong>{getPlayerName(p)}{p?.target ? <i className={`${PREFIX}-target`}>TARGET</i> : null}</strong>
+            <em>{[getPlayerPosition(p), p?.league || p?.league_display].filter(Boolean).join(" · ")}</em>
+          </span>
+          {taken ? (
+            <span className={`${PREFIX}-sl-gone`}>
+              <TeamLogo teamId={taken.team_id} teamName={taken.team_name} size="sm" />
+              <b>#{taken.overall_pick}</b>
+            </span>
+          ) : (
+            <span className={`${PREFIX}-sl-live`}>LIVE</span>
+          )}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function LeftPane({ completed, selectedPick, onSelectPick, userTeamId, tweets, feedEnabled, shortlistRows = [], onOpenProspect }) {
+  const [pane, setPane] = useState(shortlistRows.length ? "shortlist" : "log");
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
   const rows = safeArray(completed);
@@ -1463,15 +1524,20 @@ function LeftPane({ completed, selectedPick, onSelectPick, userTeamId, tweets, f
   return (
     <aside className={`${PREFIX}-pane ${PREFIX}-pane--log`}>
       <div className={`${PREFIX}-tabs`}>
+        <button type="button" className={pane === "shortlist" ? "is-active" : ""} onClick={() => setPane("shortlist")}>
+          ★ List{shortlistRows.length ? ` ${shortlistRows.filter((r) => !r.taken).length}` : ""}
+        </button>
         <button type="button" className={pane === "log" ? "is-active" : ""} onClick={() => setPane("log")}>
-          Draft Log
+          Log
         </button>
         <button type="button" className={pane === "buzz" ? "is-active" : ""} onClick={() => setPane("buzz")}>
-          Floor Buzz
+          Buzz
         </button>
       </div>
 
-      {pane === "log" ? (
+      {pane === "shortlist" ? (
+        <ShortlistPane rows={shortlistRows} onOpenProspect={onOpenProspect} onSelectPick={onSelectPick} />
+      ) : pane === "log" ? (
         <>
           {rows.length >= 18 ? (
             <div className={`${PREFIX}-log-tools`}>
@@ -1580,7 +1646,9 @@ function BoardPane({
   const filtered = useMemo(() => {
     let rows = safeArray(available).slice();
 
-    if (posFilter !== "all") {
+    if (posFilter === "SL") {
+      rows = rows.filter((p) => p?.watchlist || p?.target);
+    } else if (posFilter !== "all") {
       rows = rows.filter((p) => {
         const pos = getPlayerPosition(p);
         if (posFilter === "W") return ["LW", "RW", "W"].includes(pos);
@@ -1651,9 +1719,9 @@ function BoardPane({
         </label>
 
         <div className={`${PREFIX}-seg`}>
-          {["all", "C", "W", "D", "G"].map((f) => (
-            <button key={f} type="button" className={posFilter === f ? "is-active" : ""} onClick={() => setPosFilter(f)}>
-              {f === "all" ? "All" : f}
+          {["all", "SL", "C", "W", "D", "G"].map((f) => (
+            <button key={f} type="button" className={`${posFilter === f ? "is-active" : ""}${f === "SL" ? " is-shortlist" : ""}`} onClick={() => setPosFilter(f)}>
+              {f === "all" ? "All" : f === "SL" ? `★ Shortlist ${safeArray(available).filter((x) => x?.watchlist || x?.target).length}` : f}
             </button>
           ))}
         </div>
@@ -1739,12 +1807,12 @@ function BoardPane({
                       <span className={`${PREFIX}-board-name-cell`}>
                         <ProspectFlag country={nat} code={natCode} width={22} />
                         <span>
-                          <strong>{getPlayerName(p)}</strong>
+                          <strong>{p?.watchlist ? <i className={`${PREFIX}-star`} title="On your shortlist">★</i> : null}{getPlayerName(p)}{p?.target ? <i className={`${PREFIX}-target`}>TARGET</i> : null}</strong>
                           {subline ? <span className={`${PREFIX}-board-sub`}>{subline}</span> : null}
                         </span>
                       </span>
                     ) : (
-                      <strong>{getPlayerName(p)}</strong>
+                      <strong>{p?.watchlist ? <i className={`${PREFIX}-star`} title="On your shortlist">★</i> : null}{getPlayerName(p)}</strong>
                     )}
                   </span>
                   <span className={`${PREFIX}-board-pos`}>{getPlayerPosition(p)}</span>
@@ -2649,7 +2717,8 @@ function SelectionModal({ open, prospects, compareIds, onCompare, onDraft, onClo
 
   const filtered = useMemo(() => {
     let rows = safeArray(prospects);
-    if (filter === "C") rows = rows.filter((p) => getPlayerPosition(p) === "C");
+    if (filter === "SL") rows = rows.filter((p) => p?.watchlist || p?.target);
+    else if (filter === "C") rows = rows.filter((p) => getPlayerPosition(p) === "C");
     else if (filter === "D") rows = rows.filter((p) => getPlayerPosition(p) === "D");
     else if (filter === "G") rows = rows.filter((p) => getPlayerPosition(p) === "G");
     else if (filter === "W") rows = rows.filter((p) => ["LW", "RW", "W"].includes(getPlayerPosition(p)));
@@ -2699,7 +2768,7 @@ function SelectionModal({ open, prospects, compareIds, onCompare, onDraft, onClo
 
   return createPortal(
     <div className={`${PREFIX}-scrim`} role="dialog" aria-modal="true" aria-label="Make selection">
-      <div className={`${PREFIX}-sheet`} style={{ width: "min(1240px,100%)", maxHeight: "92vh" }}>
+      <div className={`${PREFIX}-sheet ${PREFIX}-pick-sheet`} style={{ width: "min(1240px,100%)", maxHeight: "92vh" }}>
         <header className={`${PREFIX}-sheet-head`}>
           <div>
             <h2>You are on the clock</h2>
@@ -2738,9 +2807,9 @@ function SelectionModal({ open, prospects, compareIds, onCompare, onDraft, onClo
                 />
               </label>
               <div className={`${PREFIX}-seg`}>
-                {["all", "C", "W", "D", "G", "rising", "falling"].map((f) => (
-                  <button key={f} type="button" className={filter === f ? "is-active" : ""} onClick={() => setFilter(f)}>
-                    {f === "all" ? "All" : f === "rising" ? "Up" : f === "falling" ? "Down" : f}
+                {["all", "SL", "C", "W", "D", "G", "rising", "falling"].map((f) => (
+                  <button key={f} type="button" className={`${filter === f ? "is-active" : ""}${f === "SL" ? " is-shortlist" : ""}`} onClick={() => setFilter(f)}>
+                    {f === "all" ? "All" : f === "SL" ? `★ ${safeArray(prospects).filter((x) => x?.watchlist || x?.target).length}` : f === "rising" ? "Up" : f === "falling" ? "Down" : f}
                   </button>
                 ))}
               </div>
@@ -2761,7 +2830,7 @@ function SelectionModal({ open, prospects, compareIds, onCompare, onDraft, onClo
                   >
                     <ProspectFlag country={p.nationality || d.nationality} code={p.country_code || d.countryCode} />
                     <span className={`${PREFIX}-board-rank ${PREFIX}-tabular`}>{getRank(p) != null ? `#${getRank(p)}` : "—"}</span>
-                    <strong>{getPlayerName(p)}</strong>
+                    <strong>{p?.watchlist ? <i className={`${PREFIX}-star`} title="On your shortlist">★</i> : null}{getPlayerName(p)}{p?.target ? <i className={`${PREFIX}-target`}>TARGET</i> : null}</strong>
                     <span className={`${PREFIX}-board-pos`}>{getPlayerPosition(p)}</span>
                     {move != null && move !== 0 ? (
                       <span className={`${PREFIX}-board-stock ${move > 0 ? "up" : "down"}`}>{fmtSigned(move)}</span>
@@ -3959,6 +4028,20 @@ export default function EntryDraftMenu({ franchiseState = {}, eventData = {}, on
     return best;
   }, [completed]);
   const available = safeArray(draft.available_prospects);
+  const shortlistSeenRef = useRef(new Map());
+  available.forEach((p) => {
+    if (p?.watchlist || p?.target) shortlistSeenRef.current.set(String(getId(p)), p);
+  });
+  const shortlistRows = (() => {
+    const takenById = new Map();
+    completed.forEach((c) => {
+      const k = String(c?.prospect_id || c?.selected_prospect_id || c?.key || "");
+      if (k) takenById.set(k, c);
+    });
+    return [...shortlistSeenRef.current.entries()]
+      .map(([id, prospect]) => ({ id, prospect, taken: takenById.get(id) || null }))
+      .sort((a, b) => (a.taken ? 1 : 0) - (b.taken ? 1 : 0) || (getRank(a.prospect) ?? 9999) - (getRank(b.prospect) ?? 9999));
+  })();
   const currentPick = draft.current_pick;
   const currentRound = Number(currentPick?.round || draft.current_round || 1);
   const isUserPick = Boolean(draft.is_user_pick);
@@ -4533,6 +4616,12 @@ export default function EntryDraftMenu({ franchiseState = {}, eventData = {}, on
               userTeamId={uid}
               tweets={draftSocialTweets}
               feedEnabled={completed.length > 0}
+              shortlistRows={shortlistRows}
+              onOpenProspect={(p) => {
+                setSelectedAvailable(p);
+                setSelectedCompletedPick(null);
+                setBoardOpen(true);
+              }}
               onSelectPick={(p) => {
                 setSelectedCompletedPick(enrichPickFromBoard(p, draft));
                 setSelectedAvailable(null);

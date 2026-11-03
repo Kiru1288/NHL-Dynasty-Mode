@@ -906,11 +906,15 @@ def _scout_pool(session: FranchiseSession) -> List[Dict[str, Any]]:
         speed_mult = round(speed_mult, 3)
         days_to_72 = int(round(DRAFT_OVR_REVEAL_THRESHOLD / max(0.15, PASSIVE_ASSIGNED_DAILY * speed_mult)))
         tier = "Elite" if quality >= 88 else "Strong" if quality >= 78 else "Average"
+        firsts = ["Mike", "Sarah", "Erik", "Marc", "James", "Anna", "Tyler", "Lisa", "Dmitri", "Jonas", "Pekka", "Claire", "Owen", "Mats", "Rhea", "Viktor"]
+        lasts = ["Brennan", "Chen", "Lindholm", "Dubois", "Okafor", "Kowalski", "Morrison", "Bergstrom", "Volkov", "Nyberg", "Laine", "Fontaine", "Hayes", "Sundin", "Patel", "Orlov"]
+        person = f"{firsts[(seed + i * 5) % len(firsts)]} {lasts[(seed * 3 + i * 7) % len(lasts)]}"
         scouts.append(
             {
                 "id": sid,
                 "scout_id": sid,
-                "name": f"Regional Scout {code}",
+                "name": person,
+                "title": f"Regional Scout {code}",
                 "role": "Pro Scout" if i else "Director of Amateur Scouting",
                 "region": region,
                 "country": "",
@@ -1535,7 +1539,10 @@ def _estimate_cost(
     charged as sent, so a client could scout for $0). Bulk sweeps add a small
     per-prospect cost on top of the trip."""
     base = 18_000.0 + ACTION_SCOUTED_GAIN.get(action, 8.0) * 2_200.0
-    if n_targets > 1:
+    if str(body.get("target_type") or "").lower() in ("players", "prospects") and n_targets > 1:
+        # A hand-picked group trip: each extra prospect costs a bit over half a solo visit.
+        base *= 1.0 + 0.55 * (int(n_targets) - 1)
+    elif n_targets > 1:
         base += (int(n_targets) - 1) * 1_500.0
     cost = base * _intensity_mult(str(body.get("intensity") or "normal"))
     if state is not None:
@@ -1573,8 +1580,16 @@ def _apply_to_targets(
         or ""
     )
 
+    bulk_ids = body.get("target_ids") or (body.get("context") or {}).get("target_ids")
     affected: List[str] = []
-    if target_type in ("player", "prospect") and target_id:
+    if target_type in ("players", "prospects") and isinstance(bulk_ids, (list, tuple)):
+        seen_ids: set = set()
+        for raw in list(bulk_ids)[:40]:
+            k = str(raw)
+            if k in entry_by_key and k not in seen_ids:
+                seen_ids.add(k)
+                affected.append(k)
+    elif target_type in ("player", "prospect") and target_id:
         affected = [target_id] if target_id in entry_by_key else []
     elif target_type == "country" and country_id:
         for e in entries:
@@ -1724,6 +1739,31 @@ def _apply_scouting_meta_patch(
     if not meta_only or not isinstance(meta_patch, dict):
         return None
 
+    bulk_ids = body.get("prospect_ids") or ctx.get("prospect_ids")
+    if isinstance(bulk_ids, (list, tuple)) and bulk_ids and not body.get("_bulk_inner"):
+        # Bulk shortlist / assign: apply the same patch to each prospect, report once.
+        done, failed, last_msg = 0, 0, ""
+        for raw_pid in list(bulk_ids)[:80]:
+            sub = {"prospect_id": str(raw_pid), "meta_only": True, "meta_patch": dict(meta_patch), "_bulk_inner": True}
+            res = _apply_scouting_meta_patch(session, state, sub) or {}
+            if res.get("ok"):
+                done += 1
+            else:
+                failed += 1
+                last_msg = str(res.get("message") or "")
+        msg = f"Updated {done} prospect{'s' if done != 1 else ''}."
+        if failed:
+            msg += f" {failed} skipped" + (f" — {last_msg}" if last_msg else ".")
+        return {
+            "ok": done > 0,
+            "message": msg,
+            "updated": done,
+            "skipped": failed,
+            "prospects": get_scouting_prospects(session).get("prospects"),
+            "used_budget": float(state.get("used_budget") or 0.0),
+            "scout_spotlight": _spotlight_ids(state),
+        }
+
     pid = str(
         body.get("prospect_id")
         or body.get("player_id")
@@ -1826,6 +1866,8 @@ def _apply_scouting_meta_patch(
     elif patch.get("watchlist") is False:
         state["watchlist"] = [x for x in list(state.get("watchlist") or []) if str(x) != pid]
 
+    if body.get("_bulk_inner"):
+        return {"ok": True, "message": "Scouting metadata updated."}
     return {
         "ok": True,
         "message": "Scouting metadata updated.",
@@ -2702,3 +2744,217 @@ def get_draft_combine_payload(session: FranchiseSession) -> Dict[str, Any]:
     if getattr(session, "draft_combine_done", False) and session.draft_combine_payload:
         return dict(session.draft_combine_payload)
     return run_franchise_draft_combine(session)
+
+
+
+def build_prospect_war_room(session: FranchiseSession, prospect_id: str, entries: Optional[List[Mapping[str, Any]]] = None) -> Dict[str, Any]:
+    """Live dossier block: your file on him, who is on him, where he goes, how he ranks.
+
+    Computed fresh on every profile request (cheap), so scouting changes show at once.
+    """
+    pid = str(prospect_id or "")
+    state = _ensure_scouting_state(session)
+    entries = list(entries if entries is not None else _draft_entries(session))
+    entry = next((e for e in entries if str(e.get("key") or "") == pid), None) or {}
+    overlay = _prospect_overlay(state, pid)
+    ctx = _draft_franchise_date_context(session)
+    month = ctx.get("month")
+    cursor = int(getattr(session, "calendar_cursor", 0) or 0)
+
+    # ── Your file ────────────────────────────────────────────────────────
+    try:
+        yours = float(_scouted_pct(entry, overlay, month)) if entry else 0.0
+    except Exception:
+        yours = float(overlay.get("scouted_percentage") or 0.0)
+    try:
+        public = float(entry.get("public_scouting_confidence") or entry.get("scouting_confidence") or 0.0)
+    except (TypeError, ValueError):
+        public = 0.0
+    scouts = _scout_pool(session)
+    by_id = {str(sc.get("id")): sc for sc in scouts}
+    load: Dict[str, int] = {}
+    for ov in (state.get("prospects") or {}).values():
+        if isinstance(ov, dict) and str(ov.get("assigned_scout") or "").strip():
+            k = str(ov.get("assigned_scout")).strip()
+            load[k] = load.get(k, 0) + 1
+    assigned_raw = str(overlay.get("assigned_scout") or "").strip()
+    assigned = by_id.get(assigned_raw) or next((sc for sc in scouts if sc.get("name") == assigned_raw), None)
+    days_assigned = None
+    days_to_full = None
+    if assigned_raw:
+        at = overlay.get("assigned_at_cursor")
+        if at is not None:
+            days_assigned = max(0, cursor - int(at))
+            days_to_full = max(0, PASSIVE_FULL_FILE_DAYS - days_assigned)
+    recommended = None
+    try:
+        recommended = _best_scout_for(session, entry, dict(load)) if entry else None
+    except Exception:
+        recommended = None
+    file_block = {
+        "yours": round(yours, 1),
+        "public": round(public, 1),
+        "reveal_at": DRAFT_OVR_REVEAL_THRESHOLD,
+        "exact_at": DRAFT_OVR_EXACT_THRESHOLD,
+        "assigned_scout_id": str((assigned or {}).get("id") or assigned_raw or ""),
+        "assigned_scout_name": str((assigned or {}).get("name") or assigned_raw or ""),
+        "assigned_scout_region": str((assigned or {}).get("region") or ""),
+        "days_assigned": days_assigned,
+        "days_to_full_file": days_to_full,
+        "watchlist": bool(overlay.get("watchlist")) or pid in [str(x) for x in (state.get("watchlist") or [])],
+        "target": bool(overlay.get("target")),
+        "do_not_draft": bool(overlay.get("do_not_draft")),
+        "film_study_done": bool((overlay.get("requested_reports") or {}).get("film_study")) if isinstance(overlay.get("requested_reports"), dict) else False,
+        "interview_status": overlay.get("interview_status"),
+        "medical_status": overlay.get("medical_status"),
+        "notes": [str(n) for n in list(overlay.get("notes") or [])[-6:]],
+        "red_flags": [str(n) for n in list(overlay.get("red_flags") or [])[-4:]],
+        "recommended_scout_id": str((recommended or {}).get("id") or ""),
+    }
+    staff = [
+        {
+            "id": str(sc.get("id")),
+            "name": str(sc.get("name")),
+            "title": str(sc.get("title") or sc.get("role") or ""),
+            "region": str(sc.get("region") or ""),
+            "quality": int(sc.get("quality") or 0),
+            "tier": str(sc.get("scout_tier") or ""),
+            "load": int(load.get(str(sc.get("id")), 0)),
+            "days_to_72": int(sc.get("speed_days_to_72") or 0),
+            "recommended": str(sc.get("id")) == file_block["recommended_scout_id"],
+        }
+        for sc in scouts
+    ]
+
+    # ── Budget & action prices ───────────────────────────────────────────
+    budget = float(state.get("budget") or DEFAULT_SCOUTING_BUDGET)
+    used = float(state.get("used_budget") or 0.0)
+    prices = {}
+    for act in ("player_focus", "film_study", "interview", "medical_review"):
+        try:
+            prices[act] = round(_estimate_cost({"intensity": "normal"}, act, state, n_targets=1))
+        except Exception:
+            continue
+
+    # ── Draft range & who picks there ────────────────────────────────────
+    try:
+        rank = int(entry.get("rank") or entry.get("consensus_rank") or 0)
+    except (TypeError, ValueError):
+        rank = 0
+    order: List[str] = []
+    st = getattr(session, "standings", None)
+    recs = getattr(st, "records", None) if st is not None else None
+    if isinstance(recs, dict) and recs:
+        rows = []
+        for tid, rec in recs.items():
+            try:
+                pct = float(rec.point_pct()) if hasattr(rec, "point_pct") else 0.5
+            except Exception:
+                pct = 0.5
+            rows.append((pct, str(tid)))
+        rows.sort()
+        order = [tid for _p, tid in rows]
+    if not order:
+        order = [str(getattr(t, "team_id", "")) for t in list(getattr(getattr(session.sim, "league", None), "teams", None) or [])]
+    lo = max(1, rank - 3) if rank else None
+    hi = (rank + 5) if rank else None
+    teams_in_range = []
+    if lo and order:
+        for pick in range(lo, min(hi, len(order)) + 1):
+            tid = order[pick - 1]
+            team = (getattr(session, "team_by_id", {}) or {}).get(tid)
+            teams_in_range.append({
+                "pick": pick,
+                "team_id": tid,
+                "abbr": str(getattr(team, "abbreviation", None) or getattr(team, "abbr", None) or tid),
+                "name": str(getattr(team, "name", None) or tid),
+                "is_user": tid == str(getattr(session, "user_team_id", "")),
+            })
+    user_pick = _projected_pick(session)
+    draft_range = {
+        "rank": rank or None,
+        "low": lo,
+        "high": hi,
+        "round": 1 if rank and rank <= 32 else (2 if rank and rank <= 64 else 3),
+        "user_pick": user_pick,
+        "user_in_range": bool(lo and hi and lo <= user_pick <= hi),
+        "teams": teams_in_range[:9],
+    }
+
+    # ── How he ranks: league, position, class ───────────────────────────
+    def _f(e, k):
+        try:
+            return float(e.get(k) or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    league = str(entry.get("league") or "")
+    pos = str(entry.get("position") or "")
+    pos_group = "G" if pos == "G" else ("D" if pos == "D" else "F")
+    same_league = [e for e in entries if str(e.get("league") or "") == league]
+    same_pos = [e for e in entries if (("G" if str(e.get("position")) == "G" else ("D" if str(e.get("position")) == "D" else "F")) == pos_group)]
+
+    def _rank_in(pool, key):
+        if not pool or not entry:
+            return None
+        ordered = sorted(pool, key=lambda e: _f(e, key), reverse=True)
+        for i, e in enumerate(ordered):
+            if str(e.get("key")) == pid:
+                return {"rank": i + 1, "of": len(ordered)}
+        return None
+
+    ranks = {
+        "league": league,
+        "league_points": _rank_in(same_league, "points") if pos != "G" else None,
+        "league_ppg": _rank_in([e for e in same_league if _f(e, "gp") >= 3], "ppg") if pos != "G" else None,
+        "position_board": None,
+        "class_war": _rank_in(entries, "war") if pos != "G" else None,
+        "class_nhle": _rank_in(entries, "nhle") if pos != "G" else None,
+    }
+    if entry:
+        ordered = sorted(same_pos, key=lambda e: int(e.get("rank") or 9999))
+        for i, e in enumerate(ordered):
+            if str(e.get("key")) == pid:
+                ranks["position_board"] = {"rank": i + 1, "of": len(ordered), "group": pos_group}
+                break
+
+    def _int_or_none(v):
+        try:
+            return int(v) if v not in (None, "", "None") else None
+        except (TypeError, ValueError):
+            return None
+
+    rank_path = [
+        {"label": "Preseason", "rank": _int_or_none(entry.get("preseason_rank"))},
+        {"label": "Midseason", "rank": _int_or_none(entry.get("midseason_rank"))},
+        {"label": "Last week", "rank": _int_or_none(entry.get("rank_prev") or entry.get("previous_rank"))},
+        {"label": "Now", "rank": rank or None},
+    ]
+    projected = {
+        "gp": _int_or_none(entry.get("projected_gp")),
+        "goals": _int_or_none(entry.get("projected_goals")),
+        "assists": _int_or_none(entry.get("projected_assists")),
+        "points": _int_or_none(entry.get("projected_points")),
+    }
+    context = {
+        "production_context": entry.get("production_context"),
+        "league_difficulty": entry.get("league_difficulty"),
+        "scoring_environment": entry.get("scoring_environment"),
+        "translation_risk": entry.get("translation_risk"),
+        "quality_of_competition": entry.get("quality_of_competition"),
+        "hometown": entry.get("hometown") or entry.get("birth_city"),
+        "stock_label": entry.get("weekly_stock_label") or entry.get("stock_label"),
+        "stock_reason": entry.get("weekly_stock_reason") or entry.get("stock_reason"),
+        "scout_grade": entry.get("scout_grade"),
+        "talent_grade": entry.get("talent_grade") or entry.get("scout_tier"),
+    }
+    return {
+        "file": file_block,
+        "scouts": staff,
+        "budget": {"total": round(budget), "used": round(used), "left": round(max(0.0, budget - used)), "prices": prices},
+        "draft_range": draft_range,
+        "ranks": ranks,
+        "rank_path": rank_path,
+        "projected_season": projected,
+        "context": context,
+    }

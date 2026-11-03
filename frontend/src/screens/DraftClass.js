@@ -18,7 +18,8 @@ import {
 } from "../components/franchise/commandVisuals";
 import { BOARD_SOURCES, WORKSPACE_TABS, confMeaning, enrichProspectsForWarRoom, groupByPyramid, rankProspectsForSource, weeklyStockMovers } from "./draftWarRoom";
 import { buildProspectDossierModel } from "../components/dossier/prospectDossierModel";
-import { ProspectDossier, useDossierTab } from "../components/dossier/ProspectDossierView";
+import { useDossierTab } from "../components/dossier/ProspectDossierView";
+import KartDossier from "../components/dossier/KartDossier";
 import { resolveOvrBands, buildStubProspectProfile } from "./prospectDossierHelpers";
 
 let TRANSCENDENT_BOSS_AUDIO_URL = null;
@@ -127,6 +128,7 @@ const COVERAGE_DEPLOY_TARGETS = Object.freeze([
   { kind: "region", id: "north-america", label: "North America" },
   { kind: "region", id: "europe", label: "Europe" },
   { kind: "region", id: "scandinavia", label: "Scandinavia" },
+  { kind: "region", id: "russia-cis", label: "Russia / CIS" },
   { kind: "country", id: "canada", label: "Canada" },
   { kind: "country", id: "united-states", label: "United States" },
   { kind: "country", id: "sweden", label: "Sweden" },
@@ -520,9 +522,12 @@ function boardFilterLabel(activeBoardView) {
 }
 
 function regionForCountry(country) {
-  if (country === "Canada" || country === "United States") return "NORTH AMERICA";
-  if (["Sweden", "Finland", "Czechia", "Slovakia", "Germany", "Switzerland"].includes(country)) return "EUROPE";
-  return "INTERNATIONAL";
+  const c = String(country || "").trim();
+  if (["Canada", "United States", "USA", "CAN"].includes(c)) return "North America";
+  if (["Sweden", "Finland", "Norway", "Denmark"].includes(c)) return "Scandinavia";
+  if (["Russia", "Belarus", "Kazakhstan"].includes(c)) return "Russia / CIS";
+  if (c && c.toLowerCase() !== "unknown") return "Europe";
+  return "International";
 }
 
 function parseMonthFromDate(raw) {
@@ -2078,15 +2083,18 @@ function LeaderModalRow({
   };
 
   return (
-    <article className={`dc-lm-row${isGoalie ? " dc-lm-row--goalie" : ""}`}>
+    <article className={`dc-lm-row dkl-row${isGoalie ? " dc-lm-row--goalie" : ""}${index < 3 ? " is-podium" : ""}`}>
       <div className="dc-lm-row__identity">
-        <span className="dc-lm-row__rank">{index + 1}</span>
+        <span className={`dc-lm-row__rank dkl-rank r${index + 1}`}>{index + 1}</span>
+        {row.player ? (
+          <span className="dkl-face"><DraftClassHeadshot player={row.player} size="sm" board /></span>
+        ) : null}
         <div className="dc-lm-row__player">
           <button type="button" className="dc-lm-row__name" onClick={() => onSelect(row)}>
             {row.name}
           </button>
           <span className="dc-lm-row__meta">
-            {row.position || "—"} · {hand} · {row.league || "—"}
+            <i className="dkl-pos">{row.position || "—"}</i> {hand} · {row.league || "—"}
             {row.team ? ` · ${row.team}` : ""}
           </span>
         </div>
@@ -2166,49 +2174,174 @@ function DraftClassHeadshot({ player, size = "md", board = false }) {
   );
 }
 
-function TopHeader({ onBack, dateContext, franchiseState }) {
+const DK_TABS = [
+  ["board", "Scout board"],
+  ["ops", "Scouting ops"],
+  ["stats", "Stats"],
+];
+
+function TopHeader({ onBack, dateContext, franchiseState, workspace, setWorkspace, onOpenWjc }) {
   const logoUrl = resolveTeamLogo(franchiseState);
   const initials = resolveTeamToken(franchiseState);
   const record = resolveRecord(franchiseState);
   const ownedPickCount = resolveOwnedPickCount(franchiseState, dateContext?.draftYear);
   const hud = franchiseState?.draft_class_hud || {};
   const draftLive = dateContext?.draftLive || isDraftLive(franchiseState);
-  const draftValue = resolveHudEventDisplay(franchiseState, hud, {
-    eventKey: "draft",
-    hudRow: hud?.events?.draft,
-    draftLive,
-  });
-  const coverage = hud?.coverage_label || hud?.scouting_coverage || dateContext?.periodLabel;
+  const draftValue = resolveHudEventDisplay(franchiseState, hud, { eventKey: "draft", hudRow: hud?.events?.draft, draftLive });
+  const lotValue = resolveHudEventDisplay(franchiseState, hud, { eventKey: "draft_lottery", hudRow: hud?.events?.lottery });
+  const wjcValue = resolveHudEventDisplay(franchiseState, hud, { eventKey: "wjc_start", hudRow: hud?.events?.wjc });
+  const status = hud?.team_status?.label || "Middling";
+  const period = hud?.coverage_label || hud?.scouting_coverage || dateContext?.periodLabel || "";
+  const clock = (label, value, tone, onClick) => {
+    const inner = (
+      <>
+        <em>{label}</em>
+        <b>{value || "—"}</b>
+      </>
+    );
+    return onClick && value && value !== "—" ? (
+      <button type="button" className={`dk-clock tone-${tone}`} onClick={onClick} title={`Open ${label}`}>{inner}</button>
+    ) : (
+      <span className={`dk-clock tone-${tone}`}>{inner}</span>
+    );
+  };
   return (
-    <header className="dc-topbar dc-topbar--draft-hud dc-topbar--war">
-      <div className="dc-topbar__left">
-        <button type="button" className="dc-back-btn dc-back-btn--hud" onClick={onBack}>
-          ← Back
-        </button>
-        <div>
-          <small className="dc-record-mini">Scouting War Room</small>
-          <div className="dc-war-meta">
-            <span>Class <strong>{dateContext?.draftYear || "—"}</strong></span>
-            <span>Picks <strong>{ownedPickCount ?? 0}</strong></span>
-            <span>Record {record}</span>
-          </div>
-        </div>
+    <header className="dk-top">
+      <button type="button" className="dk-back" onClick={onBack}>◀ Hub</button>
+      <div className="dk-plate" aria-hidden="true"><span>DRAFT</span><b>ROOM</b></div>
+      <div className="dk-team">
+        <span className="dk-team-logo">
+          {logoUrl ? <img src={logoUrl} alt="" /> : <i>{initials}</i>}
+        </span>
+        <span className="dk-team-text">
+          <strong>Class of {dateContext?.draftYear || "—"}</strong>
+          <em>{ownedPickCount ?? 0} picks · {record} · {status}{period ? ` · ${period}` : ""}</em>
+        </span>
       </div>
-
-      <div className="dc-topbar__center dc-topbar__center-logo">
-        {logoUrl ? (
-          <img className="dc-team-logo" src={logoUrl} alt="Team logo" />
-        ) : (
-          <div className="dc-team-logo-fallback" aria-label="Team logo">{initials}</div>
-        )}
-        <small className="dc-date-mini">{coverage || dateContext?.statsThrough || "—"}</small>
-      </div>
-
-      <div className="dc-war-countdown" title="Days until the NHL Draft">
-        <b>{draftValue || "—"}</b>
-        <small>Until Draft</small>
+      <nav className="dk-tabs" role="tablist" aria-label="Draft workspace">
+        {DK_TABS.map(([id, label]) => (
+          <button key={id} type="button" role="tab" aria-selected={workspace === id} className={`dk-tab${workspace === id ? " is-on" : ""}`} onClick={() => setWorkspace(id)}>
+            {label}
+          </button>
+        ))}
+      </nav>
+      <div className="dk-clocks">
+        {clock("Draft", draftValue, "yellow")}
+        {clock("Lottery", lotValue, "blue")}
+        {clock("World Juniors", wjcValue, "red", onOpenWjc)}
       </div>
     </header>
+  );
+}
+
+function ScoutingOps({ prospects, scoutingStore, activeDeployments, onDeploy, deployBusy, deployNotice, onBulk, bulkBusy, bulkNote, onOpenProspect, franchiseState }) {
+  const cursor = Number(franchiseState?.calendar_cursor || 0);
+  const st = franchiseState?.scouting_state || {};
+  const budget = Number(st.budget || 0);
+  const used = Number(st.used_budget || 0);
+  const regions = useMemo(() => {
+    const keys = ["North America", "Scandinavia", "Europe", "Russia / CIS"];
+    return keys.map((name) => {
+      const list = prospects.filter((p) => regionForCountry(p.country || p.nationality || "") === name);
+      const slug = slugifyCoverageId(name);
+      const dep = (activeDeployments || []).find((d) => d.kind === "region" && slugifyCoverageId(d.id) === slug);
+      const daysLeft = dep ? Math.max(0, 28 - (cursor - Number(dep.since_cursor || cursor))) : null;
+      const files = list.map((p) => prospectDedicatedPct(p) || 0);
+      const avg = files.length ? Math.round(files.reduce((a, b) => a + b, 0) / files.length) : 0;
+      const top = list.filter((p) => (p.boardRank || prospectRank(p)) <= 64);
+      const unassignedTop = top.filter((p) => !getScoutingMeta(scoutingStore, p.id).assignedScout).slice(0, 5);
+      const best = [...list].sort((a, b) => (a.boardRank || prospectRank(a)) - (b.boardRank || prospectRank(b))).slice(0, 4);
+      return { name, slug, list, dep, daysLeft, avg, top, unassignedTop, best };
+    });
+  }, [prospects, activeDeployments, cursor, scoutingStore]);
+  const shortlist = prospects.filter((p) => getScoutingMeta(scoutingStore, p.id).watchlist);
+  const shortIds = shortlist.map((p) => p.id);
+  const unassignedShort = shortlist.filter((p) => !getScoutingMeta(scoutingStore, p.id).assignedScout).map((p) => p.id);
+
+  return (
+    <div className="dko">
+      <section className="dko-col">
+        <div className="dko-banner">
+          <strong>Scouting ops</strong>
+          <span>Deploy whole regions, assign scouts in bulk and work your shortlist without leaving the war room.</span>
+          <div className="dko-budget">
+            <em>Budget</em>
+            <i><s style={{ width: `${budget ? Math.min(100, (used / budget) * 100) : 0}%` }} /></i>
+            <b>${((budget - used) / 1e6).toFixed(2)}M left</b>
+          </div>
+          {bulkNote || deployNotice ? <p className="dko-note" aria-live="polite">{bulkNote || deployNotice}</p> : null}
+        </div>
+        <div className="dko-regions">
+          {regions.map((r) => (
+            <article key={r.slug} className={`dko-region${r.dep ? " is-live" : ""}`}>
+              <header>
+                <strong>{r.name}</strong>
+                {r.dep ? <span className="dko-live">Coverage live · {r.daysLeft}d</span> : <span className="dko-idle">No coverage</span>}
+              </header>
+              <div className="dko-stats">
+                <div><em>Prospects</em><b>{r.list.length}</b></div>
+                <div><em>Top 64</em><b>{r.top.length}</b></div>
+                <div><em>Avg file</em><b>{r.avg}%</b></div>
+              </div>
+              <ul className="dko-best">
+                {r.best.map((p) => (
+                  <li key={p.id}>
+                    <button type="button" onClick={() => onOpenProspect(p)}>
+                      <b>#{p.boardRank || prospectRank(p)}</b>
+                      <span>{p.firstName} {p.lastName}</span>
+                      <em>{p.position} · {prospectDedicatedPct(p) || 0}%</em>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              <div className="dko-actions">
+                <button type="button" className="dkb-dock-btn is-go" disabled={deployBusy || !r.list.length} onClick={() => onDeploy({ kind: "region", id: r.slug, label: r.name })}>
+                  {r.dep ? "Re-sweep region" : "Deploy coverage"}
+                </button>
+                <button type="button" className="dkb-dock-btn is-blue" disabled={bulkBusy || !r.unassignedTop.length} onClick={() => onBulk("assign", r.unassignedTop.map((p) => p.id))}>
+                  Assign scouts · top {r.unassignedTop.length || 0}
+                </button>
+                <button type="button" className="dkb-dock-btn" disabled={bulkBusy || !r.top.length} onClick={() => onBulk("scout", r.top.slice(0, 6).map((p) => p.id))}>
+                  Scout trip · top {Math.min(6, r.top.length)}
+                </button>
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
+      <aside className="dko-side">
+        <div className="dko-short">
+          <header>
+            <strong>Your shortlist</strong>
+            <b>{shortlist.length}</b>
+          </header>
+          <p>This list follows you onto the draft floor.</p>
+          <div className="dko-actions">
+            <button type="button" className="dkb-dock-btn is-go" disabled={bulkBusy || !shortIds.length} onClick={() => onBulk("scout", shortIds.slice(0, 40))}>Scout all</button>
+            <button type="button" className="dkb-dock-btn is-blue" disabled={bulkBusy || !unassignedShort.length} onClick={() => onBulk("assign", unassignedShort)}>Assign scouts ({unassignedShort.length})</button>
+          </div>
+          <ul className="dko-shortlist">
+            {shortlist.length ? shortlist.map((p) => {
+              const pct = prospectDedicatedPct(p) || 0;
+              const meta = getScoutingMeta(scoutingStore, p.id);
+              return (
+                <li key={p.id}>
+                  <button type="button" onClick={() => onOpenProspect(p)}>
+                    <b>#{p.boardRank || prospectRank(p)}</b>
+                    <span>
+                      {p.firstName} {p.lastName}
+                      <em>{p.position} · {p.league}{meta.assignedScout ? " · scout on file" : ""}</em>
+                    </span>
+                    <i className="dko-pct"><s style={{ width: `${pct}%` }} /></i>
+                    <small>{pct}%</small>
+                  </button>
+                </li>
+              );
+            }) : <li className="dko-empty">Nobody yet. Star prospects on the board to build your list.</li>}
+          </ul>
+        </div>
+      </aside>
+    </div>
   );
 }
 
@@ -2383,16 +2516,14 @@ function resolveCurrentEstimate(player, profile, ceilingHidden, dedicatedFile) {
   return { text: "\u2014", detail: "Not revealed", exact: false };
 }
 
-function ProspectBoardRow({ player, index, selected, expanded, onSelect, onPrefetch, meta, showConsensus }) {
+function ProspectBoardRow({ player, index, selected, onSelect, onPrefetch, meta, showConsensus, checked = false, onToggleCheck, onToggleWatch }) {
   const rank = player.boardRank || prospectRank(player, index);
   const countryCode = normalizeCountryCode(player);
-  const scoutPct = prospectEffectivePct(player);
-  const dedicatedPct = prospectDedicatedPct(player);
-  prospectConfidenceFogClass(scoutPct);
+  const pub = prospectPublicPct(player);
+  const you = prospectDedicatedPct(player);
   const ceilingHidden = Boolean(player?.ceilingHidden);
   const profile = player?.profile || null;
   const ovr = resolveCurrentEstimate(player, profile, ceilingHidden, Boolean(profile?.dedicatedScoutFile));
-  const ovrBands = resolveOvrBands(profile, player, ceilingHidden);
   const pot = resolvePotentialEstimate(player);
   const league = player.leagueDisplay || player.league || "—";
   const pos = player.position || "—";
@@ -2400,127 +2531,99 @@ function ProspectBoardRow({ player, index, selected, expanded, onSelect, onPrefe
   const rowFlagUrl = flagApiUrl(countryCode || nationFull, 32);
   const stock = player.draftStock || {};
   const delta = Number(stock.deltaRank) || 0;
-  const topFive = rank <= 5;
-  const boardOvrText = ovr.text !== "—" ? ovr.text : "—";
-  const boardOvrTitle = ovrBands.peakText && !ceilingHidden && ovr.text !== "—"
-    ? `Now ${ovr.text} · Peak ${ovrBands.peakText}`
-    : (ovr.detail || "Present ability");
-  const lo = pot.exact ? pot.value : (player?.potentialRange?.low ?? null);
-  const hi = pot.exact ? pot.value : (player?.potentialRange?.high ?? null);
-  const mid = pot.value;
-  confMeaning(scoutPct);
   const tier = player.pyramidTier;
-
-  const reasonCode = Array.isArray(player.draftRankReasonCodes) ? player.draftRankReasonCodes[0] : null;
-  const reasonLabel = humanizeScoutReason(reasonCode);
+  const reasonLabel = humanizeScoutReason(Array.isArray(player.draftRankReasonCodes) ? player.draftRankReasonCodes[0] : null);
   const divergence = player.boardDivergence;
-  const ceilingFog = player.ceilingHidden
-    ? "hidden"
-    : (pot.exact ? "exact" : ((dedicatedPct == null || dedicatedPct < 76) && String(pot.text || "").includes("–") ? "range-fog" : "plain"));
-  const rankNumClass = wrNumClassForRank(rank);
-  const potNumClass = wrNumClassForTier(pot.tier?.key);
-  const glowCeiling = pot.exact && (pot.tier?.key === "elite" || pot.tier?.key === "generational" || rank <= 5);
+  const potKey = pot.tier?.key || "fog";
+  const rankTone = rank <= 5 ? "gold" : rank <= 16 ? "purple" : rank <= 32 ? "blue" : rank <= 64 ? "green" : "slate";
+  const wasRank = Number(player?.draftStock?.previousRank || player?.previousRank || player?.rank_prev || 0);
+  const posGroup = isGoaliePosition(pos) ? "g" : isDefensemanPosition(pos) ? "d" : "f";
+  const watch = Boolean(meta?.watchlist);
+  const statLine = (() => {
+    const gp = Number(player?.gp ?? player?.gamesPlayed ?? 0);
+    if (!gp) return "";
+    if (isGoaliePosition(pos)) return `${gp} GP${player?.savePct ? ` · ${player.savePct} SV%` : ""}`;
+    return `${player?.goals ?? 0}G ${player?.assists ?? 0}A ${player?.points ?? 0}P · ${gp} GP`;
+  })();
+  const projection = String(player.scoutProjection || "").replace(/ Projection$/i, "");
 
   return (
-    <button
-      type="button"
-      className={`dc-prospect-row${selected ? " is-selected" : ""}${expanded ? " is-expanded" : ""}${meta?.doNotDraft ? " is-dnd" : ""}${player?.isTranscendent ? " prospect-card--transcendent" : ""}${rank > 32 ? " is-late-round" : ""}${topFive ? " is-top5" : ""}${player.overager ? " is-overager" : ""}`}
+    <div
+      role="button"
+      tabIndex={0}
+      className={`dkb-row rank-${rankTone}${selected ? " is-open" : ""}${checked ? " is-checked" : ""}${meta?.doNotDraft ? " is-dnd" : ""}${player?.isTranscendent ? " is-transcendent" : ""}`}
       onClick={onSelect}
+      onKeyDown={(e) => { if (e.key === "Enter") onSelect?.(); }}
       onMouseEnter={() => onPrefetch?.(player)}
       style={tier ? { "--tier-color": tier.color } : undefined}
     >
-      <div className={`dc-prospect-row__rank ${rankNumClass}`} aria-label={`Rank ${rank}`}>
-        <RankChange rank={rank} delta={delta} />
-      </div>
-
-      <div className="dc-prospect-row__player">
-        <div className="dc-prospect-row__shot">
-          <DraftClassHeadshot player={player} size={topFive ? "lg" : "md"} board />
-        </div>
-        {rowFlagUrl ? (
-          <img
-            className="dc-prospect-row__flag"
-            src={rowFlagUrl}
-            alt={nationFull || ""}
-            title={nationFull || undefined}
-            loading="lazy"
-            onError={(e) => { e.currentTarget.style.display = "none"; }}
-          />
-        ) : null}
-        <span className="dc-prospect-row__identity">
-          <span className="dc-prospect-row__name-row">
-            <strong className="dc-prospect-row__name">{player.firstName} {player.lastName}</strong>
-            {topFive ? (
-              <b
-                className={`dc-prospect-row__ovr ${(ovr.exact || (ovrBands.peakText && !ceilingHidden)) ? "wr-num-gold" : "wr-num-slate"}`}
-                title={boardOvrTitle}
-              >
-                {boardOvrText}
-              </b>
-            ) : null}
-          </span>
-          <span className="dc-prospect-row__sub">
-            {player.teamDisplay || player.team || league} · {player.age || "—"} yrs
-            {player.scoutProjection ? ` · ${player.scoutProjection}` : ""}
-            {player.scoutConfidence ? ` · ${player.scoutConfidence} confidence` : ""}
-            {Array.isArray(player.scoutTags) && player.scoutTags.length ? ` · ${player.scoutTags.slice(0, 2).join(", ")}` : ""}
-            {player.overager ? <em className="dc-overage-pill">Overager</em> : null}
-            {player.characterConcerns ? <em className="dc-char-pill">Character</em> : null}
-            {reasonLabel ? <em className="wr-reason-chip">{reasonLabel}</em> : null}
-            {divergence ? (
-              <em className="wr-div-chip">YOU #{divergence.scoutRank} · PUBLIC #{divergence.publicRank}</em>
-            ) : null}
-            {player.goalieBoardCap ? <em className="wr-cap-chip">Goalie board cap</em> : null}
-          </span>
-        </span>
-      </div>
-
-      <span className="dc-prospect-row__cell dc-prospect-row__pos">{pos}</span>
-      <span className="dc-prospect-row__cell dc-prospect-row__league" title={league}>
-        <LeagueBadge league={league} />
+      <span className="dkb-check" onClick={(e) => { e.stopPropagation(); onToggleCheck?.(); }} role="checkbox" aria-checked={checked} title="Select for bulk actions">
+        <i>{checked ? "✓" : ""}</i>
       </span>
-      <span
-        className={`dc-prospect-row__cell dc-prospect-row__pot${pot.tier ? ` is-pot-${pot.tier.key}` : ""}${pot.exact ? "" : " is-range"}`}
-        title={`${pot.tier ? `${pot.tier.label} · ` : ""}${pot.detail} · Now ${ovr.text}`}
+      <span className="dkb-rank" title={`Board rank ${rank}`}>
+        <b>{rank}</b>
+        {delta ? <em className={delta > 0 ? "is-up" : "is-down"}>{delta > 0 ? "▲" : "▼"}{Math.abs(delta)}</em> : wasRank && wasRank !== rank ? <em>was {wasRank}</em> : null}
+      </span>
+      <span className="dkb-face">
+        <DraftClassHeadshot player={player} size="md" board />
+        {rowFlagUrl ? <img className="dkb-flag" src={rowFlagUrl} alt={nationFull || ""} loading="lazy" onError={(e) => { e.currentTarget.style.display = "none"; }} /> : null}
+      </span>
+      <span className="dkb-main">
+        <span className="dkb-name">
+          {player.firstName} {player.lastName}
+          {watch ? <i className="dkb-star" title="Shortlisted">★</i> : null}
+          {meta?.assignedScout ? <i className="dkb-scoutpin" title="Scout assigned">SCOUT</i> : null}
+          {meta?.target ? <i className="dkb-target" title="Draft-day target">TARGET</i> : null}
+        </span>
+        <span className="dkb-sub">
+          <span>{player.teamDisplay || player.team || league}</span>
+          <span>{player.age || "—"} yrs</span>
+          {statLine ? <span className="dkb-stat">{statLine}</span> : null}
+        </span>
+        <span className="dkb-chips">
+          {projection ? <i className="dkb-chip is-proj">{projection}</i> : null}
+          {Array.isArray(player.scoutTags) ? player.scoutTags.slice(0, 2).map((t) => <i key={t} className="dkb-chip">{t}</i>) : null}
+          {player.scoutConfidence ? <i className={`dkb-chip is-conf conf-${String(player.scoutConfidence).toLowerCase()}`}>{player.scoutConfidence} conf.</i> : null}
+          {player.overager ? <i className="dkb-chip is-warn">Overager</i> : null}
+          {player.characterConcerns ? <i className="dkb-chip is-bad">Character</i> : null}
+          {reasonLabel ? <i className="dkb-chip">{reasonLabel}</i> : null}
+          {divergence ? <i className="dkb-chip is-div">You #{divergence.scoutRank} · Pub #{divergence.publicRank}</i> : null}
+        </span>
+      </span>
+      <span className={`dkb-pos pos-${posGroup}`}>{pos}</span>
+      <span className="dkb-league" title={league}><LeagueBadge league={league} /></span>
+      <span className="dkb-now" title={ovr.detail || "Present ability"}>
+        <em>NOW</em>
+        <b>{ovr.text}</b>
+      </span>
+      <span className={`dkb-ceil tier-${potKey}`} title={`${pot.tier ? `${pot.tier.label} · ` : ""}${pot.detail}`}>
+        <em>CEILING</em>
+        <b>{pot.text}</b>
+        {player.potentialTrend === "rising" || player.potentialTrend === "falling" ? (
+          <i className={`dkb-trend is-${player.potentialTrend}`}>{player.potentialTrend === "rising" ? "▲" : "▼"}</i>
+        ) : null}
+      </span>
+      <span className="dkb-window">{projectionForRank(rank)}</span>
+      <span className="dkb-file" title={`Public file ${pub ?? "—"}% · your file ${you ?? 0}%`}>
+        <i className="dkb-file-bar">
+          <s className="is-pub" style={{ width: `${pub || 0}%` }} />
+          <s className="is-you" style={{ width: `${you || 0}%` }} />
+        </i>
+        <span><b>{you ?? 0}%</b> you · {pub ?? "—"}% pub</span>
+      </span>
+      <span className={`dkb-stock${delta > 0 ? " is-up" : delta < 0 ? " is-down" : ""}`} title="Weekly stock">
+        {delta > 0 ? `+${delta}` : delta < 0 ? `${delta}` : "—"}
+      </span>
+      {showConsensus ? <span className="dkb-pub">#{player.publicRank || player.rank}</span> : null}
+      <button
+        type="button"
+        className={`dkb-watch${watch ? " is-on" : ""}`}
+        title={watch ? "Remove from shortlist" : "Add to shortlist"}
+        onClick={(e) => { e.stopPropagation(); onToggleWatch?.(); }}
       >
-        <span
-          className={`wr-ceiling-chip${ceilingFog === "hidden" ? " is-hidden" : ""}${ceilingFog === "range-fog" ? " is-range-fog" : ""}${ceilingFog === "exact" ? " is-exact" : ""}${glowCeiling ? " is-glow" : ""}`}
-          aria-label={ceilingFog === "hidden" ? "Ceiling unreported" : undefined}
-        >
-          {ceilingFog === "hidden" ? null : (
-            <ProjectionRange
-              low={lo}
-              mid={mid}
-              high={hi}
-              confidence={scoutPct}
-              className={pot.exact ? potNumClass : ""}
-            />
-          )}
-        </span>
-        {ceilingFog !== "hidden" && (player.potentialTrend === "rising" || player.potentialTrend === "falling") ? (
-          <span
-            className={`dc-pot-trend is-${player.potentialTrend}`}
-            title={player.potentialTrendLabel || (player.potentialTrend === "rising" ? "Scouts see the ceiling rising" : "Scouts see the ceiling slipping")}
-          >
-            {player.potentialTrend === "rising" ? "▲" : "▼"}
-            {player.potentialChangeEst != null ? Math.abs(player.potentialChangeEst) : ""}
-          </span>
-        ) : null}
-      </span>
-      <span className="dc-prospect-row__cell dc-prospect-row__proj">{projectionForRank(rank)}</span>
-      <ScoutingFileSplit player={player} compact />
-      <span className="dc-prospect-row__cell dc-prospect-row__stock" title="Weekly stock">
-        <StockTrajectory delta={delta} direction={stock.direction} />
-      </span>
-      {showConsensus ? (
-        <span className="dc-prospect-row__cell dc-prospect-row__pub">#{player.publicRank || player.rank}</span>
-      ) : null}
-      {expanded ? (
-        <div className="dc-mini-dossier">
-          <PerformanceStrip player={player} />
-        </div>
-      ) : null}
-    </button>
+        {watch ? "★" : "☆"}
+      </button>
+    </div>
   );
 }
 
@@ -2573,6 +2676,29 @@ function CoverageDeployPanel({ prospects, activeDeployments, onDeploy, busy, not
   );
 }
 
+const BOARD_LIST_FILTERS = [
+  ["all", "Everyone"],
+  ["shortlist", "Shortlist"],
+  ["assigned", "Scout on file"],
+  ["unscouted", "No file yet"],
+  ["risers", "Risers"],
+];
+
+function BulkDock({ count, busy, note, onAction, onClear }) {
+  if (!count && !note) return null;
+  return (
+    <div className={`dkb-dock${count ? " is-live" : ""}`} role="region" aria-label="Bulk scouting actions">
+      <span className="dkb-dock-count"><b>{count}</b> selected</span>
+      <button type="button" className="dkb-dock-btn" disabled={busy || !count} onClick={() => onAction("shortlist")}>☆ Shortlist all</button>
+      <button type="button" className="dkb-dock-btn" disabled={busy || !count} onClick={() => onAction("unshortlist")}>Remove from shortlist</button>
+      <button type="button" className="dkb-dock-btn is-blue" disabled={busy || !count} onClick={() => onAction("assign")}>Assign best scouts</button>
+      <button type="button" className="dkb-dock-btn is-go" disabled={busy || !count} onClick={() => onAction("scout")}>{busy ? "Scouting…" : `Scout trip ×${count}`}</button>
+      <span className="dkb-dock-note" aria-live="polite">{note}</span>
+      {count ? <button type="button" className="dkb-dock-x" onClick={onClear} aria-label="Clear selection">×</button> : null}
+    </div>
+  );
+}
+
 function ProspectBoardPanel({
   prospects,
   selectedProspectId,
@@ -2580,6 +2706,7 @@ function ProspectBoardPanel({
   onPrefetchProspect,
   scoutingStore,
   activeBoardView,
+  setActiveBoardView,
   boardSource,
   setBoardSource,
   showConsensus,
@@ -2590,48 +2717,100 @@ function ProspectBoardPanel({
   onDeployCoverage,
   deployBusy,
   deployNotice,
+  onToggleWatch,
+  onBulk,
+  bulkBusy = false,
+  bulkNote = "",
 }) {
-  const filterLabel = boardFilterLabel(activeBoardView);
-  const groups = pyramidMode ? groupByPyramid(prospects) : [{ key: "rank", prospects, color: null, label: null, rarity: null }];
+  const [listFilter, setListFilter] = useState("all");
+  const [region, setRegion] = useState("all");
+  const [query, setQuery] = useState("");
+  const [limit, setLimit] = useState(120);
+  const [checked, setChecked] = useState(() => new Set());
+  useEffect(() => { setLimit(120); }, [activeBoardView, listFilter, region, query, boardSource, showConsensus]);
+
+  const regions = useMemo(() => {
+    const m = new Map();
+    prospects.forEach((p) => {
+      const r = regionForCountry(p.country || p.nationality || "");
+      if (r) m.set(r, (m.get(r) || 0) + 1);
+    });
+    return [...m.entries()].sort((a, b) => b[1] - a[1]);
+  }, [prospects]);
+
+  const shown = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return prospects.filter((p) => {
+      const meta = getScoutingMeta(scoutingStore, p.id);
+      if (listFilter === "shortlist" && !meta.watchlist) return false;
+      if (listFilter === "assigned" && !meta.assignedScout) return false;
+      if (listFilter === "unscouted" && (prospectDedicatedPct(p) || 0) > 0) return false;
+      if (listFilter === "risers" && !((Number(p?.draftStock?.deltaRank) || 0) > 0)) return false;
+      if (region !== "all" && regionForCountry(p.country || p.nationality || "") !== region) return false;
+      if (q && !`${p.firstName} ${p.lastName} ${p.team || ""} ${p.league || ""}`.toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }, [prospects, scoutingStore, listFilter, region, query]);
+
+  const visible = shown.slice(0, limit);
+  const toggle = (id) => setChecked((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  const shortlistCount = prospects.filter((p) => getScoutingMeta(scoutingStore, p.id).watchlist).length;
+
+  const groups = pyramidMode ? groupByPyramid(visible) : null;
   const renderRow = (player, index) => (
     <ProspectBoardRow
       key={player.id}
       player={player}
       index={index}
       selected={player.id === selectedProspectId}
-      expanded={player.id === selectedProspectId}
       onSelect={() => onOpenProspect(player)}
       onPrefetch={onPrefetchProspect}
       meta={getScoutingMeta(scoutingStore, player.id)}
       showConsensus={showConsensus}
+      checked={checked.has(player.id)}
+      onToggleCheck={() => toggle(player.id)}
+      onToggleWatch={() => onToggleWatch?.(player.id)}
     />
   );
 
   return (
-    <section className={`dc-prospect-board${showConsensus ? " is-consensus" : ""}`}>
-      <header className="dc-prospect-board__head">
-        <p className="dc-public-intel-note" title="Dedicated YOU file reopens ceiling fog on later picks">
-          Public ceiling intel clear through pick ~45 · later picks need Deploy coverage or assigned scouts
-        </p>
-        <span>
-          {prospects.length} prospect{prospects.length === 1 ? "" : "s"}
-          {filterLabel ? ` · ${filterLabel}` : ""}
-        </span>
-      </header>
-      <div className="dc-board-toolbar">
-        <div className="dc-board-sources">
+    <section className={`dkb-board${showConsensus ? " is-consensus" : ""}`}>
+      <div className="dkb-toolbar">
+        <div className="dkb-seg" role="tablist" aria-label="Position">
+          {BOARD_NAV_ITEMS.map((item) => (
+            <button key={item.key} type="button" className={activeBoardView === item.key ? "is-on" : ""} onClick={() => setActiveBoardView(item.key)}>
+              {item.label}
+            </button>
+          ))}
+        </div>
+        <div className="dkb-chips-row">
+          {BOARD_LIST_FILTERS.map(([key, label]) => (
+            <button key={key} type="button" className={`dkb-fchip${listFilter === key ? " is-on" : ""}`} onClick={() => setListFilter(key)}>
+              {label}
+              {key === "shortlist" ? <small>{shortlistCount}</small> : null}
+            </button>
+          ))}
+        </div>
+        <select className="dkb-select" value={region} onChange={(e) => setRegion(e.target.value)} aria-label="Region">
+          <option value="all">All regions</option>
+          {regions.map(([r, c]) => <option key={r} value={r}>{r} ({c})</option>)}
+        </select>
+        <input className="dkb-search" type="search" placeholder="Search name, team, league" value={query} onChange={(e) => setQuery(e.target.value)} />
+      </div>
+      <div className="dkb-toolbar is-second">
+        <div className="dkb-sources">
+          <span className="dkb-kicker">Board</span>
           {BOARD_SOURCES.map((src) => (
-            <button
-              key={src.id}
-              type="button"
-              className={boardSource === src.id ? "is-active" : ""}
-              onClick={() => setBoardSource(src.id)}
-            >
+            <button key={src.id} type="button" className={boardSource === src.id ? "is-on" : ""} onClick={() => setBoardSource(src.id)}>
               {src.label}
             </button>
           ))}
         </div>
-        <div className="dc-board-filters">
+        <div className="dkb-toggles">
           <CoverageDeployPanel
             prospects={prospects}
             activeDeployments={activeDeployments}
@@ -2639,43 +2818,48 @@ function ProspectBoardPanel({
             busy={deployBusy}
             notice={deployNotice}
           />
+          <button type="button" className={`dkb-toggle${pyramidMode ? " is-on" : ""}`} onClick={() => setPyramidMode((v) => !v)} aria-pressed={pyramidMode}>Tiers</button>
+          <button type="button" className={`dkb-toggle${showConsensus ? " is-on" : ""}`} onClick={() => setShowConsensus((v) => !v)} aria-pressed={showConsensus}>Public rank</button>
           <button
             type="button"
-            className={`dc-consensus-chip${pyramidMode ? " is-on" : ""}`}
-            onClick={() => setPyramidMode((v) => !v)}
-            aria-pressed={pyramidMode}
-            title="Group the board into pyramid tiers. Off = strict rank order."
+            className="dkb-toggle"
+            onClick={() => setChecked((prev) => {
+              const next = new Set(prev);
+              visible.slice(0, 25).forEach((p) => next.add(p.id));
+              return next;
+            })}
+            title="Select the first 25 rows in this view"
           >
-            Pyramid tiers
-          </button>
-          <button
-            type="button"
-            className={`dc-consensus-chip${showConsensus ? " is-on" : ""}`}
-            onClick={() => setShowConsensus((v) => !v)}
-            aria-pressed={showConsensus}
-            title="Public consensus is a reference filter, not the GM board"
-          >
-            Public consensus
+            Select 25
           </button>
         </div>
       </div>
-      <div className="dc-prospect-board__list dc-scroll-surface">
-        <ProspectBoardColumnHeader showConsensus={showConsensus} />
-        {!prospects.length ? (
-          <div className="dc-board-standby">
-            <span className="dc-board-standby__label">
-              {filterLabel ? "No matching prospects" : "Board not yet populated"}
-            </span>
-            <p className="dc-empty-note dc-prospect-board__empty">
-              {filterLabel
-                ? `Nothing on the board matches the ${filterLabel} filter.`
-                : "No prospects have been published to this draft class yet."}
-            </p>
+
+      <div className="dkb-head" aria-hidden="true">
+        <span />
+        <span>#</span>
+        <span />
+        <span>Prospect · {shown.length} shown</span>
+        <span>Pos</span>
+        <span>League</span>
+        <span>Now</span>
+        <span>Ceiling</span>
+        <span>Window</span>
+        <span>Your file</span>
+        <span>Stock</span>
+        {showConsensus ? <span>Pub</span> : null}
+        <span />
+      </div>
+      <div className="dkb-list">
+        {!shown.length ? (
+          <div className="dkb-empty">
+            <strong>{listFilter === "shortlist" ? "Your shortlist is empty" : "No prospects match"}</strong>
+            <span>{listFilter === "shortlist" ? "Tap ☆ on any row to pin a prospect here." : "Loosen a filter to see more of the class."}</span>
           </div>
-        ) : pyramidMode ? (
+        ) : groups ? (
           groups.map((group) => (
-            <div key={group.key} className="dc-tier-group">
-              <div className="dc-tier-band" style={{ "--tier-color": group.color }}>
+            <div key={group.key} className="dkb-tier">
+              <div className="dkb-tier-band" style={{ "--tier-color": group.color }}>
                 <strong>{group.label}</strong>
                 <span>{group.rarity} · {group.prospects.length}</span>
               </div>
@@ -2683,9 +2867,25 @@ function ProspectBoardPanel({
             </div>
           ))
         ) : (
-          prospects.map((player, index) => renderRow(player, index))
+          visible.map((player, index) => renderRow(player, index))
         )}
+        {shown.length > limit ? (
+          <button type="button" className="dkb-more" onClick={() => setLimit((v) => v + 150)}>
+            Show more ({shown.length - limit} left)
+          </button>
+        ) : null}
       </div>
+      <BulkDock
+        count={checked.size}
+        busy={bulkBusy}
+        note={bulkNote}
+        onClear={() => setChecked(new Set())}
+        onAction={async (kind) => {
+          const ids = [...checked];
+          const ok = await onBulk?.(kind, ids);
+          if (ok && kind !== "unshortlist") setChecked(new Set());
+        }}
+      />
     </section>
   );
 }
@@ -2746,6 +2946,8 @@ function ProspectProfileModal({
   onRunScoutAction,
   scoutActionBusy = false,
   scoutActionNote = "",
+  scoutStaff = [],
+  scoutBudget = null,
 }) {
   const [dossierTab, setDossierTab] = useDossierTab();
   const [showAssignPanel, setShowAssignPanel] = useState(false);
@@ -2814,94 +3016,42 @@ function ProspectProfileModal({
   const scoutMeta = meta || EMPTY_SCOUTING_META;
   const model = buildProspectDossierModel(player, profile || {}, {
     allProspects,
-    userScoutPct: Number(profile?.userScoutPct ?? player?.dedicatedScoutingPct ?? player?.scoutedPercentage ?? 0),
+    userScoutPct: Number(profile?.war_room?.file?.yours ?? profile?.userScoutPct ?? player?.dedicatedScoutingPct ?? player?.scoutedPercentage ?? 0),
   });
-  const filmReports = scoutMeta.requestedReports || {};
-  const filmDone = Boolean(filmReports.film_study || filmReports.filmStudy);
-  const filmReady = Boolean(scoutMeta.watchlist || scoutMeta.assignedScout);
   const countryLabel = model.identity.nation || countryDisplayLabel(player, profile);
-  const actions = [
-    {
-      id: "scout",
-      label: "Scout player",
-      hint: scoutActionBusy ? "Scouting…" : "One-off visit",
-      disabled: scoutActionBusy || !onRunScoutAction,
-      onClick: () => onRunScoutAction?.("player_focus"),
-    },
-    {
-      id: "film",
-      label: "Film study",
-      hint: filmDone ? "Film study · done" : filmReady ? "1 per prospect" : "Shortlist or assign first",
-      title: filmDone ? "Film study · done" : filmReady ? "4-hour film study" : "Shortlist or assign a scout first",
-      disabled: scoutActionBusy || !onRunScoutAction || !filmReady || filmDone,
-      onClick: () => onRunScoutAction?.("film_study"),
-    },
-    {
-      id: "assign",
-      label: scoutMeta.assignedScout ? `Scout: ${scoutMeta.assignedScout}` : "Assign scout",
-      hint: "On assignment · file +~2%/day",
-      primary: true,
-      disabled: scoutActionBusy || !onAssignScout,
-      onClick: () => setShowAssignPanel((v) => !v),
-    },
-    {
-      id: "short",
-      label: scoutMeta.watchlist ? "Shortlisted" : "Shortlist",
-      hint: scoutMeta.watchlist ? "On your board" : "Pin to your board",
-      disabled: !onToggleWatchlist,
-      onClick: onToggleWatchlist,
-    },
-  ];
 
   return (
     <div
-      className={`dc-profile-modal dc-profile-modal--prospect dc-profile-modal--file-open${isTranscendent ? " prospect-modal--transcendent" : ""}`}
+      className={`kdd-overlay${isTranscendent ? " prospect-modal--transcendent" : ""}`}
       role="dialog"
       aria-modal="true"
       aria-label={`${player.firstName} ${player.lastName} scouting profile`}
     >
-      <button type="button" className="dc-profile-modal__backdrop" onClick={onClose} aria-label="Close" />
-      <article className={`dc-signal-panel dc-signal-panel--premium dc-signal-panel--dossier dc-dossier-shell${isTranscendent ? " aura-gold shake-on-open" : ""}`}>
-        <ModalCloseButton onClick={onClose} label="Close prospect profile" />
-        {profileEnriching ? (
-          <p className="dc-dossier-enriching" aria-live="polite">Syncing full scout file…</p>
-        ) : null}
-        {!profile ? (
-          <p className="dc-empty-note dc-profile-modal__loading">Scouting profile loading…</p>
-        ) : (
-          <ProspectDossier
-            model={model}
-            portrait={(
-              <>
-                <DraftClassHeadshot player={player} size="lg" />
-                <SignalNationFlag country={countryLabel} size={48} className="dd-flag" />
-              </>
-            )}
-            tab={dossierTab}
-            onTab={setDossierTab}
-            actions={actions}
-            statusNote={scoutActionNote}
-            assignPanel={showAssignPanel ? (
-              <div className="dd-assign">
-                {SCOUT_NAMES.map((name) => (
-                  <button
-                    key={name}
-                    type="button"
-                    className={scoutMeta.assignedScout === name ? "is-active" : ""}
-                    disabled={scoutActionBusy}
-                    onClick={() => {
-                      onAssignScout?.(name);
-                      setShowAssignPanel(false);
-                    }}
-                  >
-                    {name}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-          />
+      <button type="button" className="kdd-backdrop" onClick={onClose} aria-label="Close" />
+      <KartDossier
+        model={model}
+        profile={profile || {}}
+        meta={scoutMeta}
+        busy={scoutActionBusy}
+        note={scoutActionNote}
+        enriching={profileEnriching}
+        onClose={onClose}
+        onToggleWatchlist={onToggleWatchlist}
+        onToggleTarget={onToggleTarget}
+        onToggleDND={onToggleDND}
+        onAssign={(scoutId) => onAssignScout?.(scoutId)}
+        onAction={(action) => onRunScoutAction?.(action)}
+        player={player}
+        allProspects={allProspects}
+        staff={scoutStaff}
+        budgetFallback={scoutBudget}
+        portrait={(
+          <>
+            <DraftClassHeadshot player={player} size="lg" />
+            <SignalNationFlag country={countryLabel} size={44} className="kdd-flag" />
+          </>
         )}
-      </article>
+      />
     </div>
   );
 }
@@ -2974,7 +3124,7 @@ function StatsWorkspace({
   const sortLabel = metricSort?.key ? (LEADER_METRICS[metricSort.key]?.label || metricSort.key) : null;
 
   return (
-    <div className="dc-stats-workspace dc-scroll-surface dc-leaders-modal-sc">
+    <div className="dc-stats-workspace dc-scroll-surface dc-leaders-modal-sc dkl-root">
       <header className="dc-stats-workspace__head">
         <div>
           <p className="dc-lm-eyebrow">Draft class</p>
@@ -3257,6 +3407,37 @@ export default function DraftClass() {
   const [deployNotice, setDeployNotice] = useState("");
   const [scoutActionBusy, setScoutActionBusy] = useState(false);
   const [scoutActionNote, setScoutActionNote] = useState("");
+  const refetchOpenProfileRef = useRef(null);
+  const [scoutStaff, setScoutStaff] = useState([]);
+  const scoutBudgetRef = useRef(null);
+  useEffect(() => {
+    let live = true;
+    api.get("/api/franchise/scouting/state").then((res) => {
+      if (!live) return;
+      const d = res?.data || {};
+      const costs = d.action_costs || {};
+      const priceOf = (k) => Number(costs?.[k]?.normal ?? costs?.[k]) || null;
+      scoutBudgetRef.current = {
+        total: Number(d.budget) || 0,
+        used: Number(d.used_budget) || 0,
+        left: Number(d.budget_remaining ?? ((Number(d.budget) || 0) - (Number(d.used_budget) || 0))) || 0,
+        prices: { player_focus: priceOf("player_focus"), film_study: priceOf("film_study") || priceOf("video_review") },
+      };
+      const scouts = Array.isArray(d.scouts) ? d.scouts : [];
+      setScoutStaff(scouts.map((sc) => ({
+        id: String(sc.id || sc.scout_id || ""),
+        name: String(sc.name || ""),
+        title: String(sc.title || sc.role || ""),
+        region: String(sc.region || sc.specialty || ""),
+        quality: Number(sc.quality || 0),
+        tier: String(sc.scout_tier || ""),
+        load: Number(sc.workload || 0),
+        days_to_72: Number(sc.speed_days_to_72 || 0),
+        recommended: false,
+      })).filter((sc) => sc.id));
+    }).catch(() => {});
+    return () => { live = false; };
+  }, [franchiseState?.session_id, franchiseState?.scouting_state?.used_budget]);
 
   const activeDeployments = useMemo(
     () => franchiseState?.scouting_state?.active_deployments || [],
@@ -3271,6 +3452,7 @@ export default function DraftClass() {
     }));
     try {
       await patchScoutingMeta(prospectId, apiPatch || localPatch);
+      refetchOpenProfileRef.current?.(prospectId);
     } catch {
       // Keep optimistic UI; board refresh will reconcile later.
     }
@@ -3294,21 +3476,25 @@ export default function DraftClass() {
     patchProspectMeta(prospectId, { doNotDraft: next }, { do_not_draft: next });
   }, [scoutingStore, patchProspectMeta]);
 
-  const assignProspectScout = useCallback((prospectId, scoutName) => {
-    patchProspectMeta(prospectId, { assignedScout: scoutName }, { assigned_scout: scoutName });
+  const assignProspectScout = useCallback((prospectId, scoutId) => {
+    patchProspectMeta(prospectId, { assignedScout: scoutId || "" }, { assigned_scout: scoutId || "" });
   }, [patchProspectMeta]);
 
-  const requestProspectProfile = useCallback((prospectId) => {
+  const requestProspectProfile = useCallback((prospectId, { force = false } = {}) => {
     if (!prospectId) return Promise.resolve(null);
     const hudProfiles = franchiseState?.draft_class_hud?.prospect_profiles_by_id || {};
-    if (hudProfiles[prospectId] || profileCacheRef.current[prospectId]) {
-      return Promise.resolve(hudProfiles[prospectId] || profileCacheRef.current[prospectId]);
+    const cachedFull = profileCacheRef.current[prospectId];
+    if (!force && cachedFull && cachedFull.war_room) {
+      return Promise.resolve(cachedFull);
+    }
+    if (!force && !cachedFull && hudProfiles[prospectId] && hudProfiles[prospectId].war_room) {
+      return Promise.resolve(hudProfiles[prospectId]);
     }
     const fetchId = profileFetchRef.current + 1;
     profileFetchRef.current = fetchId;
     setProfileLoadingId(prospectId);
     return getDraftProspectProfile(prospectId, {
-      prospectRevision: franchiseState?.prospect_revision,
+      prospectRevision: force ? `${franchiseState?.prospect_revision || 0}-${Date.now()}` : franchiseState?.prospect_revision,
     })
       .then((loaded) => {
         if (profileFetchRef.current !== fetchId || !loaded) return loaded;
@@ -3340,6 +3526,12 @@ export default function DraftClass() {
     requestProspectProfile(player.id);
   }, [requestProspectProfile]);
 
+  refetchOpenProfileRef.current = (pid) => {
+    if (pid && selectedProspect?.id && String(pid) === String(selectedProspect.id)) {
+      requestProspectProfile(pid, { force: true });
+    }
+  };
+
   const runDossierScoutAction = useCallback(async (action) => {
     const prospectId = selectedProspect?.id;
     if (!prospectId || scoutActionBusy) return;
@@ -3355,20 +3547,8 @@ export default function DraftClass() {
           setScoutingStore((prev) => mergeScoutingStores(prev, scoutingStoreFromApiProspects(result.prospects)));
         }
       }
-      await refreshFranchise();
-      if (selectedProspect?.id) {
-        profileFetchRef.current += 1;
-        const rev = profileFetchRef.current;
-        setProfileLoadingId(prospectId);
-        try {
-          const profilePayload = await requestProspectProfile(prospectId);
-          if (profileFetchRef.current === rev && profilePayload) {
-            setProfileCache((prev) => ({ ...prev, [prospectId]: profilePayload }));
-          }
-        } finally {
-          if (profileFetchRef.current === rev) setProfileLoadingId(null);
-        }
-      }
+      await requestProspectProfile(prospectId, { force: true });
+      refreshFranchise();
     } catch (err) {
       setScoutActionNote(err?.response?.data?.detail || err?.message || "Scouting action failed.");
     } finally {
@@ -3390,6 +3570,43 @@ export default function DraftClass() {
       setDeployBusy(false);
     }
   }, [deployBusy, refreshFranchise]);
+
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkNote, setBulkNote] = useState("");
+  const runBulk = useCallback(async (kind, ids) => {
+    const list = (ids || []).filter(Boolean);
+    if (!list.length) return false;
+    setBulkBusy(true);
+    setBulkNote("");
+    try {
+      let res;
+      if (kind === "shortlist" || kind === "unshortlist") {
+        const on = kind === "shortlist";
+        setScoutingStore((prev) => {
+          const next = { ...prev };
+          list.forEach((id) => { next[id] = { ...getScoutingMeta(prev, id), watchlist: on }; });
+          return next;
+        });
+        res = await api.post(SCOUTING_ENDPOINTS.focus, { context: { meta_only: true, meta_patch: { watchlist: on }, prospect_ids: list } });
+      } else if (kind === "assign") {
+        res = await api.post(SCOUTING_ENDPOINTS.focus, { context: { meta_only: true, meta_patch: { assigned_scout: "auto" }, prospect_ids: list } });
+      } else {
+        res = await api.post(SCOUTING_ENDPOINTS.focus, { action: "player_focus", target_type: "players", intensity: "normal", context: { target_ids: list.slice(0, 40) } });
+      }
+      const data = res?.data || {};
+      if (Array.isArray(data.prospects)) {
+        setScoutingStore((prev) => mergeScoutingStores(prev, scoutingStoreFromApiProspects(data.prospects)));
+      }
+      setBulkNote(data.message || "Done.");
+      refreshFranchise();
+      return true;
+    } catch (err) {
+      setBulkNote(err?.response?.data?.detail || err?.message || "Bulk action failed.");
+      return false;
+    } finally {
+      setBulkBusy(false);
+    }
+  }, [refreshFranchise]);
 
   const toggleProspectCompare = useCallback((prospectId) => {
     setCompareIds((prev) => {
@@ -3449,14 +3666,13 @@ export default function DraftClass() {
 
   const selectedProspectId = selectedProspect?.id ?? null;
 
+  // The open dossier stays open through board refreshes (a refresh briefly empties
+  // the list, which used to close the file mid-scout). Keep its row data fresh.
   useEffect(() => {
-    if (!filteredProspects.length) {
-      setSelectedProspect(null);
-      return;
-    }
-    if (selectedProspectId && !filteredProspects.some((p) => p.id === selectedProspectId)) {
-      setSelectedProspect(null);
-    }
+    if (!selectedProspectId || !filteredProspects.length) return;
+    const fresh = filteredProspects.find((p) => p.id === selectedProspectId);
+    if (fresh && fresh !== selectedProspect) setSelectedProspect(fresh);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filteredProspects, selectedProspectId]);
 
   useEffect(() => {
@@ -3471,9 +3687,9 @@ export default function DraftClass() {
   const activeProfile = useMemo(() => {
     if (!selectedProspect) return null;
     const profiles = franchiseState?.draft_class_hud?.prospect_profiles_by_id || {};
-    const cached = selectedProspect.profile
-      || profiles[selectedProspect.id]
-      || profileCache[selectedProspect.id];
+    const cached = profileCache[selectedProspect.id]
+      || selectedProspect.profile
+      || profiles[selectedProspect.id];
     if (cached) return cached;
     return buildStubProspectProfile(selectedProspect);
   }, [selectedProspect, franchiseState?.draft_class_hud?.prospect_profiles_by_id, profileCache]);
@@ -3532,30 +3748,15 @@ export default function DraftClass() {
   return (
     <div className="game-root">
       <div className="game-canvas">
-        <main className="dc-root dc-screen register-ops" data-register="ops">
+        <main className="dc-root dk-root dc-screen register-ops" data-register="ops">
           <TopHeader
             onBack={handleBack}
             dateContext={dateContext}
             franchiseState={franchiseStateForHeader}
-          />
-
-          <CommandStatStrip
-            franchiseState={franchiseStateForHeader || franchiseState}
+            workspace={workspace}
+            setWorkspace={setWorkspace}
             onOpenWjc={handleOpenWjc}
           />
-
-          <nav className="dc-workspace-tabs" aria-label="Draft workspace">
-            {WORKSPACE_TABS.map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                className={workspace === tab.id ? "is-active" : ""}
-                onClick={() => setWorkspace(tab.id)}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </nav>
 
           {workspace === "stats" ? (
             <StatsWorkspace
@@ -3566,33 +3767,44 @@ export default function DraftClass() {
               profilesById={franchiseState?.draft_class_hud?.prospect_profiles_by_id || {}}
               onSelectPlayer={openProspect}
             />
+          ) : workspace === "ops" ? (
+            <ScoutingOps
+              prospects={rawProspects}
+              scoutingStore={scoutingStore}
+              activeDeployments={activeDeployments}
+              onDeploy={handleDeployCoverage}
+              deployBusy={deployBusy}
+              deployNotice={deployNotice}
+              onBulk={runBulk}
+              bulkBusy={bulkBusy}
+              bulkNote={bulkNote}
+              onOpenProspect={openProspect}
+              franchiseState={franchiseState}
+            />
           ) : (
-            <div className="dc-command-grid">
-              <aside className="dc-board-nav-rail">
-                <DraftBoardNavRail
-                  activeBoardView={activeBoardView}
-                  setActiveBoardView={setActiveBoardView}
-                />
-              </aside>
-              <ProspectBoardPanel
-                prospects={filteredProspects}
-                selectedProspectId={selectedProspectId}
-                onOpenProspect={openProspect}
-                onPrefetchProspect={prefetchProspectProfile}
-                scoutingStore={scoutingStore}
-                activeBoardView={activeBoardView}
-                boardSource={boardSource}
-                setBoardSource={setBoardSource}
-                pyramidMode={pyramidMode}
-                setPyramidMode={setPyramidMode}
-                showConsensus={showConsensus}
-                setShowConsensus={setShowConsensus}
-                activeDeployments={activeDeployments}
-                onDeployCoverage={handleDeployCoverage}
-                deployBusy={deployBusy}
-                deployNotice={deployNotice}
-              />
-            </div>
+            <ProspectBoardPanel
+              prospects={filteredProspects}
+              selectedProspectId={selectedProspectId}
+              onOpenProspect={openProspect}
+              onPrefetchProspect={prefetchProspectProfile}
+              scoutingStore={scoutingStore}
+              activeBoardView={activeBoardView}
+              setActiveBoardView={setActiveBoardView}
+              boardSource={boardSource}
+              setBoardSource={setBoardSource}
+              pyramidMode={pyramidMode}
+              setPyramidMode={setPyramidMode}
+              showConsensus={showConsensus}
+              setShowConsensus={setShowConsensus}
+              activeDeployments={activeDeployments}
+              onDeployCoverage={handleDeployCoverage}
+              deployBusy={deployBusy}
+              deployNotice={deployNotice}
+              onToggleWatch={toggleProspectWatchlist}
+              onBulk={runBulk}
+              bulkBusy={bulkBusy}
+              bulkNote={bulkNote}
+            />
           )}
 
           <IntelFeed prospects={filteredProspects} />
@@ -3617,6 +3829,8 @@ export default function DraftClass() {
             onRunScoutAction={runDossierScoutAction}
             scoutActionBusy={scoutActionBusy}
             scoutActionNote={scoutActionNote}
+            scoutStaff={scoutStaff}
+            scoutBudget={scoutBudgetRef.current}
           />
         ) : null}
 

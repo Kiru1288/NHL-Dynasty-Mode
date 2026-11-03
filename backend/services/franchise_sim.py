@@ -23051,6 +23051,30 @@ def get_draft_prospect_profile_payload(
     sim: Any,
     prospect_id: str,
 ) -> Dict[str, Any]:
+    """Dossier profile + a live war-room block (scouting file, staff, draft range, ranks)."""
+    base = _get_draft_prospect_profile_cached(session, sim, prospect_id)
+    if not isinstance(base, dict) or not base:
+        return base
+    out = dict(base)
+    try:
+        from services.franchise_scouting import build_prospect_war_room
+
+        entries = None
+        try:
+            entries = list((get_cached_draft_class_rankings(session, sim) or {}).get("entries") or [])
+        except Exception:
+            entries = None
+        out["war_room"] = build_prospect_war_room(session, str(prospect_id), entries)
+    except Exception:
+        _swallowed_log.warning("war room block failed for %s", prospect_id, exc_info=True)
+    return out
+
+
+def _get_draft_prospect_profile_cached(
+    session: FranchiseSession,
+    sim: Any,
+    prospect_id: str,
+) -> Dict[str, Any]:
     """Build one dossier profile on demand — avoids ~320-profile HUD rebuilds."""
     pid = str(prospect_id or "").strip()
     if not pid:

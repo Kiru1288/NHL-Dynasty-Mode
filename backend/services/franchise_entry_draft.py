@@ -912,6 +912,17 @@ def build_team_draft_board(
                 "board_story": ident_row.get("story"),
                 "conviction": ident_row.get("conviction") or 0.0,
             }
+        flags: Dict[str, Any] = {}
+        if str(team_id or "") == str(getattr(session, "user_team_id", "") or ""):
+            # Your shortlist / target / DND follow you onto the draft floor.
+            wl_ids = set(str(x) for x in ((getattr(session, "scouting_state", None) or {}).get("watchlist") or []))
+            flags = {
+                "watchlist": bool(overlay.get("watchlist")) or pid in wl_ids,
+                "target": bool(overlay.get("target")),
+                "do_not_draft": bool(overlay.get("do_not_draft")),
+                "assigned_scout": str(overlay.get("assigned_scout") or ""),
+                "scouted_percentage": overlay.get("scouted_percentage"),
+            }
         board.append({
             **enriched,
             "team_board_score": board_score,
@@ -919,6 +930,7 @@ def build_team_draft_board(
             "public_rank": pub_rank,
             **scout_meta,
             **extra,
+            **flags,
             "scouting_notes": scout_notes,
         })
 
@@ -2518,6 +2530,26 @@ def get_entry_draft_payload(
         state["completed_picks"] = completed
         state["draft_results"] = completed
         session.draft_state = state
+
+    # Your shortlist, targets and DND flags ride along on every available prospect.
+    try:
+        sc_state = getattr(session, "scouting_state", None) or {}
+        sc_prospects = sc_state.get("prospects") if isinstance(sc_state.get("prospects"), dict) else {}
+        wl_ids = set(str(x) for x in (sc_state.get("watchlist") or []))
+        tagged = []
+        for row in enriched_available:
+            k = str(row.get("key") or row.get("prospect_id") or row.get("id") or "")
+            ov = sc_prospects.get(k) if isinstance(sc_prospects.get(k), dict) else {}
+            tagged.append({
+                **row,
+                "watchlist": bool(ov.get("watchlist")) or k in wl_ids,
+                "target": bool(ov.get("target")),
+                "do_not_draft": bool(ov.get("do_not_draft")),
+                "assigned_scout": str(ov.get("assigned_scout") or ""),
+            })
+        enriched_available = tagged
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     payload = {
         **_strip_private_fields(state),
