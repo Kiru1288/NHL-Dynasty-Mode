@@ -12,7 +12,7 @@
 
 import { getApiBaseUrl } from "../services/api";
 
-const CACHE_VERSION = "ps2v2";
+const CACHE_VERSION = "ps2dream2";
 const STORE_PREFIX = `${CACHE_VERSION}:`;
 const memCache = new Map(); // src -> dataURL | "" (failed)
 const inflight = new Map(); // src -> Promise
@@ -148,6 +148,60 @@ export function ps2Process(img, opts = {}) {
   return img;
 }
 
+/**
+ * Dreamlike low-poly restyle: split the image into a triangle grid, fill every facet
+ * with its average colour (flat shading, low polygon count), then a soft pastel grade —
+ * lifted indigo shadows, peach highlights, gentle saturation. No dither, no edge ink.
+ * opts: cell (facet size in px), alphaCut.
+ */
+export function dreamFacets(img, opts = {}) {
+  const { cell = 6, alphaCut = 90, lift = 0.16, sat = 0.92 } = opts;
+  const { width: w, height: h, data } = img;
+  const src = new Uint8ClampedArray(data);
+  const cols = Math.ceil(w / cell);
+  const rows = Math.ceil(h / cell);
+  const fill = (tri, flip) => {
+    // tri: 0 = upper-left half, 1 = lower-right half of the cell (diagonal alternates)
+    return (cx, cy) => {
+      let r = 0, g = 0, b = 0, a = 0, n = 0;
+      const px = [];
+      for (let y = cy * cell; y < Math.min(h, (cy + 1) * cell); y += 1) {
+        for (let x = cx * cell; x < Math.min(w, (cx + 1) * cell); x += 1) {
+          const u = (x - cx * cell) / cell;
+          const v = (y - cy * cell) / cell;
+          const upper = flip ? u + v < 1 : u > v;
+          if ((tri === 0) !== upper) continue;
+          const o = (y * w + x) * 4;
+          px.push(o);
+          if (src[o + 3] >= alphaCut) { r += src[o]; g += src[o + 1]; b += src[o + 2]; a += 1; }
+          n += 1;
+        }
+      }
+      if (!px.length) return;
+      const solid = a / n >= 0.5;
+      r = a ? r / a : 0; g = a ? g / a : 0; b = a ? b / a : 0;
+      // dream grade
+      const l = 0.299 * r + 0.587 * g + 0.114 * b;
+      r = l + (r - l) * sat; g = l + (g - l) * sat; b = l + (b - l) * sat;
+      const t = l / 255;
+      r = r + (1 - t) * 60 * lift + t * 18 * lift * 2;
+      g = g + (1 - t) * 40 * lift + t * 6 * lift;
+      b = b + (1 - t) * 110 * lift - t * 10 * lift;
+      for (const o of px) {
+        data[o] = r; data[o + 1] = g; data[o + 2] = b; data[o + 3] = solid ? 255 : 0;
+      }
+    };
+  };
+  for (let cy = 0; cy < rows; cy += 1) {
+    for (let cx = 0; cx < cols; cx += 1) {
+      const flip = (cx + cy) % 2 === 1;
+      fill(0, flip)(cx, cy);
+      fill(1, flip)(cx, cy);
+    }
+  }
+  return img;
+}
+
 function loadImage(url, cors) {
   return new Promise((resolve, reject) => {
     const im = new Image();
@@ -169,7 +223,7 @@ function proxyUrl(src) {
   return `${base}/api/headshot-proxy?url=${encodeURIComponent(src)}`;
 }
 
-function rasterizePhoto(im, targetW = 48) {
+function rasterizePhoto(im, targetW = 96) {
   const iw = im.naturalWidth || im.width;
   const ih = im.naturalHeight || im.height;
   if (!iw || !ih) return "";
@@ -186,7 +240,7 @@ function rasterizePhoto(im, targetW = 48) {
   out.ctx.imageSmoothingQuality = "high";
   out.ctx.drawImage(mid.canvas, 0, 0, w, h);
   const data = out.ctx.getImageData(0, 0, w, h); // throws if tainted
-  ps2Process(data);
+  dreamFacets(data, { cell: 8 });
   out.ctx.putImageData(data, 0, 0);
   return out.canvas.toDataURL("image/png");
 }

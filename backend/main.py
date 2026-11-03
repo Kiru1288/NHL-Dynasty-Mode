@@ -1861,7 +1861,29 @@ def post_franchise_trade_find(
 ) -> dict[str, Any]:
     s = _session_or_404(x_franchise_session)
     try:
-        return find_trade_offers(
+        # GMs answer one canvass per asset every 14 days. Re-running the finder (or asking
+        # for "different" trades) inside the same window returns the same answers, so the
+        # finder can't be spammed into rolling new deals.
+        day = int(getattr(s, "calendar_cursor", 0) or 0)
+        window = day // 14
+        key = "|".join([
+            str(body.asset_type or ""), str(body.asset_id or ""), str(body.mode or ""),
+            str(body.target_team_id or ""), str(getattr(s, "season_calendar_year", "") or ""), str(window),
+        ])
+        cache = getattr(s, "_trade_finder_window_cache", None)
+        if not isinstance(cache, dict):
+            cache = {}
+        cached = cache.get(key)
+        if isinstance(cached, dict):
+            out = dict(cached)
+            next_day = (window + 1) * 14
+            out["cooldown"] = {
+                "active": True,
+                "days_left": max(1, next_day - day),
+                "message": f"Clubs already answered this canvass. New offers in {max(1, next_day - day)} day(s).",
+            }
+            return out
+        res = find_trade_offers(
             s,
             asset_type=body.asset_type,
             asset_id=body.asset_id,
@@ -1870,6 +1892,12 @@ def post_franchise_trade_find(
             exclude_ids=list(body.exclude_ids or []),
             limit=int(body.limit),
         )
+        if isinstance(res, dict) and res.get("offers") is not None:
+            # keep the cache small: only this window's entries
+            cache = {k: v for k, v in cache.items() if k.endswith(f"|{window}")}
+            cache[key] = res
+            s._trade_finder_window_cache = cache
+        return res
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 

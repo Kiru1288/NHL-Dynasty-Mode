@@ -33,7 +33,8 @@ function coachSystemKey(raw) {
 }
 /* Editor role keys -> backend playstyle keys used by the coach table. */
 function playstyleKey(p) {
-  const raw = String(p?.chemistry_profile?.playstyle || p?.playstyle || p?.archetype || p?.play_role_label || "").toLowerCase().replace(/[\s-]+/g, "_");
+  // The rating-derived role (what the line cards show) wins over the stored chemistry playstyle tag.
+  const raw = String(p?.play_role_label || p?.role_label || p?.archetype || p?.chemistry_profile?.playstyle || p?.playstyle || "").toLowerCase().replace(/[\s-]+/g, "_");
   if (!raw) return "";
   if (raw.includes("offensive_d") || raw === "od") return "offensive_defenseman";
   if (raw.includes("defensive_d") || raw === "dd" || raw.includes("shutdown")) return /^(ld|rd|d)$/i.test(p?.position || "") ? "defensive_defenseman" : "shutdown";
@@ -119,6 +120,50 @@ function findStandingRow(franchiseState) {
   return null;
 }
 
+function DialSlider({ left, right, value, note, onCommit }) {
+  const v = Math.max(0, Math.min(100, Math.round(Number(value) || 0)));
+  const [draft, setDraft] = useState(null);
+  const shown = draft == null ? v : draft;
+  return <div className="sbd-meter sbd-meter--live">
+    <div className="sbd-meter__ends"><span>{left}</span><span>{right}</span></div>
+    <input
+      type="range" min={0} max={100} step={1} value={shown}
+      className="sbd-dial-range"
+      aria-label={`${left} to ${right}`}
+      onChange={(e) => setDraft(Number(e.target.value))}
+      onPointerUp={() => { if (draft != null) { onCommit?.(draft); setDraft(null); } }}
+      onKeyUp={() => { if (draft != null) { onCommit?.(draft); setDraft(null); } }}
+      onBlur={() => { if (draft != null) { onCommit?.(draft); setDraft(null); } }}
+    />
+    {note ? <p className="sbd-meter__note">{note}</p> : null}
+  </div>;
+}
+
+function applyRiskLevel(lineState, level) {
+  const v = Math.max(0, Math.min(100, Number(level) || 0));
+  const fwd = lineState?.forwards || [];
+  const attacking = Math.round((v / 100) * fwd.length);
+  const roles = v >= 67 ? ["neutral", "offensive", "offensive"] : v >= 34 ? ["shutdown", "neutral", "sheltered"] : ["shutdown", "shutdown", "neutral"];
+  return {
+    ...lineState,
+    forwards: fwd.map((line, i) => ({ ...line, zone: i < attacking ? "offensive" : "defensive", usage: i < attacking ? "attack" : "checking" })),
+    defense: (lineState?.defense || []).map((line, i) => ({ ...line, pair_role: roles[Math.min(i, roles.length - 1)] })),
+  };
+}
+
+function applySpreadLevel(lineState, level) {
+  const v = Math.max(0, Math.min(100, Number(level) || 0));
+  const t = v / 100; // 0 = even rotation, 1 = ride the top two lines
+  const lerp = (a, b) => a + (b - a) * t;
+  const f = [lerp(26, 37), lerp(25, 32), lerp(25, 19), lerp(24, 12)];
+  const d = [lerp(34, 43), lerp(33, 34), lerp(33, 23)];
+  const setShares = (units, shares) => (units || []).map((line, i) => (i < shares.length ? { ...line, toi_share: Math.round(shares[i]) } : line));
+  const fw = setShares(lineState?.forwards, f);
+  const df = setShares(lineState?.defense, d);
+  const fix = (units) => { const tot = units.reduce((t, l) => t + (Number(l.toi_share) || 0), 0); if (units.length && tot !== 100) { const last = units.length - 1; units[last] = { ...units[last], toi_share: (Number(units[last].toi_share) || 0) + (100 - tot) }; } return units; };
+  return { ...lineState, forwards: fix(fw), defense: fix(df) };
+}
+
 function Meter({ left, right, value, note }) {
   const v = Math.max(0, Math.min(100, Math.round(value)));
   return <div className="sbd-meter">
@@ -139,7 +184,7 @@ function Choice({ value, options, onPick }) {
 
 const TABS = [["identity", "Identity"], ["tactics", "Tactics"], ["deploy", "Deployment"], ["perf", "Performance"], ["adjust", "Adjustments"]];
 
-export default function StrategyBoard({ franchiseState, lineState, playerMap, chemistryByUnit, chemReport, onDeploy, onShareSet, onCoach, shareTotals }) {
+export default function StrategyBoard({ franchiseState, lineState, playerMap, chemistryByUnit, chemReport, onDeploy, onShareSet, onCoach, shareTotals, onApplyLines }) {
   const [tab, setTab] = useState(() => { try { return window.localStorage.getItem("sbd.tab") || "identity"; } catch (e) { return "identity"; } });
   const [open, setOpen] = useState(() => { try { return window.localStorage.getItem("sbd.open") !== "0"; } catch (e) { return true; } });
   const pickTab = (id) => { setTab(id); setOpen(true); try { window.localStorage.setItem("sbd.tab", id); window.localStorage.setItem("sbd.open", "1"); } catch (e) { /* storage off */ } };
@@ -272,9 +317,9 @@ export default function StrategyBoard({ franchiseState, lineState, playerMap, ch
             </article>
             <article className="sbd-card">
               <span className="ccx-kicker">Style dials</span>
-              <Meter left="Grit" right="Skill" value={identity.skillPct} note="Share of weighted minutes going to skill vs heavy players." />
-              <Meter left="Safe" right="Aggressive" value={identity.riskPct} note="From zone starts, line style and how active your D pairs are." />
-              <Meter left="Spread" right="Top-heavy" value={identity.depthPct} note="How much of the night the top two lines take." />
+              <Meter left="Grit" right="Skill" value={identity.skillPct} note="Read-only: set by who you dress. Change it by moving skill or heavy players in the lines below." />
+              <DialSlider left="Safe" right="Aggressive" value={identity.riskPct} note="Drag: sets zone starts and line style for every line, and how active your D pairs are." onCommit={(v) => onApplyLines?.(applyRiskLevel(lineState, v), "Deployment style updated.")} />
+              <DialSlider left="Spread" right="Top-heavy" value={identity.depthPct} note="Drag: shifts ice time between your top two lines and your depth." onCommit={(v) => onApplyLines?.(applySpreadLevel(lineState, v), "Ice-time spread updated.")} />
             </article>
             <article className="sbd-card">
               <span className="ccx-kicker">Coaching synergy</span>

@@ -2719,8 +2719,15 @@ function AssetPoolRow({
       WAIVED
     </span>
   ) : ntcLocked ? (
-    <span className="trade-pool-status-pill locked" title={`${blockTitle ? `${blockTitle} — ` : ""}Click to ask him to waive`}>
-      {/NMC/.test(clauseUpper) ? "NMC" : /M-NTC/.test(clauseUpper) ? "M-NTC" : "NTC"} · ASK
+    <span
+      className="trade-pool-status-pill locked"
+      title={
+        /M-NTC/.test(clauseUpper) && !/NMC/.test(clauseUpper)
+          ? `${blockTitle ? `${blockTitle} — ` : ""}Can only be traded to his approved list`
+          : `${blockTitle ? `${blockTitle} — ` : ""}Click to ask him to waive`
+      }
+    >
+      {/NMC/.test(clauseUpper) ? "NMC · ASK" : /M-NTC/.test(clauseUpper) ? "M-NTC · LIST" : "NTC · ASK"}
     </span>
   ) : item.conductTradeRestricted ? (
     <span className="trade-pool-status-pill locked" title={blockTitle || "Restricted trade market after conduct matter"}>
@@ -3683,7 +3690,7 @@ function AssetDetailDrawer({
                   </div>
                   {asset.tradeBlockReason && <p className="trade-drawer-warn">{asset.tradeBlockReason}</p>}
                   {safeArray(asset.approvedTradeTeams).length > 0 && (
-                    <p className="trade-drawer-line">Approved: {asset.approvedTradeTeams.join(", ")}</p>
+                    <p className="trade-drawer-line">Approved: {asset.approvedTradeTeams.filter((x) => !/^\d+$/.test(String(x).trim())).join(", ")}</p>
                   )}
                   {asset.retained_pct > 0 && <p className="trade-drawer-line">Retained: {asset.retained_pct}%</p>}
                 </>
@@ -6221,6 +6228,7 @@ function TradeFinder({ meta, partnerId, onLoadOffer, tradeHistory = [], onOpenTa
         ) : null}
         {status === "loading" && <div className="th-tfinder-empty"><strong>Calling around the league…</strong></div>}
         {status === "error" && <div className="th-tfinder-empty is-error"><strong>{error}</strong></div>}
+        {result?.cooldown?.active ? <div className="th-tfinder-empty th-tfinder-cooldown"><strong>{result.cooldown.message}</strong></div> : null}
         {result?.note && <div className="th-tfinder-empty"><strong>{result.note}</strong></div>}
         {status === "done" && !offers.length && !result?.note && (
           <div className="th-tfinder-empty">
@@ -7950,6 +7958,10 @@ export default function TradeHub() {
               handleQuickAdd("left", meta.userTeamId, player);
             }}
           />
+        </main>
+      ) : hubView === "negotiate" && !partnerId && partnerOptions.length > 0 ? (
+        <main className="trade-hub-main th-market-main">
+          <div className="trade-hub-loading">OPENING THE DESK…</div>
         </main>
       ) : hubView === "market" || !partnerId ? (
         <main className="trade-hub-main th-market-main">

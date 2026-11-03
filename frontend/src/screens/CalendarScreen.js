@@ -3138,6 +3138,11 @@ function CalendarGameTile({ game, activeTeam, allTeams, standings = [], compact,
       }}
       onClick={(event) => {
         event.stopPropagation();
+        // A played game opens its box score straight from the icons.
+        if (completed && String(game?.id || game?.game_id || "").trim()) {
+          setBoxScoreOpen(true);
+          return;
+        }
         onToggle?.();
       }}
       role="button"

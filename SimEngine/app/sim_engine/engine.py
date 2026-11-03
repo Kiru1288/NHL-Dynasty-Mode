@@ -11437,11 +11437,13 @@ class SimEngine:
             tier_mult = 1.0 + (tier_mult - 1.0) * 0.72
         # Smooth superstar floor/cap (was a hard cliff at 90/93 that only the
         # very top pair ever cleared in practice).
-        if ovr99 >= 88 and pos != "D":
-            tier_mult = max(tier_mult, min(1.72, 1.10 + 0.05 * (ovr99 - 86.0)))
+        # Stars carry the offence: the curve starts at 85 and climbs steeply so the top
+        # end produces like real NHL stars (100+ points) while depth scoring is unchanged.
+        if ovr99 >= 85 and pos != "D":
+            tier_mult = max(tier_mult, min(2.25, 1.06 + 0.085 * (ovr99 - 85.0)))
         elif ovr99 >= 86 and pos == "D":
-            tier_mult = max(tier_mult, min(1.42, 1.06 + 0.04 * (ovr99 - 84.0)))
-        cap = min(2.05, 1.48 + 0.06 * max(0.0, ovr99 - 88.0))
+            tier_mult = max(tier_mult, min(1.60, 1.06 + 0.05 * (ovr99 - 84.0)))
+        cap = min(2.55, 1.52 + 0.09 * max(0.0, ovr99 - 87.0))
         return float(max(0.85, min(cap, tier_mult * self._gm_franchise_alloc_mult(
             p, "overall_equivalent", "effort", "shot_involvement", "assist_involvement"
         ))))
@@ -16955,9 +16957,22 @@ class SimEngine:
             five = _sample_unit(fwd, f_key, 3, False) + _sample_unit(dmen, d_key, 2, True)
             return five, f_key
 
+        _star_memo: Dict[int, float] = {}
+
+        def _star(p: Any) -> float:
+            # Elite forwards take over shifts: from 84 OVR each point adds ~7% share of the
+            # unit's shots and helpers, so a 94 carries ~1.75x a 84 linemate. Depth (<84) is untouched.
+            hit = _star_memo.get(id(p))
+            if hit is None:
+                ovr = float(self._gm_ovr_0_100(p))
+                k = 0.085 if not self._gm_is_defense(p) else 0.04
+                hit = 1.0 + k * max(0.0, ovr - 84.0) + 0.009 * max(0.0, ovr - 89.0) ** 2
+                _star_memo[id(p)] = hit
+            return hit
+
         def _shooter(five: List[Any], *, pp_lane: bool = False) -> Any:
             st = "PP" if pp_lane else "EV"
-            weights = [self._gm_shot_selection_weight(p, strength=st) for p in five]
+            weights = [self._gm_shot_selection_weight(p, strength=st) * _star(p) for p in five]
             return rng.choices(five, weights=weights, k=1)[0]
 
         _aw_memo: Dict[int, float] = {}
@@ -16968,7 +16983,7 @@ class SimEngine:
                 return hit
             comp = self._gm_playmaking_99(p) / 99.0
             ovr = self._gm_ovr_0_100(p)
-            star = 1.0 + 0.03 * max(0.0, ovr - 92.0)
+            star = _star(p)
             # comp^3 handed nearly every helper on a line to its best passer, so the
             # same two players topped the league every year. comp^2.2 plus a season
             # playmaking form draw spreads the helpers without flattening talent.

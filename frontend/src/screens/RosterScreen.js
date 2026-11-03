@@ -6026,10 +6026,39 @@ function PlayerCharacterLifePanel({ player, franchiseState, onCallMeeting, canMa
 
 /* ─── Modal shell ────────────────────────────────────────────────────── */
 
-function DetailTabs({ activeTab, setActiveTab }) {
+const SCOUTING_TABS = [
+  { value: "overview", label: "Scouting" },
+  { value: "performance", label: "Performance" },
+  { value: "character", label: "Character & Life" },
+  { value: "career", label: "Career" },
+];
+
+function ScoutingOnlyPanel({ player }) {
+  const rank = player?.draft_rank;
+  return (
+    <section className="pdx-stack">
+      <DossierCard eyebrow="Pre-draft" title={rank ? `#${rank} on the draft board` : "Unranked on the draft board"}>
+        <DossierTiles dense>
+          <DossierTile label="Draft rank" value={rank ? `#${rank}` : "—"} />
+          <DossierTile label="Projection" value={player?.draft_projection || "—"} />
+          <DossierTile label="Scout grade" value={player?.scout_grade || "—"} />
+          <DossierTile label="Board tier" value={player?.draft_board_tier || "—"} wide />
+          <DossierTile label="League" value={player?.league || player?.level_league_code || "—"} />
+          <DossierTile label="Club" value={player?.level_club || player?.team || "—"} wide />
+        </DossierTiles>
+        <DossierNote>
+          He hasn't been drafted, so his true overall, potential and attributes stay hidden. Scout him on the Draft Class screen
+          to narrow the read before the draft.
+        </DossierNote>
+      </DossierCard>
+    </section>
+  );
+}
+
+function DetailTabs({ activeTab, setActiveTab, tabs = PANEL_TABS }) {
   return (
     <nav className="pdx-tabs" role="tablist" aria-label="Player detail tabs">
-      {PANEL_TABS.map((tab) => (
+      {tabs.map((tab) => (
         <button
           key={tab.value}
           type="button"
@@ -6046,6 +6075,7 @@ function DetailTabs({ activeTab, setActiveTab }) {
 }
 
 function DetailPanelRouter({ activeTab, player, storylines, franchiseState, onRefresh, onCallMeeting, canManage }) {
+  if (player?.scouting_only && !["performance", "character", "career"].includes(activeTab)) return <ScoutingOnlyPanel player={player} />;
   if (activeTab === "overview") return <PlayerOverviewPanel player={player} franchiseState={franchiseState} />;
   if (activeTab === "character") {
     return (
@@ -6456,6 +6486,12 @@ export function PlayerProfileModal({
               ) : null}
             </div>
 
+            {player?.scouting_only ? (
+            <div className="pdx-hero__ratings">
+              <DossierRatingBadge label="DRAFT RANK" value={player?.draft_rank ? `#${player.draft_rank}` : "—"} tone="is-ovr" sub={player?.draft_projection || "Undrafted prospect"} />
+              <DossierRatingBadge label="OVR / POT" value="?" tone="is-pot" sub="Hidden until drafted" />
+            </div>
+            ) : (
             <div className="pdx-hero__ratings">
               <DossierRatingBadge
                 label="OVR"
@@ -6491,10 +6527,11 @@ export function PlayerProfileModal({
                 subTone={potChangeRaw > 0 ? "is-up" : potChangeRaw < 0 ? "is-down" : ""}
               />
             </div>
+            )}
           </header>
 
           <div className="pdx-tabs-wrap" ref={tabsAnchorRef}>
-            <DetailTabs activeTab={currentTab} setActiveTab={changeTab} />
+            <DetailTabs activeTab={currentTab} setActiveTab={changeTab} tabs={player?.scouting_only ? SCOUTING_TABS : PANEL_TABS} />
           </div>
 
           <div className="pdx-content" role="tabpanel">

@@ -413,6 +413,22 @@ def evaluate_ntc_waiver_request(
                 "value_penalty_pct": 0.0,
             }
 
+    if clause.get("mntc", 0) > 0 and not clause.get("ntc") and not clause.get("nmc"):
+        approved = clause.get("approved_destinations") or []
+        return {
+            "ok": True,
+            "accepted": False,
+            "can_request": False,
+            "player_id": str(getattr(player, "id", "") or ""),
+            "player_name": pname,
+            "clause_label": "M-NTC",
+            "reason": "Not on his approved trade list"
+            + (f" ({', '.join(str(x).upper() for x in list(approved)[:12])})" if approved else ""),
+            "reason_code": "mntc_not_listed",
+            "accept_chance": 0.0,
+            "value_penalty_pct": 0.0,
+        }
+
     dest_quality = _team_strength_proxy(destination_team, ctx)
     dest_market = _market_size(destination_team)
     src_quality = _team_strength_proxy(source_team, ctx)
@@ -693,15 +709,13 @@ def validate_trade_rules(
                 dest = str(asset.acquiring_team_id)
                 if _dest_on_list(dest, approved):
                     pass
-                elif _asset_has_ntc_waiver(asset, ctx):
-                    warnings.append(
-                        f"{pname} waived M-NTC destination restriction — trade value slightly reduced"
-                    )
-                    clause_impact.setdefault(asset.source_team_id, []).append(
-                        f"{pname}: M-NTC waived for {dest}"
-                    )
                 else:
-                    blocking.append("Modified no-trade clause requires approved destination.")
+                    # A modified NTC is a list: he can only be moved to the clubs on it.
+                    abbrs = [str(x).upper() for x in list(approved) if not str(x).strip().isdigit()]
+                    listed = ", ".join(abbrs[:12]) or "no clubs listed"
+                    blocking.append(
+                        f"{pname} has a modified no-trade clause — he can only be traded to his approved list ({listed})."
+                    )
                     clause_impact.setdefault(asset.source_team_id, []).append(f"{pname}: M-NTC blocks trade")
 
             # NHL rule: no waiting period after a trade. The only re-acquisition limit is that a

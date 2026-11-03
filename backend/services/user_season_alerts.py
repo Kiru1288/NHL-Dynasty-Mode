@@ -209,6 +209,16 @@ def _suspension_watch(session: Any) -> None:
                         break
             watch[key] = entry
             changed = True
+            # Take him out of the lineup now and dress the best available replacement.
+            try:
+                from services.lineup_integrity import reconcile_user_lineup
+
+                rep = reconcile_user_lineup(session, auto_fill=True, reason="suspension")
+                filled = [f for f in (rep.get("filled") or []) if f.get("label") == entry.get("label")]
+                if filled:
+                    entry["replacement"] = filled[0].get("player_name")
+            except Exception:
+                log.exception("suspension lineup replace failed")
             try:
                 from app.sim_engine.franchise.storyline_conduct import get_conduct_games_remaining
 
@@ -220,7 +230,11 @@ def _suspension_watch(session: Any) -> None:
             )
             what = "placed on leave" if leave else "suspended"
             span = f" for {games} game{'s' if games != 1 else ''}" if games > 0 else ""
-            slot_txt = f" He leaves an opening at {entry['label']}." if entry.get("label") else ""
+            slot_txt = (
+                f" {entry['replacement']} takes his spot at {entry['label']}."
+                if entry.get("replacement") and entry.get("label")
+                else (f" His spot at {entry['label']} has been filled." if entry.get("label") else "")
+            )
             _popup(
                 session,
                 f"gm_susp:{key}:{_season(session)}:{int(getattr(session, 'calendar_cursor', 0) or 0)}",

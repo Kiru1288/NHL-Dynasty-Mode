@@ -15797,7 +15797,9 @@ def _actionable_interrupt_ids(session: FranchiseSession):
         actions = p.get("actions") or []
         claim = any(isinstance(a, dict) and str(a.get("id") or "") == "waiver_claim" for a in actions)
         if claim:
-            pops.append("w:" + str(p.get("player_id") or p.get("id") or ""))
+            # A notice for a player who wouldn't crack your lineup no longer halts every sim.
+            if p.get("upgrade_for_user", True):
+                pops.append("w:" + str(p.get("player_id") or p.get("id") or ""))
         elif str(p.get("presentation_type") or "").startswith("trade_demand") and (
             not utid or str(p.get("team_id") or "") == utid
         ):
@@ -15869,10 +15871,13 @@ def _drop_resolved_waiver_popups(session: FranchiseSession) -> None:
     def _keep(p: Any) -> bool:
         if not isinstance(p, dict):
             return True
-        kind = str(p.get("kind") or "")
+        # Only stale "put in a claim?" notices go. Claim results (won / beaten / no room),
+        # "claimed off you" and "cleared" reports are outcomes the user must still see.
+        if p.get("waiver_result"):
+            return True
         actions = p.get("actions") or []
         claim = any(isinstance(a, dict) and str(a.get("id") or "") == "waiver_claim" for a in actions)
-        if kind != "waiver" and not claim and "waiver" not in str(p.get("headline") or "").lower():
+        if not claim:
             return True
         return str(p.get("player_id") or "") in open_ids
 
@@ -26462,8 +26467,32 @@ def _repair_flat_potential_v1(session: FranchiseSession) -> None:
         invalidate_session_payload_caches(session, reason="flat_potential_repair")
 
 
+def _seed_all_mntc_lists(session: FranchiseSession) -> None:
+    """Every modified-NTC player needs his approved list: the list is the only way he can move."""
+    if getattr(session, "_mntc_lists_seeded_v1", False):
+        return
+    league = getattr(getattr(session, "sim", None), "league", None)
+    if league is None:
+        return
+    from services.trade_demand_engine import seed_mntc_destinations
+
+    for t in list(getattr(league, "teams", None) or []):
+        for attr in ("roster", "ahl_roster", "injured_reserve"):
+            for p in list(getattr(t, attr, None) or []):
+                try:
+                    seed_mntc_destinations(p, league)
+                except Exception:
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
+    session._mntc_lists_seeded_v1 = True
+
+
 def build_state_payload(session: FranchiseSession, *, include_heavy: bool = False, crisis_tick: bool = False) -> Dict[str, Any]:
     from services.perf_profiler import span
+
+    try:
+        _seed_all_mntc_lists(session)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     try:
         _strip_bootstrap_fake_rights(session)

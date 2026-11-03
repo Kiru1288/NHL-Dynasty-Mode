@@ -201,6 +201,26 @@ export function TradeValueHero({ asset, meta, intel = null, compact = false }) {
           </span>
           {data ? <span className={`twr-chip twr-demand tone-${demandTone(data.demand)}`}>Demand: {data.demand}</span> : null}
         </div>
+        {(() => {
+          const label = String(asset?.tradeMeta?.clauseLabel || asset?.clauseLabel || asset?.protection || "").toUpperCase();
+          if (!label || label === "NONE") return null;
+          const approved = (asset?.tradeMeta?.approvedTradeTeams || asset?.approvedTradeTeams || []).filter((x) => x && !/^\d+$/.test(String(x).trim()));
+          const isM = label.includes("M-NTC") || label.includes("MODIFIED");
+          return (
+            <div className={`twr-clause ${isM ? "is-mntc" : ""}`}>
+              <b>{isM ? "M-NTC" : label.includes("NMC") ? "NMC" : "NTC"}</b>
+              <span>
+                {isM
+                  ? approved.length
+                    ? `Can only be traded to: ${[...new Set(approved.map((x) => String(x).toUpperCase()).filter((x) => x.length <= 4))].join(" · ") || approved.slice(0, 12).join(" · ")}`
+                    : "Approved list loading — he can only go to clubs on it."
+                  : label.includes("NMC")
+                    ? "No-movement clause: he must agree to any move."
+                    : "No-trade clause: he must waive it for any destination."}
+              </span>
+            </div>
+          );
+        })()}
       </div>
     </div>
   );

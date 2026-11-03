@@ -184,10 +184,10 @@ _EXPECTED_PPG_ANCHORS: Tuple[Tuple[float, float], ...] = (
     (70.0, 0.35),
     (75.0, 0.45),
     (80.0, 0.58),
-    (85.0, 0.72),
-    (90.0, 0.90),
-    (95.0, 1.05),
-    (99.0, 1.25),
+    (85.0, 0.70),
+    (90.0, 0.86),
+    (95.0, 1.00),
+    (99.0, 1.18),
 )
 
 
@@ -2352,9 +2352,11 @@ def _elite_growth_scale(ovr99: float) -> float:
         ovr = float(ovr99)
     except (TypeError, ValueError):
         return 1.0
-    if ovr <= 84.0:
+    # Was exp(-0.25*(ovr-84)): an 88 kept 37% of his growth and a 90 only 22%, so young
+    # players with real headroom stalled in the mid-80s. Stars still slow near the top.
+    if ovr <= 86.0:
         return 1.0
-    return float(math.exp(-0.25 * (ovr - 84.0)))
+    return float(math.exp(-0.11 * (ovr - 86.0)))
 
 
 def _scout_potential99(player: Any) -> float:
@@ -2852,13 +2854,13 @@ def calculate_season_growth_budget(
     # Share of the gap to potential one season closes. 22-26 used to close 15%
     # (an 8-point runway was +1 a year), so growth died after a player's 2nd season.
     if age <= 21:
-        close = 0.28
+        close = 0.40
     elif age <= 23:
-        close = 0.25
+        close = 0.36
     elif age <= 26:
-        close = 0.19
+        close = 0.27
     elif age <= 29:
-        close = 0.09
+        close = 0.12
     else:
         close = 0.04
     # A random "regression" roll is not a reason for a young player to drop:
@@ -2910,8 +2912,8 @@ def calculate_season_growth_budget(
         used_close = close * (0.45 if phase == "STALL" else 1.0)
         budget = gap_exp * used_close * coeff
         # One season closes a slice of the gap. The ceiling itself is potential, not an age wall.
-        step_cap = 0.042 if age <= 25 else 0.024
-        budget = min(budget, gap_exp * (0.45 if phase == "SPIKE" else 0.35), step_cap)
+        step_cap = 0.068 if age <= 25 else 0.038
+        budget = min(budget, gap_exp * (0.60 if phase == "SPIKE" else 0.48), step_cap)
 
     # F13: out-producing his rating is growth for a young player at any level (AHL,
     # ECHL, junior included: production is the NHL-equivalent line), even at or past

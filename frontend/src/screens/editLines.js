@@ -892,7 +892,7 @@ function PlayerPool({ players, assignedSet, lockedSet, selectedPlayerId, search,
         const fit = focusSlot && posFit(player, focusSlot) ? chemistryFitScore(player, focusSlot) : null;
         const status = player.availability?.key === "active" ? null : player.availability?.label;
         const meta = [assigned ? `✓ ${player.position}` : player.position, fit != null ? `${fit} fit` : null, status].filter(Boolean).join(" · ");
-        return <div key={player.id} className={`lb-player ${assigned ? "assigned" : ""} ${selectedPlayerId === player.id ? "selected" : ""} ${disabled ? "disabled" : ""} ${locked ? "locked" : ""}`} draggable={!disabled} onDragStart={(event) => { document.body.classList.add("lb-dragging"); onDragStart(event, player.id); }} onDragEnd={() => { document.body.classList.remove("lb-dragging"); document.querySelectorAll(".fm-card.is-dragover").forEach((el) => el.classList.remove("is-dragover")); }} onClick={() => onPlayerSelect(player.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onPlayerSelect(player.id); } }} role="button" tabIndex={0} aria-label={`${player.name}, ${player.position}, ${player.overall} overall${assigned ? ", dressed" : ""}`} title={disabled ? player.availability?.reason || "Player cannot be moved." : `${player.name} · ${player.position} · ${player.overall} overall${assigned ? " · Dressed" : ""}`}>
+        return <div key={player.id} data-pid={!disabled ? player.id : undefined} className={`lb-player ${assigned ? "assigned" : ""} ${selectedPlayerId === player.id ? "selected" : ""} ${disabled ? "disabled" : ""} ${locked ? "locked" : ""}`} draggable={false} onDragStart={(event) => { document.body.classList.add("lb-dragging"); onDragStart(event, player.id); }} onDragEnd={() => { document.body.classList.remove("lb-dragging"); document.querySelectorAll(".fm-card.is-dragover").forEach((el) => el.classList.remove("is-dragover")); }} onClick={() => onPlayerSelect(player.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onPlayerSelect(player.id); } }} role="button" tabIndex={0} aria-label={`${player.name}, ${player.position}, ${player.overall} overall${assigned ? ", dressed" : ""}`} title={disabled ? player.availability?.reason || "Player cannot be moved." : `${player.name} · ${player.position} · ${player.overall} overall${assigned ? " · Dressed" : ""}`}>
           <PlayerHeadshot player={player} size="md" />
           <div className="lb-player-copy">
             <div className="lb-player-name">{player.name}</div>
@@ -938,6 +938,8 @@ function FormationCard({ descriptor, geo, player, tier, pips, locked, selected, 
   ].filter(Boolean).join(" ");
   return <div
     ref={(node) => registerRef && registerRef(descriptor.key, node)}
+    data-slot-key={descriptor.key}
+    data-pid={player && !locked && player.availability?.placeable ? player.id : undefined}
     className={classes}
     style={cardStyle(geo)}
     role="button"
@@ -950,7 +952,7 @@ function FormationCard({ descriptor, geo, player, tier, pips, locked, selected, 
     onDragEnter={(event) => event.currentTarget.classList.add("is-dragover")}
     onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) event.currentTarget.classList.remove("is-dragover"); }}
     onDrop={(event) => { event.currentTarget.classList.remove("is-dragover"); onDrop(event, descriptor); }}
-    draggable={Boolean(player) && !locked && player.availability?.placeable}
+    draggable={false}
     onDragStart={(event) => { if (!player) return; event.currentTarget.classList.add("is-dragging"); document.body.classList.add("lb-dragging"); onDragStart(event, player.id); }}
     onDragEnd={(event) => { event.currentTarget.classList.remove("is-dragging"); document.body.classList.remove("lb-dragging"); document.querySelectorAll(".fm-card.is-dragover").forEach((el) => el.classList.remove("is-dragover")); }}
   >
@@ -1177,7 +1179,21 @@ function UnitDeploy({ group, line, index, count, onShare, onDeploy }) {
         <span>%</span>
       </label>
       <span className="fm-share-min" title="Approximate minutes in a 60-minute game">~{minutes} min</span>
-      <span className="fm-share-bar" aria-hidden="true"><i style={{ width: `${Math.min(100, (share / 50) * 100)}%` }} /></span>
+      <input
+        type="range"
+        className="fm-share-range"
+        min={0}
+        max={50}
+        step={1}
+        value={Math.min(50, Math.round(Number(share) || 0))}
+        onChange={(event) => onShare(group, line.id, event.target.value)}
+        onClick={(event) => event.stopPropagation()}
+        onPointerDown={(event) => event.stopPropagation()}
+        draggable={false}
+        onDragStart={(event) => { event.preventDefault(); event.stopPropagation(); }}
+        aria-label={`${defense ? "Pair" : "Line"} ${index + 1} ice time slider`}
+        style={{ "--fill": `${Math.min(100, (share / 50) * 100)}%` }}
+      />
     </div>
     {defense ? (
       <div className="fm-deploy-row">
@@ -1980,6 +1996,66 @@ export function EvenStrengthLines(props) {
     else if (row.playerId) nextLocks[row.key] = true;
     commit(lineState, nextLocks, nextLocks[row.key] ? "Slot locked." : "Slot unlocked.");
   }, [lineState, locks, commit]);
+  // Pointer drag: works with a plain mouse/touch move even where native HTML5 drag-and-drop
+  // never fires (pen/touch, some Chrome builds, overlays). Native DnD stays as well.
+  const pointerDragRef = useRef(null);
+  useEffect(() => {
+    const root = document.querySelector(".linebuilder-root");
+    if (!root) return undefined;
+    const THRESH = 6;
+    const onDown = (e) => {
+      if (e.button !== 0 || e.target.closest("input,button,select,textarea,a")) return;
+      const src = e.target.closest("[data-pid]");
+      if (!src || !root.contains(src)) return;
+      pointerDragRef.current = { pid: src.getAttribute("data-pid"), x: e.clientX, y: e.clientY, active: false, ghost: null, src };
+    };
+    const onMove = (e) => {
+      const d = pointerDragRef.current;
+      if (!d) return;
+      if (!d.active) {
+        if (Math.abs(e.clientX - d.x) + Math.abs(e.clientY - d.y) < THRESH) return;
+        d.active = true;
+        const g = d.src.cloneNode(true);
+        g.className = `${d.src.className} lb-pointer-ghost`;
+        g.removeAttribute("data-pid"); g.removeAttribute("data-slot-key");
+        const r = d.src.getBoundingClientRect();
+        g.style.width = `${r.width}px`;
+        document.body.appendChild(g);
+        d.ghost = g;
+        document.body.classList.add("lb-dragging");
+      }
+      e.preventDefault();
+      if (d.ghost) { d.ghost.style.left = `${e.clientX + 8}px`; d.ghost.style.top = `${e.clientY + 8}px`; }
+      root.querySelectorAll(".fm-card.is-dragover").forEach((el) => el.classList.remove("is-dragover"));
+      const over = document.elementFromPoint(e.clientX, e.clientY)?.closest?.("[data-slot-key]");
+      if (over) over.classList.add("is-dragover");
+    };
+    const onUp = (e) => {
+      const d = pointerDragRef.current;
+      pointerDragRef.current = null;
+      if (!d || !d.active) return;
+      d.ghost?.remove();
+      document.body.classList.remove("lb-dragging");
+      root.querySelectorAll(".fm-card.is-dragover").forEach((el) => el.classList.remove("is-dragover"));
+      const over = document.elementFromPoint(e.clientX, e.clientY)?.closest?.("[data-slot-key]");
+      if (!over) return;
+      const key = over.getAttribute("data-slot-key");
+      const target = descriptors(lineState, showThird).find((row) => row.key === key);
+      if (target && d.pid) placePlayer(String(d.pid), target);
+      // swallow the click that follows a drag
+      const stop = (ev) => { ev.stopPropagation(); ev.preventDefault(); window.removeEventListener("click", stop, true); };
+      window.addEventListener("click", stop, true);
+      setTimeout(() => window.removeEventListener("click", stop, true), 0);
+    };
+    root.addEventListener("pointerdown", onDown);
+    window.addEventListener("pointermove", onMove, { passive: false });
+    window.addEventListener("pointerup", onUp);
+    return () => {
+      root.removeEventListener("pointerdown", onDown);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+  }, [lineState, showThird, placePlayer]);
   const registerSlotRef = useCallback((key, node) => { if (node) slotRefs.current.set(key, node); else slotRefs.current.delete(key); }, []);
   const onSlotKeyDown = useCallback((event, row) => {
     if (event.key === "Enter") { event.preventDefault(); onSlotSelect(row); return; }
@@ -2248,6 +2324,7 @@ export function EvenStrengthLines(props) {
           onShareSet={onShareSet}
           onCoach={onCoach}
           shareTotals={shareTotals}
+          onApplyLines={(next, msg) => commit(next, locks, msg)}
         />
       ) : null}
       <div className="lb-workspace">

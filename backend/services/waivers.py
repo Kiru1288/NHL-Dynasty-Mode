@@ -191,7 +191,24 @@ def place_on_waivers(session: Any, team: Any, player: Any, *, reason: str = "man
     if _tid(team) == user_tid and manual:
         _resolve_entry(session, entry)
     elif entry["overall"] >= POPUP_MIN_OVR and _tid(team) != user_tid:
+        # Only a real upgrade for the user's club pauses a week/month sim; the rest
+        # are informational notices that wait on the desk.
+        upgrade = False
+        try:
+            league_teams = list(getattr(league, "teams", None) or [])
+            ut = next((t for t in league_teams if _tid(t) == user_tid), None)
+            if ut is not None:
+                same = sorted(
+                    _player_ovr(q) for q in list(getattr(ut, "roster", None) or [])
+                    if _position_bucket(q) == entry["position"]
+                )
+                keep = {"C": 4, "LW": 4, "RW": 4, "F": 12, "D": 6, "G": 2}.get(str(entry["position"]), 4)
+                bar = same[-keep] if len(same) >= keep else 0
+                upgrade = float(entry["overall"]) >= float(bar) + 1.0
+        except Exception:
+            upgrade = False
         _popup(session, f"waiver_avail:{pid}:{now}", {
+            "upgrade_for_user": bool(upgrade),
             "kind": "waiver",
             "source_label": "Waiver Wire",
             "headline": f"{_team_name(team)} placed {entry['name']} on waivers",
@@ -508,7 +525,17 @@ def process_waiver_wire(session: Any) -> Dict[str, Any]:
                 _resolve_entry(session, e, claim_cache)
                 resolved += 1
             except Exception:
+                _swallowed_log.warning("waiver resolve failed for %s", e.get("player_id"), exc_info=True)
                 e["cleared"] = True
+                if e.get("user_claim"):
+                    # Never leave a user claim hanging silently.
+                    _popup(session, f"waiver_err:{e.get('player_id')}:{now}", {
+                        "kind": "waiver", "source_label": "Waiver Wire", "theme": "warning",
+                        "headline": f"Claim on {e.get('name') or 'player'} not processed",
+                        "summary": "The league office could not process your claim. He was returned to his club.",
+                        "waiver_result": {"success": False},
+                        **_portrait_fields(e.get("player_ref"), e),
+                    })
     rng = random.Random(f"waivers|{now}|{getattr(session, 'session_id', '')}")
     try:
         moves = _cpu_waiver_moves(session, rng)

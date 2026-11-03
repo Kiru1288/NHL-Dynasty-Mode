@@ -209,4 +209,45 @@ def player_dossier_row(session: Any, player_id: str) -> Dict[str, Any]:
     if team is not None:
         row.setdefault("team_id", str(getattr(team, "team_id", None) or getattr(team, "id", "") or ""))
         row.setdefault("team_abbr", _team_label(team))
+    undrafted_junior = (
+        level == "JUNIOR"
+        and team is None
+        and not bool(getattr(p, "drafted", False))
+        and not (getattr(p, "nhl_rights_team_id", None) or getattr(p, "rights_team_id", None))
+    )
+    if undrafted_junior:
+        # Pre-draft fog: an undrafted prospect's true ability is hidden. The dossier shows
+        # his scouting picture and draft ranking, never his OVR, potential or attributes.
+        for k in list(row.keys()):
+            kl = k.lower()
+            if kl in ("ovr", "overall", "effective_ovr", "potential", "potential_score", "pot", "display_ovr",
+                      "ratings", "attributes", "attribute_profile", "chapter_profile", "overall_delta",
+                      "growth_delta", "season_ovr_delta", "season_potential_delta", "potential_change_season",
+                      "rating_history", "true_ovr", "true_potential") or kl.startswith("attr_") or (
+                kl != "draft_rank"
+                and any(w in kl for w in ("ovr", "overall", "potential", "rating", "attribute"))
+            ):
+                row.pop(k, None)
+        row["scouting_only"] = True
+        row["pre_draft"] = True
+        rank = None
+        try:
+            from services.franchise_sim import get_cached_draft_class_rankings
+
+            board = get_cached_draft_class_rankings(session, getattr(session, "sim", None)) or {}
+            entries = board.get("entries") or board.get("prospects") or board.get("board") or board.get("rankings") or []
+            pid = _pid(p)
+            for i, e in enumerate(entries):
+                if str(e.get("key") or e.get("player_id") or e.get("id") or "") == pid:
+                    rank = int(e.get("rank") or (i + 1))
+                    row["draft_projection"] = (
+                        e.get("scout_projection") or e.get("projected_range") or e.get("projection") or e.get("draft_range")
+                    )
+                    row["scout_grade"] = e.get("scout_grade") or e.get("grade")
+                    row["draft_board_tier"] = e.get("scout_tier") or e.get("class_tier") or e.get("tier") or e.get("board_tier")
+                    row["draft_stock"] = e.get("stock_label") or e.get("draft_stock")
+                    break
+        except Exception:
+            _log.debug("draft rank lookup failed", exc_info=True)
+        row["draft_rank"] = rank
     return {"found": True, "player": row}

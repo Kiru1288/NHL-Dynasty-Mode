@@ -418,6 +418,10 @@ def reconcile_lines(
             reason = "duplicate"
         elif not fits_slot(player, row["slot"]):
             reason = "wrong_position"
+        elif is_suspended(player):
+            # A suspended player can't dress: his slot is filled outright, not blacked out.
+            # The suspension watcher remembers the slot and puts him back when he returns.
+            reason = "suspended"
         if reason:
             _set_slot(payload, row["group"], row["unit_id"], row["slot"], "")
             if row["slot"] not in OPTIONAL_GOALIE_SLOTS:
