@@ -9,7 +9,7 @@
  * sits next to the restyled real NHL photos as one art style.
  */
 
-import { dreamFacets, makeCanvas } from "./ps2Pixel";
+import { dreamGrade, makeCanvas } from "./ps2Pixel";
 
 const SKIN = {
   fair: "#f2c9a8",
@@ -424,8 +424,8 @@ export function buildFaceModel(t, colors = {}) {
 }
 
 const faceCache = new Map();
-const FACE_W = 88;
-const FACE_H = 108;
+const FACE_W = 132;
+const FACE_H = 162;
 
 function backdropFor(t, colors) {
   const base = colors.primary || "#1b3260";
@@ -470,7 +470,7 @@ export function renderLowPolyFace(player, colors = {}) {
   try {
     drawPolys(fg.ctx, buildFaceModel(t, colors));
     const img = fg.ctx.getImageData(0, 0, FACE_W, FACE_H);
-    dreamFacets(img, { cell: 8, lift: 0.12, sat: 0.95, alphaCut: 120 });
+    dreamGrade(img, { lift: 0.07, sat: 1.0, alphaCut: 120 });
     fg.ctx.putImageData(img, 0, 0);
     // Faceted backdrop shards in a muted team tint.
     const [b1, b2, b3] = backdropFor(t, colors);

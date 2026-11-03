@@ -856,7 +856,10 @@ function normalizePlayerFromRow(row, teamId, franchiseState, isUserTeam = false,
       scouted_pct: 100,
       scouting_level: "fully_scouted",
       ovr_confidence: "exact",
-      headshot_url: norm.headshot_url || row?.headshot_url || row?.headshotUrl || null,
+      headshot_url: norm.headshot_url || row?.headshot_url || row?.headshotUrl || row?.nhl_headshot_url || row?.portrait_url || null,
+      nhl_headshot_url: row?.nhl_headshot_url || norm?.nhl_headshot_url || null,
+      nhl_player_id: row?.nhl_player_id || norm?.nhl_player_id || null,
+      portrait_source: row?.portrait_source || norm?.portrait_source || null,
       is_injured: Boolean(norm.is_injured ?? row?.is_injured),
       is_user_roster: true,
       teamId: String(teamId),
@@ -912,7 +915,10 @@ function normalizePlayerFromRow(row, teamId, franchiseState, isUserTeam = false,
     scouted_pct: scoutedPct,
     scouting_level: scoutingLevel,
     ovr_confidence: String(row?.ovr_confidence || "exact"),
-    headshot_url: row?.headshot_url || row?.headshotUrl || norm?.headshot_url || null,
+    headshot_url: row?.headshot_url || row?.headshotUrl || row?.nhl_headshot_url || row?.portrait_url || norm?.headshot_url || null,
+    nhl_headshot_url: row?.nhl_headshot_url || norm?.nhl_headshot_url || null,
+    nhl_player_id: row?.nhl_player_id || norm?.nhl_player_id || null,
+    portrait_source: row?.portrait_source || norm?.portrait_source || null,
     is_injured: Boolean(row?.is_injured ?? norm?.is_injured),
     is_user_roster: false,
     teamId: String(teamId),
@@ -1079,7 +1085,13 @@ function getTeamDirection(teamId, tradeAssets, franchiseState, standings) {
   const dir = tradeAssets?.teams?.[tid]?.team_direction;
   if (dir) return String(dir).toUpperCase();
   const st = safeArray(standings).find((r) => String(r.team_id) === tid);
-  const gp = Number(st?.gp) || 1;
+  const gp = Number(st?.gp) || 0;
+  // Before ~10 games the record says nothing; don't brand the whole league sellers.
+  if (gp < 10) {
+    const strat0 = String(franchiseState?.team?.strategy || "");
+    if (tid === String(franchiseState?.user_team_id) && strat0) return strat0.toUpperCase();
+    return "LISTENING";
+  }
   const ppg = (Number(st?.pts) || 0) / Math.max(1, gp);
   if (ppg < 0.88) return "SELLER";
   if (ppg > 1.12) return "BUYER";
@@ -1425,6 +1437,7 @@ function deriveTradeDirectionLabel(team) {
   const pickCount = Number(team?.pickCount) || 0;
   if (inj >= 3) return "INJURED";
   if (cap != null && Number.isFinite(Number(cap)) && Number(cap) < 1.5) return "CAP TIGHT";
+  if (gpHint < 10) return ovr >= 84 ? "CONTENDER" : "BUBBLE";
   if (ppg >= 1.05 && ovr >= 82) return "CONTENDER";
   if (ppg >= 0.95 && (Number(cap) > 3 || pickCount >= 4)) return "BUYER";
   if (ppg < 0.88 && pipeline >= 78) return "REBUILDER";
@@ -2005,28 +2018,36 @@ function AssetCard({
 }) {
   if (!asset) return null;
 
+  const valueRaw = asset.type === "pick" ? poolPickValueScore(asset) : poolPlayerValueScore(asset);
+  const valueTxt = Number.isFinite(Number(asset?.tradeValue))
+    ? Number(asset.tradeValue).toFixed(1)
+    : Number.isFinite(Number(valueRaw))
+      ? Number(valueRaw).toFixed(1)
+      : "—";
+  const removeBtn = onRemove ? (
+    <button type="button" className="kd-card-x" onClick={onRemove} aria-label="Remove from deal" title="Remove">
+      ×
+    </button>
+  ) : null;
+
   if (asset.type === "pick") {
     const orig = asset.originalTeamAbbr || inferLogoAbbr(asset.original_team_id, asset.original_team_id);
     return (
-      <div
-        className={`trade-asset-card trade-asset-card-pick ${compact ? "compact" : ""}`}
-        draggable={draggable}
-        onDragStart={onDragStart}
-      >
-        <PickIcon round={asset.round} year={asset.year} />
-        <div className="trade-asset-card-body">
-          <div className="trade-asset-card-name">{asset.year} {roundLabel(asset.round)}</div>
-          <div className="trade-asset-card-meta">
-            ORIG {orig}
-            {asset.protection ? ` · ${asset.protection}` : ""}
-          </div>
-          <PickValueMeter item={asset} showLabel={false} className="trade-asset-card-pick-meter" />
-        </div>
-        {onRemove && (
-          <button type="button" className="trade-asset-card-remove" onClick={onRemove} aria-label="Remove">
-            ×
-          </button>
-        )}
+      <div className={`kd-card kd-card--pick${compact ? " is-compact" : ""}`} draggable={draggable} onDragStart={onDragStart}>
+        <span className="kd-pick-ticket" aria-hidden="true">
+          <b>{roundLabel(asset.round)}</b>
+          <i>{asset.year}</i>
+        </span>
+        <span className="kd-card-main">
+          <b className="kd-card-name">{asset.year} {roundLabel(asset.round)} round</b>
+          <span className="kd-card-meta">
+            <span>{orig ? `Orig. ${orig}` : "Draft pick"}</span>
+            <span className="kd-term tone-free" title="Trade value">VAL {valueTxt}</span>
+            {asset.protection ? <span className="kd-term tone-mid">{asset.protection}</span> : null}
+          </span>
+        </span>
+        <span className="kd-card-value"><em>VALUE</em><b>{valueTxt}</b></span>
+        {removeBtn}
       </div>
     );
   }
@@ -2034,7 +2055,6 @@ function AssetCard({
   const retained = Number(asset.retained_pct || 0);
   const capHit = playerPackageCapHit(asset);
   const capDisplay = capHit > 0 ? capHit : Number(asset.capHit) || 0;
-  const capImpact = playerCapImpactLabel(side, capHit);
   const headPlayer = ensurePlayerHeadshotFields({
     ...asset,
     position: asset.pos,
@@ -2043,74 +2063,46 @@ function AssetCard({
   });
   const clauseMini = clauseTimingText(asset);
   const rumorMod = activeTradeRumorModifier(asset);
+  const ovrText = displayOvr(asset);
+  const ovrNum = parseInt(ovrText, 10) || 0;
+  const ovrTier = ovrNum >= 90 ? "s" : ovrNum >= 84 ? "a" : ovrNum >= 78 ? "b" : ovrNum ? "c" : "u";
 
   return (
     <div
-      className={`trade-asset-card trade-asset-card-player ${compact ? "compact" : ""} ${asset.type === "prospect" ? "is-prospect" : ""}`}
+      className={`kd-card kd-card--player${compact ? " is-compact" : ""}${asset.type === "prospect" ? " is-prospect" : ""}`}
       draggable={draggable}
       onDragStart={onDragStart}
     >
-      <PlayerHeadshot
-        player={headPlayer}
-        size={compact ? "sm" : "md"}
-        className="trade-asset-headshot"
-        flag={null}
-        number={null}
-      />
-      <div className="trade-asset-ovr-focus" title={getOverallTooltip(asset)}>
-        <span className="trade-asset-ovr-label">OVR</span>
-        <strong className="trade-asset-ovr-number">{displayOvr(asset)}</strong>
-      </div>
-      <div className="trade-asset-card-body">
-        <div className="trade-asset-card-name trade-asset-card-name-row">
-          <TradeFlagBadge player={asset} size="md" />
-          <span>{asset.name}</span>
-          {isFranchisePlayer(asset) ? <em className="trade-asset-franchise-mark">★</em> : null}
-        </div>
-        {protectedWarning ? (
-          <div className="trade-asset-protected-warn">{protectedWarning}</div>
-        ) : null}
+      <span className="kd-card-face">
+        <PlayerHeadshot player={headPlayer} size="sm" className="kd-face" flag={null} number={null} />
+      </span>
+      <span className="kd-card-main">
+        <b className="kd-card-name">
+          {asset.name}
+          {isFranchisePlayer(asset) ? <em className="kd-star" title="Franchise player">★</em> : null}
+        </b>
+        <span className="kd-card-meta">
+          <i className="kd-pos">{asset.pos || "—"}</i>
+          <span>Age {asset.age || "—"}</span>
+          <span className="kd-cap">{capDisplay > 0 ? formatMoneyShort(capDisplay) : formatPlayerCapLabel(asset)}</span>
+          <span className="kd-term tone-mid">{assetCardTermLabel(asset)}</span>
+          <span className="kd-term tone-free" title="Trade value">VAL {valueTxt}</span>
+          {retained > 0 ? <span className="kd-term tone-long">{retained}% retained</span> : null}
+        </span>
+        {protectedWarning ? <span className="kd-card-warn">{protectedWarning}</span> : null}
+        {clauseMini ? <span className="kd-card-warn is-clause">{clauseMini}</span> : null}
         {rumorMod ? (
-          <div className="trade-asset-rumor-chip" title={`Storyline: trade rumours ${rumorMod.amount} OVR for ${rumorMod.gamesRemaining} more games`}>
-            Rumours {rumorMod.amount} · {rumorMod.gamesRemaining} GP
-          </div>
+          <span className="kd-card-warn" title="Trade rumours are weighing on him">
+            Rumours {rumorMod.amount} OVR · {rumorMod.gamesRemaining} GP
+          </span>
         ) : null}
-        <div className="trade-asset-card-meta trade-asset-card-meta-tiny">
-          <PositionIcon pos={asset.pos} />
-          <span>{asset.age}Y</span>
-          <span>{assetCardTermLabel(asset)}</span>
-          {clauseMini && (
-            <span
-              className={`trade-asset-clause-mini${asset.clausePending || /starts/i.test(clauseMini) ? " is-pending" : ""}`}
-              title={clauseMini}
-            >
-              {clauseMini}
-            </span>
-          )}
-        </div>
-        {asset.potentialGrade && (
-          <div className="trade-asset-pot-big">POT {asset.potentialGrade}</div>
-        )}
-      </div>
-      <div className="trade-asset-card-right">
-        <div className="trade-asset-aav-badge">
-          <span className="trade-asset-aav-value">
-            {capDisplay > 0 ? formatMoneyShort(capDisplay) : formatPlayerCapLabel(asset)}
-          </span>
-          <span className="trade-asset-aav-label">AAV</span>
-        </div>
-        {capImpact && (
-          <span className={`trade-asset-cap-impact ${side === "left" ? "good" : "bad"}`}>
-            {capImpact}
-          </span>
-        )}
-        {retained > 0 && <span className="trade-ret-badge">{retained}% RET</span>}
-        {onRemove && (
-          <button type="button" className="trade-asset-card-remove" onClick={onRemove} aria-label="Remove">
-            ×
-          </button>
-        )}
-      </div>
+      </span>
+      <span className={`kd-ovr tier-${ovrTier}`} title={getOverallTooltip(asset)}>
+        <em>OVR</em>
+        <b>{ovrText}</b>
+      </span>
+      <span className="kd-card-value"><em>VALUE</em><b>{valueTxt}</b></span>
+      {removeBtn}
     </div>
   );
 }
@@ -2317,7 +2309,7 @@ function playerPackageCapHit(asset) {
 
 function assetCardTermLabel(asset) {
   const years = Number(asset?.years) || 0;
-  if (years > 0) return `${years}Y`;
+  if (years > 0) return `${years} YR${years === 1 ? "" : "S"}`;
   const contractType = String(asset?.contractType || "").toLowerCase();
   if (contractType.includes("entry")) return "ELC";
   const age = Number(asset?.age);
@@ -2604,11 +2596,9 @@ function DraftPickYearSection({
 }) {
   return (
     <>
-      <div className="trade-pick-year-divider">
-        <span className="trade-pick-year-divider-title">{group.year} DRAFT</span>
-        <span className="trade-pick-year-divider-count">
-          {group.count} PICK{group.count === 1 ? "" : "S"}
-        </span>
+      <div className="kd-year">
+        <span>{group.year} Draft</span>
+        <small>{group.count} pick{group.count === 1 ? "" : "s"}</small>
       </div>
       {group.picks.map((pick) => (
         <AssetPoolRow
@@ -2744,113 +2734,104 @@ function AssetPoolRow({
   ) : null;
 
   const seasonLine =
-    item.type !== "pick" && (item.gp != null || item.pts != null || item.war != null)
+    item.type !== "pick" && (item.gp != null || item.pts != null)
       ? [
           item.gp != null ? `${item.gp} GP` : null,
           item.g != null || item.a != null || item.pts != null
-            ? `${Number(item.g) || 0}-${Number(item.a) || 0}-${Number(item.pts) || 0}`
-            : null,
-          item.war != null && Number.isFinite(Number(item.war))
-            ? `WAR ${Number(item.war).toFixed(2)}`
+            ? `${Number(item.g) || 0}G ${Number(item.a) || 0}A ${Number(item.pts) || 0}P`
             : null,
         ]
           .filter(Boolean)
           .join(" · ")
       : "";
+  const valueRaw = item.type === "pick" ? poolPickValueScore(item) : poolPlayerValueScore(item);
+  const valueNum = Number.isFinite(Number(valueRaw)) ? Number(valueRaw) : null;
+  const valuePct = tradeValueBarPct(valueNum || 0, peakValue);
+  const ovrText = item.type === "pick" ? "" : displayOvr(item);
+  const ovrNum = parseInt(ovrText, 10) || 0;
+  const ovrTier = ovrNum >= 90 ? "s" : ovrNum >= 84 ? "a" : ovrNum >= 78 ? "b" : ovrNum ? "c" : "u";
+  const termRaw = formatPlayerTermLabel(item);
+  const termYears = /^(\d+)Y$/.exec(termRaw);
+  const termText = termYears ? `${termYears[1]} YR${termYears[1] === "1" ? "" : "S"}` : termRaw;
+  const termTone = termYears ? (Number(termYears[1]) <= 1 ? "expiring" : Number(termYears[1]) >= 5 ? "long" : "mid") : "free";
 
   return (
     <div
-      className={`trade-pool-row trade-pool-compact trade-pool-${item.type || "player"} ${used ? "used in-deal-row" : ""} ${isAhlProspect || blocked ? "view-only inactive" : ""}`}
+      className={`kd-row kd-row--${item.type || "player"}${used ? " is-used" : ""}${isAhlProspect || blocked ? " is-locked" : ""}`}
       draggable={draggable}
       onDragStart={draggable ? (e) => onDragStart(e, item, "pool") : undefined}
       onDoubleClick={() => draggable && onQuickAdd(item)}
       onClick={handleClick}
-      title={
-        used
-          ? "Already in package — remove from a deal slot"
-          : blockTitle || "Click to add · drag to slot"
-      }
+      title={used ? "Already in the deal" : blockTitle || "Click to add · drag into a slot"}
     >
       {item.type === "pick" ? (
         <>
-          <div className="trade-player-list-photo">
-            <PickIcon round={item.round} year={item.year} className="trade-pool-pick-icon" />
-          </div>
-
-          <div className="trade-player-list-main">
-            <div className="trade-player-list-name-row">
-              <strong>
-                {item.year} {roundLabel(item.round)}
-              </strong>
-            </div>
-            <div className="trade-pick-origin-line">
-              {pickOrigLogo ? (
-                <img className="trade-pick-origin-logo" src={pickOrigLogo} alt={pickOrigAbbr || "TEAM"} />
-              ) : (
-                <span className="trade-pick-origin-fallback">{pickOrigAbbr || "TEAM"}</span>
-              )}
-            </div>
-
-            <div className="trade-player-list-mid trade-pick-list-mid">
-              <PlayerValueFocus item={item} peakValue={peakValue} />
-            </div>
-          </div>
-
-          {statusPill}
+          <span className="kd-pick-ticket" aria-hidden="true">
+            <b>{roundLabel(item.round)}</b>
+            <i>{item.year}</i>
+          </span>
+          <span className="kd-row-main">
+            <b className="kd-row-name">{item.year} {roundLabel(item.round)} round</b>
+            <span className="kd-row-meta">
+              {pickOrigLogo ? <img className="kd-pick-logo" src={pickOrigLogo} alt="" /> : null}
+              <span>{pickOrigAbbr && String(originalTeam?.id || "") !== String(teamId) ? `via ${pickOrigAbbr}` : "Own pick"}</span>
+              {pickOutlookLabel(item) ? <span className="kd-term tone-mid">{pickOutlookLabel(item)}</span> : null}
+              {statusPill ? <span className="kd-row-tag">{statusPill}</span> : null}
+            </span>
+          </span>
+          <span className="kd-row-value" title="Trade value">
+            <em>VALUE</em>
+            <b>{valueNum != null ? valueNum.toFixed(1) : "—"}</b>
+            <i><s style={{ width: `${valuePct}%` }} /></i>
+          </span>
         </>
       ) : (
         <>
-          <div className="trade-player-list-photo">
+          <span className="kd-row-face">
             <PlayerHeadshot
               player={ensurePlayerHeadshotFields({ ...item, position: item.pos })}
               size="sm"
-              className="trade-pool-headshot trade-player-clean-headshot"
+              className="kd-face"
               flag={null}
               number={null}
             />
-          </div>
-
-          <div className="trade-player-list-main">
-            <div className="trade-player-list-name-row">
-              <TradeFlagBadge player={item} size="sm" />
-              <strong>{item.name}</strong>
+            <TradeFlagBadge player={item} size="sm" />
+          </span>
+          <span className="kd-row-main">
+            <b className="kd-row-name">
+              {item.name}
               {iceholeThread ? (
                 <button
                   type="button"
-                  className="trade-icehole-buzz"
+                  className="kd-buzz"
                   title={String(iceholeThread.title || "IceHole trade rumor thread")}
                   onClick={(e) => {
                     e.stopPropagation();
                     onOpenIcehole?.(iceholeThread);
                   }}
                 >
-                  IceHole buzz
+                  BUZZ
                 </button>
               ) : null}
-            </div>
-
-            <div className="trade-player-list-mid">
-              <div className="trade-player-list-details">
-                <span className="trade-player-detail-pos">{item.pos || "—"}</span>
-                <span className="trade-player-detail-age">{Number(item.age) ? `${item.age}Y` : "—"}</span>
-                <span className="trade-player-detail-cap">{formatPlayerCapLabel(item)}</span>
-              </div>
-
-              <PlayerValueFocus item={item} peakValue={peakValue} />
-            </div>
-            {seasonLine ? <div className="trade-pool-season-line">{seasonLine}</div> : null}
-          </div>
-
-          <div className="trade-player-ovr-tower">
-            <span>OVR</span>
-            <strong>{displayOvr(item)}</strong>
-            {activeTradeRumorModifier(item) && (
-              <small>
-                {`Rumors ${activeTradeRumorModifier(item).amount}`} · {`${activeTradeRumorModifier(item).gamesRemaining} GP`} · Trade Heat
-              </small>
-            )}
-          </div>
-          {statusPill}
+            </b>
+            <span className="kd-row-meta">
+              <i className="kd-pos">{item.pos || "—"}</i>
+              <span>{Number(item.age) ? `Age ${item.age}` : "—"}</span>
+              <span className="kd-cap">{formatPlayerCapLabel(item)}</span>
+              <span className={`kd-term tone-${termTone}`} title="Contract years remaining">{termText}</span>
+              {statusPill ? <span className="kd-row-tag">{statusPill}</span> : null}
+            </span>
+            {seasonLine ? <span className="kd-row-season">{seasonLine}</span> : null}
+          </span>
+          <span className={`kd-ovr tier-${ovrTier}`} title="Overall">
+            <em>OVR</em>
+            <b>{ovrText}</b>
+          </span>
+          <span className="kd-row-value" title="Trade value">
+            <em>VALUE</em>
+            <b>{valueNum != null ? valueNum.toFixed(1) : "—"}</b>
+            <i><s style={{ width: `${valuePct}%` }} /></i>
+          </span>
         </>
       )}
     </div>
@@ -2868,7 +2849,6 @@ function AssetPool({
   iceholeByPlayerId = null,
   onOpenIcehole = null,
 }) {
-  const [tab, setTab] = useState("ROSTER");
   const players = safeArray(meta?.players?.[teamId]);
   const affiliates = safeArray(meta?.affiliates?.[teamId]);
   const picks = safeArray(meta?.picks?.[teamId]);
@@ -2926,10 +2906,10 @@ function AssetPool({
     return peak;
   }, [rosterRows]);
 
-  const pickYearGroups = useMemo(() => {
-    if (tab !== "PICKS") return [];
-    return groupPicksByDraftYear(picks.map((p) => ({ ...p, type: "pick" })));
-  }, [tab, picks]);
+  const pickYearGroups = useMemo(
+    () => groupPicksByDraftYear(picks.map((p) => ({ ...p, type: "pick" }))),
+    [picks],
+  );
 
   const picksPeak = useMemo(() => {
     let peak = 1;
@@ -2940,27 +2920,80 @@ function AssetPool({
     return peak;
   }, [picks]);
 
+  const [filter, setFilter] = useState("ALL");
+  const [sortKey, setSortKey] = useState("value");
+  const [query, setQuery] = useState("");
+  const shownRows = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    let rows = rosterRows.filter((r) => {
+      const pos = String(r.pos || r.position || "").toUpperCase();
+      if (filter === "F" && !/^(C|LW|RW|F|W)$/.test(pos)) return false;
+      if (filter === "D" && pos !== "D") return false;
+      if (filter === "G" && pos !== "G") return false;
+      if (filter === "PROS" && !(r.type === "prospect" || String(r.orgLevel || "").toLowerCase() !== "nhl")) return false;
+      if (q && !String(r.name || "").toLowerCase().includes(q)) return false;
+      return true;
+    });
+    const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : -1);
+    const by = {
+      value: (r) => num(poolPlayerValueScore(r)),
+      ovr: (r) => num(parseInt(displayOvr(r), 10)),
+      cap: (r) => num(r.capHit),
+      term: (r) => num(r.years),
+      age: (r) => -num(r.age),
+    }[sortKey];
+    if (by && sortKey !== "value") rows = [...rows].sort((a, b) => by(b) - by(a));
+    return rows;
+  }, [rosterRows, filter, sortKey, query]);
+
+  const chips = [
+    ["ALL", "All", rosterRows.length],
+    ["F", "F", null],
+    ["D", "D", null],
+    ["G", "G", null],
+    ["PROS", "Minors", null],
+    ["PICKS", "Picks", picks.length],
+  ];
+  const showingPicks = filter === "PICKS";
+
   return (
-    <div className="trade-asset-pool">
-      <div className="trade-pool-tabs trade-pool-tabs-flat">
-        {[
-          ["ROSTER", rosterRows.length],
-          ["PICKS", picks.length],
-        ].map(([label, count]) => (
-          <button
-            key={label}
-            type="button"
-            className={tab === label ? "active" : ""}
-            onClick={() => {
-              setTab(label);
-            }}
-          >
-            {label} ({count})
-          </button>
-        ))}
+    <div className="kd-pool">
+      <div className="kd-pool-tools">
+        <div className="kd-chips" role="tablist">
+          {chips.map(([key, label, count]) => (
+            <button
+              key={key}
+              type="button"
+              role="tab"
+              aria-selected={filter === key}
+              className={`kd-chip${filter === key ? " is-on" : ""}`}
+              onClick={() => setFilter(key)}
+            >
+              {label}
+              {count != null ? <small>{count}</small> : null}
+            </button>
+          ))}
+        </div>
+        {!showingPicks ? (
+          <div className="kd-pool-search">
+            <input
+              type="search"
+              placeholder="Find a player"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+            <select value={sortKey} onChange={(e) => setSortKey(e.target.value)} aria-label="Sort roster">
+              <option value="value">Sort: Value</option>
+              <option value="ovr">Sort: OVR</option>
+              <option value="cap">Sort: Cap hit</option>
+              <option value="term">Sort: Term</option>
+              <option value="age">Sort: Youngest</option>
+            </select>
+          </div>
+        ) : null}
       </div>
-      <div className="trade-pool-list">
-        {tab === "PICKS" ? (
+      <div className="kd-pool-list">
+        {showingPicks ? (
           pickYearGroups.length ? (
             pickYearGroups.map((group) => (
               <DraftPickYearSection
@@ -2978,10 +3011,10 @@ function AssetPool({
               />
             ))
           ) : (
-            <div className="trade-pool-empty">No picks loaded</div>
+            <div className="kd-empty">No tradeable picks on file.</div>
           )
-        ) : rosterRows.length ? (
-          rosterRows.map((item) => (
+        ) : shownRows.length ? (
+          shownRows.map((item) => (
             <AssetPoolRow
               key={`${item.type}-${item.id}-${item.orgLevel || "nhl"}`}
               item={item}
@@ -2999,18 +3032,12 @@ function AssetPool({
             />
           ))
         ) : (
-          <div className="trade-pool-empty">No roster assets loaded</div>
+          <div className="kd-empty">{query ? "Nobody by that name." : "No players here."}</div>
         )}
       </div>
     </div>
   );
 }
-
-
-
-
-
-
 
 function FanReactionBadge({ score, compact = true }) {
   const s = Number(score) || 0;
@@ -5418,38 +5445,48 @@ function MarketPulseStrip({ tradeMarket, teams, userTeamId }) {
   );
 }
 
+const GM_OPENERS = {
+  seller: "We're retooling. Bring me picks, kids or cap room and I'll listen.",
+  buyer: "We're going for it this year. Show me players who help right now.",
+  neutral: "I'll do a hockey trade if it fills a hole. Don't try to fleece me.",
+};
+
 function PartnerReadCard({ team, interest, info }) {
   if (!team) return null;
   const side = marketSideOf(team);
   const appetite = MARKET_APPETITE[side];
   const needs = safeArray(info?.needs).slice(0, 3);
   const surplus = safeArray(info?.surplus).slice(0, 2);
-  const leverage = team.marketPressure?.tradeLeverageHint;
-  // One strip: who you're dealing with, what moves them, and (on demand) how
-  // they judge. Cap room is not repeated here — it sits on their roster rail.
+  const leverage = team.marketPressure?.tradeLeverageHint || team.marketPressure?.label || "";
+  const hue = Number.isFinite(Number(team.hue)) ? Number(team.hue) : 210;
   return (
-    <div className={`th-read th-read--strip side-${side}`} title={appetite.tip}>
-      <div className="th-read-who">
-        <span className="th-kicker">{team.abbr || "Partner"} GM</span>
-        <strong>{team.gmPersonality || "Pragmatic Dealer"}</strong>
+    <div className={`kd-gm side-${side}`} style={{ "--kd-team": `hsl(${hue} 62% 46%)` }}>
+      <div className="kd-gm-face" aria-hidden="true">
+        <TradeLogo team={team} size={58} />
+        <span className="kd-gm-tag">{team.abbr} GM</span>
       </div>
-      <dl className="th-read-facts">
-        <div><dt>Wants</dt><dd>{appetite.wants}</dd></div>
-        <div><dt>Avoids</dt><dd>{appetite.avoids}</dd></div>
-        <div className={interest != null ? "is-interest" : ""}>
-          <dt>{interest != null ? "Interest" : "Leverage"}</dt>
-          <dd>{interest != null ? `${Math.round(interest * 100)}%` : leverage || team.marketPressure?.label || "—"}</dd>
+      <div className="kd-gm-body">
+        <div className="kd-gm-who">
+          <strong>{team.gmPersonality || "Pragmatic Dealer"}</strong>
+          <span className={`kd-gm-side side-${side}`}>{side === "seller" ? "Seller" : side === "buyer" ? "Buyer" : "On the fence"}</span>
+          {interest != null ? (
+            <span className="kd-gm-interest" title="How close their GM is to yes">
+              Interest <b>{Math.round(interest * 100)}%</b>
+            </span>
+          ) : null}
         </div>
-      </dl>
-      {(needs.length > 0 || surplus.length > 0) && (
-        <div className="th-read-needs">
-          {needs.map((n) => <em key={`n-${n}`} className="is-need">Needs {n}</em>)}
-          {surplus.map((n) => <em key={`s-${n}`} className="is-surplus">Has {n}</em>)}
+        <p className="kd-bubble">“{GM_OPENERS[side] || GM_OPENERS.neutral}”</p>
+        <div className="kd-gm-chips">
+          <span className="kd-tagchip is-want"><em>Wants</em>{appetite.wants}</span>
+          <span className="kd-tagchip is-avoid"><em>Avoids</em>{appetite.avoids}</span>
+          {leverage ? <span className="kd-tagchip"><em>Leverage</em>{leverage}</span> : null}
+          {needs.map((n) => <span key={`n-${n}`} className="kd-tagchip is-need"><em>Needs</em>{n}</span>)}
+          {surplus.map((n) => <span key={`s-${n}`} className="kd-tagchip is-has"><em>Has</em>{n}</span>)}
         </div>
-      )}
-      <details className="th-read-how">
-        <summary>How they judge</summary>
-        <ol className="th-read-steps" aria-label="How the partner judges a deal">
+      </div>
+      <details className="kd-gm-how">
+        <summary>How he judges</summary>
+        <ol>
           {TRADE_JUDGING_STEPS.map(([k, v]) => (
             <li key={k}><strong>{k}</strong><span>{v}</span></li>
           ))}
@@ -5459,36 +5496,72 @@ function PartnerReadCard({ team, interest, info }) {
   );
 }
 
-function MarketTeamRow({ team, onOpenTalks, isPartner, info }) {
+function marketBlockPlayers(meta, teamId, limit = 2) {
+  return safeArray(meta?.players?.[teamId])
+    .filter((p) => p && p.tradeable !== false && Number.isFinite(Number(p.tradeValue)))
+    .sort((a, b) => Number(b.tradeValue) - Number(a.tradeValue))
+    .slice(0, limit);
+}
+
+function MarketTeamRow({ team, onOpenTalks, isPartner, info, meta, capPeak = 15 }) {
   const side = marketSideOf(team);
+  const hue = Number.isFinite(Number(team.hue)) ? Number(team.hue) : 210;
+  const cap = Number(team.capSpace);
+  const capPct = Number.isFinite(cap) ? Math.max(3, Math.min(100, (Math.max(cap, 0) / Math.max(capPeak, 1)) * 100)) : 0;
+  const needs = safeArray(info?.needs).slice(0, 3);
+  const surplus = safeArray(info?.surplus).slice(0, 2);
+  const block = marketBlockPlayers(meta, team.id, 2);
   return (
-    <button
-      type="button"
-      className={`th-mrow side-${side} ${isPartner ? "is-partner" : ""}`}
-      onClick={() => onOpenTalks(team.id)}
-      title={`Open talks with ${team.name}`}
+    <article
+      className={`kd-mcard side-${side}${isPartner ? " is-partner" : ""}`}
+      style={{ "--kd-team": `hsl(${hue} 62% 46%)`, "--kd-team-dk": `hsl(${hue} 60% 24%)` }}
     >
-      <TradeLogo team={team} size={28} />
-      <div className="th-mrow-main">
-        <div className="th-mrow-top">
+      <header className="kd-mcard-head">
+        <span className="kd-mcard-logo"><TradeLogo team={team} size={34} /></span>
+        <span className="kd-mcard-who">
           <strong>{team.name}</strong>
-          <em className={`th-side-pill side-${side}`}>{team.tradeDirectionLabel || team.direction || "—"}</em>
-        </div>
-        <div className="th-mrow-meta">
-          <TeamIdentityTag teamId={team.id} abbr={team.abbr} name={team.name} compact />
-          <span>{team.gmPersonality || "—"}</span>
-          <NeedChips info={info} limit={2} />
-        </div>
+          <em>{team.tradeDirectionLabel || team.direction || "—"}{team.record ? ` · ${team.record}` : ""}</em>
+        </span>
+        <span className="kd-mcard-odds" title="Playoff odds"><em>PO%</em><b>{team.playoffOdds != null ? team.playoffOdds : "—"}</b></span>
+      </header>
+      <div className="kd-mcard-cap" title="Cap space">
+        <em>Cap space</em>
+        <i><s style={{ width: `${capPct}%` }} /></i>
+        <b className={cap < 1 ? "is-tight" : ""}>{Number.isFinite(cap) ? formatMoneyM(cap) : "—"}</b>
       </div>
-      <div className="th-mrow-stats">
-        <span><em>Cap</em><strong className="th-num">{team.capSpace != null ? formatMoneyM(team.capSpace) : "—"}</strong></span>
-        <span><em>PO%</em><strong className="th-num">{team.playoffOdds != null ? `${team.playoffOdds}%` : "—"}</strong></span>
+      <div className="kd-mcard-tags">
+        <span className="kd-tagchip"><em>GM</em>{team.gmPersonality || "Pragmatic Dealer"}</span>
+        <TeamIdentityTag teamId={team.id} abbr={team.abbr} name={team.name} compact />
       </div>
-    </button>
+      {needs.length || surplus.length ? (
+        <div className="kd-mcard-tags">
+          {needs.map((n) => <span key={`n-${n}`} className="kd-tagchip is-need"><em>Needs</em>{n}</span>)}
+          {surplus.map((n) => <span key={`s-${n}`} className="kd-tagchip is-has"><em>Has</em>{n}</span>)}
+        </div>
+      ) : (
+        <div className="kd-mcard-tags"><span className="kd-tagchip is-want"><em>Lineup</em>No glaring holes</span></div>
+      )}
+      {block.length ? (
+        <div className="kd-mcard-block">
+          <span className="kd-kicker">{side === "seller" ? "On the block" : "Top trade chips"}</span>
+          {block.map((p) => (
+            <span key={p.id} className="kd-mcard-chip">
+              <i className="kd-pos">{p.pos || "—"}</i>
+              <b>{p.name}</b>
+              <span>{displayOvr(p)} OVR</span>
+              <span className="kd-term tone-mid">{assetCardTermLabel(p)}</span>
+            </span>
+          ))}
+        </div>
+      ) : null}
+      <button type="button" className="kd-go is-sm is-wide" onClick={() => onOpenTalks(team.id)}>
+        {isPartner ? "Back to talks" : "Open talks"}
+      </button>
+    </article>
   );
 }
 
-function MarketBoard({ teams, userTeamId, partnerId, tradeMarket, onOpenTalks, needsIndex = {} }) {
+function MarketBoard({ teams, userTeamId, partnerId, tradeMarket, onOpenTalks, needsIndex = {}, meta = null }) {
   const [sort, setSort] = useState("cap");
   const others = safeArray(teams).filter((t) => String(t.id) !== String(userTeamId));
   const sorter = (a, b) =>
@@ -5498,60 +5571,46 @@ function MarketBoard({ teams, userTeamId, partnerId, tradeMarket, onOpenTalks, n
   const buyers = others.filter((t) => marketSideOf(t) === "buyer").sort(sorter);
   const sellers = others.filter((t) => marketSideOf(t) === "seller").sort(sorter);
   const neutral = others.filter((t) => marketSideOf(t) === "neutral").sort(sorter);
-  const recent = safeArray(tradeMarket?.recent_trades).slice(0, 10);
-  const column = (title, meta, list, side) => (
-    <section className={`th-board-col side-${side}`}>
-      <div className="th-section-head">
-        <h3>{title}</h3>
-        <span className="th-num">{list.length}</span>
-      </div>
-      <p className="th-section-meta">{meta}</p>
-      <div className="th-board-list">
+  const capPeak = Math.max(1, ...others.map((t) => Number(t.capSpace) || 0));
+  const column = (title, blurb, list, side) => (
+    <section className={`kd-mcol side-${side}`}>
+      <header className="kd-mcol-head">
+        <strong>{title}</strong>
+        <b>{list.length}</b>
+        <span>{blurb}</span>
+      </header>
+      <div className="kd-mcol-list">
         {list.length ? (
           list.map((t) => (
-            <MarketTeamRow key={t.id} team={t} info={needsIndex[t.id]} onOpenTalks={onOpenTalks} isPartner={String(t.id) === String(partnerId)} />
+            <MarketTeamRow
+              key={t.id}
+              team={t}
+              meta={meta}
+              capPeak={capPeak}
+              info={needsIndex[t.id]}
+              onOpenTalks={onOpenTalks}
+              isPartner={String(t.id) === String(partnerId)}
+            />
           ))
         ) : (
-          <p className="th-empty">No clubs in this bucket right now.</p>
+          <p className="kd-empty">No clubs here right now.</p>
         )}
       </div>
     </section>
   );
   return (
-    <div className="th-board">
-      <div className="th-board-bar">
-        <span className="th-kicker">League market</span>
-        <span className="th-board-hint">Click a club to open talks.</span>
-        <div className="th-seg" role="group" aria-label="Sort clubs">
-          <button type="button" className={sort === "cap" ? "is-active" : ""} onClick={() => setSort("cap")}>Cap room</button>
-          <button type="button" className={sort === "odds" ? "is-active" : ""} onClick={() => setSort("odds")}>Playoff odds</button>
+    <div className="kd-board">
+      <div className="kd-board-bar">
+        <span className="kd-kicker">League market · click a club to open talks</span>
+        <div className="kd-seg" role="group" aria-label="Sort clubs">
+          <button type="button" className={sort === "cap" ? "is-on" : ""} onClick={() => setSort("cap")}>Cap room</button>
+          <button type="button" className={sort === "odds" ? "is-on" : ""} onClick={() => setSort("odds")}>Playoff odds</button>
         </div>
       </div>
-      <div className="th-board-floor">
-        {column("Buyers", "Pushing for a run: they want NHL help and will pay in futures.", buyers, "buyer")}
-        {column("Sellers", "Retooling: they'll move veterans for picks, prospects, and cap relief.", sellers, "seller")}
-        <section className="th-board-col th-board-side">
-          <div className="th-section-head"><h3>On the fence</h3><span className="th-num">{neutral.length}</span></div>
-          <p className="th-section-meta">Bubble clubs. They trade for fit, not direction.</p>
-          <div className="th-board-list th-board-list-short">
-            {neutral.map((t) => (
-              <MarketTeamRow key={t.id} team={t} info={needsIndex[t.id]} onOpenTalks={onOpenTalks} isPartner={String(t.id) === String(partnerId)} />
-            ))}
-          </div>
-          <div className="th-section-head th-wire-head"><h3>League wire</h3><span className="th-num">{recent.length}</span></div>
-          <ul className="th-wire">
-            {recent.length ? (
-              recent.map((t, i) => (
-                <li key={t.trade_id || i} className={t.user_involved ? "is-user" : ""}>
-                  <span className="th-num">{t.calendar_iso ? String(t.calendar_iso).slice(5, 10) : "—"}</span>
-                  <p>{tradeRecordHeadline(t)}</p>
-                </li>
-              ))
-            ) : (
-              <li className="is-quiet"><p>No completed trades yet.</p></li>
-            )}
-          </ul>
-        </section>
+      <div className="kd-board-cols">
+        {column("Buyers", "Pushing for a run. They want NHL help and pay in futures.", buyers, "buyer")}
+        {column("On the fence", "Bubble clubs. They trade for fit, not direction.", neutral, "neutral")}
+        {column("Sellers", "Retooling. Veterans out for picks, prospects and cap relief.", sellers, "seller")}
       </div>
     </div>
   );
@@ -5923,7 +5982,8 @@ function NeedsFinder({ meta, index, partnerId, onOpenTalks, onShop }) {
 function finderAssetLabel(a) {
   if (!a) return "—";
   if (a.type === "pick") {
-    const orig = a.original_team_id ? ` (${inferLogoAbbr(a.original_team_id, a.original_team_id)})` : "";
+    const ab = a.original_team_id ? inferLogoAbbr(a.original_team_id, a.original_team_id) : "";
+    const orig = ab && !/^\?+$/.test(ab) && String(a.original_team_id) !== String(a.team || "") ? ` (${ab})` : "";
     return `${a.year || ""} ${roundLabel(a.round)}${orig}`.trim();
   }
   return a.name || "?";
@@ -5952,80 +6012,107 @@ function orgAssetsFor(meta, teamId) {
   return { players, picks };
 }
 
-function FinderOfferCard({ offer, team, onLoad }) {
-  const net = Number(offer.user_gets_value) - Number(offer.user_gives_value);
+function finderTermLabel(a) {
+  const y = Number(a?.years ?? a?.years_remaining);
+  if (Number.isFinite(y) && y > 0) return `${y} YR${y === 1 ? "" : "S"}`;
+  return "";
+}
+
+function FinderOfferCard({ offer, team, onLoad, yearsById = null }) {
+  const give = Number(offer.user_gives_value) || 0;
+  const get = Number(offer.user_gets_value) || 0;
+  const net = get - give;
   const interest = offer.interest != null ? Math.round(offer.interest * 100) : null;
+  const hue = Number.isFinite(Number(team?.hue)) ? Number(team.hue) : 210;
   const side = (list) => (
-    <ul className="th-offer-assets">
-      {list.map((a) => (
-        <li key={`${a.type}-${a.id}`} className={a.type === "pick" ? "is-pick" : ""}>
-          {a.type === "pick" ? (
-            <span className="th-offer-type type-pick">PK</span>
-          ) : (
-            <PlayerHeadshot
-              player={ensurePlayerHeadshotFields({ ...a, position: a.pos })}
-              size="sm"
-              className="th-offer-face"
-              flag={null}
-              number={null}
-            />
-          )}
-          <strong title={finderAssetLabel(a)}>{finderAssetLabel(a)}</strong>
-          <em>{finderAssetMeta(a)}</em>
-          {a.type === "player" && a.ovr != null ? (
-            <span className="th-offer-rating">
-              <b className="th-num">{a.ovr}</b>
-              <i>{a.pot != null && a.pot > a.ovr ? `POT ${a.pot}` : "OVR"}</i>
+    <ul className="kd-offer-list">
+      {list.map((a) => {
+        const cap = a.cap_full_m ?? a.cap_m;
+        const term = finderTermLabel(a) || finderTermLabel({ years: yearsById?.[String(a.id)] });
+        return (
+          <li key={`${a.type}-${a.id}`} className={`kd-offer-item${a.type === "pick" ? " is-pick" : ""}`}>
+            {a.type === "pick" ? (
+              <span className="kd-pick-ticket is-sm" aria-hidden="true">
+                <b>{roundLabel(a.round)}</b>
+                <i>{a.year}</i>
+              </span>
+            ) : (
+              <span className="kd-row-face is-sm">
+                <PlayerHeadshot
+                  player={ensurePlayerHeadshotFields({ ...a, ...(a.headshot || {}), position: a.pos })}
+                  size="sm"
+                  className="kd-face"
+                  flag={null}
+                  number={null}
+                />
+              </span>
+            )}
+            <span className="kd-row-main">
+              <b className="kd-row-name" title={finderAssetLabel(a)}>{finderAssetLabel(a)}</b>
+              <span className="kd-row-meta">
+                {a.type === "pick" ? (
+                  <span>Draft pick</span>
+                ) : (
+                  <>
+                    <i className="kd-pos">{a.pos || "—"}</i>
+                    {a.age ? <span>Age {a.age}</span> : null}
+                    {cap ? <span className="kd-cap">${Number(cap).toFixed(2)}M</span> : null}
+                    {term ? <span className="kd-term tone-mid">{term}</span> : null}
+                    {a.level === "AHL" ? <span className="kd-term tone-free">AHL</span> : null}
+                    {Number(a.retained) > 0 ? <span className="kd-term tone-long">{a.retained}% ret.</span> : null}
+                    {a.clause_display && a.clause_display !== "None" ? <span className="kd-term tone-expiring">{a.clause_display}</span> : null}
+                  </>
+                )}
+              </span>
             </span>
-          ) : (
-            <span className="th-offer-rating is-val">
-              <b className="th-num">{Number(a.value).toFixed(0)}</b>
-              <i>Trade Value</i>
-            </span>
-          )}
-        </li>
-      ))}
+            {a.type === "player" && a.ovr != null ? (
+              <span className={`kd-ovr tier-${a.ovr >= 90 ? "s" : a.ovr >= 84 ? "a" : a.ovr >= 78 ? "b" : "c"}`}>
+                <em>{a.pot != null && a.pot > a.ovr ? `POT ${a.pot}` : "OVR"}</em>
+                <b>{a.ovr}</b>
+              </span>
+            ) : (
+              <span className="kd-row-value"><em>VALUE</em><b>{Number(a.value).toFixed(1)}</b></span>
+            )}
+          </li>
+        );
+      })}
     </ul>
   );
   return (
-    <article className={`th-offer${offer.desperate ? " is-desperate" : ""}`}>
-      {offer.desperate ? (
-        <div className="th-offer-desperate">
-          <b>Offer you can't refuse</b>
-          <span>{offer.desperate_note || "A desperate club is overpaying — it won't last."}</span>
-        </div>
-      ) : null}
-      <header className="th-offer-head">
-        <div className="th-offer-team">
-          {team ? <TradeLogo team={team} size={28} /> : null}
+    <article className={`kd-offer${offer.desperate ? " is-desperate" : ""}`} style={{ "--kd-team": `hsl(${hue} 62% 46%)`, "--kd-team-dk": `hsl(${hue} 60% 24%)` }}>
+      <header className="kd-offer-head">
+        <span className="kd-offer-logo">{team ? <TradeLogo team={team} size={34} /> : null}</span>
+        <span className="kd-offer-who">
           <strong>{offer.partner_name}</strong>
-          {team ? <em className={`th-side-pill side-${marketSideOf(team)}`}>{team.tradeDirectionLabel || team.direction}</em> : null}
-        </div>
-        <div className="th-offer-tags">
-          {offer.archetype ? <span className="th-offer-arch">{offer.archetype}</span> : null}
-          <span className="th-offer-accept">GM accepts{interest != null ? ` · ${interest}%` : ""}</span>
-        </div>
+          <em>{[team?.tradeDirectionLabel || team?.direction, offer.archetype].filter(Boolean).join(" · ")}</em>
+        </span>
+        <span className="kd-offer-yes" title="Their GM accepts this as-is">
+          <em>GM says</em>
+          <b>YES{interest != null ? ` ${interest}%` : ""}</b>
+        </span>
       </header>
-      <div className="th-offer-body">
-        <div>
-          <span className="th-kicker">You give</span>
+      {offer.desperate ? (
+        <p className="kd-offer-hot"><b>Offer you can't refuse.</b> {offer.desperate_note || "A desperate club is overpaying. It won't last."}</p>
+      ) : null}
+      <div className="kd-offer-body">
+        <div className="kd-offer-side is-give">
+          <span className="kd-kicker">You give</span>
           {side(offer.user_gives)}
         </div>
-        <div>
-          <span className="th-kicker">You get</span>
+        <div className="kd-offer-side is-get">
+          <span className="kd-kicker">You get</span>
           {side(offer.user_gets)}
         </div>
       </div>
       {safeArray(offer.send_downs).length ? (
-        <p className="th-offer-note">Roster move: {safeArray(offer.send_downs).join(", ")} assigned to the AHL to make room.</p>
+        <p className="kd-offer-note">Roster move: {safeArray(offer.send_downs).join(", ")} goes to the AHL to make room.</p>
       ) : null}
-      <footer className="th-offer-foot">
-        <span>
-          Value <span className="th-num">{Number(offer.user_gives_value).toFixed(1)}</span> →{" "}
-          <span className="th-num">{Number(offer.user_gets_value).toFixed(1)}</span>
-          <em className={net >= 0 ? "is-up" : "is-down"}> ({net >= 0 ? "+" : ""}{net.toFixed(1)})</em>
+      <footer className="kd-offer-foot">
+        <span className="kd-offer-val">
+          <em>Value</em> <b>{give.toFixed(1)}</b> → <b>{get.toFixed(1)}</b>
+          <i className={net >= 0 ? "is-up" : "is-down"}>{net >= 0 ? "+" : ""}{net.toFixed(1)}</i>
         </span>
-        <button type="button" className="th-cta-btn" onClick={() => onLoad(offer)}>Load into desk</button>
+        <button type="button" className="kd-go is-sm" onClick={() => onLoad(offer)}>Load into desk</button>
       </footer>
     </article>
   );
@@ -6110,97 +6197,133 @@ function TradeFinder({ meta, partnerId, onLoadOffer, tradeHistory = [], onOpenTa
       null
     : null;
 
+  const searched = status === "loading" || status === "done" || status === "error";
+  const [showIntel, setShowIntel] = useState(false);
+  const yearsById = useMemo(() => {
+    const m = {};
+    Object.values(meta?.players || {}).forEach((list) => safeArray(list).forEach((p) => { if (p?.id && Number(p.years) > 0) m[String(p.id)] = Number(p.years); }));
+    Object.values(meta?.affiliates || {}).forEach((list) => safeArray(list).forEach((p) => { if (p?.id && Number(p.years) > 0) m[String(p.id)] = Number(p.years); }));
+    return m;
+  }, [meta]);
+  const selValue = selectedFinderAsset
+    ? Number(selectedFinderAsset.tradeValue ?? selectedFinderAsset.value_hint)
+    : null;
+
   return (
-    <div className="th-tfinder">
-      <aside className="th-finder-filters">
-        <div className="th-filter-group">
-          <span className="th-kicker">I want to</span>
-          <div className="th-seg th-seg-full">
-            <button type="button" className={mode === "sell" ? "is-active" : ""} onClick={() => { setMode("sell"); reset(); }}>Sell an asset</button>
-            <button type="button" className={mode === "buy" ? "is-active" : ""} onClick={() => { setMode("buy"); reset(); }}>Acquire one</button>
-          </div>
+    <div className="kd-finder">
+      <aside className="kd-finder-pick">
+        <div className="kd-step"><b>1</b><span>What's the plan?</span></div>
+        <div className="kd-seg">
+          <button type="button" className={mode === "sell" ? "is-on" : ""} onClick={() => { setMode("sell"); reset(); }}>Sell an asset</button>
+          <button type="button" className={mode === "buy" ? "is-on" : ""} onClick={() => { setMode("buy"); reset(); }}>Acquire one</button>
         </div>
         {mode === "buy" && (
-          <div className="th-filter-group">
-            <span className="th-kicker">From</span>
-            <select className="th-input" value={targetTeam} onChange={(e) => { setTargetTeam(e.target.value); reset(); }} aria-label="Team to acquire from">
-              <option value="">Choose a club…</option>
-              {others.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-            </select>
-          </div>
+          <select className="kd-select" value={targetTeam} onChange={(e) => { setTargetTeam(e.target.value); reset(); }} aria-label="Team to acquire from">
+            <option value="">Choose a club…</option>
+            {others.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+          </select>
         )}
-        <div className="th-filter-group">
-          <span className="th-kicker">Asset</span>
-          <div className="th-seg th-seg-full">
-            <button type="button" className={kind === "player" ? "is-active" : ""} onClick={() => { setKind("player"); reset(); }}>Players</button>
-            <button type="button" className={kind === "pick" ? "is-active" : ""} onClick={() => { setKind("pick"); reset(); }}>Picks</button>
-          </div>
-          <input className="th-input" type="search" placeholder={kind === "player" ? "Search players" : "Search picks"} value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Search assets" />
+        <div className="kd-step"><b>2</b><span>{mode === "sell" ? "Who are you shopping?" : "Who do you want?"}</span></div>
+        <div className="kd-chips">
+          <button type="button" className={`kd-chip${kind === "player" ? " is-on" : ""}`} onClick={() => { setKind("player"); reset(); }}>Players</button>
+          <button type="button" className={`kd-chip${kind === "pick" ? " is-on" : ""}`} onClick={() => { setKind("pick"); reset(); }}>Picks</button>
         </div>
-        <div className="th-asset-list" role="listbox" aria-label="Choose an asset">
+        <input className="kd-search" type="search" placeholder={kind === "player" ? "Search players" : "Search picks"} value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Search assets" />
+        <div className="kd-finder-list" role="listbox" aria-label="Choose an asset">
           {mode === "buy" && !targetTeam ? (
-            <p className="th-empty">Choose a club first.</p>
+            <p className="kd-empty">Choose a club first.</p>
           ) : list.length ? (
             list.map((a) => {
               const id = String(a.id || a.pick_id);
+              const val = a.tradeValue != null ? Number(a.tradeValue) : a.value_hint != null ? Number(a.value_hint) : null;
+              const ovr = kind === "player" ? parseInt(displayOvr(a), 10) || 0 : 0;
               return (
                 <button
                   key={id}
                   type="button"
                   role="option"
                   aria-selected={assetId === id}
-                  className={`th-asset-opt ${assetId === id ? "is-on" : ""}`}
-                  onClick={() => { setAssetId(id); setResult(null); setStatus("idle"); }}
+                  className={`kd-frow${assetId === id ? " is-on" : ""}`}
+                  onClick={() => { setAssetId(id); setResult(null); setStatus("idle"); setShowIntel(false); }}
                 >
-                  <strong>{kind === "player" ? a.name : `${a.year} ${roundLabel(a.round)}`}</strong>
-                  <em>{kind === "player" ? `${a.pos} · ${a.age ? `${a.age}y · ` : ""}${a.ovr} OVR` : `via ${a.originalTeamAbbr || "—"} · ${roundLabel(a.round)}`}</em>
-                  <b className="th-num">{a.tradeValue != null ? Number(a.tradeValue).toFixed(1) : a.value_hint != null ? Number(a.value_hint).toFixed(1) : "—"}</b>
+                  {kind === "player" ? (
+                    <span className="kd-row-face is-sm">
+                      <PlayerHeadshot player={ensurePlayerHeadshotFields({ ...a, position: a.pos })} size="sm" className="kd-face" flag={null} number={null} />
+                    </span>
+                  ) : (
+                    <span className="kd-pick-ticket is-sm" aria-hidden="true"><b>{roundLabel(a.round)}</b><i>{a.year}</i></span>
+                  )}
+                  <span className="kd-row-main">
+                    <b className="kd-row-name">{kind === "player" ? a.name : `${a.year} ${roundLabel(a.round)} round`}</b>
+                    <span className="kd-row-meta">
+                      {kind === "player" ? (
+                        <>
+                          <i className="kd-pos">{a.pos || "—"}</i>
+                          {a.age ? <span>Age {a.age}</span> : null}
+                          <span className="kd-cap">{formatPlayerCapLabel(a)}</span>
+                          <span className="kd-term tone-mid">{assetCardTermLabel(a)}</span>
+                        </>
+                      ) : (
+                        <span>via {a.originalTeamAbbr || "—"}</span>
+                      )}
+                    </span>
+                  </span>
+                  {kind === "player" ? (
+                    <span className={`kd-ovr tier-${ovr >= 90 ? "s" : ovr >= 84 ? "a" : ovr >= 78 ? "b" : "c"}`}><em>OVR</em><b>{ovr || "—"}</b></span>
+                  ) : null}
+                  <span className="kd-row-value"><em>VALUE</em><b>{val != null && Number.isFinite(val) ? val.toFixed(1) : "—"}</b></span>
                 </button>
               );
             })
           ) : (
-            <p className="th-empty">No matching assets.</p>
+            <p className="kd-empty">No matching assets.</p>
           )}
         </div>
-        <button type="button" className="th-cta-btn th-cta-wide" disabled={!assetId || status === "loading"} onClick={run}>
-          {status === "loading" ? "Canvassing GMs…" : mode === "sell" ? "Find buyers" : "Build offers"}
+        <button type="button" className="kd-go" disabled={!assetId || status === "loading"} onClick={run}>
+          {status === "loading" ? "Calling GMs…" : mode === "sell" ? "Find buyers" : "Build offers"}
         </button>
       </aside>
 
-      <section className="th-tfinder-results">
-        {inbound.length > 0 && (
-          <div className="th-inbound">
-            <div className="th-section-head">
-              <h3>Incoming calls</h3>
-              <span className="th-num">{inbound.length} open</span>
+      <section className="kd-finder-main">
+        {inbound.length > 0 && !searched && (
+          <div className="kd-inbound">
+            <div className="kd-banner is-red">
+              <strong>Incoming calls</strong>
+              <span>{inbound.length} open · CPU clubs phoned about your players. Offers stay open a few days.</span>
             </div>
-            <p className="th-section-meta">CPU clubs phoned about your players. Each offer stays open for a few days.</p>
-            <div className="th-offer-grid has-offers">
+            <div className="kd-offers">
               {inbound.map((o) => (
-                <div key={o.offer_id} className="th-inbound-item">
-                  <p className="th-section-meta"><strong>{o.headline}</strong> · expires day {o.expires_day}</p>
-                  <FinderOfferCard offer={o} team={teamById[String(o.partner_team_id)]} onLoad={onLoadOffer} />
-                  <button type="button" className="th-ghost-btn" onClick={() => declineInbound(o.offer_id)}>Decline</button>
+                <div key={o.offer_id} className="kd-inbound-item">
+                  <p className="kd-inbound-head"><strong>{o.headline}</strong> · expires day {o.expires_day}</p>
+                  <FinderOfferCard offer={o} team={teamById[String(o.partner_team_id)]} onLoad={onLoadOffer} yearsById={yearsById} />
+                  <button type="button" className="kd-mini" onClick={() => declineInbound(o.offer_id)}>Decline</button>
                 </div>
               ))}
             </div>
           </div>
         )}
-        <div className="th-section-head">
-          <h3>{mode === "sell" ? "Offers for your asset" : "Packages they'd accept"}</h3>
-          {result ? <span className="th-num">{offers.length} accepted · {result.evaluated} checked</span> : null}
-        </div>
-        <p className="th-section-meta">
-          Every offer below was run through the partner GM's real trade evaluation. They accept it as-is right now.
-        </p>
-        {status === "idle" && !result && !selectedFinderAsset && (
-          <div className="th-tfinder-empty">
-            <strong>{mode === "sell" ? "Shop a player or pick to the whole league." : "Pick a target and we'll price it from your organization."}</strong>
-            <span>Offers respect cap room, roster limits, clauses, and each GM's needs and direction.</span>
-          </div>
-        )}
-        <div className="twr-finder-intel">
-          {selectedFinderAsset ? (
+
+        {!searched && !selectedFinderAsset ? (
+          <>
+            <div className="kd-banner">
+              <strong>{mode === "sell" ? "Shop a player or pick to all 31 clubs" : "Pick a target and we'll price it from your organization"}</strong>
+              <span>Every offer runs through the partner GM's real evaluation and respects cap room, roster limits, clauses and each club's direction.</span>
+            </div>
+            <div className="kd-finder-grid">
+              {mode === "sell" ? (
+                <MarketableAssets
+                  meta={meta}
+                  teamId={meta?.userTeamId}
+                  onPick={(p) => { setKind("player"); setAssetId(String(p.id)); setResult(null); setStatus("idle"); }}
+                />
+              ) : null}
+              <MarketIntelPanel meta={meta} tradeHistory={tradeHistory} renderLogo={renderTradeLogo} onOpenTalks={onOpenTalks} />
+            </div>
+          </>
+        ) : null}
+
+        {!searched && selectedFinderAsset ? (
+          <>
             <AssetIntelPanel
               asset={selectedFinderAsset}
               teamId={sourceTid}
@@ -6210,45 +6333,71 @@ function TradeFinder({ meta, partnerId, onLoadOffer, tradeHistory = [], onOpenTa
               onOpenTalks={onOpenTalks}
               title={mode === "sell" ? "Who wants him" : "Target intel"}
             />
-          ) : mode === "sell" ? (
-            <MarketableAssets
-              meta={meta}
-              teamId={meta?.userTeamId}
-              onPick={(p) => { setKind("player"); setAssetId(String(p.id)); setResult(null); setStatus("idle"); }}
-            />
-          ) : null}
-          {!selectedFinderAsset ? (
-            <MarketIntelPanel meta={meta} tradeHistory={tradeHistory} renderLogo={renderTradeLogo} onOpenTalks={onOpenTalks} />
-          ) : null}
-        </div>
-        {result && Number(result.filtered_illegal) > 0 ? (
-          <p className="th-section-meta twr-filtered-note">
-            {result.filtered_illegal} impossible package{Number(result.filtered_illegal) === 1 ? " was" : "s were"} hidden (cap, roster or contract limits).
-          </p>
+            <div className="kd-banner is-yellow">
+              <strong>Ready when you are</strong>
+              <span>Hit <b>{mode === "sell" ? "Find buyers" : "Build offers"}</b> and we'll call every GM with a real package.</span>
+            </div>
+          </>
         ) : null}
-        {status === "loading" && <div className="th-tfinder-empty"><strong>Calling around the league…</strong></div>}
-        {status === "error" && <div className="th-tfinder-empty is-error"><strong>{error}</strong></div>}
-        {result?.cooldown?.active ? <div className="th-tfinder-empty th-tfinder-cooldown"><strong>{result.cooldown.message}</strong></div> : null}
-        {result?.note && <div className="th-tfinder-empty"><strong>{result.note}</strong></div>}
-        {status === "done" && !offers.length && !result?.note && (
-          <div className="th-tfinder-empty">
-            <strong>No GM accepts a deal built around this asset right now.</strong>
-            {near.length > 0 && (
-              <ul className="th-near">
-                {near.map((o, i) => (
-                  <li key={i}>
-                    <b>{o.partner_name}</b> — {safeArray(o.reasons)[0] || "declined on value"}
-                  </li>
-                ))}
-              </ul>
+
+        {searched ? (
+          <>
+            <div className="kd-finder-summary">
+              <span className="kd-finder-sum-who">
+                <span className="kd-kicker">{mode === "sell" ? "Shopping" : "Targeting"}</span>
+                <strong>{selectedFinderAsset ? finderAssetLabel({ ...selectedFinderAsset, type: kind }) : "Asset"}</strong>
+              </span>
+              {selValue != null && Number.isFinite(selValue) ? (
+                <span className="kd-finder-sum-stat"><em>Value</em><b>{selValue.toFixed(1)}</b></span>
+              ) : null}
+              {result ? (
+                <>
+                  <span className="kd-finder-sum-stat is-green"><em>Accepted</em><b>{offers.length}</b></span>
+                  <span className="kd-finder-sum-stat"><em>Clubs checked</em><b>{result.evaluated}</b></span>
+                  {Number(result.filtered_illegal) > 0 ? (
+                    <span className="kd-finder-sum-stat is-dim" title="Hidden: cap, roster or contract limits"><em>Impossible</em><b>{result.filtered_illegal}</b></span>
+                  ) : null}
+                </>
+              ) : null}
+              <span className="kd-finder-sum-actions">
+                <button type="button" className="kd-mini" onClick={() => setShowIntel((v) => !v)}>{showIntel ? "Hide market intel" : "Market intel"}</button>
+                <button type="button" className="kd-mini" onClick={reset}>New search</button>
+              </span>
+            </div>
+            {showIntel && selectedFinderAsset ? (
+              <AssetIntelPanel
+                asset={selectedFinderAsset}
+                teamId={sourceTid}
+                meta={meta}
+                tradeHistory={tradeHistory}
+                renderLogo={renderTradeLogo}
+                onOpenTalks={onOpenTalks}
+                title={mode === "sell" ? "Who wants him" : "Target intel"}
+              />
+            ) : null}
+            {status === "loading" && <div className="kd-banner is-yellow"><strong>Calling around the league…</strong><span>Every GM is running the numbers.</span></div>}
+            {status === "error" && <div className="kd-banner is-red"><strong>{error}</strong></div>}
+            {result?.cooldown?.active ? <div className="kd-banner is-yellow"><strong>{result.cooldown.message}</strong></div> : null}
+            {result?.note && <div className="kd-banner"><strong>{result.note}</strong></div>}
+            {status === "done" && !offers.length && !result?.note && (
+              <div className="kd-banner is-red">
+                <strong>No GM accepts a deal built around this asset right now.</strong>
+                {near.length > 0 && (
+                  <ul className="kd-near">
+                    {near.map((o, i) => (
+                      <li key={i}><b>{o.partner_name}</b> — {safeArray(o.reasons)[0] || "declined on value"}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
             )}
-          </div>
-        )}
-        <div className={`th-offer-grid ${offers.length ? "has-offers" : ""}`}>
-          {offers.map((o) => (
-            <FinderOfferCard key={`${o.partner_team_id}-${o.user_gets.map((a) => a.id).join(".")}-${o.user_gives.map((a) => a.id).join(".")}`} offer={o} team={teamById[String(o.partner_team_id)]} onLoad={onLoadOffer} />
-          ))}
-        </div>
+            <div className="kd-offers">
+              {offers.map((o) => (
+                <FinderOfferCard key={`${o.partner_team_id}-${o.user_gets.map((a) => a.id).join(".")}-${o.user_gives.map((a) => a.id).join(".")}`} offer={o} team={teamById[String(o.partner_team_id)]} onLoad={onLoadOffer} yearsById={yearsById} />
+              ))}
+            </div>
+          </>
+        ) : null}
       </section>
     </div>
   );
@@ -6478,33 +6627,42 @@ function TeamBrowserPanel({
   const nhlLine = formatRosterCapacityLine(team);
   const composition = formatRosterCompositionLine(team);
 
-  // The roster *is* the side panel: the asset list sits beside the package it
-  // feeds, so building a deal never needs a drawer. Team intel is one header.
+  const hue = Number.isFinite(Number(team.hue)) ? Number(team.hue) : 210;
   return (
-    <aside className={`trade-team-intel-panel trade-roster-rail trade-team-panel-${side} ${isActive ? "is-active" : ""}`}>
-      <header className="trade-roster-rail__head">
-        <button type="button" className="trade-roster-rail__team" onClick={() => onTeamClick?.(team)} title="Team details">
-          <TradeLogo team={team} size={52} />
-          <span className="trade-roster-rail__name">
-            <strong>{team.abbr || team.name}</strong>
+    <aside
+      className={`kd-rail side-${side}${isActive ? " is-active" : ""}`}
+      style={{ "--kd-team": `hsl(${hue} 62% 46%)`, "--kd-team-dk": `hsl(${hue} 60% 24%)` }}
+    >
+      <header className="kd-rail-head">
+        <button type="button" className="kd-rail-team" onClick={() => onTeamClick?.(team)} title="Team details">
+          <span className="kd-rail-logo"><TradeLogo team={team} size={56} /></span>
+          <span className="kd-rail-name">
+            <small>{side === "left" ? "Your club" : "Trade partner"}</small>
+            <strong>{team.name || team.abbr}</strong>
             <em>{sidebarStatusLabel(team)}{team.record ? ` · ${team.record}` : ""}</em>
           </span>
         </button>
-        <dl className="trade-roster-rail__facts">
-          <div className={capTone ? `tone-${capTone}` : ""}>
-            <dt>Space</dt>
-            <dd>
-              {Number.isFinite(liveCap) ? formatCapCompact(liveCap) : "—"}
-              {Math.abs(capDelta) >= 0.005 ? <small>{capDelta > 0 ? "+" : ""}{formatCapCompact(capDelta)}</small> : null}
-            </dd>
-          </div>
-          {nhlLine ? <div><dt>NHL</dt><dd>{nhlLine.replace(/\s*NHL$/i, "")}</dd></div> : null}
-          {composition ? <div><dt>Depth</dt><dd>{composition}</dd></div> : null}
-        </dl>
-        <button type="button" className="trade-roster-rail__expand" onClick={() => onViewPlayers?.()} title="Open the full roster view">
-          Full view
+        <button type="button" className="kd-rail-full" onClick={() => onViewPlayers?.()} title="Open the full roster view">
+          Full roster
         </button>
       </header>
+      <div className="kd-rail-stats">
+        <div className={`kd-stat${capTone ? ` tone-${capTone}` : ""}`}>
+          <em>Cap space</em>
+          <b>{Number.isFinite(liveCap) ? formatCapCompact(liveCap) : "—"}</b>
+          {Math.abs(capDelta) >= 0.005 ? <small>{capDelta > 0 ? "+" : ""}{formatCapCompact(capDelta)} after deal</small> : <small>today</small>}
+        </div>
+        <div className="kd-stat">
+          <em>NHL roster</em>
+          <b>{nhlLine ? nhlLine.replace(/\s*NHL$/i, "") : "—"}</b>
+          <small>max 23</small>
+        </div>
+        <div className="kd-stat">
+          <em>Depth</em>
+          <b className="is-small">{composition || "—"}</b>
+          <small>F · D · G</small>
+        </div>
+      </div>
       <AssetPool
         teamId={team.id}
         side={side}
@@ -6884,6 +7042,7 @@ export default function TradeHub() {
   const [assetsError, setAssetsError] = useState(false);
 
   const [partnerId, setPartnerId] = useState("");
+  const [assetsReloadTick, setAssetsReloadTick] = useState(0);
   const [hubView, setHubView] = useState("negotiate");
   const [leftAssets, setLeftAssets] = useState(emptySlots());
   const [rightAssets, setRightAssets] = useState(emptySlots());
@@ -6959,7 +7118,9 @@ export default function TradeHub() {
     setAssetsLoading(true);
     setAssetsError(false);
     Promise.all([
-      getTradeAssets().catch(() => franchiseState?.trade_assets || null),
+      getTradeAssets()
+        .catch(() => new Promise((res) => setTimeout(res, 1200)).then(() => getTradeAssets()))
+        .catch(() => franchiseState?.trade_assets || null),
       getTradeMarket().catch(() => null),
       getTradeHistory({ limit: 20 }).catch(() => ({ history: [] })),
     ])
@@ -6985,7 +7146,7 @@ export default function TradeHub() {
     return () => {
       cancelled = true;
     };
-  }, [franchiseState?.session_id, franchiseState?.team?.id]);
+  }, [franchiseState?.session_id, franchiseState?.team?.id, assetsReloadTick]);
 
   useEffect(() => {
     if (!partnerOptions.length) {
@@ -7725,13 +7886,26 @@ export default function TradeHub() {
     hydrateFranchiseNarrative,
   ]);
 
-  if (assetsLoading && !meta) {
+  if ((assetsLoading && !tradeAssets) || (!tradeAssets && assetsError)) {
     return (
-      <div className="nhlcal-root trade-hub-root">
-        <div className="trade-hub-shell">
-          <div className="trade-hub-loading">LOADING TRADE DESK</div>
+      <div className="kd-root trade-hub-root">
+        <div className="kd-shell kd-loading">
+          <div className="kd-loading-card">
+            <div className="kd-plate" aria-hidden="true"><span>TRADE</span><b>DESK</b></div>
+            {assetsLoading ? (
+              <>
+                <p>Calling 31 general managers…</p>
+                <i className="kd-loading-bar"><s /></i>
+              </>
+            ) : (
+              <>
+                <p>The league office didn't pick up. Trade data failed to load.</p>
+                <button type="button" className="kd-go" onClick={() => setAssetsReloadTick((n) => n + 1)}>Retry</button>
+              </>
+            )}
+            <button type="button" className="kd-back" onClick={() => setScreen(SCREENS.HUB)}>◀ Hub</button>
+          </div>
         </div>
-        {null}
       </div>
     );
   }
@@ -7887,43 +8061,56 @@ export default function TradeHub() {
   });
 
   return (
-    <div className="nhlcal-root trade-hub-root">
-      <div className="trade-hub-shell">
+    <div className="kd-root trade-hub-root">
+      <div className="kd-shell">
       {pendingPromiseNav?.screen === "trade" ? (
         <p className="trade-hub-explanation">
           {pendingPromiseNav.label || "Add an 80+ player who is not already in the organization."}
           <button type="button" className="trade-hub-back-btn" onClick={() => setPendingPromiseNav?.(null)}>Dismiss</button>
         </p>
       ) : null}
-      <header className="trade-hub-topbar th-topbar">
-        <button type="button" className="trade-hub-back-btn" onClick={() => setScreen(SCREENS.HUB)}>
-          ← Hub
+      <header className="kd-top">
+        <button type="button" className="kd-back" onClick={() => setScreen(SCREENS.HUB)}>
+          ◀ Hub
         </button>
-        <div className="th-insignia" aria-hidden="true">TRADE<span>DESK</span></div>
-        <div className="th-title-block">
-          <h1 className="trade-hub-screen-title">Trade Desk</h1>
-          <span className="th-title-meta">
-            {userTeam?.name} · {userTeam?.tradeDirectionLabel || userTeam?.direction || "—"} ·{" "}
-            <span className="th-num">{userTeam?.capSpace != null ? formatMoneyM(userTeam.capSpace) : "—"}</span> cap room
+        <div className="kd-plate" aria-hidden="true">
+          <span>TRADE</span>
+          <b>DESK</b>
+        </div>
+        <div className="kd-you">
+          <span className="kd-you-logo">{renderTradeLogo(userTeam, 34)}</span>
+          <span className="kd-you-text">
+            <strong>{userTeam?.name}</strong>
+            <em>
+              {userTeam?.tradeDirectionLabel || userTeam?.direction || "—"} ·{" "}
+              {userTeam?.capSpace != null ? formatMoneyM(userTeam.capSpace) : "—"} cap room
+            </em>
           </span>
         </div>
-        <div className="th-seg th-view-seg" role="tablist" aria-label="Trade desk view">
-          {[["negotiate", "Negotiate"], ["market", "Market"], ["needs", "Needs finder"], ["finder", "Trade finder"]].map(([key, label]) => (
+        <nav className="kd-tabs" role="tablist" aria-label="Trade desk view">
+          {[
+            ["negotiate", "Negotiate", "⇄"],
+            ["market", "Market", "◆"],
+            ["needs", "Needs", "✚"],
+            ["finder", "Finder", "★"],
+          ].map(([key, label, icon]) => (
             <button
               key={key}
               type="button"
               role="tab"
               aria-selected={hubView === key}
-              className={hubView === key ? "is-active" : ""}
+              className={`kd-tab${hubView === key ? " is-on" : ""}`}
               onClick={() => setHubView(key)}
             >
+              <i aria-hidden="true">{icon}</i>
               {label}
             </button>
           ))}
-        </div>
-        <div className="trade-hub-top-right">
+        </nav>
+        <label className="kd-partner">
+          <span>Talking to</span>
+          {partnerTeam ? <span className="kd-partner-logo">{renderTradeLogo(partnerTeam, 28)}</span> : null}
           <select
-            className="trade-hub-partner-select"
             value={partnerId}
             onChange={(e) => {
               setPartnerId(e.target.value);
@@ -7937,17 +8124,17 @@ export default function TradeHub() {
               </option>
             ))}
           </select>
-        </div>
+        </label>
       </header>
 
       <MarketPulseStrip tradeMarket={tradeMarket} teams={meta.teams} userTeamId={meta.userTeamId} />
 
       {hubView === "finder" ? (
-        <main className="trade-hub-main th-market-main">
+        <main className="kd-main">
           <TradeFinder meta={meta} partnerId={partnerId} onLoadOffer={loadFinderOffer} tradeHistory={tradeHistory} onOpenTalks={openTalks} />
         </main>
       ) : hubView === "needs" ? (
-        <main className="trade-hub-main th-market-main">
+        <main className="kd-main">
           <NeedsFinder
             meta={meta}
             index={needsIndex}
@@ -7960,18 +8147,19 @@ export default function TradeHub() {
           />
         </main>
       ) : hubView === "negotiate" && !partnerId && partnerOptions.length > 0 ? (
-        <main className="trade-hub-main th-market-main">
+        <main className="kd-main">
           <div className="trade-hub-loading">OPENING THE DESK…</div>
         </main>
       ) : hubView === "market" || !partnerId ? (
-        <main className="trade-hub-main th-market-main">
-          <div className="twr-market-wrap">
+        <main className="kd-main">
+          <div className="kd-market-wrap">
             <MarketBoard
               teams={meta.teams}
               userTeamId={meta.userTeamId}
               partnerId={partnerId}
               tradeMarket={tradeMarket}
               needsIndex={needsIndex}
+              meta={meta}
               onOpenTalks={openTalks}
             />
             <MarketIntelPanel
@@ -7984,12 +8172,7 @@ export default function TradeHub() {
           </div>
         </main>
       ) : (
-        <main className="trade-hub-main trade-hub-war-room-layout th-deal-layout">
-          <PartnerReadCard
-            team={partnerTeam}
-            info={needsIndex[partnerId]}
-            interest={hasProposed && evaluation ? evaluation.interest_level?.[partnerId] ?? null : null}
-          />
+        <main className="kd-desk">
           <TeamBrowserPanel
             iceholeByPlayerId={iceholeByPlayerId}
             onOpenIcehole={openIceholeThread}
@@ -8012,21 +8195,27 @@ export default function TradeHub() {
             onQuickAdd={(item) => handleQuickAdd("left", meta.userTeamId, item)}
           />
 
-          <section className="trade-hub-centre trade-hub-centre-focus th-deal-table">
-            <div className="trade-construction-grid twr-construction">
+
+          <section className="kd-table">
+            <PartnerReadCard
+              team={partnerTeam}
+              info={needsIndex[partnerId]}
+              interest={hasProposed && evaluation ? evaluation.interest_level?.[partnerId] ?? null : null}
+            />
+            <div className="kd-trays">
               <PackageList
-                title="Assets You Send"
+                title="You send"
                 side="left"
                 team={userTeam}
                 slots={leftPadded}
                 maxSlots={SLOTS}
                 totalValue={deskValues.userGive}
                 renderLogo={renderTradeLogo}
-                emptyHint="Drag a player or pick here, or use + Add Asset."
+                emptyHint="Click your players to add"
                 onAdd={() => setTeamPlayersMenu({ teamId: meta.userTeamId, side: "left" })}
                 onDropAsset={(e) => dropIntoPackage(e, "left", meta.userTeamId)}
                 renderAsset={(asset, i) => (
-                  <div className="twr-pkg-card" onClick={() => handleAssetClick(asset, "left", meta.userTeamId)}>
+                  <div className="kd-slot-card" onClick={() => handleAssetClick(asset, "left", meta.userTeamId)}>
                     <AssetCard
                       asset={asset}
                       side="left"
@@ -8036,28 +8225,27 @@ export default function TradeHub() {
                       onRetained={asset?.type === "player" ? () => setRetMenu({ side: "left", slot: i }) : undefined}
                       onDragStart={(e) => handleDragStart(e, asset, "slot", "left", i, meta.userTeamId)}
                     />
-                    <span className="twr-pkg-tv">Trade Value <b>{assetValueNumber(asset)}</b></span>
                   </div>
                 )}
               />
 
-              <div className="trade-package-divider twr-divider">
+              <div className="kd-swap" aria-hidden="true">
                 <span>⇄</span>
               </div>
 
               <PackageList
-                title="Assets You Receive"
+                title="You get"
                 side="right"
                 team={partnerTeam}
                 slots={rightPadded}
                 maxSlots={SLOTS}
                 totalValue={deskValues.partnerGive}
                 renderLogo={renderTradeLogo}
-                emptyHint={`Pick what you want from ${partnerTeam?.abbr || "their"} roster.`}
+                emptyHint={`Pick from ${partnerTeam?.abbr || "their"} roster`}
                 onAdd={() => setTeamPlayersMenu({ teamId: partnerId, side: "right" })}
                 onDropAsset={(e) => dropIntoPackage(e, "right", partnerId)}
                 renderAsset={(asset, i) => (
-                  <div className="twr-pkg-card" onClick={() => handleAssetClick(asset, "right", partnerId)}>
+                  <div className="kd-slot-card" onClick={() => handleAssetClick(asset, "right", partnerId)}>
                     <AssetCard
                       asset={asset}
                       side="right"
@@ -8068,47 +8256,26 @@ export default function TradeHub() {
                       onRetained={asset?.type === "player" ? () => setRetMenu({ side: "right", slot: i }) : undefined}
                       onDragStart={(e) => handleDragStart(e, asset, "slot", "right", i, partnerId)}
                     />
-                    <span className="twr-pkg-tv">Trade Value <b>{assetValueNumber(asset)}</b></span>
                   </div>
                 )}
               />
             </div>
 
-            <div className="trade-hub-centre-foot">
             <TradeAnalysisBoard
               userGive={deskValues.userGive}
               partnerGive={deskValues.partnerGive}
               userOutgoing={userOutgoing}
               partnerOutgoing={partnerOutgoing}
               partnerAbbr={partnerTeam?.abbr}
-              fanData={fanMeter}
+              userAbbr={userTeam?.abbr || "You"}
               userAfterCap={userAfterCap}
+              partnerAfterCap={projectedTeamCapSpace(partnerTeam, partnerOutgoing, userOutgoing)}
               evaluation={hasProposed ? evaluation : null}
               hasProposed={hasProposed}
               onReviewClick={() => setSelectedTradeReview(true)}
             />
 
-            {tradeRumorGroups.length ? (
-              <section className="trade-rumor-groups">
-                <h4>Rumors tied to deals you&apos;ve explored</h4>
-                {tradeRumorGroups.map(([tradeId, threads]) => (
-                  <div key={tradeId} className="trade-rumor-group">
-                    <strong>{tradeId}</strong>
-                    <ul>
-                      {threads.map((t) => (
-                        <li key={t.thread_id}>
-                          <button type="button" className="trade-rumor-link" onClick={() => openIceholeThread(t)}>
-                            {t.title}
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ))}
-              </section>
-            ) : null}
-
-            <div className="trade-hub-propose-wrap">
+            <div className="kd-propose">
               {proposeOutcomeBadge && !shortReason ? (
                 <span className={`trade-outcome-badge trade-outcome-${proposeOutcomeTone}`}>
                   {proposeOutcomeBadge}
@@ -8134,7 +8301,7 @@ export default function TradeHub() {
                   </div>
                 ) : null}
               </div>
-              {proposeDisabled && proposeHoverReason ? (() => {
+              {proposeDisabled && proposeHoverReason && (safeArray(userOutgoing).some(Boolean) || safeArray(partnerOutgoing).some(Boolean)) ? (() => {
                 const [why, fix] = String(proposeHoverReason).split(/\s*Fix:\s*/);
                 return (
                   <p className="twr-propose-why" role="status">
@@ -8145,7 +8312,14 @@ export default function TradeHub() {
               })() : null}
             </div>
 
-            <div className="twr-desk-intel">
+            {shortReason && deskBlockDetail?.code !== "INCOMPLETE" && submitStatus !== "accepted" && !(decisionToast?.modal) && (
+              <div className={`trade-hub-block-reason trade-hub-warning-reason tone-${deskBlockDetail?.tone || "warn"}`}>
+                <strong>{deskBlockDetail?.code === "CAP" || deskBlockDetail?.badge === "BLOCKED" ? "Why blocked" : deskBlockDetail?.badge === "REJECTED" || deskBlockDetail?.badge === "OVERPAY" ? "Why rejected" : "Note"}</strong>
+                <span>{shortReason}</span>
+                {unblockHint ? <em>What would unblock: {unblockHint}</em> : null}
+              </div>
+            )}
+            <div className="kd-intel">
               <GmNegotiationPanel
                 evaluation={hasProposed ? evaluation : null}
                 hasProposed={hasProposed}
@@ -8166,14 +8340,25 @@ export default function TradeHub() {
               />
             </div>
 
-            {shortReason && submitStatus !== "accepted" && !(decisionToast?.modal) && (
-              <div className={`trade-hub-block-reason trade-hub-warning-reason tone-${deskBlockDetail?.tone || "warn"}`}>
-                <strong>{deskBlockDetail?.code === "CAP" || deskBlockDetail?.badge === "BLOCKED" ? "Why blocked" : deskBlockDetail?.badge === "REJECTED" || deskBlockDetail?.badge === "OVERPAY" ? "Why rejected" : "Note"}</strong>
-                <span>{shortReason}</span>
-                {unblockHint ? <em>What would unblock: {unblockHint}</em> : null}
-              </div>
-            )}
-            </div>
+            {tradeRumorGroups.length ? (
+              <section className="trade-rumor-groups">
+                <h4>Rumors tied to deals you&apos;ve explored</h4>
+                {tradeRumorGroups.map(([tradeId, threads]) => (
+                  <div key={tradeId} className="trade-rumor-group">
+                    <strong>{tradeId}</strong>
+                    <ul>
+                      {threads.map((t) => (
+                        <li key={t.thread_id}>
+                          <button type="button" className="trade-rumor-link" onClick={() => openIceholeThread(t)}>
+                            {t.title}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+              </section>
+            ) : null}
 
             {assetsError && (
               <div className="trade-hub-warn-inline">Cached trade data</div>

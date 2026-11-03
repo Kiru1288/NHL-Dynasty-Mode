@@ -328,6 +328,14 @@ def _player_label(p: Any) -> Dict[str, Any]:
     age = getattr(ident, "age", None) if ident else getattr(p, "age", None)
     out = {"name": name, "pos": str(getattr(pos, "value", pos) or ""), "age": age}
     try:
+        from services.contract_economy import _contract_years_remaining
+
+        yrs = int(_contract_years_remaining(p) or 0)
+        if yrs > 0:
+            out["years"] = yrs
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    try:
         from app.sim_engine.economy.player_value import player_ovr_display, player_potential_display
 
         ovr = player_ovr_display(p)
@@ -499,7 +507,7 @@ def _payload_asset(a: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _public_asset(a: Dict[str, Any]) -> Dict[str, Any]:
-    keep = ("type", "id", "team", "value", "name", "pos", "age", "ovr", "pot", "level", "year", "round", "original_team_id", "cap_m", "cap_full_m", "retained", "clause", "clause_display", "clause_kicks_in_year")
+    keep = ("type", "id", "team", "value", "name", "pos", "age", "ovr", "pot", "level", "year", "round", "original_team_id", "cap_m", "cap_full_m", "retained", "clause", "clause_display", "clause_kicks_in_year", "years", "headshot")
     out = {k: a[k] for k in keep if k in a}
     if isinstance(a.get("headshot"), dict):
         out.update(a["headshot"])

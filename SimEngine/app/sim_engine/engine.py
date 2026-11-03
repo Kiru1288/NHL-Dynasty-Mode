@@ -215,7 +215,7 @@ def _light_side_rows(
 # League-wide goals/points lift (game scores + finish rate). Does not touch TOI allocation.
 _GM_LEAGUE_SCORING_PACE_MULT = 1.08
 # Goals per team-game (incl. OT/shootout winners) the light sim is anchored to.
-_GM_LEAGUE_TARGET_GPG = 3.15
+_GM_LEAGUE_TARGET_GPG = 3.32
 # Light-path credit: how hard a line/pair's quality tilts who scores and who is on the
 # ice for goals for and against. Measured against what that slot usually is (a typical
 # top line is ~0.06 OVR above its club's average line, a typical 4th line ~0.05 below),
@@ -11282,8 +11282,8 @@ class SimEngine:
             return 6.9
         if "power_play" in era or era_m >= 1.10:
             return 6.6
-        # Modern NHL combined GPG ~6.0–6.2 (≈3.0–3.1 per team).
-        return 6.35
+        # Modern NHL combined GPG ~6.2–6.4; leave headroom for a lively franchise pace.
+        return 6.75
 
     def _era_scoring_mu_factor(self) -> float:
         """Dampened era lift so new franchise baseline + era modifiers do not stack into 8+ GPG."""
@@ -16965,8 +16965,11 @@ class SimEngine:
             hit = _star_memo.get(id(p))
             if hit is None:
                 ovr = float(self._gm_ovr_0_100(p))
-                k = 0.085 if not self._gm_is_defense(p) else 0.04
-                hit = 1.0 + k * max(0.0, ovr - 84.0) + 0.009 * max(0.0, ovr - 89.0) ** 2
+                if not self._gm_is_defense(p):
+                    # First-liners (82-89) carry real top-line shares, stars keep their spike.
+                    hit = 1.0 + 0.08 * max(0.0, ovr - 82.0) + 0.016 * max(0.0, ovr - 88.0) ** 2
+                else:
+                    hit = 1.0 + 0.045 * max(0.0, ovr - 83.0)
                 _star_memo[id(p)] = hit
             return hit
 

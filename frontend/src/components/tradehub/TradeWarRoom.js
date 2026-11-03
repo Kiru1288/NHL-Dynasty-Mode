@@ -419,17 +419,18 @@ export function PackageList({
   renderAsset,
   onAdd,
   onDropAsset,
-  addLabel = "+ Add Asset",
+  addLabel = "Add",
   emptyHint = "",
 }) {
   const [over, setOver] = useState(false);
-  const filled = arr(slots)
-    .map((asset, index) => ({ asset, index }))
-    .filter((r) => r.asset);
+  const rows = arr(slots);
+  const filled = rows.map((asset, index) => ({ asset, index })).filter((r) => r.asset);
   const full = filled.length >= maxSlots;
+  const boxes = Array.from({ length: maxSlots }, (_, i) => filled[i] || null);
+  const capSum = filled.reduce((acc, { asset }) => acc + (asset?.type === "pick" ? 0 : num(asset?.capHit)), 0);
   return (
     <section
-      className={`twr-pkg side-${side}${over ? " is-over" : ""}`}
+      className={`kd-tray side-${side}${over ? " is-over" : ""}${filled.length ? " has-items" : ""}`}
       onDragOver={(e) => {
         e.preventDefault();
         if (!over) setOver(true);
@@ -442,51 +443,43 @@ export function PackageList({
         onDropAsset?.(e);
       }}
     >
-      <header className="twr-pkg-head">
-        {team && renderLogo ? renderLogo(team, 34) : null}
-        <div className="twr-pkg-title">
+      <header className="kd-tray-head">
+        {team && renderLogo ? <span className="kd-tray-logo">{renderLogo(team, 34)}</span> : null}
+        <div className="kd-tray-title">
           <strong>{title}</strong>
           <span>
-            {filled.length} of {maxSlots} assets
-            {totalValue != null && filled.length ? ` · Trade Value ${fmt1(totalValue)}` : ""}
+            {filled.length}/{maxSlots}
+            {filled.length && capSum > 0 ? ` · $${capSum.toFixed(2)}M cap` : ""}
           </span>
         </div>
+        <div className="kd-tray-total" title="Total trade value">
+          <em>VALUE</em>
+          <b>{filled.length && totalValue != null ? fmt1(totalValue) : "0.0"}</b>
+        </div>
       </header>
-      {filled.length ? (
-        <ol className="twr-pkg-list">
-          {filled.map(({ asset, index }) => (
-            <li key={`${side}-${index}-${asset.type}-${asset.id}`} className="twr-pkg-item">
-              {renderAsset(asset, index)}
+      <ol className="kd-tray-slots">
+        {boxes.map((row, i) =>
+          row ? (
+            <li key={`${side}-${row.index}-${row.asset.type}-${row.asset.id}`} className="kd-slot is-filled">
+              {renderAsset(row.asset, row.index)}
             </li>
-          ))}
-        </ol>
-      ) : (
-        <p className="twr-pkg-empty">{emptyHint || "Nothing here yet."}</p>
-      )}
-      <button type="button" className="twr-add-btn" onClick={onAdd} disabled={full || !onAdd}>
-        {full ? "Package full" : addLabel}
-      </button>
+          ) : (
+            <li key={`${side}-empty-${i}`} className="kd-slot is-empty">
+              <button type="button" className="kd-slot-add" onClick={onAdd} disabled={full || !onAdd}>
+                <span className="kd-itembox" aria-hidden="true">?</span>
+                <span>{i === filled.length ? (filled.length ? addLabel : emptyHint || addLabel) : ""}</span>
+              </button>
+            </li>
+          ),
+        )}
+      </ol>
     </section>
   );
 }
 
 /* ------------------------------------------------------------------ */
-/* TradeAnalysisBoard                                                  */
+/* DealMeter: real numbers only (value, cap, term). No guessed grades. */
 /* ------------------------------------------------------------------ */
-
-function riskRead({ userOutgoing, partnerOutgoing, userAfterCap }) {
-  const flags = [];
-  const out = arr(userOutgoing).filter(Boolean);
-  const inc = arr(partnerOutgoing).filter(Boolean);
-  if (Number.isFinite(userAfterCap) && userAfterCap < 1.5) flags.push(userAfterCap < 0 ? "Over the cap" : "Cap tight after deal");
-  if (out.some((p) => p.type !== "pick" && num(p.age, 99) <= 24 && num(p.ovr) >= 78)) flags.push("Moving young core");
-  if (out.some((p) => p.type === "pick" && num(p.round) === 1)) flags.push("First-round pick out");
-  if (inc.some((p) => p.type === "player" && num(p.age) >= 32)) flags.push("Aging return");
-  if (inc.some((p) => p.type === "player" && num(p.capHit) >= 6 && num(p.contractYears ?? p.years_remaining ?? p.term, 0) >= 4)) flags.push("Long-term money");
-  if (inc.some((p) => p.is_injured)) flags.push("Injured return");
-  const level = flags.length >= 3 ? "High" : flags.length >= 1 ? "Medium" : "Low";
-  return { level, flags };
-}
 
 export function recommendationFor(userGive, partnerGive, bothSides) {
   if (!bothSides) return { label: "—", tone: "neutral" };
@@ -498,74 +491,102 @@ export function recommendationFor(userGive, partnerGive, bothSides) {
   return { label: "Even", tone: "even" };
 }
 
+function sumCap(list) {
+  return arr(list).filter(Boolean).reduce((a, p) => a + (p.type === "pick" ? 0 : num(p.capHit)), 0);
+}
+
+function longestTerm(list) {
+  return arr(list).filter(Boolean).reduce((a, p) => Math.max(a, p.type === "pick" ? 0 : num(p.years)), 0);
+}
+
 export function TradeAnalysisBoard({
   userGive,
   partnerGive,
   userOutgoing,
   partnerOutgoing,
   partnerAbbr,
-  fanData,
+  userAbbr = "You",
   userAfterCap = null,
+  partnerAfterCap = null,
   evaluation = null,
   hasProposed = false,
   onReviewClick,
 }) {
-  const bothSides = arr(userOutgoing).some(Boolean) && arr(partnerOutgoing).some(Boolean);
-  const anyAssets = arr(userOutgoing).some(Boolean) || arr(partnerOutgoing).some(Boolean);
-  const diff = num(partnerGive) - num(userGive);
-  const rec = recommendationFor(userGive, partnerGive, bothSides);
-  const risk = riskRead({ userOutgoing, partnerOutgoing, userAfterCap });
-  const fd = fanData || {};
-  const heat = Number.isFinite(Number(fd.heat)) ? Number(fd.heat) : null;
-  const fanLabel = anyAssets ? fd.heatLabel || fd.category || (heat != null ? (heat >= 70 ? "Furious" : heat >= 45 ? "Uneasy" : "Calm") : "—") : "—";
-  const fanTone = heat == null ? "neutral" : heat >= 70 ? "bad" : heat >= 45 ? "warn" : "good";
-  const peak = Math.max(num(userGive), num(partnerGive), 1);
+  const out = arr(userOutgoing).filter(Boolean);
+  const inc = arr(partnerOutgoing).filter(Boolean);
+  const bothSides = out.length > 0 && inc.length > 0;
+  const anyAssets = out.length > 0 || inc.length > 0;
+  if (!anyAssets) {
+    return (
+      <section className="kd-meter is-empty">
+        <span className="kd-kicker">How to build a deal</span>
+        <ol className="kd-steps">
+          <li><b>1</b><span>Click a player or pick on <strong>{partnerAbbr || "their"}</strong> roster to ask for him.</span></li>
+          <li><b>2</b><span>Click your own players or picks to put them on the table.</span></li>
+          <li><b>3</b><span>Balance the value bar, then hit <strong>Propose</strong>. Their GM answers straight away.</span></li>
+        </ol>
+      </section>
+    );
+  }
+  const give = num(userGive);
+  const get = num(partnerGive);
+  const total = Math.max(give + get, 0.001);
+  const tilt = clampN(((get - give) / Math.max(give, get, 1)) * 50, -50, 50); // + favours you
+  const diff = get - give;
+  const capOut = sumCap(out);
+  const capIn = sumCap(inc);
   const verdict = hasProposed && evaluation
     ? evaluation.accepted && evaluation.can_execute
-      ? "GM says yes"
+      ? { text: "Deal accepted", tone: "good" }
       : evaluation.can_execute === false
-        ? "Rules block it"
-        : "GM says no"
-    : "";
+        ? { text: "Blocked by the rules", tone: "bad" }
+        : { text: "GM said no", tone: "bad" }
+    : null;
+  const balanceText = !bothSides
+    ? out.length
+      ? `Now pick something from ${partnerAbbr || "their"} roster.`
+      : "Now add something you'll send back."
+    : Math.abs(diff) < Math.max(2, 0.05 * Math.max(give, get))
+      ? "Close to even on value."
+      : diff > 0
+        ? `You get ${fmt1(diff)} more value than you send.`
+        : `You send ${fmt1(-diff)} more value than you get.`;
   return (
-    <section className="twr-panel twr-analysis">
-      <header className="twr-panel-head">
-        <span className="twr-kicker">Trade Analysis</span>
-        {verdict ? <strong className={`twr-verdict tone-${evaluation?.accepted && evaluation?.can_execute ? "good" : "bad"}`}>{verdict}</strong> : null}
+    <section className={`kd-meter${verdict ? ` verdict-${verdict.tone}` : ""}`}>
+      <header className="kd-meter-head">
+        <span className="kd-kicker">Value balance</span>
+        {verdict ? <strong className={`kd-verdict tone-${verdict.tone}`}>{verdict.text}</strong> : null}
         {hasProposed && bothSides && onReviewClick ? (
-          <button type="button" className="twr-mini-btn" onClick={onReviewClick}>Full review</button>
+          <button type="button" className="kd-mini" onClick={onReviewClick}>Full review</button>
         ) : null}
       </header>
-      <div className="twr-analysis-grid">
-        <div className="twr-stat">
-          <span>You Send</span>
-          <strong>{anyAssets ? fmt1(userGive) : "—"}</strong>
-          <i className="twr-bar side-left"><b style={{ width: `${clampN((num(userGive) / peak) * 100, 0, 100)}%` }} /></i>
+      <div className="kd-tug" role="img" aria-label={balanceText}>
+        <span className="kd-tug-side is-give"><em>You send</em><b>{fmt1(give)}</b></span>
+        <div className="kd-tug-track">
+          <i className="kd-tug-fill is-give" style={{ width: `${(give / total) * 100}%` }} />
+          <i className="kd-tug-fill is-get" style={{ width: `${(get / total) * 100}%` }} />
+          <span className="kd-tug-flag" style={{ left: `${50 + tilt}%` }} aria-hidden="true" />
+          <span className="kd-tug-mid" aria-hidden="true" />
         </div>
-        <div className="twr-stat">
-          <span>You Receive</span>
-          <strong>{anyAssets ? fmt1(partnerGive) : "—"}</strong>
-          <i className="twr-bar side-right"><b style={{ width: `${clampN((num(partnerGive) / peak) * 100, 0, 100)}%` }} /></i>
+        <span className="kd-tug-side is-get"><em>You get</em><b>{fmt1(get)}</b></span>
+      </div>
+      <p className={`kd-meter-line tone-${!bothSides ? "neutral" : diff >= 0 ? "good" : "warn"}`}>{balanceText}</p>
+      <div className="kd-meter-facts">
+        <div>
+          <em>Cap out / in</em>
+          <b>${capOut.toFixed(2)}M / ${capIn.toFixed(2)}M</b>
         </div>
-        <div className={`twr-stat tone-${!bothSides ? "neutral" : diff >= 0 ? "good" : "bad"}`}>
-          <span>Trade Value Difference</span>
-          <strong>{bothSides ? `${diff >= 0 ? "+" : "−"}${fmt1(Math.abs(diff))}` : "—"}</strong>
-          <em>{bothSides ? (diff >= 0 ? `Trade Value Added for you` : `Trade Value Removed from you`) : "Add assets to both sides"}</em>
+        <div className={Number.isFinite(userAfterCap) && userAfterCap < 0 ? "tone-bad" : ""}>
+          <em>{userAbbr} cap after</em>
+          <b>{Number.isFinite(userAfterCap) ? `$${userAfterCap.toFixed(2)}M` : "—"}</b>
         </div>
-        <div className={`twr-stat tone-${rec.tone}`}>
-          <span>Recommendation</span>
-          <strong>{rec.label}</strong>
-          <em>{bothSides ? (rec.tone === "good" ? `You win on value vs ${partnerAbbr || "them"}` : rec.tone === "bad" ? "You are overpaying" : "Close to fair") : "—"}</em>
+        <div className={Number.isFinite(partnerAfterCap) && partnerAfterCap < 0 ? "tone-bad" : ""}>
+          <em>{partnerAbbr || "Them"} cap after</em>
+          <b>{Number.isFinite(partnerAfterCap) ? `$${partnerAfterCap.toFixed(2)}M` : "—"}</b>
         </div>
-        <div className={`twr-stat tone-${anyAssets ? fanTone : "neutral"}`}>
-          <span>Fan Reaction</span>
-          <strong>{fanLabel}</strong>
-          <em>{anyAssets && arr(fd.factors).length ? arr(fd.factors).slice(0, 2).join(" · ") : anyAssets ? "Fans are watching" : "—"}</em>
-        </div>
-        <div className={`twr-stat tone-${!anyAssets ? "neutral" : risk.level === "High" ? "bad" : risk.level === "Medium" ? "warn" : "good"}`}>
-          <span>Risk</span>
-          <strong>{anyAssets ? risk.level : "—"}</strong>
-          <em>{anyAssets ? (risk.flags.slice(0, 2).join(" · ") || "No red flags") : "—"}</em>
+        <div>
+          <em>Longest term in</em>
+          <b>{longestTerm(inc) ? `${longestTerm(inc)} yrs` : "—"}</b>
         </div>
       </div>
     </section>
@@ -693,7 +714,7 @@ export function GmNegotiationPanel({
     setCounter({ status: "idle", data: null });
   }, [payloadKey]);
 
-  if (!partnerTeam) return null;
+  if (!partnerTeam || !hasProposed) return null;
   const interestRaw = evaluation?.interest_level?.[partnerId];
   const interest = hasProposed && interestRaw != null ? clampN(num(interestRaw), 0, 1) : null;
   const mood = hasProposed ? gmMood(evaluation, interest) : "idle";

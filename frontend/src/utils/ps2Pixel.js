@@ -12,7 +12,7 @@
 
 import { getApiBaseUrl } from "../services/api";
 
-const CACHE_VERSION = "ps2dream2";
+const CACHE_VERSION = "ps2soft3";
 const STORE_PREFIX = `${CACHE_VERSION}:`;
 const memCache = new Map(); // src -> dataURL | "" (failed)
 const inflight = new Map(); // src -> Promise
@@ -202,6 +202,24 @@ export function dreamFacets(img, opts = {}) {
   return img;
 }
 
+/** Gentle dream grade only: lifted shadows, warm highlights, soft saturation. No faceting. */
+export function dreamGrade(img, opts = {}) {
+  const { lift = 0.08, sat = 1.04, alphaCut = 60 } = opts;
+  const d = img.data;
+  for (let o = 0; o < d.length; o += 4) {
+    if (d[o + 3] < alphaCut) { d[o + 3] = 0; continue; }
+    let r = d[o], g = d[o + 1], b = d[o + 2];
+    const l = 0.299 * r + 0.587 * g + 0.114 * b;
+    r = l + (r - l) * sat; g = l + (g - l) * sat; b = l + (b - l) * sat;
+    const t = l / 255;
+    d[o] = r + (1 - t) * 40 * lift + t * 14 * lift;
+    d[o + 1] = g + (1 - t) * 26 * lift + t * 6 * lift;
+    d[o + 2] = b + (1 - t) * 70 * lift - t * 6 * lift;
+    d[o + 3] = 255;
+  }
+  return img;
+}
+
 function loadImage(url, cors) {
   return new Promise((resolve, reject) => {
     const im = new Image();
@@ -223,7 +241,7 @@ function proxyUrl(src) {
   return `${base}/api/headshot-proxy?url=${encodeURIComponent(src)}`;
 }
 
-function rasterizePhoto(im, targetW = 96) {
+function rasterizePhoto(im, targetW = 168) {
   const iw = im.naturalWidth || im.width;
   const ih = im.naturalHeight || im.height;
   if (!iw || !ih) return "";
@@ -240,7 +258,7 @@ function rasterizePhoto(im, targetW = 96) {
   out.ctx.imageSmoothingQuality = "high";
   out.ctx.drawImage(mid.canvas, 0, 0, w, h);
   const data = out.ctx.getImageData(0, 0, w, h); // throws if tainted
-  dreamFacets(data, { cell: 8 });
+  dreamGrade(data, { lift: 0.06, sat: 1.03 });
   out.ctx.putImageData(data, 0, 0);
   return out.canvas.toDataURL("image/png");
 }
