@@ -82531,3 +82531,14 @@ html:not(#_) .dk-root :is(.dkb-row, .dkl-row) { contain: layout paint; }
 html:not(#_) .dk-root .dkl-row .dc-lm-row__draft { flex-direction: row !important; flex-wrap: nowrap !important; align-items: center !important; gap: 5px !important; }
 html:not(#_) .dk-root .dkl-row .dc-lm-row__draft > * { margin: 0 !important; }
 html:not(#_) .dk-root .dkl-row { min-height: 0 !important; padding: 5px 10px !important; }
+
+/* Pick modal: career outcome rail readable on paper */
+html:not(#_) .edraft-pick-modal .ws-out__head span { color: #15112b !important; font-weight: 900 !important; text-shadow: none !important; }
+html:not(#_) .edraft-pick-modal .ws-out__legend li { color: #15112b !important; font-weight: 800 !important; opacity: 1 !important; text-shadow: none !important; }
+html:not(#_) .edraft-pick-modal .ws-out__legend li b { color: #15112b !important; font-weight: 900 !important; }
+html:not(#_) .edraft-pick-modal .ws-out__legend li.is-top { background: #ffcf1f; border: 2px solid #15112b; border-radius: 7px; padding: 0 6px; }
+html:not(#_) .edraft-pick-modal .ws-out__bar { border: 2.5px solid #15112b !important; border-radius: 8px !important; overflow: hidden; }
+
+/* Board / stats rows: skip rendering rows that are off screen */
+html:not(#_) .dk-root .dkb-row { content-visibility: auto; contain-intrinsic-size: auto 66px; }
+html:not(#_) .dk-root .dkl-row { content-visibility: auto; contain-intrinsic-size: auto 62px; }

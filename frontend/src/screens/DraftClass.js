@@ -3409,6 +3409,17 @@ export default function DraftClass() {
     setVisitedWs((v) => (v[next] ? v : { ...v, [next]: true }));
     startTransition(() => setWorkspaceRaw(next));
   }, []);
+  useEffect(() => {
+    // Pre-build the other tabs while the board sits idle, so the first click is instant.
+    const ric = window.requestIdleCallback || ((fn) => window.setTimeout(fn, 1200));
+    const cic = window.cancelIdleCallback || window.clearTimeout;
+    let h2 = null;
+    const h1 = ric(() => {
+      startTransition(() => setVisitedWs((v) => (v.ops ? v : { ...v, ops: true })));
+      h2 = ric(() => startTransition(() => setVisitedWs((v) => (v.stats ? v : { ...v, stats: true }))), { timeout: 4000 });
+    }, { timeout: 2500 });
+    return () => { cic(h1); if (h2) cic(h2); };
+  }, []);
   const [leaderMode, setLeaderMode] = useState("points");
   const [leadersModalOpen, setLeadersModalOpen] = useState(false);
   const [scoutingStore, setScoutingStore] = useState({});
