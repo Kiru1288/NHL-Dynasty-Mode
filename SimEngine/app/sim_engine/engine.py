@@ -11491,6 +11491,134 @@ class SimEngine:
         avg = sum(v * w for v, w in zip(rated, pair_w)) / total_w
         return float(max(0.0, min(0.14, (avg - 52.0) / 220.0)))
 
+    # ── Special-teams and goalie strategy (user coach plan) ─────────────────
+    _ST_PP_SETUPS = ("umbrella", "one_three_one", "overload", "net_front")
+    _ST_PK_SYSTEMS = ("box", "diamond", "aggressive", "wedge")
+
+    def _gm_st_unit(self, team: Any, attr: str, unit_id: str, slots: List[str]) -> List[Any]:
+        payload = getattr(team, attr, None) if team is not None else None
+        out: List[Any] = []
+        if payload is not None:
+            units = payload if isinstance(payload, list) else (payload.get("units") or payload.get("lines") or [])
+            by_id = self._gm_roster_by_id(team)
+            for unit in units or []:
+                if not isinstance(unit, dict) or str(unit.get("id") or "").lower() != unit_id:
+                    continue
+                for sl in slots:
+                    pl = self._gm_lookup_roster_player(by_id, str((unit.get("slots") or {}).get(sl) or ""))
+                    if pl is not None and pl not in out:
+                        out.append(pl)
+        if len(out) >= 3:
+            return out
+        sk = [x for x in self._gm_skaters(team) if not self._injury_sidelined(x)]
+        if unit_id.startswith("pp"):
+            sk.sort(key=lambda x: self._gm_rating_avg(x, OFFENSE_KEYS) + self._gm_rating_avg(x, PASSING_KEYS), reverse=True)
+            fw = [x for x in sk if not self._gm_is_defense(x)][:4]
+            dd = [x for x in sk if self._gm_is_defense(x)][:1]
+            return fw + dd
+        sk.sort(key=lambda x: self._gm_rating_avg(x, DEFENSE_KEYS), reverse=True)
+        fw = [x for x in sk if not self._gm_is_defense(x)][:2]
+        dd = [x for x in sk if self._gm_is_defense(x)][:2]
+        return fw + dd
+
+    def _gm_pp_setup_fits(self, players: List[Any]) -> Dict[str, float]:
+        """How well a PP unit suits each setup (0..1; ratings / 99)."""
+        def r(x: Any, keys: Any) -> float:
+            return float(self._gm_rating_avg(x, keys)) / 99.0
+        players = [x for x in (players or []) if x is not None]
+        if not players:
+            return {k: 0.6 for k in self._ST_PP_SETUPS}
+        fw = [x for x in players if not self._gm_is_defense(x)] or players
+        dd = [x for x in players if self._gm_is_defense(x)]
+        shot = max(r(x, OFFENSE_KEYS) for x in players)
+        point = max(0.5 * r(x, OFFENSE_KEYS) + 0.5 * r(x, PASSING_KEYS) for x in (dd or players))
+        dish = max(r(x, PASSING_KEYS) for x in fw)
+        move = sum(0.5 * r(x, PASSING_KEYS) + 0.5 * r(x, SKATING_KEYS) for x in fw) / len(fw)
+        net = max(0.6 * r(x, PHYS_KEYS) + 0.4 * r(x, OFFENSE_KEYS) for x in fw)
+        n_f = sum(1 for x in players if not self._gm_is_defense(x))
+        return {
+            "umbrella": 0.55 * point + 0.45 * shot + (0.015 if dd else -0.03),
+            "one_three_one": 0.5 * dish + 0.5 * shot + (0.02 if n_f >= 4 else -0.02),
+            "overload": 0.6 * move + 0.4 * dish,
+            "net_front": 0.55 * net + 0.45 * shot,
+        }
+
+    def _gm_pk_system_fits(self, players: List[Any]) -> Dict[str, float]:
+        def r(x: Any, keys: Any) -> float:
+            return float(self._gm_rating_avg(x, keys)) / 99.0
+        players = [x for x in (players or []) if x is not None]
+        if not players:
+            return {k: 0.6 for k in self._ST_PK_SYSTEMS}
+        fw = [x for x in players if not self._gm_is_defense(x)] or players
+        dd = [x for x in players if self._gm_is_defense(x)] or players
+        dfn = sum(r(x, DEFENSE_KEYS) for x in players) / len(players)
+        return {
+            "box": 0.8 * dfn + 0.2 * sum(r(x, IQ_KEYS) for x in players) / len(players),
+            "diamond": 0.5 * dfn + 0.5 * sum(r(x, SKATING_KEYS) for x in dd) / len(dd),
+            "aggressive": 0.4 * dfn + 0.6 * sum(r(x, SKATING_KEYS) for x in fw) / len(fw),
+            "wedge": 0.5 * dfn + 0.5 * sum(r(x, PHYS_KEYS) for x in players) / len(players),
+        }
+
+    def _gm_special_teams_profile(self, team: Any) -> Dict[str, float]:
+        """Per-game PP / PK multipliers from the coach's plan. CPU clubs (no plan) are 1.0.
+
+        pp: on own power-play goals · pk: on goals allowed while shorthanded ·
+        sh_for: own shorthanded goals · sh_against: shorthanded goals conceded on the PP.
+        The gain is relative to the average fit of every option, so picking the scheme
+        that suits the personnel helps and forcing the wrong one hurts.
+        """
+        out = {"pp": 1.0, "pk": 1.0, "sh_for": 1.0, "sh_against": 1.0}
+        if team is None:
+            return out
+        cached = getattr(team, "_gm_st_profile_cache", None)
+        key = (id(getattr(team, "_user_pp_strategy", None)), id(getattr(team, "_user_pk_strategy", None)), id(getattr(team, "_franchise_saved_pp", None)), id(getattr(team, "_franchise_saved_pk", None)))
+        if isinstance(cached, tuple) and cached[0] == key:
+            return cached[1]
+        pp_plan = getattr(team, "_user_pp_strategy", None)
+        pk_plan = getattr(team, "_user_pk_strategy", None)
+        try:
+            if isinstance(pp_plan, dict):
+                fits = self._gm_pp_setup_fits(self._gm_st_unit(team, "_franchise_saved_pp", "pp1", ["LW", "C", "RW", "LD", "RD"]))
+                setup = str(pp_plan.get("setup") or "")
+                if setup in fits:
+                    gain = fits[setup] - sum(fits.values()) / len(fits)
+                    out["pp"] *= 1.0 + max(-0.12, min(0.12, 3.5 * gain))
+                mind = str(pp_plan.get("mindset") or "balanced")
+                if mind == "shoot":
+                    out["pp"] *= 1.03
+                    out["sh_against"] *= 1.10
+                elif mind == "possession":
+                    out["pp"] *= 1.01
+                    out["sh_against"] *= 0.88
+            if isinstance(pk_plan, dict):
+                fits = self._gm_pk_system_fits(self._gm_st_unit(team, "_franchise_saved_pk", "pk1", ["F1", "F2", "D1", "D2"]))
+                system = str(pk_plan.get("system") or "")
+                if system in fits:
+                    gain = fits[system] - sum(fits.values()) / len(fits)
+                    out["pk"] *= 1.0 - max(-0.12, min(0.12, 3.5 * gain))
+                if system == "aggressive":
+                    out["sh_for"] *= 1.15
+                pressure = str(pk_plan.get("pressure") or "balanced")
+                if pressure == "aggressive":
+                    out["pk"] *= 0.98
+                    out["sh_for"] *= 1.12
+                elif pressure == "passive":
+                    out["pk"] *= 1.01
+                    out["sh_for"] *= 0.85
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+        setattr(team, "_gm_st_profile_cache", (key, out))
+        return out
+
+    def _gm_special_teams_goal_mults(self, home: Any, away: Any) -> Tuple[float, float]:
+        """Fast score path: special teams are ~22% of goals, shorthanded goals ~2%."""
+        hp = self._gm_special_teams_profile(home)
+        ap = self._gm_special_teams_profile(away)
+        pp_share, sh_share = 0.22, 0.02
+        home_m = 1.0 + pp_share * (hp["pp"] * ap["pk"] - 1.0) + sh_share * (hp["sh_for"] * ap["sh_against"] - 1.0)
+        away_m = 1.0 + pp_share * (ap["pp"] * hp["pk"] - 1.0) + sh_share * (ap["sh_for"] * hp["sh_against"] - 1.0)
+        return max(0.9, min(1.1, home_m)), max(0.9, min(1.1, away_m))
+
     def _team_pp_danger(self, team: Any) -> float:
         """0..1 PP threat proxy for special-teams goal share in the stat ledger."""
         off = self._team_offense_skill(team)
@@ -13807,6 +13935,14 @@ class SimEngine:
                 return out
             return []
 
+        def _plan_share(plan: Any) -> Optional[float]:
+            try:
+                if isinstance(plan, dict) and plan.get("unit1_share") is not None:
+                    return max(0.5, min(0.85, float(plan.get("unit1_share"))))
+            except (TypeError, ValueError):
+                pass
+            return None
+
         pp_payload = getattr(team, "_franchise_saved_pp", None) if team is not None else None
         pk_payload = getattr(team, "_franchise_saved_pk", None) if team is not None else None
         pp1 = _resolve_special_unit(pp_payload, "pp1", ["LW", "C", "RW", "LD", "RD"])
@@ -13962,6 +14098,8 @@ class SimEngine:
             "fw": fw,
             "defs": defs,
             "deployment_style": self._gm_deployment_style(team),
+            "pp1_share": _plan_share(getattr(team, "_user_pp_strategy", None)),
+            "pk1_share": _plan_share(getattr(team, "_user_pk_strategy", None)),
         }
 
     def _gm_allocate_conserved_toi(
@@ -14438,11 +14576,11 @@ class SimEngine:
     ) -> Tuple[List[Any], List[Any]]:
         st = str(strength or "EV").upper()
         if st == "PP":
-            pp_share = 0.78 + 0.06 * min(1.0, sum(self._gm_primary_assist_weight(p) for p in units.get("pp1", [])[:3]) / 3.0)
+            pp_share = units.get("pp1_share") or (0.78 + 0.06 * min(1.0, sum(self._gm_primary_assist_weight(p) for p in units.get("pp1", [])[:3]) / 3.0))
             pp = units["pp1"] if rng.random() < pp_share else units["pp2"]
             return list(pp), []
         if st in ("SH", "PK"):
-            pk_share = 0.74
+            pk_share = units.get("pk1_share") or 0.74
             pk = units["pk1"] if rng.random() < pk_share else units["pk2"]
             return list(pk), []
 
@@ -14581,7 +14719,9 @@ class SimEngine:
         # Hard rest triggers — hierarchy first, lottery never decides the starter.
         if is_b2b:
             # Coach's back-to-back goalie plan (user pick or CPU auto) wins when set.
-            plan = getattr(team, "_tactic_b2b_goalie_choice", None)
+            _gp = getattr(team, "_user_goalie_plan", None)
+            plan = str(_gp.get("b2b") or "") if isinstance(_gp, dict) else ""
+            plan = plan if plan in ("backup", "starter") else getattr(team, "_tactic_b2b_goalie_choice", None)
             if plan is None and isinstance(getattr(team, "_tactics", None), dict):
                 try:
                     from app.sim_engine.economy.coaching_ai import b2b_goalie_choice
@@ -14628,6 +14768,9 @@ class SimEngine:
         # TRUE_TANDEM
         if consec >= 1:
             return True
+        _gp = getattr(team, "_user_goalie_plan", None)
+        if isinstance(_gp, dict) and str(_gp.get("usage") or "") == "tandem":
+            return False  # a coach-chosen tandem alternates the net, no coin flip
         return rng.random() < 0.45 if gap < 1.5 else rng.random() < 0.35
 
     def _gm_select_starting_goalie(
@@ -14660,6 +14803,37 @@ class SimEngine:
             preferred = self._gm_determine_preferred_goalie(available, team)
             others = [g for g in available if g is not preferred]
             backup = self._gm_determine_preferred_goalie(others, team) if others else None
+            # Coach's goalie plan (user team) overrides the derived usage.
+            plan = getattr(team, "_user_goalie_plan", None)
+            if isinstance(plan, dict):
+                usage = str(plan.get("usage") or "auto")
+                mapped = {
+                    "workhorse": "WORKHORSE",
+                    "starter": "STARTER_HEAVY",
+                    "balanced": "NORMAL_STARTER",
+                    "tandem": "TRUE_TANDEM",
+                    "hot_hand": "NORMAL_STARTER",
+                }.get(usage)
+                if mapped:
+                    strategy = mapped
+                if usage == "hot_hand" and backup is not None and not bool(is_playoff):
+                    # Ride whoever is in form: the goalie who started last keeps the net
+                    # while his recent save % holds; a cold streak hands it over.
+                    hist = self._gm_goalie_start_state(team)
+                    last = None
+                    for g in (preferred, backup):
+                        rec = hist.get(_id_str(g, "id"), {}) or {}
+                        if int(rec.get("consecutive", 0) or 0) > 0:
+                            last = g
+                    if last is not None:
+                        rec = hist.get(_id_str(last, "id"), {}) or {}
+                        sv = float(rec.get("recent_save_pct", 0.905) or 0.905)
+                        consec = int(rec.get("consecutive", 0) or 0)
+                        other = backup if last is preferred else preferred
+                        if sv >= 0.905 and consec < 8:
+                            preferred, backup = last, other
+                        elif sv < 0.895:
+                            preferred, backup = other, last
             setattr(team, "_gm_goalie_usage_strategy", strategy)
             # Playoffs: the preferred healthy goalie starts. Rest rules are regular season only.
             if bool(is_playoff):
@@ -15378,6 +15552,10 @@ class SimEngine:
                     raw_xg *= float(getattr(atk_team, "_staff_pp_mult", 1.0) or 1.0) * float(getattr(def_team, "_staff_pk_mult", 1.0) or 1.0)
                     # Board of Governors power-play rules (pp_efficiency) - was read nowhere here.
                     raw_xg *= float(self._board_game_rules().get("pp_mult", 1.0))
+                    try:
+                        raw_xg *= float(self._gm_special_teams_profile(atk_team)["pp"]) * float(self._gm_special_teams_profile(def_team)["pk"])
+                    except Exception:
+                        _swallowed_log.debug("suppressed exception", exc_info=True)
                 ctx = self._gm_chance_context(
                     rng, chance, shooter, atk_unit, def_unit,
                     away_starter if side == "home" else home_starter,
@@ -18649,6 +18827,13 @@ class SimEngine:
         if _tac is not None:
             home_mu *= _tac[0]
             away_mu *= _tac[1]
+        # Coach's power-play setup / penalty-kill system (user plan; CPU stays 1.0).
+        try:
+            _st_h, _st_a = self._gm_special_teams_goal_mults(home, away)
+            home_mu *= _st_h
+            away_mu *= _st_a
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         # Starter vs best healthy goalie. A rested or lesser starter lets in more.
         def _starter_adj(starter: Any, team: Any) -> float:
             healthy = [g for g in self._gm_goalies(team) if not self._injury_sidelined(g)] or list(self._gm_goalies(team) or [])

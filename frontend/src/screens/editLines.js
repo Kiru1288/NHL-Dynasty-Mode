@@ -1232,7 +1232,7 @@ function FormationBoard({
   selectedUnit, selectedSlotKey, selectedPlayer, locks, showThird, menuKey, clipboard,
   onSelectUnit, onSlotSelect, onDrop, onDragStart, onRemove, onToggleLock, onSlotKeyDown,
   registerSlotRef,   onWarnings, onMenuToggle, actions, onTogglePool, onToggleInspector, rosterEmpty,
-  onShare, onDeploy, onCoach, shareTotals,
+  onShare, onDeploy, onCoach, shareTotals, goaliePanel = null,
 }) {
   const options = [[LINEUP_MODES.ALL, "All"], [LINEUP_MODES.FORWARDS, "Forwards"], [LINEUP_MODES.DEFENSE, "Defence"], [LINEUP_MODES.GOALIES, "Goalies"]];
   const showForwards = mode === LINEUP_MODES.ALL || mode === LINEUP_MODES.FORWARDS;
@@ -1332,7 +1332,8 @@ function FormationBoard({
       </div> : null}
 
       {showGoalies ? <div className="fm-section">
-        <SectionHead title="Goalies" note="Outside the chemistry system" />
+        <SectionHead title="Goalies" note="Scored on their own, no chemistry links" />
+        {goaliePanel}
         {lineState.goalies.map((line) => <FormationUnit
           key={line.id}
           {...shared}
@@ -1349,7 +1350,7 @@ function FormationBoard({
           menuOpen={menuKey === `goalies:${line.id}`}
           showPips={false}
           isolated
-          isolatedNote="No chemistry links — goalies are scored on their own"
+          isolatedNote={null}
         />)}
       </div> : null}
 
@@ -1549,6 +1550,24 @@ export function EvenStrengthLines(props) {
   const ahl = Boolean(props.ahl);
   const [ahlData, setAhlData] = useState(null);
   const sessionId = ahl ? `ahl:${getFranchiseSessionId()}` : getFranchiseSessionId();
+  const [goaliePlan, setGoaliePlan] = useState(() => franchiseState?.lines?.even_strength?.goalie_plan || {});
+  useEffect(() => {
+    const saved = franchiseState?.lines?.even_strength?.goalie_plan;
+    if (saved && typeof saved === "object") setGoaliePlan(saved);
+  }, [franchiseState?.lines?.even_strength?.goalie_plan]);
+  const changeGoaliePlan = useCallback(async (next) => {
+    setGoaliePlan(next);
+    // Saves on its own against the last saved sheet, so pending line edits stay pending.
+    const savedLines = franchiseState?.lines?.even_strength?.lines;
+    if (!savedLines) { setToast({ type: "warning", message: "Save your lines once, then set the goalie plan." }); return; }
+    try {
+      const res = await saveFranchiseLines({ unit_type: "even_strength", lines: savedLines, goalie_plan: next });
+      if (res?.lines) setFranchiseState((prev) => ({ ...(prev || {}), lines: res.lines }));
+      setToast({ type: "success", message: "Goalie plan saved." });
+    } catch {
+      setToast({ type: "error", message: "Couldn't save the goalie plan." });
+    }
+  }, [franchiseState?.lines?.even_strength?.lines, setFranchiseState]);
   useEffect(() => {
     if (!ahl) return undefined;
     let active = true;
@@ -1996,66 +2015,11 @@ export function EvenStrengthLines(props) {
     else if (row.playerId) nextLocks[row.key] = true;
     commit(lineState, nextLocks, nextLocks[row.key] ? "Slot locked." : "Slot unlocked.");
   }, [lineState, locks, commit]);
-  // Pointer drag: works with a plain mouse/touch move even where native HTML5 drag-and-drop
-  // never fires (pen/touch, some Chrome builds, overlays). Native DnD stays as well.
-  const pointerDragRef = useRef(null);
-  useEffect(() => {
-    const root = document.querySelector(".linebuilder-root");
-    if (!root) return undefined;
-    const THRESH = 6;
-    const onDown = (e) => {
-      if (e.button !== 0 || e.target.closest("input,button,select,textarea,a")) return;
-      const src = e.target.closest("[data-pid]");
-      if (!src || !root.contains(src)) return;
-      pointerDragRef.current = { pid: src.getAttribute("data-pid"), x: e.clientX, y: e.clientY, active: false, ghost: null, src };
-    };
-    const onMove = (e) => {
-      const d = pointerDragRef.current;
-      if (!d) return;
-      if (!d.active) {
-        if (Math.abs(e.clientX - d.x) + Math.abs(e.clientY - d.y) < THRESH) return;
-        d.active = true;
-        const g = d.src.cloneNode(true);
-        g.className = `${d.src.className} lb-pointer-ghost`;
-        g.removeAttribute("data-pid"); g.removeAttribute("data-slot-key");
-        const r = d.src.getBoundingClientRect();
-        g.style.width = `${r.width}px`;
-        document.body.appendChild(g);
-        d.ghost = g;
-        document.body.classList.add("lb-dragging");
-      }
-      e.preventDefault();
-      if (d.ghost) { d.ghost.style.left = `${e.clientX + 8}px`; d.ghost.style.top = `${e.clientY + 8}px`; }
-      root.querySelectorAll(".fm-card.is-dragover").forEach((el) => el.classList.remove("is-dragover"));
-      const over = document.elementFromPoint(e.clientX, e.clientY)?.closest?.("[data-slot-key]");
-      if (over) over.classList.add("is-dragover");
-    };
-    const onUp = (e) => {
-      const d = pointerDragRef.current;
-      pointerDragRef.current = null;
-      if (!d || !d.active) return;
-      d.ghost?.remove();
-      document.body.classList.remove("lb-dragging");
-      root.querySelectorAll(".fm-card.is-dragover").forEach((el) => el.classList.remove("is-dragover"));
-      const over = document.elementFromPoint(e.clientX, e.clientY)?.closest?.("[data-slot-key]");
-      if (!over) return;
-      const key = over.getAttribute("data-slot-key");
-      const target = descriptors(lineState, showThird).find((row) => row.key === key);
-      if (target && d.pid) placePlayer(String(d.pid), target);
-      // swallow the click that follows a drag
-      const stop = (ev) => { ev.stopPropagation(); ev.preventDefault(); window.removeEventListener("click", stop, true); };
-      window.addEventListener("click", stop, true);
-      setTimeout(() => window.removeEventListener("click", stop, true), 0);
-    };
-    root.addEventListener("pointerdown", onDown);
-    window.addEventListener("pointermove", onMove, { passive: false });
-    window.addEventListener("pointerup", onUp);
-    return () => {
-      root.removeEventListener("pointerdown", onDown);
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-    };
-  }, [lineState, showThird, placePlayer]);
+  // Pointer drag (shared with the PP / PK boards).
+  useBoardPointerDrag((pid, key) => {
+    const target = descriptors(lineState, showThird).find((row) => row.key === key);
+    if (target && pid) placePlayer(String(pid), target);
+  });
   const registerSlotRef = useCallback((key, node) => { if (node) slotRefs.current.set(key, node); else slotRefs.current.delete(key); }, []);
   const onSlotKeyDown = useCallback((event, row) => {
     if (event.key === "Enter") { event.preventDefault(); onSlotSelect(row); return; }
@@ -2332,6 +2296,7 @@ export function EvenStrengthLines(props) {
           ? <section className="lb-region lb-pool-region"><div className="lb-region-head"><h2 className="lb-region-title">Player pool</h2></div><div className="lb-loading"><div className="lb-skeleton" /></div></section>
           : <PlayerPool players={filteredPool} assignedSet={assignedSet} lockedSet={lockedSet} selectedPlayerId={selectedPlayerId} search={search} setSearch={setSearch} focusSlot={focusSlot} onPlayerSelect={onPlayerSelect} onDragStart={onDragStart} open={poolOpen} onClose={() => setPoolOpen(false)} />}
         <FormationBoard
+          goaliePanel={ahl ? null : <GoaliePlanPanel plan={goaliePlan} onChange={changeGoaliePlan} starter={playerMap[String(lineState.goalies?.[0]?.slots?.Starter || "")]} backup={playerMap[String(lineState.goalies?.[0]?.slots?.Backup || "")]} />}
           mode={mode}
           setMode={setMode}
           lineState={lineState}
@@ -2464,23 +2429,276 @@ function calculatePenaltyKillChemistry(players) {
   return { score, label, defensive: clamp(defensive), discipline: clamp(discipline), balance: clamp(balance), trust: clamp(workEthic), tips };
 }
 
+/** Rating-group average 0..1 from the roster row (same groups the engine uses). */
+function ratingGroup(player, title) {
+  const groups = Array.isArray(player?.rating_groups) ? player.rating_groups : [];
+  const g = groups.find((x) => String(x?.title || "").toLowerCase().startsWith(String(title).toLowerCase()));
+  const rows = Array.isArray(g?.rows) ? g.rows : [];
+  if (rows.length) return rows.reduce((sum, r) => sum + (Number(r.v) || 0), 0) / rows.length / 99;
+  const prof = player?.chemistry_profile || {};
+  const fallback = {
+    offense: prof.offensive_instinct, playmaking: prof.puck_movement ?? prof.creativity, defense: prof.defensive_buy_in,
+    physical: prof.work_ethic, skating: prof.puck_movement, iq: prof.creativity,
+  }[String(title).toLowerCase().split(" ")[0]];
+  const v = Number(fallback);
+  return Number.isFinite(v) ? v / 100 : (Number(player?.overall) || 75) / 99;
+}
+const ppOffense = (p) => 0.5 * ratingGroup(p, "Offense") + 0.35 * ratingGroup(p, "Playmaking") + 0.15 * ratingGroup(p, "Skating");
+const ppPoint = (p) => 0.5 * ratingGroup(p, "Offense") + 0.5 * ratingGroup(p, "Playmaking");
+const pkForward = (p) => 0.6 * ratingGroup(p, "Defense") + 0.25 * ratingGroup(p, "Skating") + 0.15 * ratingGroup(p, "IQ");
+const pkDefender = (p) => 0.7 * ratingGroup(p, "Defense") + 0.3 * ratingGroup(p, "Physical");
+const specialTeamsPool = (players) => (players || []).filter((p) => p?.availability?.placeable !== false && !p?.scratched);
+
 function makeInitialPowerPlayLines(players) {
-  const forwards = players.filter((p) => isForward(p.position));
-  const defenders = players.filter((p) => isDefense(p.position));
-  return [
-    { id: "pp1", name: "Power Play 1", slots: { LW: forwards[0]?.id || "", C: forwards[1]?.id || "", RW: forwards[2]?.id || "", LD: defenders[0]?.id || "", RD: defenders[1]?.id || defenders[0]?.id || "" } },
-    { id: "pp2", name: "Power Play 2", slots: { LW: forwards[3]?.id || forwards[0]?.id || "", C: forwards[4]?.id || forwards[1]?.id || "", RW: forwards[5]?.id || forwards[2]?.id || "", LD: defenders[2]?.id || defenders[0]?.id || "", RD: defenders[3]?.id || defenders[1]?.id || "" } },
-  ];
+  // 4F-1D, like most NHL power plays: the best offensive forwards, one puck-moving D up top.
+  const pool = specialTeamsPool(players);
+  const fwd = pool.filter((p) => isForward(p.position)).sort((a, b) => ppOffense(b) - ppOffense(a));
+  const dee = pool.filter((p) => isDefense(p.position)).sort((a, b) => ppPoint(b) - ppPoint(a));
+  const unit = (n, four, d) => {
+    const group = [...four];
+    const centers = group.filter((p) => String(p.position) === "C");
+    const byDish = (a, b) => ratingGroup(b, "Playmaking") - ratingGroup(a, "Playmaking");
+    const center = [...(centers.length ? centers : group)].sort(byDish)[0];
+    if (center) group.splice(group.indexOf(center), 1);
+    group.sort((a, b) => ratingGroup(b, "Offense") - ratingGroup(a, "Offense"));
+    return { id: `pp${n}`, name: `Power Play ${n}`, slots: { LW: group[0]?.id || "", C: center?.id || "", RW: group[1]?.id || "", LD: d?.id || "", RD: group[2]?.id || "" } };
+  };
+  return [unit(1, fwd.slice(0, 4), dee[0]), unit(2, fwd.slice(4, 8), dee[1])];
 }
 
 function makeInitialPenaltyKillLines(players) {
-  const forwards = players.filter((p) => isForward(p.position));
-  const defenders = players.filter((p) => isDefense(p.position));
-  return [
-    { id: "pk1", name: "Penalty Kill 1", slots: { F1: forwards[0]?.id || "", F2: forwards[1]?.id || "", D1: defenders[0]?.id || "", D2: defenders[1]?.id || "" } },
-    { id: "pk2", name: "Penalty Kill 2", slots: { F1: forwards[2]?.id || forwards[0]?.id || "", F2: forwards[3]?.id || forwards[1]?.id || "", D1: defenders[2]?.id || defenders[0]?.id || "", D2: defenders[3]?.id || defenders[1]?.id || "" } },
-    { id: "pk3", name: "Penalty Kill 3", slots: { F1: forwards[4]?.id || forwards[0]?.id || "", F2: forwards[5]?.id || forwards[1]?.id || "", D1: defenders[4]?.id || defenders[0]?.id || "", D2: defenders[5]?.id || defenders[1]?.id || "" } },
-  ];
+  // Killers by defensive rating, not by overall: two forwards + two D per unit.
+  const pool = specialTeamsPool(players);
+  const fwd = pool.filter((p) => isForward(p.position)).sort((a, b) => pkForward(b) - pkForward(a));
+  const dee = pool.filter((p) => isDefense(p.position)).sort((a, b) => pkDefender(b) - pkDefender(a));
+  return [1, 2, 3].map((n, i) => ({
+    id: `pk${n}`,
+    name: `Penalty Kill ${n}`,
+    slots: { F1: fwd[i * 2]?.id || "", F2: fwd[i * 2 + 1]?.id || "", D1: dee[i * 2]?.id || dee[0]?.id || "", D2: dee[i * 2 + 1]?.id || dee[1]?.id || "" },
+  }));
+}
+
+/* Coach plans. Fits mirror the engine's (_gm_pp_setup_fits / _gm_pk_system_fits). */
+const PP_SETUPS = [
+  { id: "umbrella", name: "Umbrella", tag: "Point bombs", note: "A big shot up top, two flanks and a net-front. Needs a D who can shoot and pass." },
+  { id: "one_three_one", name: "1-3-1", tag: "One-timer", note: "Half-wall playmaker feeding a one-timer, a bumper in the slot. Needs 4 forwards." },
+  { id: "overload", name: "Overload", tag: "Quick passing", note: "Load one side and move it fast. Needs mobile passers." },
+  { id: "net_front", name: "Net-front", tag: "Screens", note: "Shoot through a big body for rebounds and deflections. Needs a physical forward." },
+];
+const PK_SYSTEMS = [
+  { id: "box", name: "Box", tag: "Safe", note: "Four in a square, protect the slot. Works with any sound defenders." },
+  { id: "diamond", name: "Diamond", tag: "Cover the point", note: "Pressure the top man. Needs mobile defencemen." },
+  { id: "aggressive", name: "Aggressive", tag: "Hunt pucks", note: "Forwards chase the carrier. More shorthanded goals, needs fast forwards." },
+  { id: "wedge", name: "Wedge +1", tag: "Block shots", note: "Collapse and block everything. Needs physical, brave killers." },
+];
+const GOALIE_PLANS = [
+  { id: "auto", name: "Coach decides", note: "The coach picks from the depth chart and form." },
+  { id: "workhorse", name: "Workhorse", note: "Starter plays ~65 games and only sits after long runs." },
+  { id: "starter", name: "Clear No. 1", note: "Starter plays ~55–60 games; backup gets every ~5th start." },
+  { id: "balanced", name: "Starter + rest", note: "Starter ~50 games; backup gets regular rest starts." },
+  { id: "tandem", name: "Tandem", note: "Split the net roughly 50/50." },
+  { id: "hot_hand", name: "Hot hand", note: "Whoever has the better recent save % keeps the net." },
+];
+function ppSetupFits(players) {
+  const list = (players || []).filter(Boolean);
+  if (!list.length) return null;
+  const fw = list.filter((p) => isForward(p.position));
+  const dd = list.filter((p) => isDefense(p.position));
+  const f = fw.length ? fw : list;
+  const max = (arr, fn) => Math.max(...arr.map(fn));
+  const shot = max(list, (p) => ratingGroup(p, "Offense"));
+  const point = max(dd.length ? dd : list, ppPoint);
+  const dish = max(f, (p) => ratingGroup(p, "Playmaking"));
+  const move = f.reduce((sum, p) => sum + 0.5 * ratingGroup(p, "Playmaking") + 0.5 * ratingGroup(p, "Skating"), 0) / f.length;
+  const net = max(f, (p) => 0.6 * ratingGroup(p, "Physical") + 0.4 * ratingGroup(p, "Offense"));
+  return {
+    umbrella: 0.55 * point + 0.45 * shot + (dd.length ? 0.015 : -0.03),
+    one_three_one: 0.5 * dish + 0.5 * shot + (fw.length >= 4 ? 0.02 : -0.02),
+    overload: 0.6 * move + 0.4 * dish,
+    net_front: 0.55 * net + 0.45 * shot,
+  };
+}
+function pkSystemFits(players) {
+  const list = (players || []).filter(Boolean);
+  if (!list.length) return null;
+  const fw = list.filter((p) => isForward(p.position));
+  const dd = list.filter((p) => isDefense(p.position));
+  const avg = (arr, fn) => (arr.length ? arr : list).reduce((sum, p) => sum + fn(p), 0) / (arr.length || list.length);
+  const dfn = avg(list, (p) => ratingGroup(p, "Defense"));
+  return {
+    box: 0.8 * dfn + 0.2 * avg(list, (p) => ratingGroup(p, "IQ")),
+    diamond: 0.5 * dfn + 0.5 * avg(dd, (p) => ratingGroup(p, "Skating")),
+    aggressive: 0.4 * dfn + 0.6 * avg(fw, (p) => ratingGroup(p, "Skating")),
+    wedge: 0.5 * dfn + 0.5 * avg(list, (p) => ratingGroup(p, "Physical")),
+  };
+}
+/** Fit -> grade relative to the other options (what the engine rewards). */
+function fitGrades(fits) {
+  if (!fits) return {};
+  const vals = Object.values(fits);
+  const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
+  const out = {};
+  for (const [k, v] of Object.entries(fits)) {
+    const edge = Math.max(-12, Math.min(12, 3.5 * (v - mean) * 100));
+    out[k] = { fit: Math.round(v * 100), edge: Math.round(edge * 10) / 10 };
+  }
+  return out;
+}
+
+const GOALIE_SPLITS = { workhorse: [65, 17], starter: [58, 24], balanced: [50, 32], tandem: [41, 41], hot_hand: [48, 34], auto: [54, 28] };
+function GoaliePlanPanel({ plan, onChange, starter, backup }) {
+  const usage = plan?.usage || "auto";
+  const [a, b] = GOALIE_SPLITS[usage] || GOALIE_SPLITS.auto;
+  const last = (p) => (p?.name ? String(p.name).split(" ").slice(-1)[0] : "—");
+  return <div className="st-plan st-plan--goalie">
+    <div className="st-plan-head">
+      <strong>Goalie plan</strong>
+      <span>Projected starts: <b>{last(starter)} ~{a}</b> · <b>{last(backup)} ~{b}</b> of 82. Playoffs always go to the starter.</span>
+    </div>
+    <div className="st-plan-cards st-plan-cards--six">
+      {GOALIE_PLANS.map((o) => <button type="button" key={o.id} className={`st-plan-card${usage === o.id ? " is-on" : ""}`} onClick={() => onChange({ ...plan, usage: o.id })}>
+        <span className="st-plan-card__top"><b>{o.name}</b></span>
+        <p>{o.note}</p>
+      </button>)}
+    </div>
+    <div className="st-plan-row">
+      <span className="st-plan-label">Back-to-backs</span>
+      <div className="st-seg">
+        {[["auto", "Coach decides"], ["backup", "Backup starts"], ["starter", "Starter plays both"]].map(([id, label]) => <button type="button" key={id} className={(plan?.b2b || "auto") === id ? "is-on" : ""} onClick={() => onChange({ ...plan, b2b: id })}>{label}</button>)}
+      </div>
+    </div>
+  </div>;
+}
+
+/**
+ * Pointer drag-and-drop for the line boards. Native HTML5 drag never fires reliably here,
+ * and the headshot <img> inside each card is natively draggable: grabbing a card by the
+ * face started an image drag, the browser cancelled the pointer stream, pointerup never
+ * came and the ghost stayed on screen for good (and the drop was lost). This version
+ * blocks native drags inside the board, cleans up on cancel / blur / Escape / unmount,
+ * and keeps one set of listeners for the life of the screen.
+ */
+function useBoardPointerDrag(onDropKey) {
+  const cbRef = useRef(onDropKey);
+  cbRef.current = onDropKey;
+  useEffect(() => {
+    const root = document.querySelector(".linebuilder-root");
+    if (!root) return undefined;
+    const THRESH = 6;
+    let drag = null;
+    const clearHover = () => root.querySelectorAll(".is-dragover").forEach((el) => el.classList.remove("is-dragover"));
+    const clear = () => {
+      if (drag?.ghost) drag.ghost.remove();
+      drag = null;
+      document.body.classList.remove("lb-dragging");
+      document.querySelectorAll(".lb-pointer-ghost").forEach((g) => g.remove());
+      clearHover();
+    };
+    clear();
+    const onNativeDrag = (e) => { if (root.contains(e.target)) e.preventDefault(); };
+    const onDown = (e) => {
+      if (e.button !== 0 || e.target.closest("input,button,select,textarea,a")) return;
+      const src = e.target.closest("[data-pid]");
+      if (!src || !root.contains(src)) return;
+      if (e.target.closest("img")) e.preventDefault();
+      drag = { pid: src.getAttribute("data-pid"), x: e.clientX, y: e.clientY, active: false, ghost: null, src };
+    };
+    const onMove = (e) => {
+      if (!drag) return;
+      if (!drag.active) {
+        if (Math.abs(e.clientX - drag.x) + Math.abs(e.clientY - drag.y) < THRESH) return;
+        drag.active = true;
+        const name = drag.src.querySelector(".fm-card-name, .lb-player-name, strong")?.textContent
+          || drag.src.getAttribute("aria-label")?.split(",")[0] || "Player";
+        const ovr = drag.src.querySelector(".fm-card-ovr, .lb-player-ovr")?.textContent || "";
+        const g = document.createElement("div");
+        g.className = "lb-pointer-ghost";
+        g.innerHTML = `<b></b><span></span>`;
+        g.querySelector("b").textContent = ovr;
+        g.querySelector("span").textContent = name;
+        document.body.appendChild(g);
+        drag.ghost = g;
+        document.body.classList.add("lb-dragging");
+      }
+      e.preventDefault();
+      drag.ghost.style.left = `${e.clientX + 10}px`;
+      drag.ghost.style.top = `${e.clientY + 10}px`;
+      clearHover();
+      const over = document.elementFromPoint(e.clientX, e.clientY)?.closest?.("[data-slot-key]");
+      if (over && root.contains(over)) over.classList.add("is-dragover");
+    };
+    const onUp = (e) => {
+      const d = drag;
+      if (!d) return;
+      const wasActive = d.active;
+      clear();
+      if (!wasActive) return;
+      const over = document.elementFromPoint(e.clientX, e.clientY)?.closest?.("[data-slot-key]");
+      if (over && root.contains(over) && d.pid) cbRef.current?.(String(d.pid), over.getAttribute("data-slot-key"));
+      // swallow the click that follows a drag
+      const stop = (ev) => { ev.stopPropagation(); ev.preventDefault(); window.removeEventListener("click", stop, true); };
+      window.addEventListener("click", stop, true);
+      setTimeout(() => window.removeEventListener("click", stop, true), 0);
+    };
+    const onKey = (e) => { if (e.key === "Escape") clear(); };
+    root.addEventListener("dragstart", onNativeDrag);
+    root.addEventListener("pointerdown", onDown);
+    window.addEventListener("pointermove", onMove, { passive: false });
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", clear);
+    window.addEventListener("blur", clear);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      clear();
+      root.removeEventListener("dragstart", onNativeDrag);
+      root.removeEventListener("pointerdown", onDown);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", clear);
+      window.removeEventListener("blur", clear);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, []);
+}
+
+function StrategyPanel({ kind, strategy, onChange, unitPlayers }) {
+  const isPP = kind === "power_play";
+  const options = isPP ? PP_SETUPS : PK_SYSTEMS;
+  const key = isPP ? "setup" : "system";
+  const grades = fitGrades(isPP ? ppSetupFits(unitPlayers) : pkSystemFits(unitPlayers));
+  const best = Object.entries(grades).sort((a, b) => b[1].edge - a[1].edge)[0]?.[0];
+  const chosen = strategy?.[key] || "";
+  const share = Math.round((Number(strategy?.unit1_share) || (isPP ? 0.65 : 0.6)) * 100);
+  const seg = isPP
+    ? { field: "mindset", label: "Mindset", opts: [["shoot", "Shoot first", "+PP goals, more shorthanded chances against"], ["balanced", "Balanced", ""], ["possession", "Possession", "Fewer turnovers, safer"]] }
+    : { field: "pressure", label: "Pressure", opts: [["passive", "Passive", "Protect the slot, fewer SH goals"], ["balanced", "Balanced", ""], ["aggressive", "Aggressive", "Force turnovers, more SH goals"]] };
+  return <div className="st-plan">
+    <div className="st-plan-head">
+      <strong>{isPP ? "Power-play setup" : "Penalty-kill system"}</strong>
+      <span>Fit is based on {isPP ? "PP1" : "PK1"}'s ratings. Picking the best fit adds to {isPP ? "PP goals" : "kills"}, a poor fit costs you.</span>
+    </div>
+    <div className="st-plan-cards">
+      {options.map((o) => {
+        const g = grades[o.id];
+        const on = chosen === o.id;
+        return <button type="button" key={o.id} className={`st-plan-card${on ? " is-on" : ""}${best === o.id ? " is-best" : ""}`} onClick={() => onChange({ ...strategy, [key]: on ? "" : o.id })}>
+          <span className="st-plan-card__top"><b>{o.name}</b>{best === o.id ? <em>Best fit</em> : null}</span>
+          <small>{o.tag}</small>
+          {g ? <span className={`st-plan-edge ${g.edge >= 0 ? "up" : "down"}`}>{g.edge >= 0 ? "+" : ""}{g.edge}% {isPP ? "PP goals" : "kills"}</span> : <span className="st-plan-edge">Fill the unit</span>}
+          <p>{o.note}</p>
+        </button>;
+      })}
+    </div>
+    <div className="st-plan-row">
+      <span className="st-plan-label">{seg.label}</span>
+      <div className="st-seg">
+        {seg.opts.map(([id, label, hint]) => <button type="button" key={id} title={hint} className={(strategy?.[seg.field] || "balanced") === id ? "is-on" : ""} onClick={() => onChange({ ...strategy, [seg.field]: id })}>{label}</button>)}
+      </div>
+      <span className="st-plan-label">{isPP ? "PP1" : "PK1"} ice time</span>
+      <input type="range" min="50" max="85" step="5" value={share} onChange={(e) => onChange({ ...strategy, unit1_share: Number(e.target.value) / 100 })} aria-label="Top unit share" />
+      <b className="st-plan-share">{share}% / {100 - share}%</b>
+    </div>
+  </div>;
 }
 
 function emptySpecialTeamsLines(kind) {
@@ -2610,6 +2828,21 @@ function SpecialTeamsLines({ kind, ...props }) {
     return emptySpecialTeamsLines(kind);
   });
   const hydratedSession = useRef("");
+  const strategyKey = `nhl.st-plan.${kind}.${sessionId || "local"}`;
+  const [strategy, setStrategy] = useState(() => {
+    const saved = franchiseState?.lines?.[kind]?.strategy;
+    if (saved && typeof saved === "object") return saved;
+    try { return JSON.parse(localStorage.getItem(strategyKey) || "null") || {}; } catch { return {}; }
+  });
+  useEffect(() => {
+    const saved = franchiseState?.lines?.[kind]?.strategy;
+    if (saved && typeof saved === "object") setStrategy(saved);
+  }, [franchiseState?.lines?.[kind]?.strategy, kind]);
+  const changeStrategy = useCallback((next) => {
+    setStrategy(next);
+    try { localStorage.setItem(strategyKey, JSON.stringify(next)); } catch { /* storage off */ }
+    setUnsaved(true);
+  }, [strategyKey]);
   // Undo / redo, same as the even-strength builder.
   const [stHistory, setStHistory] = useState([]);
   const [stFuture, setStFuture] = useState([]);
@@ -2808,6 +3041,11 @@ function SpecialTeamsLines({ kind, ...props }) {
     if (playerId) placePlayer(String(playerId), lineId, slot);
   }, [placePlayer]);
 
+  useBoardPointerDrag((pid, key) => {
+    const [lineId, slot] = String(key || "").split(":");
+    if (lineId && slot) placePlayer(pid, lineId, slot);
+  });
+
   const onPlayerSelect = useCallback((playerId) => {
     if (selectedLineId && selectedSlot) { placePlayer(playerId, selectedLineId, selectedSlot); return; }
     setSelectedPlayerId((current) => current === playerId ? "" : playerId);
@@ -2863,7 +3101,7 @@ function SpecialTeamsLines({ kind, ...props }) {
     else props.onSavePenaltyKill?.(lines);
     props.onSave?.({ type: isPP ? "powerPlay" : "penaltyKill", lines });
     try {
-      const res = await saveFranchiseLines({ unit_type: kind, lines });
+      const res = await saveFranchiseLines({ unit_type: kind, lines, strategy });
       if (res?.lines) setFranchiseState((prev) => ({ ...(prev || {}), lines: res.lines, ...(res?.lines_revision != null ? { lines_revision: res.lines_revision } : {}) }));
       setUnsaved(false);
       const fallout = Array.isArray(res?.storyline_events) ? res.storyline_events : [];
@@ -2883,7 +3121,7 @@ function SpecialTeamsLines({ kind, ...props }) {
     } finally {
       setSaving(false);
     }
-  }, [saving, kind, lines, sessionId, isPP, props, setFranchiseState, setScreen]);
+  }, [saving, kind, lines, strategy, sessionId, isPP, props, setFranchiseState, setScreen]);
 
   const metricRows = isPP
     ? [["Creativity", unitChemistry.creativity], ["Puck movement", unitChemistry.movement], ["Finishing", unitChemistry.finishing], ["Role balance", unitChemistry.balance]]
@@ -2933,7 +3171,8 @@ function SpecialTeamsLines({ kind, ...props }) {
             </div>
           </div>
           {!players.length && !rosterLoading ? <div className="lb-empty">Roster unavailable</div> : <div className="fm-scroll">
-            <SectionHead title={isPP ? "Power play" : "Penalty kill"} note={isPP ? "Triangle up top, pair on the points — put a forward on a point for a 4F/1D unit" : "Four-sided box"} />
+            <StrategyPanel kind={kind} strategy={strategy} onChange={changeStrategy} unitPlayers={Object.values(lines[0]?.slots || {}).map((id) => playerMap[String(id || "")]).filter(Boolean)} />
+            <SectionHead title={isPP ? "Units" : "Units"} note={isPP ? "Drag players in. A forward on a point makes it 4F-1D." : "Two forwards, two defencemen per unit"} />
             {lines.map((line, index) => <SpecialTeamsUnit
               key={line.id}
               kind={kind}

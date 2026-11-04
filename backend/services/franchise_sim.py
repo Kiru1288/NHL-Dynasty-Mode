@@ -13873,6 +13873,10 @@ def _attach_franchise_saved_lineups(
         setattr(tm, "_franchise_saved_pk", None)
         setattr(tm, "_franchise_deployed_lineup", None)
         setattr(tm, "_user_scratched_ids", set())
+        setattr(tm, "_user_pp_strategy", None)
+        setattr(tm, "_user_pk_strategy", None)
+        setattr(tm, "_user_goalie_plan", None)
+        setattr(tm, "_gm_st_profile_cache", None)
 
     lines_root = getattr(session, "lines", None)
     if not isinstance(lines_root, dict):
@@ -13910,6 +13914,15 @@ def _attach_franchise_saved_lineups(
                 setattr(tm, "_franchise_saved_pp", pp_user)
             if pk_user is not None:
                 setattr(tm, "_franchise_saved_pk", pk_user)
+            for attr, block_key, field in (
+                ("_user_pp_strategy", "power_play", "strategy"),
+                ("_user_pk_strategy", "penalty_kill", "strategy"),
+                ("_user_goalie_plan", "even_strength", "goalie_plan"),
+            ):
+                blk = lines_root.get(block_key)
+                plan = blk.get(field) if isinstance(blk, dict) else None
+                if isinstance(plan, dict) and plan:
+                    setattr(tm, attr, plan)
 
 
 def _clear_franchise_saved_lineups(home: Any, away: Any) -> None:
@@ -27568,7 +27581,35 @@ def save_franchise_lines(session: FranchiseSession, payload: Dict[str, Any]) -> 
         )
     except Exception:
         lineup_storylines = []
+    # Coach plans ride along with the units: PP setup / PK system / goalie usage.
+    _plan_fields = {
+        "strategy": {
+            "setup": ("umbrella", "one_three_one", "overload", "net_front"),
+            "mindset": ("shoot", "balanced", "possession"),
+            "system": ("box", "diamond", "aggressive", "wedge"),
+            "pressure": ("passive", "balanced", "aggressive"),
+        },
+        "goalie_plan": {
+            "usage": ("auto", "workhorse", "starter", "balanced", "tandem", "hot_hand"),
+            "b2b": ("auto", "backup", "starter"),
+        },
+    }
+    _plans: Dict[str, Any] = {}
+    for _field, _allowed in _plan_fields.items():
+        raw = payload.get(_field)
+        if not isinstance(raw, dict):
+            raw = prev_saved.get(_field)
+        if isinstance(raw, dict):
+            clean = {k: str(v) for k, v in raw.items() if k in _allowed and str(v) in _allowed[k]}
+            if "unit1_share" in raw:
+                try:
+                    clean["unit1_share"] = max(0.5, min(0.85, float(raw.get("unit1_share"))))
+                except (TypeError, ValueError):
+                    pass
+            if clean:
+                _plans[_field] = clean
     session.lines[unit_type] = {
+        **_plans,
         "lines": lines,
         "warnings": warnings,
         "last_saved": _today_iso(session),

@@ -186,9 +186,15 @@ const TABS = [["identity", "Identity"], ["tactics", "Tactics"], ["deploy", "Depl
 
 export default function StrategyBoard({ franchiseState, lineState, playerMap, chemistryByUnit, chemReport, onDeploy, onShareSet, onCoach, shareTotals, onApplyLines }) {
   const [tab, setTab] = useState(() => { try { return window.localStorage.getItem("sbd.tab") || "identity"; } catch (e) { return "identity"; } });
-  const [open, setOpen] = useState(() => { try { return window.localStorage.getItem("sbd.open") !== "0"; } catch (e) { return true; } });
-  const pickTab = (id) => { setTab(id); setOpen(true); try { window.localStorage.setItem("sbd.tab", id); window.localStorage.setItem("sbd.open", "1"); } catch (e) { /* storage off */ } };
-  const toggle = () => setOpen((v) => { try { window.localStorage.setItem("sbd.open", v ? "0" : "1"); } catch (e) { /* storage off */ } return !v; });
+  // Starts folded to its one-line summary: open, it pushed the lines half off the screen.
+  const [open, setOpen] = useState(() => { try { return window.localStorage.getItem("sbd.open2") === "1"; } catch (e) { return false; } });
+  const pickTab = (id) => {
+    const same = open && id === tab;
+    setTab(id);
+    setOpen(!same);
+    try { window.localStorage.setItem("sbd.tab", id); window.localStorage.setItem("sbd.open2", same ? "0" : "1"); } catch (e) { /* storage off */ }
+  };
+  const toggle = () => setOpen((v) => { try { window.localStorage.setItem("sbd.open2", v ? "0" : "1"); } catch (e) { /* storage off */ } return !v; });
 
   const coachName = franchiseState?.team?.coach || franchiseState?.head_coach_name || "Your coach";
   const archetype = franchiseState?.team?.coach_archetype || franchiseState?.coach_archetype || "balanced";

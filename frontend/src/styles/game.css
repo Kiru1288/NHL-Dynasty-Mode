@@ -82668,3 +82668,64 @@ html:not(#_) .dk-root .dks-faq__list dd { margin: 4px 0 0; font-weight: 700; fon
   html:not(#_) .dk-root .dks-grid, html:not(#_) .dk-root .dks-how, html:not(#_) .dk-root .dks-regions { grid-template-columns: 1fr; }
 }
 html:not(#_) .dk-root .dks > * { flex-shrink: 0; }
+
+/* ── Lines: drag chip, coach plans (PP / PK / goalies) ─────────────────── */
+html:not(#_) .linebuilder-root img { -webkit-user-drag: none; user-select: none; }
+html:not(#_) .lb-pointer-ghost {
+  position: fixed !important; z-index: 99999 !important; pointer-events: none !important;
+  display: inline-flex !important; align-items: center; gap: 8px; width: auto !important; height: auto !important;
+  padding: 6px 12px 6px 6px !important; background: #fbf5e4 !important; color: #15112b !important;
+  border: 3px solid #15112b !important; border-radius: 12px !important; box-shadow: 4px 5px 0 #15112b !important;
+  font: 900 14px/1 "Nunito", system-ui, sans-serif !important; transform: rotate(-3deg); opacity: 1 !important;
+}
+html:not(#_) .lb-pointer-ghost b { font-family: "Luckiest Guy", sans-serif; font-weight: 400; font-size: 15px; background: #ffcf1f; border: 2px solid #15112b; border-radius: 7px; padding: 2px 6px 0; }
+html:not(#_) .lb-pointer-ghost b:empty { display: none; }
+html:not(#_) body.lb-dragging, html:not(#_) body.lb-dragging * { cursor: grabbing !important; user-select: none !important; }
+html:not(#_) .linebuilder-root .fm-card.is-dragover { outline: 3px solid #ffcf1f !important; outline-offset: 2px; }
+
+html:not(#_) .linebuilder-root .st-plan {
+  margin: 0 0 14px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px;
+  background: rgba(12, 22, 56, .72); border: 1px solid rgba(120, 160, 255, .28); border-radius: 14px;
+}
+html:not(#_) .linebuilder-root .st-plan-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; }
+html:not(#_) .linebuilder-root .st-plan-head strong { font-family: "Luckiest Guy", sans-serif; font-weight: 400; font-size: 19px; color: #ffcf1f; letter-spacing: .01em; }
+html:not(#_) .linebuilder-root .st-plan-head span { font-size: 12.5px; font-weight: 700; color: #b9c6ee; }
+html:not(#_) .linebuilder-root .st-plan-head span b { color: #fff; }
+html:not(#_) .linebuilder-root .st-plan-cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+html:not(#_) .linebuilder-root .st-plan-cards--six { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+html:not(#_) .linebuilder-root .st-plan-card {
+  text-align: left; display: flex; flex-direction: column; gap: 3px; padding: 8px 10px; cursor: pointer;
+  background: rgba(255, 255, 255, .05); color: #e8eeff; border: 1px solid rgba(160, 190, 255, .22); border-radius: 11px;
+  transition: background .12s, border-color .12s, transform .12s;
+}
+html:not(#_) .linebuilder-root .st-plan-card:hover { background: rgba(255, 255, 255, .1); transform: translateY(-1px); }
+html:not(#_) .linebuilder-root .st-plan-card.is-on { background: #fbf5e4; color: #15112b; border: 2px solid #ffcf1f; box-shadow: 0 3px 0 #15112b; }
+html:not(#_) .linebuilder-root .st-plan-card__top { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+html:not(#_) .linebuilder-root .st-plan-card__top b { font-family: "Luckiest Guy", sans-serif; font-weight: 400; font-size: 16px; }
+html:not(#_) .linebuilder-root .st-plan-card__top em { font-style: normal; font-family: "Silkscreen", monospace; font-size: 8.5px; text-transform: uppercase; background: #2fc25b; color: #0b2a14; border-radius: 5px; padding: 1px 5px; }
+html:not(#_) .linebuilder-root .st-plan-card small { font-family: "Silkscreen", monospace; font-size: 9px; text-transform: uppercase; opacity: .75; }
+html:not(#_) .linebuilder-root .st-plan-card p { margin: 2px 0 0; font-size: 11.5px; font-weight: 600; line-height: 1.35; opacity: .85; }
+html:not(#_) .linebuilder-root .st-plan-edge { align-self: flex-start; font-weight: 900; font-size: 12px; border-radius: 6px; padding: 1px 6px; background: rgba(255, 255, 255, .1); }
+html:not(#_) .linebuilder-root .st-plan-edge.up { background: rgba(47, 194, 91, .22); color: #7cf0a0; }
+html:not(#_) .linebuilder-root .st-plan-edge.down { background: rgba(238, 59, 47, .2); color: #ff9b92; }
+html:not(#_) .linebuilder-root .st-plan-card.is-on .st-plan-edge.up { background: #d8f7e0; color: #157a33; }
+html:not(#_) .linebuilder-root .st-plan-card.is-on .st-plan-edge.down { background: #ffd9d5; color: #a3160f; }
+html:not(#_) .linebuilder-root .st-plan-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
+html:not(#_) .linebuilder-root .st-plan-label { font-family: "Silkscreen", monospace; font-size: 9.5px; text-transform: uppercase; color: #9fb0e4; }
+html:not(#_) .linebuilder-root .st-seg { display: inline-flex; gap: 2px; padding: 3px; background: rgba(0, 0, 0, .3); border-radius: 9px; }
+html:not(#_) .linebuilder-root .st-seg button { border: 0; background: transparent; color: #c9d3ff; font-weight: 800; font-size: 12px; padding: 4px 10px; border-radius: 7px; cursor: pointer; }
+html:not(#_) .linebuilder-root .st-seg button.is-on { background: #ffcf1f; color: #15112b; }
+html:not(#_) .linebuilder-root .st-plan-row input[type="range"] { width: 140px; accent-color: #ffcf1f; }
+html:not(#_) .linebuilder-root .st-plan-share { font-weight: 900; font-size: 12.5px; color: #fff; }
+@media (max-width: 1400px) {
+  html:not(#_) .linebuilder-root .st-plan-cards--six { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+/* Undo / redo: 34px icon boxes were holding "↶ Undo" text and the words overlapped. */
+html:not(#_) .linebuilder-root .lb-icon.lb-icon--history { width: auto !important; min-width: 0 !important; padding: 4px 9px !important; font-size: 12px !important; font-weight: 800; white-space: nowrap; gap: 4px; display: inline-flex; align-items: center; }
+/* Inspector fit read: player trait tags were bubble paragraphs; now one-line chips. */
+html:not(#_) .linebuilder-root .lb-fitread-tags { display: flex !important; flex-direction: column; gap: 4px !important; }
+html:not(#_) .linebuilder-root .lb-fitread-tag {
+  display: block !important; border-radius: 8px !important; padding: 3px 8px !important; border-width: 1.5px !important;
+  font-size: 10.5px !important; line-height: 1.25 !important; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;
+}
+html:not(#_) .linebuilder-root .lb-fitread-tag:hover { white-space: normal; }
