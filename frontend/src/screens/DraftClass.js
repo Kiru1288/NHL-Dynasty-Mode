@@ -2238,113 +2238,324 @@ function TopHeader({ onBack, dateContext, franchiseState, workspace, setWorkspac
   );
 }
 
-function ScoutingOps({ prospects, scoutingStore, activeDeployments, onDeploy, deployBusy, deployNotice, onBulk, bulkBusy, bulkNote, onOpenProspect, franchiseState }) {
+const SCOUT_FAQ = [
+  ["What is scouting?", "Building a private file on each draft prospect. The fuller his file, the more of his real ratings you see. Everyone else only sees the public board."],
+  ["What am I scouting?", "The next draft class: every draft-eligible prospect in North America, Scandinavia, Europe and Russia / CIS. They're on the Scout Board."],
+  ["What does the file % mean?", "How much your staff knows about him. 30%: tier words. 72%: an OVR range. 92%: his exact OVR. 100%: the full file (ceiling, character, medical)."],
+  ["How do I scout a player?", "Assign him a scout (free, and his file grows every day), send a scout visit (+10% right away), or run film study (+12%, needs a scout or a shortlist star). Shortlisting adds a little every day."],
+  ["How long does a file take?", "An average scout reaches 72% in about 2½ months on his own. A scout working his own region is 25% faster. After 14 days with a scout, a file can go all the way to 100%."],
+  ["Why is a file stuck at 62%?", "Without a scout, a file stops growing at 62% (78% for a target). Files your staff runs automatically stop at 86%. Assign your own scout to finish the file."],
+  ["Which scouts do I have?", "Five: four regional scouts and a goalie scout. Each one has a quality rating (speed and accuracy), a home region and a workload. They're on the staff cards."],
+  ["Does the scout I pick matter?", "Yes. A scout in his own region, or the goalie scout on a goalie, builds files 25% faster. \"Assign best scout\" picks the right one for you."],
+  ["How many players can my scouts cover?", "Your scouts share a fixed number of assignment slots. The slot counter is up top. Free a slot by recalling a scout from a prospect."],
+  ["What is staff auto-scouting?", "When it's on, your staff fills open slots every week with the best prospects near your pick. Their files stop at 86%. Turn it off if you want to pick everyone yourself."],
+  ["Where does my budget come from?", "The owner funds scouting out of team revenue: about $2.5M at a typical club, anywhere from $1.2M to $6M."],
+  ["What costs money?", "Scout visits, film study and region coverage. Coverage also charges a weekly crew salary while it's live, and every live coverage makes all prices 14% higher. Assigning scouts and shortlisting are free."],
+  ["How do I get more budget?", "Grow revenue (winning, crowds, playoff runs), or pass the Board of Governors rule \"Bigger scouting budgets\". The budget refills to full when the new draft class arrives after the draft."],
+  ["What happens when I run out?", "Paid actions are blocked and live coverage comes home. Assigned scouts keep working for free, so files still grow."],
+  ["What is region coverage?", "A 28-day crew in one region. Everyone there gets +6% on their file right away, then +0.1% a day."],
+  ["When is coverage worth it?", "When you want rough reads on a lot of players at once, like a region where you have no files yet. For a handful of players, a scout visit costs less."],
+  ["What is my goal?", "Get 72%+ files on the prospects around your projected pick, plus everyone on your shortlist, before the draft in June. The goal ring tracks it."],
+  ["Where do I see what scouting did?", "The Results feed lists every visit, assignment, unlocked file and discovery, with dates."],
+  ["What is a discovery?", "The public board has some prospects wrong (late bloomers, early flamers). When one of their files reaches 72%, you find out, and your scout reputation goes up."],
+  ["What does scout reputation do?", "It tracks how many of those discoveries you've made. Right now it's a score; it doesn't change prices or speed yet."],
+  ["Shortlist, Target or DND?", "Shortlist: follows you onto the draft floor and adds a little every day. Target: your draft-day priority, and his file can grow to 78% without a scout. DND: hidden from auto-picks."],
+  ["Does scouting change the draft?", "It changes what you know. You see true OVR and ceiling instead of the public guess, and your shortlist and targets go with you to the draft floor. CPU teams scout on their own."],
+  ["What is the public board?", "The consensus ranking everyone sees. Reads on the top 45 are fairly clear. Deeper in the class it's foggy, and that's where your own files pay off."],
+  ["When should I scout?", "Early season: put scouts on your draft range. Midseason: visits and film on risers. Spring: push your shortlist to 92%+ before June."],
+  ["Does scouting stop in summer?", "It slows down in July. After the draft the class turns over, files start fresh and the budget resets."],
+];
+
+function opsMoney(n) {
+  const v = Number(n) || 0;
+  if (Math.abs(v) >= 1e6) return `$${(v / 1e6).toFixed(2)}M`;
+  if (Math.abs(v) >= 1e3) return `$${Math.round(v / 1e3)}K`;
+  return `$${Math.round(v)}`;
+}
+
+function OpsRing({ value, total, label }) {
+  const pct = total ? Math.min(1, value / total) : 0;
+  const r = 34;
+  const c = 2 * Math.PI * r;
+  return (
+    <svg className="dks-ring" viewBox="0 0 84 84" aria-label={`${value} of ${total} ${label}`}>
+      <circle cx="42" cy="42" r={r} className="dks-ring__bg" />
+      <circle cx="42" cy="42" r={r} className="dks-ring__fg" strokeDasharray={`${c * pct} ${c}`} transform="rotate(-90 42 42)" />
+      <text x="42" y="40" textAnchor="middle" className="dks-ring__num">{value}/{total}</text>
+      <text x="42" y="55" textAnchor="middle" className="dks-ring__lbl">{label}</text>
+    </svg>
+  );
+}
+
+function ScoutingOps({ prospects, scoutingStore, activeDeployments, onDeploy, deployBusy, deployNotice, onBulk, bulkBusy, bulkNote, onOpenProspect, franchiseState, desk, onAuto }) {
   const cursor = Number(franchiseState?.calendar_cursor || 0);
   const st = franchiseState?.scouting_state || {};
-  const budget = Number(st.budget || 0);
-  const used = Number(st.used_budget || 0);
+  const d = desk || {};
+  const budget = Number(d.budget ?? st.budget ?? 0);
+  const used = Number(d.used_budget ?? st.used_budget ?? 0);
+  const left = Math.max(0, budget - used);
+  const deployments = d.active_deployments || activeDeployments || [];
+  const mult = Number(d.price_multiplier) || (1 + 0.14 * deployments.length);
+  const weeklySalary = deployments.length * Number(d.deployment_salary_per_week || 48000);
+  const costs = d.action_costs || {};
+  const visitPrice = Number(costs?.player_focus?.normal) || Math.round(40000 * mult);
+  const filmPrice = Number(costs?.film_study?.normal) || Math.round(44400 * mult);
+  const scouts = Array.isArray(d.scouts) ? d.scouts : [];
+  const slotsUsed = Number(d.assignment_slots_used ?? 0);
+  const slotsMax = Number(d.assignment_slot_limit ?? 62);
+  const autoOn = d.auto_manage !== undefined ? Boolean(d.auto_manage) : Boolean(st.auto_manage);
+  const weeksLeft = d.weeks_until_draft;
+  const pick = Number(d?.desk?.projected_pick) || 16;
+  const log = Array.isArray(d.log) ? [...d.log].reverse() : [];
+  const discoveries = Array.isArray(d.discoveries) ? d.discoveries : [];
+  const rep = Number(d.scout_reputation ?? 50);
+
+  const rankOf = (p) => p.boardRank || prospectRank(p);
+  const fileOf = (p) => prospectDedicatedPct(p) || 0;
+  const lo = Math.max(1, pick - 4);
+  const hi = pick + 8;
+  const shortlist = prospects.filter((p) => getScoutingMeta(scoutingStore, p.id).watchlist);
+  const rangeList = useMemo(
+    () => prospects.filter((p) => { const r = rankOf(p); return r >= lo && r <= hi; }).sort((a, b) => rankOf(a) - rankOf(b)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [prospects, lo, hi]
+  );
+  const goalSet = useMemo(() => {
+    const m = new Map();
+    [...rangeList, ...shortlist].forEach((p) => m.set(p.id, p));
+    return [...m.values()];
+  }, [rangeList, shortlist]);
+  const goalDone = goalSet.filter((p) => fileOf(p) >= 72).length;
+  const goalNoScout = goalSet.filter((p) => !getScoutingMeta(scoutingStore, p.id).assignedScout && fileOf(p) < 72).map((p) => p.id);
+
   const regions = useMemo(() => {
     const keys = ["North America", "Scandinavia", "Europe", "Russia / CIS"];
     return keys.map((name) => {
       const list = prospects.filter((p) => regionForCountry(p.country || p.nationality || "") === name);
       const slug = slugifyCoverageId(name);
-      const dep = (activeDeployments || []).find((d) => d.kind === "region" && slugifyCoverageId(d.id) === slug);
+      const dep = deployments.find((x) => x.kind === "region" && slugifyCoverageId(x.id) === slug);
       const daysLeft = dep ? Math.max(0, 28 - (cursor - Number(dep.since_cursor || cursor))) : null;
-      const files = list.map((p) => prospectDedicatedPct(p) || 0);
+      const files = list.map((p) => fileOf(p));
       const avg = files.length ? Math.round(files.reduce((a, b) => a + b, 0) / files.length) : 0;
-      const top = list.filter((p) => (p.boardRank || prospectRank(p)) <= 64);
+      const ready = files.filter((f) => f >= 72).length;
+      const top = list.filter((p) => rankOf(p) <= 64);
       const unassignedTop = top.filter((p) => !getScoutingMeta(scoutingStore, p.id).assignedScout).slice(0, 5);
-      const best = [...list].sort((a, b) => (a.boardRank || prospectRank(a)) - (b.boardRank || prospectRank(b))).slice(0, 4);
-      return { name, slug, list, dep, daysLeft, avg, top, unassignedTop, best };
+      const best = [...list].sort((a, b) => rankOf(a) - rankOf(b)).slice(0, 3);
+      const price = Number(d.region_costs?.[slug]) || Math.round((31200 + Math.max(0, list.length - 1) * 1500) * mult);
+      const scout = scouts.find((sc) => String(sc.region || "") === name);
+      return { name, slug, list, dep, daysLeft, avg, ready, top, unassignedTop, best, price, scout };
     });
-  }, [prospects, activeDeployments, cursor, scoutingStore]);
-  const shortlist = prospects.filter((p) => getScoutingMeta(scoutingStore, p.id).watchlist);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prospects, deployments, cursor, scoutingStore, d.region_costs, mult, scouts]);
+
   const shortIds = shortlist.map((p) => p.id);
   const unassignedShort = shortlist.filter((p) => !getScoutingMeta(scoutingStore, p.id).assignedScout).map((p) => p.id);
+  const note = bulkNote || deployNotice;
+  const [faqOpen, setFaqOpen] = useState(false);
+  const goalieList = prospects.filter((p) => String(p.position).toUpperCase() === "G");
+
+  const scoutCards = scouts.map((sc) => {
+    const region = String(sc.region || "");
+    const pool = region === "Goaltending" ? goalieList : prospects.filter((p) => regionForCountry(p.country || p.nationality || "") === region);
+    const open = pool
+      .filter((p) => !getScoutingMeta(scoutingStore, p.id).assignedScout && fileOf(p) < 72)
+      .sort((a, b) => rankOf(a) - rankOf(b))
+      .slice(0, 5);
+    return { sc, open };
+  });
 
   return (
-    <div className="dko">
-      <section className="dko-col">
-        <div className="dko-banner">
-          <strong>Scouting ops</strong>
-          <span>Deploy whole regions, assign scouts in bulk and work your shortlist without leaving the war room.</span>
-          <div className="dko-budget">
-            <em>Budget</em>
-            <i><s style={{ width: `${budget ? Math.min(100, (used / budget) * 100) : 0}%` }} /></i>
-            <b>${((budget - used) / 1e6).toFixed(2)}M left</b>
+    <div className="dks">
+      <section className="dks-hero">
+        <article className="dks-tile dks-tile--goal">
+          <OpsRing value={goalDone} total={goalSet.length || 0} label="ready" />
+          <div>
+            <em>Season goal</em>
+            <strong>72%+ files on your range</strong>
+            <p>Prospects #{lo}–#{hi} around your projected pick #{pick}, plus your shortlist. Finish them before the draft.</p>
+            <button type="button" className="dkb-dock-btn is-go" disabled={bulkBusy || !goalNoScout.length} onClick={() => onBulk("assign", goalNoScout.slice(0, 20))}>
+              {goalNoScout.length ? `Assign scouts to ${Math.min(20, goalNoScout.length)} open files` : "Every goal file has a scout"}
+            </button>
           </div>
-          {bulkNote || deployNotice ? <p className="dko-note" aria-live="polite">{bulkNote || deployNotice}</p> : null}
+        </article>
+        <article className="dks-tile dks-tile--budget">
+          <em>Budget</em>
+          <strong>{opsMoney(left)} <small>left of {opsMoney(budget)}</small></strong>
+          <i className="dks-bar"><s style={{ width: `${budget ? Math.min(100, (used / budget) * 100) : 0}%` }} /></i>
+          <ul className="dks-prices">
+            <li><span>Scout visit</span><b>{opsMoney(visitPrice)}</b><small>+10% file</small></li>
+            <li><span>Film study</span><b>{opsMoney(filmPrice)}</b><small>+12% file</small></li>
+            <li><span>Coverage crew</span><b>{opsMoney(48000)}/wk</b><small>per live region</small></li>
+            <li><span>Assign / shortlist</span><b>Free</b><small>daily growth</small></li>
+          </ul>
+          <p>{weeklySalary ? `Live coverage costs ${opsMoney(weeklySalary)} a week and makes every price ${Math.round((mult - 1) * 100)}% higher. ` : ""}Paid for by team revenue. Refills after the draft.</p>
+        </article>
+        <article className="dks-tile dks-tile--staff">
+          <em>Scouting staff</em>
+          <strong>{scouts.length || 5} scouts <small>· {slotsUsed}/{slotsMax} slots used</small></strong>
+          <i className="dks-bar is-blue"><s style={{ width: `${slotsMax ? Math.min(100, (slotsUsed / slotsMax) * 100) : 0}%` }} /></i>
+          <label className={`dks-switch${autoOn ? " is-on" : ""}`}>
+            <input type="checkbox" checked={autoOn} onChange={(e) => onAuto?.({ action: "toggle", enabled: e.target.checked })} />
+            <span><b>Staff auto-scouting {autoOn ? "ON" : "OFF"}</b><small>{autoOn ? "Staff fill open slots weekly (their files stop at 86%)" : "You choose every assignment"}</small></span>
+          </label>
+          <button type="button" className="dkb-dock-btn is-blue" onClick={() => onAuto?.({ action: "fill" })}>Fill every open slot now</button>
+        </article>
+        <article className="dks-tile dks-tile--clock">
+          <em>Draft</em>
+          <strong>{weeksLeft != null ? `${Math.round(weeksLeft)} wks` : "—"}</strong>
+          <p>{d.period_label || "Scouting season"}</p>
+          <div className="dks-rep"><span>Scout reputation</span><b>{Math.round(rep)}</b><small>{discoveries.length} discover{discoveries.length === 1 ? "y" : "ies"}</small></div>
+        </article>
+      </section>
+
+      <section className="dks-how" aria-label="How scouting works">
+        <div><b>1</b><strong>Pick who to watch</strong><p>Star prospects for your shortlist, or mark a target. Both add a little to their file every day.</p></div>
+        <div><b>2</b><strong>Assign a scout</strong><p>Free. His file grows about 1% a day, 25% faster if the scout works that region. Without a scout, files stop at 62%.</p></div>
+        <div><b>3</b><strong>Speed it up</strong><p>Scout visit +10% · Film study +12% · Region coverage gives +6% to the whole region, then +0.1% a day.</p></div>
+        <div><b>4</b><strong>Read the file</strong><p><span className="dks-chip">30% tier</span><span className="dks-chip">72% OVR range</span><span className="dks-chip">92% exact OVR</span><span className="dks-chip">100% full file</span></p></div>
+      </section>
+
+      {note ? <p className="dks-note" aria-live="polite">{note}</p> : null}
+
+      <div className="dks-grid">
+        <div className="dks-main">
+          <section className="dks-panel">
+            <header><strong>Your scouts</strong><span>Who works where, and who to give them next</span></header>
+            <div className="dks-scouts">
+              {scoutCards.length ? scoutCards.map(({ sc, open }) => (
+                <article key={sc.id} className="dks-scout">
+                  <div className="dks-scout__top">
+                    <span className="dks-scout__badge">{String(sc.name || sc.title || "?").split(" ").map((x) => x[0]).join("").slice(0, 2)}</span>
+                    <div>
+                      <strong>{sc.name || sc.title}</strong>
+                      <small>{sc.region} · {sc.scout_tier || ""} {sc.quality ? `· ${sc.quality}` : ""}</small>
+                    </div>
+                  </div>
+                  <i className="dks-bar is-green"><s style={{ width: `${Math.min(100, Number(sc.quality) || 0)}%` }} /></i>
+                  <p><b>{sc.workload || 0}</b> prospects · ~{sc.speed_days_to_72 || "—"} days to a 72% read</p>
+                  <button type="button" className="dkb-dock-btn" disabled={bulkBusy || !open.length} onClick={() => onBulk("assign", open.map((p) => p.id))}>
+                    {open.length ? `Give him top ${open.length} open` : "No open files here"}
+                  </button>
+                </article>
+              )) : <p className="dks-empty">Loading your staff…</p>}
+            </div>
+          </section>
+
+          <section className="dks-panel">
+            <header><strong>Regions</strong><span>Coverage sends a crew for 28 days. The price is shown before you click.</span></header>
+            <div className="dks-regions">
+              {regions.map((r) => (
+                <article key={r.slug} className={`dks-region${r.dep ? " is-live" : ""}`}>
+                  <header>
+                    <strong>{r.name}</strong>
+                    {r.dep ? <span className="dko-live">Crew live · {r.daysLeft}d left</span> : <span className="dko-idle">No crew</span>}
+                  </header>
+                  <div className="dks-region__nums">
+                    <span><b>{r.list.length}</b> prospects</span>
+                    <span><b>{r.top.length}</b> in top 64</span>
+                    <span><b>{r.ready}</b> read 72%+</span>
+                    <span><b>{r.avg}%</b> avg file</span>
+                  </div>
+                  <ul className="dks-region__best">
+                    {r.best.map((p) => (
+                      <li key={p.id}><button type="button" onClick={() => onOpenProspect(p)}><b>#{rankOf(p)}</b> {p.firstName} {p.lastName} <em>{fileOf(p)}%</em></button></li>
+                    ))}
+                  </ul>
+                  <div className="dko-actions">
+                    <button type="button" className="dkb-dock-btn is-go" disabled={deployBusy || !r.list.length || r.price > left} onClick={() => onDeploy({ kind: "region", id: r.slug, label: r.name })}>
+                      {r.dep ? "Re-sweep" : "Send crew"} · {opsMoney(r.price)}
+                    </button>
+                    <button type="button" className="dkb-dock-btn is-blue" disabled={bulkBusy || !r.unassignedTop.length} onClick={() => onBulk("assign", r.unassignedTop.map((p) => p.id))}>
+                      Assign top {r.unassignedTop.length || 0} · free
+                    </button>
+                    <button type="button" className="dkb-dock-btn" disabled={bulkBusy || !r.top.length} onClick={() => onBulk("scout", r.top.slice(0, 6).map((p) => p.id))}>
+                      Visit top {Math.min(6, r.top.length)}
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
         </div>
-        <div className="dko-regions">
-          {regions.map((r) => (
-            <article key={r.slug} className={`dko-region${r.dep ? " is-live" : ""}`}>
-              <header>
-                <strong>{r.name}</strong>
-                {r.dep ? <span className="dko-live">Coverage live · {r.daysLeft}d</span> : <span className="dko-idle">No coverage</span>}
-              </header>
-              <div className="dko-stats">
-                <div><em>Prospects</em><b>{r.list.length}</b></div>
-                <div><em>Top 64</em><b>{r.top.length}</b></div>
-                <div><em>Avg file</em><b>{r.avg}%</b></div>
-              </div>
-              <ul className="dko-best">
-                {r.best.map((p) => (
-                  <li key={p.id}>
+
+        <aside className="dks-side">
+          <section className="dks-panel">
+            <header><strong>Your draft range</strong><span>#{lo}–#{hi} · projected pick #{pick}</span></header>
+            <ul className="dks-files">
+              {rangeList.slice(0, 13).map((p) => {
+                const pct = fileOf(p);
+                const meta = getScoutingMeta(scoutingStore, p.id);
+                return (
+                  <li key={p.id} className={pct >= 72 ? "is-ready" : ""}>
                     <button type="button" onClick={() => onOpenProspect(p)}>
-                      <b>#{p.boardRank || prospectRank(p)}</b>
-                      <span>{p.firstName} {p.lastName}</span>
-                      <em>{p.position} · {prospectDedicatedPct(p) || 0}%</em>
+                      <b>#{rankOf(p)}</b>
+                      <span>{p.firstName} {p.lastName}<em>{p.position} · {meta.assignedScout ? "scout on file" : "no scout"}</em></span>
+                      <i className="dko-pct"><s style={{ width: `${pct}%` }} /><u style={{ left: "72%" }} /></i>
+                      <small>{pct}%</small>
                     </button>
                   </li>
-                ))}
-              </ul>
-              <div className="dko-actions">
-                <button type="button" className="dkb-dock-btn is-go" disabled={deployBusy || !r.list.length} onClick={() => onDeploy({ kind: "region", id: r.slug, label: r.name })}>
-                  {r.dep ? "Re-sweep region" : "Deploy coverage"}
-                </button>
-                <button type="button" className="dkb-dock-btn is-blue" disabled={bulkBusy || !r.unassignedTop.length} onClick={() => onBulk("assign", r.unassignedTop.map((p) => p.id))}>
-                  Assign scouts · top {r.unassignedTop.length || 0}
-                </button>
-                <button type="button" className="dkb-dock-btn" disabled={bulkBusy || !r.top.length} onClick={() => onBulk("scout", r.top.slice(0, 6).map((p) => p.id))}>
-                  Scout trip · top {Math.min(6, r.top.length)}
-                </button>
-              </div>
-            </article>
-          ))}
-        </div>
-      </section>
-      <aside className="dko-side">
-        <div className="dko-short">
-          <header>
-            <strong>Your shortlist</strong>
-            <b>{shortlist.length}</b>
-          </header>
-          <p>This list follows you onto the draft floor.</p>
-          <div className="dko-actions">
-            <button type="button" className="dkb-dock-btn is-go" disabled={bulkBusy || !shortIds.length} onClick={() => onBulk("scout", shortIds.slice(0, 40))}>Scout all</button>
-            <button type="button" className="dkb-dock-btn is-blue" disabled={bulkBusy || !unassignedShort.length} onClick={() => onBulk("assign", unassignedShort)}>Assign scouts ({unassignedShort.length})</button>
-          </div>
-          <ul className="dko-shortlist">
-            {shortlist.length ? shortlist.map((p) => {
-              const pct = prospectDedicatedPct(p) || 0;
-              const meta = getScoutingMeta(scoutingStore, p.id);
-              return (
-                <li key={p.id}>
-                  <button type="button" onClick={() => onOpenProspect(p)}>
-                    <b>#{p.boardRank || prospectRank(p)}</b>
-                    <span>
-                      {p.firstName} {p.lastName}
-                      <em>{p.position} · {p.league}{meta.assignedScout ? " · scout on file" : ""}</em>
-                    </span>
-                    <i className="dko-pct"><s style={{ width: `${pct}%` }} /></i>
-                    <small>{pct}%</small>
-                  </button>
+                );
+              })}
+              {!rangeList.length ? <li className="dko-empty">The board is still loading.</li> : null}
+            </ul>
+          </section>
+
+          <section className="dks-panel">
+            <header><strong>Shortlist</strong><span>{shortlist.length} starred · follows you to the draft floor</span></header>
+            <div className="dko-actions">
+              <button type="button" className="dkb-dock-btn is-go" disabled={bulkBusy || !shortIds.length} onClick={() => onBulk("scout", shortIds.slice(0, 40))}>
+                Visit all · {opsMoney(visitPrice * Math.max(1, 1 + 0.55 * (shortIds.length - 1)))}
+              </button>
+              <button type="button" className="dkb-dock-btn is-blue" disabled={bulkBusy || !unassignedShort.length} onClick={() => onBulk("assign", unassignedShort)}>Assign scouts ({unassignedShort.length})</button>
+            </div>
+            <ul className="dks-files">
+              {shortlist.length ? shortlist.slice(0, 12).map((p) => {
+                const pct = fileOf(p);
+                return (
+                  <li key={p.id} className={pct >= 72 ? "is-ready" : ""}>
+                    <button type="button" onClick={() => onOpenProspect(p)}>
+                      <b>#{rankOf(p)}</b>
+                      <span>{p.firstName} {p.lastName}<em>{p.position} · {p.league}</em></span>
+                      <i className="dko-pct"><s style={{ width: `${pct}%` }} /><u style={{ left: "72%" }} /></i>
+                      <small>{pct}%</small>
+                    </button>
+                  </li>
+                );
+              }) : <li className="dko-empty">Nobody yet. Star prospects on the Scout Board.</li>}
+            </ul>
+          </section>
+
+          <section className="dks-panel">
+            <header><strong>Results</strong><span>What your scouting has turned up</span></header>
+            <ul className="dks-log">
+              {log.length ? log.slice(0, 12).map((row, i) => (
+                <li key={`${row.cursor}-${i}`} className={`is-${row.kind}`}>
+                  <time>{String(row.date || "").slice(5) || "—"}</time>
+                  <span>{row.text}</span>
+                  {row.cost ? <b>−{opsMoney(row.cost)}</b> : null}
                 </li>
-              );
-            }) : <li className="dko-empty">Nobody yet. Star prospects on the board to build your list.</li>}
-          </ul>
-        </div>
-      </aside>
+              )) : (
+                <li className="dko-empty">
+                  {Array.isArray(d.log) ? "Nothing yet. Assign a scout or send a visit, then sim a few days." : "The results feed appears after the game server restarts with the new build."}
+                </li>
+              )}
+            </ul>
+          </section>
+        </aside>
+      </div>
+
+      <section className={`dks-faq${faqOpen ? " is-open" : ""}`}>
+        <button type="button" className="dks-faq__toggle" onClick={() => setFaqOpen((v) => !v)}>
+          <b>?</b> Scouting guide: 25 quick answers <span>{faqOpen ? "Hide" : "Show"}</span>
+        </button>
+        {faqOpen ? (
+          <dl className="dks-faq__list">
+            {SCOUT_FAQ.map(([q, a], i) => (
+              <div key={q}><dt><i>{i + 1}</i>{q}</dt><dd>{a}</dd></div>
+            ))}
+          </dl>
+        ) : null}
+      </section>
     </div>
   );
 }
@@ -3441,11 +3652,15 @@ export default function DraftClass() {
   const rawProspectsRef = useRef([]);
   const selectedProspectIdRef = useRef(null);
   const scoutBudgetRef = useRef(null);
+  const [scoutDesk, setScoutDesk] = useState(null);
+  const [deskTick, setDeskTick] = useState(0);
+  const bumpDesk = useCallback(() => setDeskTick((n) => n + 1), []);
   useEffect(() => {
     let live = true;
     api.get("/api/franchise/scouting/state").then((res) => {
       if (!live) return;
       const d = res?.data || {};
+      setScoutDesk(d);
       const costs = d.action_costs || {};
       const priceOf = (k) => Number(costs?.[k]?.normal ?? costs?.[k]) || null;
       scoutBudgetRef.current = {
@@ -3468,7 +3683,7 @@ export default function DraftClass() {
       })).filter((sc) => sc.id));
     }).catch(() => {});
     return () => { live = false; };
-  }, [franchiseState?.session_id, franchiseState?.scouting_state?.used_budget]);
+  }, [franchiseState?.session_id, franchiseState?.scouting_state?.used_budget, deskTick]);
 
   const activeDeployments = useMemo(
     () => franchiseState?.scouting_state?.active_deployments || [],
@@ -3580,12 +3795,13 @@ export default function DraftClass() {
       }
       await requestProspectProfile(prospectId, { force: true });
       refreshFranchise();
+      bumpDesk();
     } catch (err) {
       setScoutActionNote(err?.response?.data?.detail || err?.message || "Scouting action failed.");
     } finally {
       setScoutActionBusy(false);
     }
-  }, [selectedProspect?.id, scoutActionBusy, refreshFranchise, requestProspectProfile]);
+  }, [selectedProspect?.id, scoutActionBusy, refreshFranchise, requestProspectProfile, bumpDesk]);
 
   const handleDeployCoverage = useCallback(async (target) => {
     if (!target || deployBusy) return;
@@ -3593,14 +3809,27 @@ export default function DraftClass() {
     setDeployNotice("");
     try {
       const result = await runCoverageDeploy(target);
-      setDeployNotice(result?.message || `Coverage deployed to ${target.label}.`);
+      setDeployNotice(result?.ok === false ? (result?.message || "Coverage deploy failed.") : (result?.message || `Coverage deployed to ${target.label}.`));
       await refreshFranchise();
+      bumpDesk();
     } catch (err) {
-      setDeployNotice(err?.message || "Coverage deploy failed.");
+      setDeployNotice(err?.response?.data?.detail || err?.message || "Coverage deploy failed.");
     } finally {
       setDeployBusy(false);
     }
-  }, [deployBusy, refreshFranchise]);
+  }, [deployBusy, refreshFranchise, bumpDesk]);
+
+  const runScoutAuto = useCallback(async (body) => {
+    setDeployNotice("");
+    try {
+      const res = await api.post("/api/franchise/scouting/auto", body);
+      setDeployNotice(res?.data?.message || "Scouting staff updated.");
+    } catch (err) {
+      setDeployNotice(err?.response?.data?.detail || err?.message || "Couldn't update scouting staff.");
+    }
+    refreshFranchise();
+    bumpDesk();
+  }, [refreshFranchise, bumpDesk]);
 
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkNote, setBulkNote] = useState("");
@@ -3681,6 +3910,7 @@ export default function DraftClass() {
       }
       setBulkNote(data.message || "Done.");
       refreshFranchise();
+      bumpDesk();
       return true;
     } catch (err) {
       setBulkNote(err?.response?.data?.detail || err?.message || "Bulk action failed.");
@@ -3688,7 +3918,7 @@ export default function DraftClass() {
     } finally {
       setBulkBusy(false);
     }
-  }, [refreshFranchise]);
+  }, [refreshFranchise, bumpDesk]);
 
   const toggleProspectCompare = useCallback((prospectId) => {
     setCompareIds((prev) => {
@@ -3881,6 +4111,8 @@ export default function DraftClass() {
               bulkNote={bulkNote}
               onOpenProspect={openProspect}
               franchiseState={franchiseState}
+              desk={scoutDesk}
+              onAuto={runScoutAuto}
             />
             </div>
           ) : null}

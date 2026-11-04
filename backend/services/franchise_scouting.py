@@ -73,6 +73,12 @@ DISCOVERY_REP_LATE_BLOOMER = 8
 DISCOVERY_REP_EARLY_FLAMER = 5
 DEPLOYMENT_DAYS = 28  # a coverage deployment runs four weeks, then ends
 REGION_SPECIALIST_BONUS = 1.25
+REGION_SWEEP_BASE = 60_000.0
+REGION_SWEEP_PER_PROSPECT = 400.0
+REGION_SWEEP_PER_CAP = 200
+DEPLOYMENT_PRICE_STEP = 0.14  # each live coverage adds this share to every scouting price
+SCOUTING_LOG_MAX = 40
+FILE_MILESTONES = ((100.0, "full file"), (92.0, "exact OVR"), (72.0, "OVR range"), (30.0, "tier read"))
 #: One-time deep dives (a second interview / medical adds nothing).
 ONE_TIME_ACTIONS = {
     "interview": "interview_status",
@@ -459,9 +465,30 @@ def _maybe_award_discovery(
     _set_prospect_overlay(state, prospect_id, {"miss_discovered": True})
 
 
+def _milestone_for(before: float, after: float) -> str:
+    for threshold, label in FILE_MILESTONES:
+        if before < threshold <= after:
+            return label
+    return ""
+
+
+def _log_scouting(session: FranchiseSession, state: Dict[str, Any], kind: str, text: str, **extra: Any) -> None:
+    """Short history of what scouting did, for the Ops "what did I get" feed."""
+    cur = int(getattr(session, "calendar_cursor", 0) or 0)
+    row = {"kind": kind, "text": text, "cursor": cur}
+    try:
+        row["date"] = _calendar_iso(session, cur)
+    except Exception:
+        row["date"] = ""
+    row.update({k: v for k, v in extra.items() if v is not None})
+    log = list(state.get("log") or [])
+    log.append(row)
+    state["log"] = log[-SCOUTING_LOG_MAX:]
+
+
 def _deployment_cost_multiplier(state: Mapping[str, Any]) -> float:
     n = len(list(state.get("active_deployments") or []))
-    return 1.0 + max(0, n) * 0.14
+    return 1.0 + max(0, n) * DEPLOYMENT_PRICE_STEP
 
 
 def _charge_deployment_salary(
@@ -772,6 +799,8 @@ def apply_passive_scouting_progress(session: FranchiseSession, *, days: int = 1)
         director_speed = float(staff_user_effect(session, "scout_speed", 1.0))
     except Exception:
         director_speed = 1.0
+    milestones: List[Dict[str, Any]] = []
+    disc_before = len(list(state.get("discoveries") or []))
     for entry in entries:
         pid = str(entry.get("key") or entry.get("id") or "")
         if not pid:
@@ -831,8 +860,30 @@ def apply_passive_scouting_progress(session: FranchiseSession, *, days: int = 1)
 
         _set_prospect_overlay(state, pid, {"scouted_percentage": round(new_pct, 1)})
         _maybe_award_discovery(session, state, pid, overlay, entry, new_pct)
+        unlock = _milestone_for(current, new_pct)
+        if unlock and unlock != "tier read":
+            milestones.append({"id": pid, "name": str(entry.get("name") or ""), "rank": int(entry.get("rank") or 0), "unlock": unlock, "after": round(new_pct, 1)})
         changed = True
 
+    if milestones:
+        milestones.sort(key=lambda m: m.get("rank") or 999)
+        parts = []
+        for _thr, label in FILE_MILESTONES:
+            grp = [m["name"] for m in milestones if m["unlock"] == label]
+            if grp:
+                parts.append(f"{label}: " + ", ".join(grp[:3]) + (f" +{len(grp) - 3}" if len(grp) > 3 else ""))
+        _log_scouting(
+            session, state, "milestone",
+            "Files unlocked — " + " · ".join(parts),
+            gains=milestones[:8], count=len(milestones),
+        )
+    for d in list(state.get("discoveries") or [])[disc_before:]:
+        kind = "a late bloomer" if d.get("type") == "late_bloomer" else "an early flamer"
+        _log_scouting(
+            session, state, "discovery",
+            f"Discovery: {d.get('name')} (#{d.get('rank')}) is {kind} the public board has wrong · +{d.get('rep_bonus')} scout reputation",
+            prospect_id=d.get("prospect_id"),
+        )
     if changed:
         session._cached_scouting_prospects_payload = None
         session._cached_scouting_world_payload = None
@@ -1306,6 +1357,14 @@ def action_cost_table(state: Mapping[str, Any]) -> Dict[str, Dict[str, int]]:
     return out
 
 
+def _region_counts(entries: List[Mapping[str, Any]]) -> Dict[str, int]:
+    out: Dict[str, int] = {}
+    for e in entries or []:
+        reg = str(e.get("region") or "") or _region_for_country(str(e.get("country") or ""))
+        out[reg] = out.get(reg, 0) + 1
+    return out
+
+
 def get_scouting_state(session: FranchiseSession) -> Dict[str, Any]:
     state = _ensure_scouting_state(session)
     entries = _draft_entries(session)
@@ -1357,6 +1416,14 @@ def get_scouting_state(session: FranchiseSession) -> Dict[str, Any]:
         "hidden_ceiling_pool_size": len(list(state.get("hidden_ceiling_pool") or [])),
         "discoveries": list(state.get("discoveries") or [])[-8:],
         "deployment_salary_per_week": DEPLOYMENT_SALARY_PER_WEEK,
+        "deployment_price_step": DEPLOYMENT_PRICE_STEP,
+        "price_multiplier": round(_deployment_cost_multiplier(state), 2),
+        "region_costs": {
+            _slug(r): int(round(_estimate_cost({"intensity": "normal"}, "region_sweep", state, n_targets=n)))
+            for r, n in _region_counts(entries).items()
+        },
+        "budget_source": str(state.get("budget_source") or "default"),
+        "log": list(state.get("log") or [])[-SCOUTING_LOG_MAX:],
         "auto_manage": bool(state.get("auto_manage")),
         "desk": {
             "projected_pick": pick,
@@ -1539,7 +1606,11 @@ def _estimate_cost(
     charged as sent, so a client could scout for $0). Bulk sweeps add a small
     per-prospect cost on top of the trip."""
     base = 18_000.0 + ACTION_SCOUTED_GAIN.get(action, 8.0) * 2_200.0
-    if str(body.get("target_type") or "").lower() in ("players", "prospects") and n_targets > 1:
+    if action == "region_sweep":
+        # Coverage is a flat crew cost plus a little per prospect, capped. It used to be
+        # $1,500 per prospect uncapped: one North America sweep (~600 players) cost ~$960K.
+        base = REGION_SWEEP_BASE + min(int(n_targets), REGION_SWEEP_PER_CAP) * REGION_SWEEP_PER_PROSPECT
+    elif str(body.get("target_type") or "").lower() in ("players", "prospects") and n_targets > 1:
         # A hand-picked group trip: each extra prospect costs a bit over half a solo visit.
         base *= 1.0 + 0.55 * (int(n_targets) - 1)
     elif n_targets > 1:
@@ -1630,6 +1701,8 @@ def _apply_to_targets(
     if dry_run:
         return affected, cost
 
+    gains_out: List[Dict[str, Any]] = []
+    state["_last_gains"] = gains_out
     for pid in affected:
         entry = entry_by_key.get(pid) or {}
         overlay = _prospect_overlay(state, pid)
@@ -1637,6 +1710,14 @@ def _apply_to_targets(
             continue
         current = _scouted_pct(entry, overlay, month)
         new_pct = min(100.0, current + gain)
+        gains_out.append({
+            "id": pid,
+            "name": str(entry.get("name") or ""),
+            "rank": int(entry.get("rank") or 0),
+            "before": round(current, 1),
+            "after": round(new_pct, 1),
+            "unlock": _milestone_for(current, new_pct),
+        })
         patch: Dict[str, Any] = {
             "scouted_percentage": round(new_pct, 1),
             "scouted_bonus": float(overlay.get("scouted_bonus") or 0.0) + max(0.0, new_pct - current),
@@ -1752,6 +1833,14 @@ def _apply_scouting_meta_patch(
                 failed += 1
                 last_msg = str(res.get("message") or "")
         msg = f"Updated {done} prospect{'s' if done != 1 else ''}."
+        if done and "assigned_scout" in meta_patch and str(meta_patch.get("assigned_scout") or "").strip():
+            _log_scouting(session, state, "assign", f"Scouts assigned to {done} prospect{'s' if done != 1 else ''} — files grow daily", count=done)
+        elif done and "watchlist" in meta_patch:
+            _log_scouting(
+                session, state, "shortlist",
+                f"{'Added' if meta_patch.get('watchlist') else 'Removed'} {done} prospect{'s' if done != 1 else ''} {'to' if meta_patch.get('watchlist') else 'from'} your shortlist",
+                count=done,
+            )
         if failed:
             msg += f" {failed} skipped" + (f" — {last_msg}" if last_msg else ".")
         return {
@@ -1867,7 +1956,15 @@ def _apply_scouting_meta_patch(
         state["watchlist"] = [x for x in list(state.get("watchlist") or []) if str(x) != pid]
 
     if body.get("_bulk_inner"):
-        return {"ok": True, "message": "Scouting metadata updated."}
+        return {"ok": True, "message": "Scouting metadata updated.", "assigned": str(patch.get("assigned_scout") or "")}
+    if str(patch.get("assigned_scout") or "").strip() and not str(overlay_before.get("assigned_scout") or "").strip():
+        sc = _scout_lookup(session, str(patch.get("assigned_scout"))) or {}
+        entry = next((e for e in _draft_entries(session) if str(e.get("key") or "") == pid), {})
+        _log_scouting(
+            session, state, "assign",
+            f"{sc.get('name') or 'A scout'} assigned to {entry.get('name') or 'a prospect'} — file grows daily",
+            scout=str(sc.get("name") or ""), prospect_id=pid,
+        )
     return {
         "ok": True,
         "message": "Scouting metadata updated.",
@@ -1949,6 +2046,23 @@ def apply_scouting_command(
 
     affected, cost = _apply_to_targets(session, state, body, action)
     state["used_budget"] = used + cost
+    gains = list(state.pop("_last_gains", None) or [])
+    unlocked = [g for g in gains if g.get("unlock")]
+    label = action.replace("_", " ")
+    if action == "region_sweep":
+        label = "Coverage deployed"
+    elif action == "player_focus":
+        label = "Scout visit"
+    who = gains[0]["name"] if len(gains) == 1 else f"{len(gains)} prospects"
+    avg_gain = round(sum(g["after"] - g["before"] for g in gains) / len(gains), 1) if gains else 0.0
+    text = f"{label.capitalize()}: {who} (+{avg_gain}% file{' each' if len(gains) > 1 else ''})"
+    if unlocked:
+        text += f" · {len(unlocked)} unlocked {unlocked[0]['unlock']}" if len(unlocked) > 1 else f" · unlocked {unlocked[0]['unlock']}"
+    _log_scouting(
+        session, state, "action", text,
+        action=action, cost=int(round(cost)), count=len(gains),
+        gains=sorted(gains, key=lambda g: g.get("rank") or 999)[:8],
+    )
     assignment = _upsert_assignment(state, body, action, cost, affected, status="completed")
     invalidate_session_payload_caches(session, "scouting_action")
 

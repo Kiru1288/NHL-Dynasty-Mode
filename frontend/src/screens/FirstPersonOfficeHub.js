@@ -988,13 +988,41 @@ import React, {
     const camera = useThree((s) => s.camera);
     const invalidate = useThree((s) => s.invalidate);
     useEffect(() => {
-      if (typeof gl.compileAsync !== "function") return undefined;
+      if (typeof gl.compile !== "function") return undefined;
       let live = true;
-      gl.compileAsync(scene, camera)
-        .then(() => live && invalidate())
-        .catch(() => {});
+      let timer = null;
+      // Same as three's compileAsync, but guarded: its internal poll threw an uncaught
+      // "reading 'isReady'" when a material was swapped or disposed mid-compile (hot
+      // reload, quality switch), which took the whole hub down.
+      let pending;
+      try {
+        pending = gl.compile(scene, camera);
+      } catch {
+        return undefined;
+      }
+      const props = gl.properties;
+      let tries = 0;
+      const poll = () => {
+        if (!live) return;
+        tries += 1;
+        try {
+          pending.forEach((material) => {
+            const program = props?.get?.(material)?.currentProgram;
+            if (!program || typeof program.isReady !== "function" || program.isReady()) pending.delete(material);
+          });
+        } catch {
+          pending.clear();
+        }
+        if (!pending.size || tries > 600) {
+          invalidate();
+          return;
+        }
+        timer = window.setTimeout(poll, 10);
+      };
+      poll();
       return () => {
         live = false;
+        if (timer) window.clearTimeout(timer);
       };
     }, [gl, scene, camera, invalidate, token]);
     return null;
@@ -2346,7 +2374,7 @@ import React, {
     leagueOpsClickToken = 0,
   }) {
     const controlsRef = useRef(null);
-    const { camera } = useThree();
+    const { camera, invalidate } = useThree();
     const focusRef = useRef({
       position: new THREE.Vector3(...OFFICE_CAMERA.position),
       target: new THREE.Vector3(...OFFICE_CAMERA.target),
@@ -2379,11 +2407,12 @@ import React, {
         camera.fov = officeFovForWindow();
         camera.updateProjectionMatrix();
         focusRef.current.fov = camera.fov;
+        invalidate();
       };
       applyFov();
       window.addEventListener("resize", applyFov);
       return () => window.removeEventListener("resize", applyFov);
-    }, [activePanel, camera]);
+    }, [activePanel, camera, invalidate]);
 
     useEffect(() => {
       const snap = prefersReducedMotion || lowPowerMode;
@@ -2406,7 +2435,9 @@ import React, {
           camera.lookAt(...nextTarget);
         }
       }
+      invalidate(); // start the move even when the canvas only renders on demand
     }, [
+      invalidate,
       resetToken,
       activePanel,
       camera,
@@ -2467,6 +2498,16 @@ import React, {
       camera.updateProjectionMatrix();
       controlsRef.current.target.lerp(focusRef.current.target, lerpFactor);
       controlsRef.current.update();
+      // On-demand frameloop (hub covered by a toast/modal, panel settled, low power): keep
+      // asking for frames until the camera has actually arrived. Without this a move that
+      // was cut off mid-way froze the room skewed and zoomed in.
+      const moving =
+        camera.position.distanceToSquared(destPos) > 0.00004 ||
+        controlsRef.current.target.distanceToSquared(destTarget) > 0.00004 ||
+        Math.abs(camera.fov - baseFov) > 0.02 ||
+        hoverBlendRef.current > 0.002 ||
+        clickBlendRef.current > 0.002;
+      if (moving) invalidate();
     });
 
     return (

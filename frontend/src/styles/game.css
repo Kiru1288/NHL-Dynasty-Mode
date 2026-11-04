@@ -82542,3 +82542,129 @@ html:not(#_) .edraft-pick-modal .ws-out__bar { border: 2.5px solid #15112b !impo
 /* Board / stats rows: skip rendering rows that are off screen */
 html:not(#_) .dk-root .dkb-row { content-visibility: auto; contain-intrinsic-size: auto 66px; }
 html:not(#_) .dk-root .dkl-row { content-visibility: auto; contain-intrinsic-size: auto 62px; }
+
+/* ── Scouting HQ (dks) ───────────────────────────────────────────────── */
+html:not(#_) .dk-root .dks { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 18px 60px; display: flex; flex-direction: column; gap: 14px; scrollbar-width: thin; color: var(--kd-ink); }
+html:not(#_) .dk-root .dks :is(em) { font-style: normal; }
+html:not(#_) .dk-root .dks-hero { display: grid; grid-template-columns: 1.35fr 1.35fr 1.1fr 0.8fr; gap: 14px; }
+html:not(#_) .dk-root :is(.dks-tile, .dks-panel, .dks-how > div, .dks-faq) {
+  background: var(--kd-paper); border: 3px solid var(--kd-ink); border-radius: 18px; box-shadow: var(--kd-shadow);
+}
+html:not(#_) .dk-root .dks-tile { padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+html:not(#_) .dk-root .dks-tile > em, html:not(#_) .dk-root .dks-tile--goal em { font-family: var(--kd-pixel); font-size: 10px; text-transform: uppercase; color: #6c6587; }
+html:not(#_) .dk-root .dks-tile strong { font-family: var(--kd-display); font-weight: 400; font-size: 24px; line-height: 1.05; }
+html:not(#_) .dk-root .dks-tile strong small { font-family: var(--kd-ui); font-weight: 900; font-size: 13px; color: #4b4468; }
+html:not(#_) .dk-root .dks-tile p { margin: 0; font-weight: 800; font-size: 12.5px; color: #4b4468; line-height: 1.35; }
+html:not(#_) .dk-root .dks-tile--goal { flex-direction: row; align-items: center; gap: 14px; background: linear-gradient(180deg, #fff6c9, var(--kd-paper) 60%); }
+html:not(#_) .dk-root .dks-tile--goal > div { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+html:not(#_) .dk-root .dks-tile--goal .dkb-dock-btn { align-self: flex-start; }
+html:not(#_) .dk-root .dks-ring { width: 96px; height: 96px; flex: 0 0 96px; }
+html:not(#_) .dk-root .dks-ring__bg { fill: #fff; stroke: #e1d8bd; stroke-width: 10; }
+html:not(#_) .dk-root .dks-ring__fg { fill: none; stroke: var(--kd-green); stroke-width: 10; stroke-linecap: round; }
+html:not(#_) .dk-root .dks-ring__num { font-family: var(--kd-display); font-size: 19px; fill: var(--kd-ink); }
+html:not(#_) .dk-root .dks-ring__lbl { font-family: var(--kd-pixel); font-size: 8px; fill: #6c6587; text-transform: uppercase; }
+html:not(#_) .dk-root .dks-bar { display: block; height: 12px; background: #e1d8bd; border: 2px solid var(--kd-ink); border-radius: 6px; overflow: hidden; }
+html:not(#_) .dk-root .dks-bar s { display: block; height: 100%; text-decoration: none; background: repeating-linear-gradient(135deg, var(--kd-red) 0 8px, #ff6a5c 8px 16px); }
+html:not(#_) .dk-root .dks-bar.is-blue s { background: repeating-linear-gradient(135deg, var(--kd-blue) 0 8px, #6c98ff 8px 16px); }
+html:not(#_) .dk-root .dks-bar.is-green s { background: linear-gradient(90deg, var(--kd-green), var(--kd-yellow)); }
+html:not(#_) .dk-root .dks-prices { list-style: none; margin: 2px 0; padding: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+html:not(#_) .dk-root .dks-prices li { display: grid; grid-template-columns: 1fr auto; background: #fff; border: 2px solid var(--kd-ink); border-radius: 9px; padding: 3px 8px; }
+html:not(#_) .dk-root .dks-prices span { font-weight: 900; font-size: 12px; }
+html:not(#_) .dk-root .dks-prices b { font-family: var(--kd-display); font-weight: 400; font-size: 15px; grid-row: span 2; align-self: center; }
+html:not(#_) .dk-root .dks-prices small { font-family: var(--kd-pixel); font-size: 8.5px; color: #6c6587; text-transform: uppercase; }
+html:not(#_) .dk-root .dks-switch { display: flex; align-items: center; gap: 9px; background: #fff; border: 2px solid var(--kd-ink); border-radius: 11px; padding: 6px 9px; cursor: pointer; }
+html:not(#_) .dk-root .dks-switch input { width: 34px; height: 18px; accent-color: var(--kd-green); flex: 0 0 auto; }
+html:not(#_) .dk-root .dks-switch span { display: flex; flex-direction: column; min-width: 0; }
+html:not(#_) .dk-root .dks-switch b { font-weight: 900; font-size: 13px; }
+html:not(#_) .dk-root .dks-switch small { font-weight: 800; font-size: 11px; color: #6c6587; }
+html:not(#_) .dk-root .dks-switch.is-on { background: #e3ffe9; }
+html:not(#_) .dk-root .dks-tile--staff .dkb-dock-btn { align-self: flex-start; }
+html:not(#_) .dk-root .dks-tile--clock { background: linear-gradient(180deg, #e8eeff, var(--kd-paper) 60%); }
+html:not(#_) .dk-root .dks-tile--clock strong { font-size: 34px; }
+html:not(#_) .dk-root .dks-rep { margin-top: auto; display: grid; grid-template-columns: 1fr auto; background: #fff; border: 2px solid var(--kd-ink); border-radius: 10px; padding: 4px 9px; }
+html:not(#_) .dk-root .dks-rep span { font-family: var(--kd-pixel); font-size: 9px; text-transform: uppercase; }
+html:not(#_) .dk-root .dks-rep b { font-family: var(--kd-display); font-weight: 400; font-size: 22px; grid-row: span 2; }
+html:not(#_) .dk-root .dks-rep small { font-weight: 800; font-size: 11px; color: #6c6587; }
+
+html:not(#_) .dk-root .dks-how { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+html:not(#_) .dk-root .dks-how > div { position: relative; padding: 10px 12px 10px 52px; box-shadow: var(--kd-shadow-sm); }
+html:not(#_) .dk-root .dks-how > div > b {
+  position: absolute; left: 10px; top: 10px; width: 32px; height: 32px; display: grid; place-items: center;
+  font-family: var(--kd-display); font-weight: 400; font-size: 20px; background: var(--kd-yellow); border: 2.5px solid var(--kd-ink); border-radius: 50%;
+}
+html:not(#_) .dk-root .dks-how strong { font-family: var(--kd-display); font-weight: 400; font-size: 17px; }
+html:not(#_) .dk-root .dks-how p { margin: 3px 0 0; font-weight: 800; font-size: 12px; color: #4b4468; line-height: 1.35; }
+html:not(#_) .dk-root .dks-chip { display: inline-block; margin: 2px 4px 0 0; font-family: var(--kd-pixel); font-size: 8.5px; text-transform: uppercase; color: var(--kd-ink); background: #fff; border: 2px solid var(--kd-ink); border-radius: 6px; padding: 1px 5px; }
+html:not(#_) .dk-root .dks-how > div:nth-child(4) .dks-chip:nth-child(2) { background: #fff2c2; }
+html:not(#_) .dk-root .dks-how > div:nth-child(4) .dks-chip:nth-child(3) { background: #d8f7e0; }
+html:not(#_) .dk-root .dks-how > div:nth-child(4) .dks-chip:nth-child(4) { background: var(--kd-green); }
+html:not(#_) .dk-root .dks-note { margin: 0; font-weight: 900; background: #fff; border: 2.5px solid var(--kd-ink); border-radius: 12px; padding: 7px 12px; box-shadow: var(--kd-shadow-sm); }
+
+html:not(#_) .dk-root .dks-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(340px, 30%); gap: 14px; align-items: start; }
+html:not(#_) .dk-root :is(.dks-main, .dks-side) { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+html:not(#_) .dk-root .dks-panel { padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+html:not(#_) .dk-root .dks-panel > header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+html:not(#_) .dk-root .dks-panel > header strong { font-family: var(--kd-display); font-weight: 400; font-size: 22px; }
+html:not(#_) .dk-root .dks-panel > header span { font-weight: 800; font-size: 12px; color: #6c6587; }
+html:not(#_) .dk-root .dks-scouts { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+html:not(#_) .dk-root .dks-scout { background: #fff; border: 2.5px solid var(--kd-ink); border-radius: 14px; padding: 9px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+html:not(#_) .dk-root .dks-scout__top { display: flex; gap: 8px; align-items: center; min-width: 0; }
+html:not(#_) .dk-root .dks-scout__top > div { display: flex; flex-direction: column; min-width: 0; }
+html:not(#_) .dk-root .dks-scout__top strong { font-weight: 900; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+html:not(#_) .dk-root .dks-scout__top small { font-weight: 800; font-size: 11px; color: #6c6587; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+html:not(#_) .dk-root .dks-scout__badge { flex: 0 0 36px; width: 36px; height: 36px; display: grid; place-items: center; font-family: var(--kd-display); font-size: 15px; background: linear-gradient(180deg, #cfe0ff, #8fb0f0); border: 2.5px solid var(--kd-ink); border-radius: 10px; }
+html:not(#_) .dk-root .dks-scout p { margin: 0; font-weight: 800; font-size: 11.5px; color: #4b4468; }
+html:not(#_) .dk-root .dks-scout .dkb-dock-btn { font-size: 12px !important; padding: 4px 6px !important; }
+html:not(#_) .dk-root .dks-regions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+html:not(#_) .dk-root .dks-region { background: #fff; border: 2.5px solid var(--kd-ink); border-radius: 14px; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+html:not(#_) .dk-root .dks-region.is-live { background: linear-gradient(180deg, #e3ffe9, #fff 45%); }
+html:not(#_) .dk-root .dks-region header { display: flex; align-items: center; justify-content: space-between; }
+html:not(#_) .dk-root .dks-region header strong { font-family: var(--kd-display); font-weight: 400; font-size: 19px; }
+html:not(#_) .dk-root .dks-region__nums { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; }
+html:not(#_) .dk-root .dks-region__nums span { display: flex; flex-direction: column; font-family: var(--kd-pixel); font-size: 8.5px; text-transform: uppercase; color: #6c6587; background: var(--kd-paper); border: 2px solid var(--kd-ink); border-radius: 8px; padding: 2px 6px; }
+html:not(#_) .dk-root .dks-region__nums b { font-family: var(--kd-display); font-weight: 400; font-size: 17px; color: var(--kd-ink); }
+html:not(#_) .dk-root .dks-region__best { list-style: none; margin: 0; padding: 0; display: flex; gap: 5px; flex-wrap: wrap; }
+html:not(#_) .dk-root .dks-region__best button { background: var(--kd-paper); border: 2px solid var(--kd-ink); border-radius: 9px; padding: 2px 7px; font-weight: 900; font-size: 12px; color: var(--kd-ink); }
+html:not(#_) .dk-root .dks-region__best button:hover { background: #fff6c9; }
+html:not(#_) .dk-root .dks-region__best em { font-weight: 800; color: #6c6587; margin-left: 3px; }
+html:not(#_) .dk-root .dks-region .dkb-dock-btn { font-size: 12.5px !important; }
+html:not(#_) .dk-root .dks-files { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+html:not(#_) .dk-root .dks-files button {
+  width: 100%; display: grid; grid-template-columns: 40px minmax(0, 1fr) 76px 38px; align-items: center; gap: 8px; text-align: left;
+  background: #fff; border: 2px solid var(--kd-ink); border-radius: 10px; padding: 3px 8px; color: var(--kd-ink);
+}
+html:not(#_) .dk-root .dks-files button:hover { background: #fff6c9; }
+html:not(#_) .dk-root .dks-files li.is-ready button { background: #e3ffe9; }
+html:not(#_) .dk-root .dks-files b { font-family: var(--kd-display); font-weight: 400; font-size: 14px; }
+html:not(#_) .dk-root .dks-files span { display: flex; flex-direction: column; font-weight: 900; font-size: 13px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+html:not(#_) .dk-root .dks-files span em { font-weight: 800; font-size: 10.5px; color: #6c6587; }
+html:not(#_) .dk-root .dks-files small { font-weight: 900; font-size: 12px; text-align: right; }
+html:not(#_) .dk-root .dks-files .dko-pct { position: relative; }
+html:not(#_) .dk-root .dks-files .dko-pct u { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--kd-ink); text-decoration: none; }
+html:not(#_) .dk-root .dks-log { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; max-height: 360px; overflow-y: auto; scrollbar-width: thin; }
+html:not(#_) .dk-root .dks-log li { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; gap: 8px; align-items: start; background: #fff; border: 2px solid var(--kd-ink); border-left-width: 6px; border-radius: 10px; padding: 4px 8px; font-weight: 800; font-size: 12px; line-height: 1.3; }
+html:not(#_) .dk-root .dks-log li.is-milestone { border-left-color: var(--kd-green); }
+html:not(#_) .dk-root .dks-log li.is-discovery { border-left-color: var(--kd-yellow); background: #fff9de; }
+html:not(#_) .dk-root .dks-log li.is-action { border-left-color: var(--kd-blue); }
+html:not(#_) .dk-root .dks-log li.is-assign { border-left-color: #8a5cff; }
+html:not(#_) .dk-root .dks-log li.dko-empty { border-left-width: 2px; grid-template-columns: 1fr; }
+html:not(#_) .dk-root .dks-log time { font-family: var(--kd-pixel); font-size: 9px; color: #6c6587; padding-top: 2px; }
+html:not(#_) .dk-root .dks-log b { font-weight: 900; color: #a3160f; white-space: nowrap; }
+html:not(#_) .dk-root .dks-faq { padding: 0; overflow: hidden; }
+html:not(#_) .dk-root .dks-faq__toggle { width: 100%; display: flex; align-items: center; gap: 10px; background: none; border: 0; padding: 10px 14px; font-family: var(--kd-display); font-size: 19px; color: var(--kd-ink); cursor: pointer; text-align: left; }
+html:not(#_) .dk-root .dks-faq__toggle b { width: 28px; height: 28px; display: grid; place-items: center; background: var(--kd-yellow); border: 2.5px solid var(--kd-ink); border-radius: 50%; font-weight: 400; }
+html:not(#_) .dk-root .dks-faq__toggle span { margin-left: auto; font-family: var(--kd-pixel); font-size: 10px; text-transform: uppercase; background: #fff; border: 2px solid var(--kd-ink); border-radius: 7px; padding: 2px 8px; }
+html:not(#_) .dk-root .dks-faq__list { margin: 0; padding: 0 14px 14px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+html:not(#_) .dk-root .dks-faq__list > div { background: #fff; border: 2px solid var(--kd-ink); border-radius: 12px; padding: 8px 10px; }
+html:not(#_) .dk-root .dks-faq__list dt { font-weight: 900; font-size: 13px; display: flex; gap: 7px; align-items: baseline; }
+html:not(#_) .dk-root .dks-faq__list dt i { font-style: normal; font-family: var(--kd-display); font-size: 13px; color: var(--kd-blue); }
+html:not(#_) .dk-root .dks-faq__list dd { margin: 4px 0 0; font-weight: 700; font-size: 12px; color: #4b4468; line-height: 1.4; }
+@media (max-width: 1400px) {
+  html:not(#_) .dk-root .dks-hero { grid-template-columns: 1fr 1fr; }
+  html:not(#_) .dk-root .dks-scouts { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  html:not(#_) .dk-root .dks-faq__list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 1100px) {
+  html:not(#_) .dk-root .dks-grid, html:not(#_) .dk-root .dks-how, html:not(#_) .dk-root .dks-regions { grid-template-columns: 1fr; }
+}
+html:not(#_) .dk-root .dks > * { flex-shrink: 0; }
