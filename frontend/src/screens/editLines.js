@@ -4,7 +4,7 @@ import { useGameUI } from "../game/GameUIContext";
 import { SCREENS, teamNameToNhlAbbr } from "../game/constants";
 import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
 import { CHEMISTRY_HIGH, CHEMISTRY_MID, chemistryLabel } from "../utils/chemistryScale";
-import { getAhlLines, getFranchiseChemistry, previewFranchiseChemistry, saveAhlLines, saveFranchiseLines } from "../services/franchiseService";
+import { getAhlLines, getFranchiseChemistry, getLinesHub, previewFranchiseChemistry, saveAhlLines, saveFranchiseLines } from "../services/franchiseService";
 import { getFranchiseSessionId, readSessionLineupCache, writeSessionLineupCache } from "../services/api";
 import TeamLinesViewer from "../components/franchise/lines/TeamLinesViewer";
 import StrategyBoard from "../components/franchise/lines/StrategyBoard";
@@ -872,7 +872,7 @@ function LineStatusStrip({ metrics, meter }) {
   </div>;
 }
 
-function PlayerPool({ players, assignedSet, lockedSet, selectedPlayerId, search, setSearch, focusSlot, onPlayerSelect, onDragStart, open, onClose }) {
+function PlayerPool({ players, assignedSet, lockedSet, selectedPlayerId, search, setSearch, focusSlot, onPlayerSelect, onDragStart, open, onClose, stats = null }) {
   return <section className={`lb-region lb-pool-region ${open ? "open" : ""}`}>
     <div className="lb-region-head">
       <h2 className="lb-region-title">Player pool</h2>
@@ -891,7 +891,10 @@ function PlayerPool({ players, assignedSet, lockedSet, selectedPlayerId, search,
         // Fit only means something for players who can actually play the slot.
         const fit = focusSlot && posFit(player, focusSlot) ? chemistryFitScore(player, focusSlot) : null;
         const status = player.availability?.key === "active" ? null : player.availability?.label;
-        const meta = [assigned ? `✓ ${player.position}` : player.position, fit != null ? `${fit} fit` : null, status].filter(Boolean).join(" · ");
+        const st = stats?.[player.id];
+        const meta = stats !== null
+          ? [player.position, roleName(player) || null, status || (assigned ? "Dressed" : "Extra")].filter(Boolean).join(" · ")
+          : [assigned ? `✓ ${player.position}` : player.position, fit != null ? `${fit} fit` : null, status].filter(Boolean).join(" · ");
         return <div key={player.id} data-pid={!disabled ? player.id : undefined} className={`lb-player ${assigned ? "assigned" : ""} ${selectedPlayerId === player.id ? "selected" : ""} ${disabled ? "disabled" : ""} ${locked ? "locked" : ""}`} draggable={false} onDragStart={(event) => { document.body.classList.add("lb-dragging"); onDragStart(event, player.id); }} onDragEnd={() => { document.body.classList.remove("lb-dragging"); document.querySelectorAll(".fm-card.is-dragover").forEach((el) => el.classList.remove("is-dragover")); }} onClick={() => onPlayerSelect(player.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onPlayerSelect(player.id); } }} role="button" tabIndex={0} aria-label={`${player.name}, ${player.position}, ${player.overall} overall${assigned ? ", dressed" : ""}`} title={disabled ? player.availability?.reason || "Player cannot be moved." : `${player.name} · ${player.position} · ${player.overall} overall${assigned ? " · Dressed" : ""}`}>
           <PlayerHeadshot player={player} size="md" />
           <div className="lb-player-copy">
@@ -899,6 +902,8 @@ function PlayerPool({ players, assignedSet, lockedSet, selectedPlayerId, search,
             <div className="lb-player-meta">{meta}</div>
           </div>
           <div className="lb-player-side">
+            {stats !== null && st ? <span className="kl-pool-pts">{seasonChip(player, st)}</span> : null}
+            {stats !== null ? <EnergyPips player={player} /> : null}
             <div className="lb-player-ovr">{player.overall}</div>
             <span className={`lb-dot ${player.availability?.key === "active" ? "" : player.availability?.placeable ? "warn" : "bad"}`} />
           </div>
@@ -1544,6 +1549,491 @@ function LineBuilderToast({ toast, onDismiss, onDetails }) {
   </div>;
 }
 
+/* ===========================================================================
+   Kart Lines (2026-11 overhaul): top bar with tabs, hero band, line rails,
+   kart player cards and a player / line drawer. Same handlers as the old
+   board, so drag-and-drop, locks, swaps, undo and save are unchanged.
+=========================================================================== */
+const LINE_ROLES = [
+  { id: "scoring", label: "Scoring", zone: "offensive", usage: "attack", hint: "Offensive-zone starts, plays to score" },
+  { id: "twoway", label: "Two-way", zone: "defensive", usage: "attack", hint: "Starts in its own end, still pushes play" },
+  { id: "checking", label: "Checking", zone: "defensive", usage: "checking", hint: "Shuts down the other team's best" },
+  { id: "energy", label: "Energy", zone: "offensive", usage: "checking", hint: "Forechecks hard and wins pucks" },
+];
+const PAIR_ROLES = [
+  { id: "shutdown", label: "Shutdown", hint: "Faces their top line" },
+  { id: "neutral", label: "Two-way", hint: "Regular minutes" },
+  { id: "offensive", label: "Offensive", hint: "Pinches and joins the rush" },
+  { id: "sheltered", label: "Sheltered", hint: "Easy minutes, kept away from top lines" },
+];
+function lineRoleOf(line, index) {
+  const zone = line?.zone || (index < 2 ? "offensive" : "defensive");
+  const usage = line?.usage || (index < 2 ? "attack" : "checking");
+  return LINE_ROLES.find((r) => r.zone === zone && r.usage === usage) || LINE_ROLES[0];
+}
+function pairRoleOf(line, index) {
+  const id = line?.pair_role || (index === 0 ? "shutdown" : index === 1 ? "neutral" : "sheltered");
+  return PAIR_ROLES.find((r) => r.id === id) || PAIR_ROLES[1];
+}
+function chemGrade(score) {
+  const n = Number(score);
+  if (!Number.isFinite(n) || n <= 0) return "—";
+  if (n >= 88) return "A+";
+  if (n >= 80) return "A";
+  if (n >= 72) return "B";
+  if (n >= 62) return "C";
+  if (n >= 50) return "D";
+  return "F";
+}
+function gradeTone(g) {
+  if (g === "A+" || g === "A") return "a";
+  if (g === "B") return "b";
+  if (g === "C") return "c";
+  if (g === "—") return "none";
+  return "f";
+}
+function unitBookKey(group, players) {
+  const ids = players.filter(Boolean).map((p) => String(p.id)).sort();
+  if (group === "defense") return ids.length === 2 ? `D|${ids.join("|")}` : "";
+  return ids.length >= 2 ? `F|${ids.join("|")}` : "";
+}
+function energyOf(player) {
+  const f = Number(player?.fatigue);
+  if (!Number.isFinite(f)) return null;
+  return Math.max(0, Math.min(100, 100 - f));
+}
+function EnergyPips({ player }) {
+  const e = energyOf(player);
+  if (e == null) return null;
+  const n = e >= 70 ? 3 : e >= 45 ? 2 : 1;
+  return <span className={`kl-energy e${n}`} title={`Energy ${Math.round(e)}%`}>{[0, 1, 2].map((i) => <i key={i} className={i < n ? "on" : ""} />)}</span>;
+}
+function seasonChip(player, stat) {
+  if (!stat) return null;
+  if (isGoalie(player?.position)) {
+    if (stat.sv_pct == null) return `${stat.gp || 0} GP`;
+    return `.${String(Math.round(stat.sv_pct * 1000)).padStart(3, "0")}`;
+  }
+  return `${stat.pts ?? 0} P`;
+}
+function lastOf(name) {
+  return String(name || "").split(" ").slice(-1)[0] || "—";
+}
+
+function useLinesHub(enabled, refreshKey) {
+  const [hub, setHub] = useState(null);
+  useEffect(() => {
+    if (!enabled) return undefined;
+    let live = true;
+    getLinesHub().then((d) => { if (live && d?.ok) setHub(d); }).catch(() => {});
+    return () => { live = false; };
+  }, [enabled, refreshKey]);
+  return hub;
+}
+
+function KartLinesTop({ team, tab, setScreen, onGoalies, onEvenStrength, title, subtitle, history, actions }) {
+  const [more, setMore] = useState(false);
+  const tabs = [
+    ["even", "Even strength", () => (onEvenStrength ? onEvenStrength() : setScreen(SCREENS.EDIT_LINES))],
+    ["pp", "Power play", () => setScreen(SCREENS.POWER_PLAY)],
+    ["pk", "Penalty kill", () => setScreen(SCREENS.PENALTY_KILL)],
+    ["goalies", "Goalies", () => (onGoalies ? onGoalies() : (() => { try { sessionStorage.setItem("kl.openGoalies", "1"); } catch { /* */ } setScreen(SCREENS.EDIT_LINES); })())],
+  ];
+  return <header className="kl-top">
+    <button type="button" className="kl-back" onClick={() => setScreen(SCREENS.HUB)}>◀ Hub</button>
+    <div className="kl-plate">
+      {team?.logo ? <img src={team.logo} alt="" /> : null}
+      <div><strong>{title}</strong>{subtitle ? <small>{subtitle}</small> : null}</div>
+    </div>
+    <nav className="kl-tabs" aria-label="Lines sections">
+      {tabs.map(([id, label, go]) => <button type="button" key={id} className={tab === id ? "is-on" : ""} aria-current={tab === id ? "page" : undefined} onClick={go}>{label}</button>)}
+      <span className="kl-more">
+        <button type="button" onClick={() => setMore((v) => !v)} aria-expanded={more}>More ▾</button>
+        {more ? <span className="kl-more-menu" onMouseLeave={() => setMore(false)}>
+          <button type="button" onClick={() => setScreen(SCREENS.ROSTER)}>Roster</button>
+          <button type="button" onClick={() => setScreen(SCREENS.CHEMISTRY)}>Chemistry</button>
+          <button type="button" onClick={() => setScreen(SCREENS.AHL_CENTER)}>AHL lines</button>
+        </span> : null}
+      </span>
+    </nav>
+    <div className="kl-actions">
+      {history ? <>
+        <button type="button" className="kl-ico" onClick={history.undo} disabled={!history.canUndo} title="Undo (Ctrl+Z)" aria-label="Undo">↶</button>
+        <button type="button" className="kl-ico" onClick={history.redo} disabled={!history.canRedo} title="Redo (Ctrl+Y)" aria-label="Redo">↷</button>
+      </> : null}
+      <button type="button" className="kl-btn" onClick={actions.clear}>Clear</button>
+      <button type="button" className="kl-btn" onClick={actions.reset}>Reset</button>
+      <button type="button" className="kl-btn is-blue" onClick={actions.auto} disabled={actions.disabled}>Auto build</button>
+      {actions.saveError ? <span className="kl-err">Save failed</span> : null}
+      <button type="button" className={`kl-save${actions.unsaved ? " is-dirty" : ""}`} onClick={actions.save} disabled={actions.saving || actions.disabled}>
+        {actions.saving ? "Saving…" : actions.unsaved ? (actions.saveLabel || "Save") : "Saved ✓"}
+      </button>
+    </div>
+  </header>;
+}
+
+function KartFace({ player, size = "md" }) {
+  return <span className={`kl-face kl-face--${size}`}>{player ? <PlayerHeadshot player={player} size={size === "lg" ? "lg" : "md"} /> : null}</span>;
+}
+
+function LinesHero({ lineState, playerMap, chemistryByUnit, teamScore, hub, issues, onFix, assignedPlayers }) {
+  const [issueIdx, setIssueIdx] = useState(0);
+  useEffect(() => { setIssueIdx(0); }, [issues.length]);
+  const skaters = new Set();
+  for (const g of ["forwards", "defense"]) for (const l of lineState[g] || []) for (const id of Object.values(l.slots || {})) if (id) skaters.add(String(id));
+  const goalies = ["Starter", "Backup"].filter((s) => lineState.goalies?.[0]?.slots?.[s]).length;
+  const avg = assignedPlayers.length ? Math.round(assignedPlayers.reduce((a, p) => a + p.overall, 0) / assignedPlayers.length) : null;
+  const grade = chemGrade(teamScore);
+  const fwd = (lineState.forwards || []).map((line, i) => ({ line, i, score: Number(chemistryByUnit[`forwards:${line.id}`]?.score) || 0 }));
+  const best = [...fwd].sort((a, b) => b.score - a.score)[0];
+  const bestPlayers = best ? ["LW", "C", "RW"].map((s) => playerMap[String(best.line.slots?.[s] || "")]).filter(Boolean) : [];
+  const bestKey = unitBookKey("forwards", bestPlayers);
+  const together = hub?.units?.[bestKey];
+  const combined = bestPlayers.reduce((a, p) => a + (hub?.players?.[p.id]?.pts || 0), 0);
+  const issue = issues[issueIdx] || null;
+  const ng = hub?.next_game;
+  const l1 = ["LW", "C", "RW"].map((s) => playerMap[String(lineState.forwards?.[0]?.slots?.[s] || "")]).filter(Boolean);
+  const l1Ovr = l1.length ? Math.round(l1.reduce((a, p) => a + p.overall, 0) / l1.length) : null;
+  const edge = ng?.top_line?.ovr != null && l1Ovr != null ? l1Ovr - ng.top_line.ovr : null;
+  const dateLabel = ng?.date ? new Date(`${ng.date}T12:00:00`).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" }) : "";
+  return <section className="kl-hero">
+    <article className={`kl-tile kl-tile--grade tone-${gradeTone(grade)}`}>
+      <em>Lineup</em>
+      <div className="kl-grade-row">
+        <b className="kl-grade">{grade}</b>
+        <div>
+          <strong>{avg ?? "—"} <small>avg OVR</small></strong>
+          <span className={skaters.size === 18 ? "ok" : "bad"}>{skaters.size}/18 skaters {skaters.size === 18 ? "✓" : "⚠"}</span>
+          <span className={goalies === 2 ? "ok" : "bad"}>{goalies}/2 goalies {goalies === 2 ? "✓" : "⚠"}</span>
+        </div>
+      </div>
+      {hub?.team?.record ? <p>{hub.team.record} · PP {hub.team.pp_pct != null ? `${Math.round(hub.team.pp_pct * 1000) / 10}%` : "—"} · PK {hub.team.pk_pct != null ? `${Math.round(hub.team.pk_pct * 1000) / 10}%` : "—"}</p> : null}
+    </article>
+    <article className="kl-tile kl-tile--best">
+      <em>Best line</em>
+      <div className="kl-best-faces">{bestPlayers.map((p) => <KartFace key={p.id} player={p} />)}</div>
+      <strong>{bestPlayers.map((p) => lastOf(p.name)).join(" – ") || "Build a line"}</strong>
+      <p>{together && together.gp
+        ? `Together: ${together.gp} GP · ${together.gf} GF – ${together.ga} GA · ${together.pts} P`
+        : bestPlayers.length ? `${combined} points this season between them` : "No line yet"}</p>
+    </article>
+    <article className={`kl-tile kl-tile--fix${issue ? ` sev-${issue.severity || "warn"}` : " is-clear"}`}>
+      <em>{issue ? `Fix this${issues.length > 1 ? ` · ${issueIdx + 1}/${issues.length}` : ""}` : "All clear"}</em>
+      <strong>{issue ? issue.text : "Your lineup is ready to play."}</strong>
+      {issue?.detail ? <p>{issue.detail}</p> : null}
+      <div className="kl-fix-row">
+        {issue?.fixLabel ? <button type="button" className="kl-btn is-go" onClick={() => onFix(issue)}>{issue.fixLabel}</button> : null}
+        {issues.length > 1 ? <>
+          <button type="button" className="kl-ico" onClick={() => setIssueIdx((i) => (i - 1 + issues.length) % issues.length)} aria-label="Previous issue">‹</button>
+          <button type="button" className="kl-ico" onClick={() => setIssueIdx((i) => (i + 1) % issues.length)} aria-label="Next issue">›</button>
+        </> : null}
+      </div>
+    </article>
+    <article className="kl-tile kl-tile--next">
+      <em>Next game</em>
+      {ng ? <>
+        <strong>{ng.home ? "vs" : "@"} {ng.opp_name || ng.opp_abbr} <small>{ng.opp_record || ""}</small></strong>
+        <p>{dateLabel}{ng.days_away === 0 ? " · tonight" : ng.days_away === 1 ? " · tomorrow" : ""}</p>
+        {ng.top_line ? <div className="kl-match">
+          <span>Their top line <b>{ng.top_line.names.join("–")}</b> <i>{ng.top_line.ovr}</i></span>
+          {edge != null ? <span className={edge >= 0 ? "ok" : "bad"}>Your L1 {l1Ovr} · {edge >= 0 ? `+${edge} edge` : `${edge} behind`}</span> : null}
+        </div> : null}
+      </> : <p>No game scheduled soon.</p>}
+    </article>
+  </section>;
+}
+
+function RailCard({ descriptor, player, stat, tier, locked, selected, targetState, onSelect, onToggleLock, onRemove, onKeyDown, registerRef }) {
+  const flag = player?.availability?.key === "injured" ? "INJ" : player?.availability?.key === "suspended" || player?.availability?.key === "leave" ? "SUSP" : player && !player.availability?.placeable ? "OUT" : null;
+  const classes = ["kl-card", player ? `t-${tier || "none"}` : "is-empty", selected ? "is-sel" : "", locked ? "is-locked" : "", targetState ? `tg-${targetState}` : "", flag ? "is-out" : ""].filter(Boolean).join(" ");
+  return <div
+    ref={(node) => registerRef && registerRef(descriptor.key, node)}
+    data-slot-key={descriptor.key}
+    data-pid={player && !locked && player.availability?.placeable ? player.id : undefined}
+    className={classes}
+    role="button"
+    tabIndex={0}
+    aria-label={player ? `${descriptor.slot}, ${player.name}, ${player.overall} overall` : `${descriptor.slot}, empty`}
+    onClick={(e) => { e.stopPropagation(); onSelect(descriptor); }}
+    onKeyDown={(e) => onKeyDown && onKeyDown(e, descriptor)}
+  >
+    <span className="kl-card-slot">{descriptor.label || descriptor.slot}</span>
+    {player ? <>
+      <KartFace player={player} />
+      <span className="kl-card-body">
+        <span className="fm-card-name kl-card-name">{lastOf(player.name)}</span>
+        <span className="kl-card-role">{roleName(player) || player.position}</span>
+        <span className="kl-card-stats">
+          {stat ? <b>{seasonChip(player, stat)}</b> : null}
+          <EnergyPips player={player} />
+        </span>
+      </span>
+      <span className="fm-card-ovr kl-ovr">{player.overall}</span>
+      {flag ? <span className="kl-stamp">{flag}</span> : null}
+      {locked ? <span className="kl-lock" title="Locked">🔒</span> : null}
+      {selected ? <span className="kl-card-acts">
+        <button type="button" onClick={(e) => { e.stopPropagation(); onToggleLock(descriptor); }} title={locked ? "Unlock" : "Lock"}>{locked ? "Unlock" : "Lock"}</button>
+        <button type="button" className="danger" onClick={(e) => { e.stopPropagation(); onRemove(descriptor); }} disabled={locked} title="Take him out">Out</button>
+      </span> : null}
+    </> : <span className="kl-card-empty">+ Drop a player</span>}
+  </div>;
+}
+
+function RailLink({ link }) {
+  const tier = link?.score == null ? "none" : link.tier;
+  const title = link?.score == null ? "No data yet" : `Chemistry ${link.score}${link.fresh ? " · new pairing" : ""}`;
+  return <span className={`kl-link l-${tier}`} title={title} aria-label={title}><i /></span>;
+}
+
+function RailUnit({
+  group, line, index, playerMap, links, chemistry, warnings, hub, locks, selectedUnit, selectedSlotKey, selectedPlayer,
+  onSelectUnit, onSlotSelect, onSlotKeyDown, registerSlotRef, onToggleLock, onRemove, onShare, onDeploy,
+  menuOpen, onMenuToggle, actions, clipboard, slots, goalieSlot = false,
+}) {
+  const selected = selectedUnit?.group === group && selectedUnit?.lineId === line.id;
+  const grade = goalieSlot ? null : chemGrade(chemistry?.score);
+  const players = slots.map((s) => playerMap[String(line.slots?.[s] || "")] || null);
+  const together = goalieSlot ? null : hub?.units?.[unitBookKey(group, players)];
+  const share = goalieSlot ? null : shownShare(line, index, group);
+  const minutes = share == null ? null : Math.round((share / 100) * 60);
+  const role = group === "defense" ? pairRoleOf(line, index) : group === "forwards" ? lineRoleOf(line, index) : null;
+  const linkFor = (a, b) => (links || []).find((l) => (l.slotA === a && l.slotB === b) || (l.slotA === b && l.slotB === a));
+  return <div className={`kl-rail kl-rail--${group}${selected ? " is-sel" : ""}`} onClick={() => onSelectUnit(group, line.id)}>
+    <div className={`kl-badge tone-${gradeTone(grade || "—")}`}>
+      <small>{group === "defense" ? "Pair" : group === "goalies" ? "Net" : "Line"} {index + 1}</small>
+      {grade ? <b>{grade}</b> : <b className="kl-badge-g">G</b>}
+      {role ? <em>{role.label}</em> : null}
+      {warnings?.length ? <span className="kl-badge-warn" title={warnings.map((w) => w.text).join("\n")}>!</span> : null}
+    </div>
+    <div className="kl-cards">
+      {slots.map((slot, si) => {
+        const descriptor = { key: slotKey(group, line.id, slot), group, lineId: line.id, lineName: line.name, slot, playerId: String(line.slots?.[slot] || "") };
+        const player = players[si];
+        const slotLinks = (links || []).filter((l) => l.slotA === slot || l.slotB === slot);
+        const tiers = slotLinks.map((l) => l.tier);
+        const worst = tiers.includes("weak") ? "weak" : tiers.includes("forming") ? "forming" : tiers.includes("strong") ? "strong" : "";
+        let targetState = "";
+        if (selectedPlayer) targetState = !selectedPlayer.availability?.placeable || !posFit(selectedPlayer, slot) ? "invalid" : player ? "swap" : "valid";
+        return <React.Fragment key={descriptor.key}>
+          {si > 0 && !goalieSlot ? <RailLink link={linkFor(slots[si - 1], slot)} /> : null}
+          <RailCard
+            descriptor={descriptor}
+            player={player}
+            stat={player ? hub?.players?.[player.id] : null}
+            tier={worst}
+            locked={Boolean(locks[descriptor.key])}
+            selected={selectedSlotKey === descriptor.key}
+            targetState={targetState}
+            onSelect={onSlotSelect}
+            onToggleLock={onToggleLock}
+            onRemove={onRemove}
+            onKeyDown={onSlotKeyDown}
+            registerRef={registerSlotRef}
+          />
+        </React.Fragment>;
+      })}
+    </div>
+    {!goalieSlot ? <div className="kl-together" title="Even-strength results while these players are on the ice together this season">
+      {together && together.gp ? <>
+        <span><b>{together.gp}</b>GP</span>
+        <span><b>{together.gf}–{together.ga}</b>GF–GA</span>
+        <span><b>{together.pts}</b>PTS</span>
+        <span><b>{together.xgf_pct != null ? `${Math.round(together.xgf_pct)}%` : "—"}</b>xGF</span>
+      </> : <span className="kl-together-none">New unit · no games together yet</span>}
+    </div> : null}
+    {!goalieSlot ? <div className="kl-ctrl" onClick={(e) => e.stopPropagation()}>
+      <label className="kl-role" title={role?.hint}>
+        <span>Role</span>
+        <select value={role?.id} onChange={(e) => {
+          if (group === "defense") onDeploy(group, line.id, { pair_role: e.target.value });
+          else {
+            const r = LINE_ROLES.find((x) => x.id === e.target.value);
+            if (r) onDeploy(group, line.id, { zone: r.zone, usage: r.usage });
+          }
+        }}>
+          {(group === "defense" ? PAIR_ROLES : LINE_ROLES).map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
+        </select>
+      </label>
+      <div className="kl-min">
+        <b>{minutes}</b><span>MIN</span>
+        <input
+          type="range" min={0} max={50} step={1}
+          value={Math.min(50, Math.round(Number(share) || 0))}
+          onChange={(e) => onShare(group, line.id, e.target.value)}
+          onPointerDown={(e) => e.stopPropagation()}
+          aria-label={`${group === "defense" ? "Pair" : "Line"} ${index + 1} ice time`}
+          style={{ "--fill": `${Math.min(100, (share / 50) * 100)}%` }}
+        />
+        <small>{Math.round(share)}%</small>
+      </div>
+    </div> : null}
+    <button type="button" className="kl-menu-btn" onClick={(e) => { e.stopPropagation(); onMenuToggle(group, line.id); }} aria-label="Unit actions">⋯</button>
+    {menuOpen ? <UnitMenu line={line} group={group} locks={locks} clipboard={clipboard} actions={actions} /> : null}
+  </div>;
+}
+
+function SpecialTeamsHero({ kind, lines, chemistryByLine, strategy, hub, playerMap }) {
+  const isPP = kind === "power_play";
+  const u1 = lines?.[0];
+  const sc = Number(chemistryByLine?.[u1?.id]?.score);
+  const grade = chemGrade(sc);
+  const unit1 = Object.values(u1?.slots || {}).map((id) => playerMap[String(id || "")]).filter(Boolean);
+  const grades = fitGrades(isPP ? ppSetupFits(unit1) : pkSystemFits(unit1));
+  const opts = isPP ? PP_SETUPS : PK_SYSTEMS;
+  const bestId = Object.entries(grades).sort((a, b) => b[1].edge - a[1].edge)[0]?.[0];
+  const best = opts.find((o) => o.id === bestId);
+  const chosen = opts.find((o) => o.id === (isPP ? strategy?.setup : strategy?.system));
+  const pct = isPP ? hub?.team?.pp_pct : hub?.team?.pk_pct;
+  const nF = unit1.filter((p) => isForward(p.position)).length;
+  return <section className="kl-hero kl-hero--st">
+    <article className={`kl-tile kl-tile--grade tone-${gradeTone(grade)}`}>
+      <em>{isPP ? "PP1" : "PK1"}</em>
+      <div className="kl-grade-row">
+        <b className="kl-grade">{grade}</b>
+        <div>
+          <strong>{unit1.map((p) => lastOf(p.name)).slice(0, 3).join(" · ") || "Empty"}</strong>
+          <span className="ok">{isPP ? `${nF}F – ${unit1.length - nF}D` : `${nF} forwards · ${unit1.length - nF} D`}</span>
+        </div>
+      </div>
+    </article>
+    <article className="kl-tile">
+      <em>This season</em>
+      <strong className="kl-big">{pct != null ? `${Math.round(pct * 1000) / 10}%` : "—"}</strong>
+      <p>{isPP ? "Power-play %" : "Penalty-kill %"}{hub?.team?.record ? ` · ${hub.team.record}` : ""}</p>
+    </article>
+    <article className="kl-tile">
+      <em>{isPP ? "Setup" : "System"}</em>
+      <strong>{chosen ? chosen.name : "None picked"}</strong>
+      <p>{best ? `Best fit for this unit: ${best.name} (${grades[best.id].edge >= 0 ? "+" : ""}${grades[best.id].edge}%)` : "Fill the unit to see fits"}</p>
+    </article>
+  </section>;
+}
+
+function KartBoard({
+  lineState, playerMap, chemistryByUnit, warningsByUnit, linksByUnit, hub, mode, setMode, showThird, shareTotals, onCoach,
+  goaliePanel, rosterEmpty, ...rest
+}) {
+  const showF = mode === LINEUP_MODES.ALL || mode === LINEUP_MODES.FORWARDS;
+  const showD = mode === LINEUP_MODES.ALL || mode === LINEUP_MODES.DEFENSE;
+  const showG = mode === LINEUP_MODES.ALL || mode === LINEUP_MODES.GOALIES;
+  const coach = lineState.coach_adjustments || "light";
+  const total = (t) => (t == null ? null : <span className={`kl-total${Math.round(t) === 100 ? " ok" : " bad"}`}>Ice time {Math.round(t)}%{Math.round(t) === 100 ? " ✓" : " · must be 100"}</span>);
+  const common = { playerMap, hub, ...rest };
+  return <section className="lb-region lb-board-region kl-board">
+    <div className="kl-filter">
+      {[[LINEUP_MODES.ALL, "All"], [LINEUP_MODES.FORWARDS, "Forwards"], [LINEUP_MODES.DEFENSE, "Defence"], [LINEUP_MODES.GOALIES, "Goalies"]].map(([id, label]) => (
+        <button type="button" key={id} className={mode === id ? "is-on" : ""} onClick={() => setMode(id)}>{label}</button>
+      ))}
+      <span className="kl-legend"><i className="l-strong" />Clicks <i className="l-forming" />Building <i className="l-weak" />Clash</span>
+      <div className="lb-mobile-tools">
+        <button type="button" className="lb-icon" onClick={rest.onTogglePool} aria-label="Open player pool">☰</button>
+      </div>
+    </div>
+    {rosterEmpty ? <div className="lb-empty">Roster unavailable</div> : <div className="fm-scroll kl-scroll">
+      {showF ? <div className="kl-section">
+        <div className="kl-section-head">
+          <h3>Forwards</h3>
+          {total(shareTotals?.forwards)}
+          <span className="kl-coach" title="What the coach changes during a game">
+            Coach changes
+            {["off", "light", "full"].map((m) => <button type="button" key={m} className={coach === m ? "is-on" : ""} onClick={() => onCoach?.(m)}>{m === "off" ? "Off" : m === "full" ? "Full" : "Light"}</button>)}
+          </span>
+        </div>
+        {lineState.forwards.map((line, i) => <RailUnit key={line.id} {...common} group="forwards" line={line} index={i} slots={["LW", "C", "RW"]}
+          links={linksByUnit[`forwards:${line.id}`] || []} chemistry={chemistryByUnit[`forwards:${line.id}`]} warnings={warningsByUnit[`forwards:${line.id}`] || []}
+          menuOpen={rest.menuKey === `forwards:${line.id}`} />)}
+      </div> : null}
+      {showD ? <div className="kl-section">
+        <div className="kl-section-head"><h3>Defence</h3>{total(shareTotals?.defense)}</div>
+        {lineState.defense.map((line, i) => <RailUnit key={line.id} {...common} group="defense" line={line} index={i} slots={["LD", "RD"]}
+          links={linksByUnit[`defense:${line.id}`] || []} chemistry={chemistryByUnit[`defense:${line.id}`]} warnings={warningsByUnit[`defense:${line.id}`] || []}
+          menuOpen={rest.menuKey === `defense:${line.id}`} />)}
+      </div> : null}
+      {showG ? <div className="kl-section">
+        <div className="kl-section-head"><h3>Goalies</h3></div>
+        {lineState.goalies.map((line, i) => <RailUnit key={line.id} {...common} group="goalies" goalieSlot line={line} index={i}
+          slots={["Starter", "Backup", ...(showThird ? ["Third"] : [])]} links={[]} chemistry={null} warnings={warningsByUnit[`goalies:${line.id}`] || []}
+          menuOpen={rest.menuKey === `goalies:${line.id}`} />)}
+        {goaliePanel}
+      </div> : null}
+    </div>}
+  </section>;
+}
+
+function KartDrawer({ open, onClose, player, stat, line, group, chemistry, links, warnings, hub, playerMap, locked, onToggleLock, onRemove, onFixUnit }) {
+  if (!open) return null;
+  const bar = (label, v) => (v == null ? null : <div className="kl-bar"><span>{label}</span><i><s style={{ width: `${Math.max(0, Math.min(100, v))}%` }} /></i><b>{Math.round(v)}</b></div>);
+  if (player) {
+    const mySlot = Object.entries(line?.slots || {}).find(([, id]) => String(id || "") === String(player.id))?.[0];
+    const seen = new Set();
+    const mates = (links || []).filter((l) => l.score != null && mySlot && (l.slotA === mySlot || l.slotB === mySlot)).map((l) => {
+      const other = playerMap[String(line?.slots?.[l.slotA === mySlot ? l.slotB : l.slotA] || "")];
+      if (!other || seen.has(other.id)) return null;
+      seen.add(other.id);
+      return { name: lastOf(other.name), tier: l.tier, score: l.score };
+    }).filter(Boolean);
+    const g = isGoalie(player.position);
+    return <aside className="kl-drawer" aria-label="Player card">
+      <button type="button" className="kl-drawer-x" onClick={onClose} aria-label="Close">×</button>
+      <div className="kl-pc-hero">
+        <KartFace player={player} size="lg" />
+        <div>
+          <strong>{player.name}</strong>
+          <span>{player.position} · {roleName(player) || "—"}{player.age ? ` · ${player.age}` : ""}</span>
+          <b className="kl-pc-ovr">{player.overall}</b>
+        </div>
+      </div>
+      <div className="kl-pc-season">
+        {stat ? (g
+          ? [["GP", stat.gp], ["W", stat.w], ["SV%", stat.sv_pct != null ? stat.sv_pct.toFixed(3).replace(/^0/, "") : "—"], ["GAA", stat.gaa ?? "—"]]
+          : [["GP", stat.gp], ["G", stat.g], ["A", stat.a], ["P", stat.pts], ["+/-", stat.pm > 0 ? `+${stat.pm}` : stat.pm], ["TOI", stat.toi_pg ?? "—"]]
+        ).map(([k, v]) => <span key={k}><b>{v ?? 0}</b>{k}</span>) : <span className="kl-muted">No games yet this season</span>}
+      </div>
+      <div className="kl-pc-block">
+        <h4>Right now</h4>
+        {bar("Energy", energyOf(player))}
+        {bar("Morale", player.morale)}
+        {bar("Confidence", player.confidence)}
+        {player.availability?.key !== "active" ? <p className="kl-warnline">{player.availability?.label}: {player.availability?.reason}</p> : null}
+      </div>
+      {mates.length ? <div className="kl-pc-block">
+        <h4>With his linemates</h4>
+        <div className="kl-chips">{mates.map((m) => <span key={m.name} className={`kl-chip l-${m.tier}`} title={`Chemistry ${m.score}`}>{m.name} · {m.tier === "strong" ? "clicks" : m.tier === "weak" ? "clash" : "building"}</span>)}</div>
+      </div> : null}
+      <div className="kl-pc-acts">
+        <button type="button" className="kl-btn" onClick={onToggleLock}>{locked ? "Unlock slot" : "Lock slot"}</button>
+        <button type="button" className="kl-btn is-red" onClick={onRemove} disabled={locked}>Take out</button>
+      </div>
+    </aside>;
+  }
+  if (!line) return null;
+  const ps = Object.values(line.slots || {}).map((id) => playerMap[String(id || "")]).filter(Boolean);
+  const together = hub?.units?.[unitBookKey(group, ps)];
+  const grade = chemGrade(chemistry?.score);
+  const strong = (links || []).filter((l) => l.tier === "strong").length;
+  const weak = (links || []).filter((l) => l.tier === "weak");
+  const bullets = [];
+  if (strong) bullets.push(`${strong} pairing${strong > 1 ? "s" : ""} that click`);
+  weak.slice(0, 1).forEach((l) => bullets.push(`${lastOf(playerMap[String(line.slots?.[l.slotA] || "")]?.name)} and ${lastOf(playerMap[String(line.slots?.[l.slotB] || "")]?.name)} clash`));
+  (warnings || []).slice(0, 2).forEach((w) => bullets.push(shortText(w.text, 14)));
+  return <aside className="kl-drawer" aria-label="Unit card">
+    <button type="button" className="kl-drawer-x" onClick={onClose} aria-label="Close">×</button>
+    <div className="kl-uc-hero">
+      <b className={`kl-grade tone-${gradeTone(grade)}`}>{grade}</b>
+      <div><strong>{line.name}</strong><span>{ps.map((p) => lastOf(p.name)).join(" – ") || "Empty"}</span></div>
+    </div>
+    <div className="kl-pc-season">
+      {together && together.gp ? [["GP", together.gp], ["GF", together.gf], ["GA", together.ga], ["PTS", together.pts], ["xGF%", together.xgf_pct != null ? Math.round(together.xgf_pct) : "—"]].map(([k, v]) => <span key={k}><b>{v}</b>{k}</span>)
+        : <span className="kl-muted">No games together yet. Results show here once they play.</span>}
+    </div>
+    <div className="kl-pc-block">
+      <h4>Read</h4>
+      {bullets.length ? <ul className="kl-bullets">{bullets.slice(0, 3).map((b, i) => <li key={i}>{b}</li>)}</ul> : <p className="kl-muted">Nothing to flag.</p>}
+    </div>
+    {group !== "goalies" ? <div className="kl-pc-acts"><button type="button" className="kl-btn is-go" onClick={onFixUnit}>Auto build this unit</button></div> : null}
+  </aside>;
+}
+
 export function EvenStrengthLines(props) {
   const { franchiseState, setScreen, setFranchiseState, setNavGuard, pendingPromiseNav, setPendingPromiseNav } = useGameUI();
   // AHL mode: same Edit Lines screen for the affiliate (no chemistry layer).
@@ -1584,7 +2074,7 @@ export function EvenStrengthLines(props) {
   const [selectedSlotKey, setSelectedSlotKey] = useState("");
   const [selectedPlayerId, setSelectedPlayerId] = useState("");
   const [tab, setTab] = useState("unit");
-  const [inspectorOpen, setInspectorOpen] = useState(true);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
   const [poolOpen, setPoolOpen] = useState(false);
   const [menuKey, setMenuKey] = useState("");
   const [clipboard, setClipboard] = useState(null);
@@ -2249,34 +2739,84 @@ export function EvenStrengthLines(props) {
     return () => setNavGuard(null);
   }, [setNavGuard, players.length, lineupHoles, holesFillable, autoFillHoles, unsaved, saveLines, ahl]);
   const replaceSelected = useCallback((playerId) => { if (selectedSlot && placePlayer(playerId, selectedSlot)) setComparing(false); }, [selectedSlot, placePlayer]);
+  const hub = useLinesHub(!ahl && Boolean(franchiseState?.session_id || sessionId), `${franchiseState?.lines_revision || 0}:${franchiseState?.calendar_cursor || 0}`);
+  useEffect(() => {
+    try {
+      if (sessionStorage.getItem("kl.openGoalies") === "1") { sessionStorage.removeItem("kl.openGoalies"); setMode(LINEUP_MODES.GOALIES); }
+    } catch { /* storage off */ }
+  }, []);
+  const lineIssues = useMemo(() => {
+    const out = [];
+    const goalieCount = ["Starter", "Backup"].filter((sl) => lineState.goalies?.[0]?.slots?.[sl]).length;
+    if (goalieCount < 2) out.push({ id: "goalies", severity: "bad", text: goalieCount ? "Only one goalie dressed" : "No goalie dressed", detail: "You need a starter and a backup.", fixLabel: holesFillable ? "Dress a backup" : "", run: "fill" });
+    const rows = descriptors(lineState, showThird);
+    rows.filter((r) => r.playerId && playerMap[r.playerId] && !playerMap[r.playerId].availability?.placeable).slice(0, 2).forEach((r) => {
+      const pl = playerMap[r.playerId];
+      out.push({ id: `out-${r.key}`, severity: "bad", text: `${lastOf(pl.name)} can't play`, detail: pl.availability?.reason, fixLabel: holesFillable ? "Replace him" : "", run: "fill" });
+    });
+    const empty = rows.filter((r) => r.group !== "goalies" && !r.playerId).length;
+    if (empty) out.push({ id: "empty", severity: "bad", text: `${empty} empty spot${empty > 1 ? "s" : ""} in the lineup`, fixLabel: holesFillable ? "Fill them" : "", run: "fill" });
+    if (shareTotals?.forwards != null && Math.round(shareTotals.forwards) !== 100) out.push({ id: "share-f", severity: "warn", text: `Forward ice time adds up to ${Math.round(shareTotals.forwards)}%`, detail: "It has to be 100% to save.", fixLabel: "Reset ice time", run: "share-f" });
+    if (shareTotals?.defense != null && Math.round(shareTotals.defense) !== 100) out.push({ id: "share-d", severity: "warn", text: `Defence ice time adds up to ${Math.round(shareTotals.defense)}%`, detail: "It has to be 100% to save.", fixLabel: "Reset ice time", run: "share-d" });
+    (lineState.forwards || []).forEach((line, i) => {
+      const role = lineRoleOf(line, i);
+      const grinders = ["LW", "C", "RW"].map((sl) => playerMap[String(line.slots?.[sl] || "")]).filter((pl) => pl && /grind|check|enforc/i.test(String(roleName(pl) || pl.role || ""))).length;
+      if (role.id === "scoring" && grinders >= 2) out.push({ id: `role-${line.id}`, severity: "warn", text: `Line ${i + 1} is set to Scoring with ${grinders} grinders`, fixLabel: "Make it Checking", run: { deploy: ["forwards", line.id, { zone: "defensive", usage: "checking" }] } });
+      const sc = Number(chemistryByUnit[`forwards:${line.id}`]?.score);
+      if (Number.isFinite(sc) && sc > 0 && sc < 50) out.push({ id: `chem-${line.id}`, severity: "warn", text: `Line ${i + 1} doesn't click (${chemGrade(sc)})`, fixLabel: "Auto build it", run: { auto: ["forwards", line.id] } });
+    });
+    (lineState.defense || []).forEach((line, i) => {
+      const sc = Number(chemistryByUnit[`defense:${line.id}`]?.score);
+      if (Number.isFinite(sc) && sc > 0 && sc < 50) out.push({ id: `chemd-${line.id}`, severity: "warn", text: `Pair ${i + 1} doesn't click (${chemGrade(sc)})`, fixLabel: "Auto build it", run: { auto: ["defense", line.id] } });
+    });
+    return out;
+  }, [lineState, playerMap, showThird, holesFillable, shareTotals, chemistryByUnit]);
+  const runFix = useCallback((issue) => {
+    const r = issue?.run;
+    if (r === "fill") { autoFillHoles(); return; }
+    if (r === "share-f") { (lineState.forwards || []).forEach((line, i) => onShareSet("forwards", line.id, FWD_SHARE_DEFAULT[i] ?? 10)); return; }
+    if (r === "share-d") { (lineState.defense || []).forEach((line, i) => onShareSet("defense", line.id, DEF_SHARE_DEFAULT[i] ?? 10)); return; }
+    if (r?.deploy) { onDeploy(...r.deploy); return; }
+    if (r?.auto) { actions.autoBuild(...r.auto); }
+  }, [autoFillHoles, lineState, onShareSet, onDeploy, actions]);
   const selectedLocked = selectedSlot ? Boolean(locks[selectedSlot.key]) : false;
   const rosterLoading = !franchiseState && !players.length;
   const live = !unsaved && !teamChemistry.projected;
-  const subtitle = `${players.length} players · ${live ? "Live chemistry" : unsaved ? "Unsaved edits — projected scores" : "Projected chemistry"}`;
 
-  return <div className={`linebuilder-root lb-dd${ahl ? " lb-ahl" : ""}`}>
+  return <div className={`linebuilder-root lb-dd kl${ahl ? " lb-ahl" : ""}`}>
     <EditLinesStyles />
-    <LineBuilderSidebar setScreen={guardedSetScreen} abbreviation={team.abbreviation} logo={team.logo} activeScreen={ahl ? SCREENS.AHL_CENTER : SCREENS.EDIT_LINES} />
-    <main className="lb-shell">
-      <LineBuilderHeader
+    <main className="lb-shell kl-shell">
+      <KartLinesTop
         team={team}
+        tab={ahl ? "" : mode === LINEUP_MODES.GOALIES ? "goalies" : "even"}
+        setScreen={guardedSetScreen}
+        onGoalies={() => setMode(LINEUP_MODES.GOALIES)}
+        onEvenStrength={() => setMode(LINEUP_MODES.ALL)}
         title={ahl ? `AHL Lines${ahlData?.team_name ? ` · ${ahlData.team_name}` : ""}` : "Lines"}
-        subtitle={ahl ? `${players.length} players · Line slots set AHL ice time (Line 1 ≈ 18.5 min → Line 4 ≈ 8.5 min)` : subtitle}
-        live={live}
-        canUndo={history.length > 0}
-        canRedo={future.length > 0}
-        onUndo={undo}
-        onRedo={redo}
-        onClear={clearAll}
-        onReset={resetSaved}
-        onAutoBuild={() => setAutoBuild((current) => ({ ...current, open: !current.open, scope: null }))}
-        onSave={saveLines}
-        saving={saving}
-        unsaved={unsaved}
-        saveError={saveError}
-        disabled={!players.length}
+        subtitle={ahl ? "Line slots set AHL ice time" : live ? "Live" : unsaved ? "Unsaved changes" : "Projected"}
+        history={{ undo, redo, canUndo: history.length > 0, canRedo: future.length > 0 }}
+        actions={{
+          clear: clearAll,
+          reset: resetSaved,
+          auto: () => setAutoBuild((current) => ({ ...current, open: !current.open, scope: null })),
+          save: saveLines,
+          saving,
+          unsaved,
+          saveError,
+          disabled: !players.length,
+          saveLabel: "Save lines",
+        }}
       />
-      <LineStatusStrip metrics={ahl ? statusMetrics.filter((m) => !/chem|new pairs/i.test(m.label)) : statusMetrics} meter={ahl ? null : chemMeter} />
+      {players.length ? <LinesHero
+        lineState={lineState}
+        playerMap={playerMap}
+        chemistryByUnit={chemistryByUnit}
+        teamScore={teamChemistry.score}
+        hub={hub}
+        issues={lineIssues}
+        onFix={runFix}
+        assignedPlayers={assignedPlayers}
+      /> : null}
       {!ahl && players.length ? (
         <StrategyBoard
           franchiseState={franchiseState}
@@ -2294,18 +2834,17 @@ export function EvenStrengthLines(props) {
       <div className="lb-workspace">
         {rosterLoading
           ? <section className="lb-region lb-pool-region"><div className="lb-region-head"><h2 className="lb-region-title">Player pool</h2></div><div className="lb-loading"><div className="lb-skeleton" /></div></section>
-          : <PlayerPool players={filteredPool} assignedSet={assignedSet} lockedSet={lockedSet} selectedPlayerId={selectedPlayerId} search={search} setSearch={setSearch} focusSlot={focusSlot} onPlayerSelect={onPlayerSelect} onDragStart={onDragStart} open={poolOpen} onClose={() => setPoolOpen(false)} />}
-        <FormationBoard
-          goaliePanel={ahl ? null : <GoaliePlanPanel plan={goaliePlan} onChange={changeGoaliePlan} starter={playerMap[String(lineState.goalies?.[0]?.slots?.Starter || "")]} backup={playerMap[String(lineState.goalies?.[0]?.slots?.Backup || "")]} />}
+          : <PlayerPool players={filteredPool} assignedSet={assignedSet} lockedSet={lockedSet} selectedPlayerId={selectedPlayerId} search={search} setSearch={setSearch} focusSlot={focusSlot} onPlayerSelect={onPlayerSelect} onDragStart={onDragStart} open={poolOpen} onClose={() => setPoolOpen(false)} stats={ahl ? null : (hub?.players || {})} />}
+        <KartBoard
+          goaliePanel={ahl ? null : <GoaliePlanPanel plan={goaliePlan} onChange={changeGoaliePlan} starter={playerMap[String(lineState.goalies?.[0]?.slots?.Starter || "")]} backup={playerMap[String(lineState.goalies?.[0]?.slots?.Backup || "")]} starts={hub?.goalies?.starts || null} />}
           mode={mode}
           setMode={setMode}
           lineState={lineState}
           playerMap={playerMap}
-          chemReport={chemReport}
           chemistryByUnit={chemistryByUnit}
           warningsByUnit={warningsByUnit}
           linksByUnit={linksByUnit}
-          depthLinks={depthLinks}
+          hub={hub}
           selectedUnit={selectedUnit}
           selectedSlotKey={selectedSlotKey}
           selectedPlayer={selectedPlayerId ? playerMap[selectedPlayerId] : null}
@@ -2313,47 +2852,37 @@ export function EvenStrengthLines(props) {
           showThird={showThird}
           menuKey={menuKey}
           clipboard={clipboard}
-          onSelectUnit={(group, lineId) => { setSelectedUnit({ group, lineId }); setInspectorOpen(true); }}
+          onSelectUnit={(group, lineId) => { setSelectedUnit({ group, lineId }); setSelectedSlotKey(""); setInspectorOpen(true); }}
           onSlotSelect={onSlotSelect}
-          onDrop={onDrop}
-          onDragStart={onDragStart}
           onRemove={removeSlot}
           onToggleLock={toggleLock}
           onSlotKeyDown={onSlotKeyDown}
           registerSlotRef={registerSlotRef}
-          onWarnings={openWarnings}
           onMenuToggle={(group, lineId) => { const key = `${group}:${lineId}`; setMenuKey((current) => current === key ? "" : key); }}
           actions={actions}
           onTogglePool={() => setPoolOpen((current) => !current)}
-          onToggleInspector={() => setInspectorOpen((current) => !current)}
           rosterEmpty={!players.length && !rosterLoading}
           onShare={onShareSet}
           onDeploy={onDeploy}
           onCoach={onCoach}
           shareTotals={shareTotals}
         />
-        <LineInspector
+        <KartDrawer
           open={inspectorOpen}
-          onClose={() => setInspectorOpen(false)}
-          tab={tab}
-          setTab={setTab}
-          selectedLine={selectedLine}
-          selectedGroup={selectedUnit.group}
-          selectedPlayer={selectedPlayer}
-          selectedSlot={selectedSlot}
-          playerMap={playerMap}
+          onClose={() => { setInspectorOpen(false); setSelectedSlotKey(""); }}
+          player={selectedPlayer}
+          stat={selectedPlayer ? hub?.players?.[selectedPlayer.id] : null}
+          line={selectedLine}
+          group={selectedUnit.group}
           chemistry={selectedChemistry}
-          warnings={inspectorWarnings}
-          unitPlayers={unitPlayers}
-          unitLinks={selectedLinks}
-          comparisonPlayers={comparisonPlayers}
-          comparing={comparing}
-          setComparing={setComparing}
-          onReplace={replaceSelected}
-          onRemoveSelected={() => selectedSlot && removeSlot(selectedSlot)}
-          onToggleSelectedLock={() => selectedSlot && toggleLock(selectedSlot)}
-          selectedLocked={selectedLocked}
-          chemistryLoading={chemLoading}
+          links={selectedLinks}
+          warnings={selectedWarnings}
+          hub={hub}
+          playerMap={playerMap}
+          locked={selectedLocked}
+          onToggleLock={() => selectedSlot && toggleLock(selectedSlot)}
+          onRemove={() => selectedSlot && removeSlot(selectedSlot)}
+          onFixUnit={() => selectedLine && actions.autoBuild(selectedUnit.group, selectedLine.id)}
         />
       </div>
       <AutoBuildPopover state={autoBuild} setState={setAutoBuild} changes={autoChanges} onApply={applyAutoBuild} />
@@ -2546,14 +3075,14 @@ function fitGrades(fits) {
 }
 
 const GOALIE_SPLITS = { workhorse: [65, 17], starter: [58, 24], balanced: [50, 32], tandem: [41, 41], hot_hand: [48, 34], auto: [54, 28] };
-function GoaliePlanPanel({ plan, onChange, starter, backup }) {
+function GoaliePlanPanel({ plan, onChange, starter, backup, starts = null }) {
   const usage = plan?.usage || "auto";
   const [a, b] = GOALIE_SPLITS[usage] || GOALIE_SPLITS.auto;
   const last = (p) => (p?.name ? String(p.name).split(" ").slice(-1)[0] : "—");
   return <div className="st-plan st-plan--goalie">
     <div className="st-plan-head">
       <strong>Goalie plan</strong>
-      <span>Projected starts: <b>{last(starter)} ~{a}</b> · <b>{last(backup)} ~{b}</b> of 82. Playoffs always go to the starter.</span>
+      <span>Projected starts: <b>{last(starter)} ~{a}</b> · <b>{last(backup)} ~{b}</b> of 82.{starts && (starter || backup) ? <> So far: <b>{last(starter)} {starts[starter?.id]?.gp ?? 0}</b> · <b>{last(backup)} {starts[backup?.id]?.gp ?? 0}</b>.</> : null} Playoffs always go to the starter.</span>
     </div>
     <div className="st-plan-cards st-plan-cards--six">
       {GOALIE_PLANS.map((o) => <button type="button" key={o.id} className={`st-plan-card${usage === o.id ? " is-on" : ""}`} onClick={() => onChange({ ...plan, usage: o.id })}>
@@ -2877,6 +3406,7 @@ function SpecialTeamsLines({ kind, ...props }) {
 
   const players = useMemo(() => liveNhlPlayers(franchiseState, props), [franchiseState, props]);
   const playerMap = useMemo(() => players.reduce((map, player) => { map[player.id] = player; return map; }, {}), [players]);
+  const stHub = useLinesHub(true, `${franchiseState?.lines_revision || 0}:${franchiseState?.calendar_cursor || 0}`);
   const playersRef = useRef(players);
   playersRef.current = players;
   const stRosterKey = useRef("");
@@ -3133,34 +3663,23 @@ function SpecialTeamsLines({ kind, ...props }) {
   const rosterLoading = !franchiseState && !players.length;
   const linkName = (slot) => lastName(playerMap[String(selectedLine?.slots?.[slot] || "")]?.name || slot);
 
-  return <div className="linebuilder-root">
+  return <div className="linebuilder-root kl kl-st">
     <EditLinesStyles />
-    <LineBuilderSidebar setScreen={setScreen} abbreviation={team.abbreviation} logo={team.logo} activeScreen={activeScreen} />
-    <main className="lb-shell">
-      <LineBuilderHeader
+    <main className="lb-shell kl-shell">
+      <KartLinesTop
         team={team}
+        tab={isPP ? "pp" : "pk"}
+        setScreen={setScreen}
         title={title}
-        subtitle={`${players.length} players · ${isPP ? "Creativity and puck movement weighted" : "Box coverage — every killer covers their partner"}`}
-        live={!unsaved}
-        canUndo={stHistory.length > 0}
-        canRedo={stFuture.length > 0}
-        onUndo={undoLines}
-        onRedo={redoLines}
-        onClear={clearAll}
-        onReset={revertToSaved}
-        onAutoBuild={resetLines}
-        onSave={saveLines}
-        saving={saving}
-        unsaved={unsaved}
-        saveError={saveError}
-        disabled={!players.length}
-        saveLabel={unsaved ? "Save units" : "Saved"}
+        subtitle={unsaved ? "Unsaved changes" : "Saved"}
+        history={{ undo: undoLines, redo: redoLines, canUndo: stHistory.length > 0, canRedo: stFuture.length > 0 }}
+        actions={{ clear: clearAll, reset: revertToSaved, auto: resetLines, save: saveLines, saving, unsaved, saveError, disabled: !players.length, saveLabel: "Save units" }}
       />
-      <LineStatusStrip metrics={statusMetrics} meter={chemMeter} />
+      {players.length ? <SpecialTeamsHero kind={kind} lines={lines} chemistryByLine={chemistryByLine} strategy={strategy} hub={stHub} playerMap={playerMap} /> : null}
       <div className="lb-workspace">
         {rosterLoading
           ? <section className="lb-region lb-pool-region"><div className="lb-region-head"><h2 className="lb-region-title">Player pool</h2></div><div className="lb-loading"><div className="lb-skeleton" /></div></section>
-          : <PlayerPool players={filteredPool} assignedSet={assignedSet} lockedSet={emptyLockedSet} selectedPlayerId={selectedPlayerId} search={search} setSearch={setSearch} focusSlot={null} onPlayerSelect={onPlayerSelect} onDragStart={onDragStart} open={poolOpen} onClose={() => setPoolOpen(false)} />}
+          : <PlayerPool players={filteredPool} assignedSet={assignedSet} lockedSet={emptyLockedSet} selectedPlayerId={selectedPlayerId} search={search} setSearch={setSearch} focusSlot={null} onPlayerSelect={onPlayerSelect} onDragStart={onDragStart} open={poolOpen} onClose={() => setPoolOpen(false)} stats={stHub?.players || {}} />}
 
         <section className="lb-region lb-board-region">
           <div className="lb-modebar">

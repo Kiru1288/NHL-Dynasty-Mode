@@ -12155,7 +12155,8 @@ class SimEngine:
         """Open a per-game memo scope; returns True when this caller owns it."""
         if getattr(self, "_gm_game_scope", None) is not None:
             return False
-        self._gm_game_scope = {"credited": {}, "rating_avg": {}, "team_offense": {}, "gp_today": set()}
+        self._gm_game_counter = int(getattr(self, "_gm_game_counter", 0) or 0) + 1
+        self._gm_game_scope = {"credited": {}, "rating_avg": {}, "team_offense": {}, "gp_today": set(), "game_no": self._gm_game_counter}
         self._gm_light_xg_sog_cache = {}
         return True
 
@@ -16944,6 +16945,52 @@ class SimEngine:
         gamma_d = math.log(1.0 / 0.82) / 6.0
         return max(0.84, min(1.20, math.exp(-gamma_d * (rating - baseline))))
 
+    def _gm_track_unit_event(
+        self,
+        team: Any,
+        players: Sequence[Any],
+        *,
+        gf: int = 0,
+        ga: int = 0,
+        sf: int = 0,
+        sa: int = 0,
+        xgf: float = 0.0,
+        xga: float = 0.0,
+        point_ids: Optional[Set[str]] = None,
+        game_key: Any = None,
+    ) -> None:
+        """Even-strength on-ice results per forward trio and D pair, for clubs that keep a
+        unit book (the user's team). Lines screen: "points together", GF/GA, xGF%."""
+        store = getattr(team, "_unit_on_ice", None) if team is not None else None
+        if not isinstance(store, dict):
+            return
+        try:
+            fw = sorted(_id_str(p, "id") for p in players if p is not None and not self._gm_is_defense(p))
+            dd = sorted(_id_str(p, "id") for p in players if p is not None and self._gm_is_defense(p))
+            keys = []
+            if len(fw) >= 2:
+                keys.append(("F|" + "|".join(x for x in fw if x), set(fw)))
+            if len(dd) == 2:
+                keys.append(("D|" + "|".join(x for x in dd if x), set(dd)))
+            for key, members in keys:
+                rec = store.get(key)
+                if rec is None:
+                    rec = {"gp": 0, "gf": 0, "ga": 0, "sf": 0, "sa": 0, "xgf": 0.0, "xga": 0.0, "pts": 0, "_g": None}
+                    store[key] = rec
+                if game_key is not None and rec.get("_g") != game_key:
+                    rec["gp"] = int(rec.get("gp", 0)) + 1
+                    rec["_g"] = game_key
+                rec["gf"] = int(rec.get("gf", 0)) + int(gf)
+                rec["ga"] = int(rec.get("ga", 0)) + int(ga)
+                rec["sf"] = int(rec.get("sf", 0)) + int(sf)
+                rec["sa"] = int(rec.get("sa", 0)) + int(sa)
+                rec["xgf"] = round(float(rec.get("xgf", 0.0)) + float(xgf), 4)
+                rec["xga"] = round(float(rec.get("xga", 0.0)) + float(xga), 4)
+                if point_ids:
+                    rec["pts"] = int(rec.get("pts", 0)) + len(members & set(point_ids))
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+
     def _gm_light_shift_attribute(
         self,
         rng: random.Random,
@@ -17306,6 +17353,9 @@ class SimEngine:
                         _bump([primary], xa=xg * 0.58)
                 _bump(atk, xgf=xg)
                 _bump(dfd, xga=xg)
+                if not e.get("pp") and not e.get("sh"):
+                    self._gm_track_unit_event(team, atk, xgf=xg, sf=1, game_key=(getattr(self, "_gm_game_scope", None) or {}).get("game_no") or id(ledger))
+                    self._gm_track_unit_event(opponent, dfd, xga=xg, sa=1, game_key=(getattr(self, "_gm_game_scope", None) or {}).get("game_no") or id(ledger))
 
         # Goals are a draw inside the fixed team total, weighted by this shot's xG.
         # Team xG is not rewritten to equal the score.
@@ -17400,6 +17450,10 @@ class SimEngine:
                             ast2["sha"] = 1.0
                         _bump([second], **ast2)
                         assist_ids.append(_id_str(second, "id"))
+            if not is_pp and not is_sh and not is_en:
+                _pt_ids = {x for x in ([_id_str(shooter, "id")] if shooter is not None else []) + assist_ids if x}
+                self._gm_track_unit_event(team, atk, gf=1, point_ids=_pt_ids, game_key=(getattr(self, "_gm_game_scope", None) or {}).get("game_no") or id(ledger))
+                self._gm_track_unit_event(opponent, dfd, ga=1, game_key=(getattr(self, "_gm_game_scope", None) or {}).get("game_no") or id(ledger))
             goal_rows.append({
                 "for_team_id": tid,
                 "scorer_id": _id_str(shooter, "id") if shooter is not None else "",

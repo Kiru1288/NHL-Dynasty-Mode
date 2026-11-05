@@ -13877,6 +13877,7 @@ def _attach_franchise_saved_lineups(
         setattr(tm, "_user_pk_strategy", None)
         setattr(tm, "_user_goalie_plan", None)
         setattr(tm, "_gm_st_profile_cache", None)
+        setattr(tm, "_unit_on_ice", None)
 
     lines_root = getattr(session, "lines", None)
     if not isinstance(lines_root, dict):
@@ -13914,6 +13915,12 @@ def _attach_franchise_saved_lineups(
                 setattr(tm, "_franchise_saved_pp", pp_user)
             if pk_user is not None:
                 setattr(tm, "_franchise_saved_pk", pk_user)
+            try:
+                from services.lines_hub import unit_book_for_season
+
+                setattr(tm, "_unit_on_ice", unit_book_for_season(session))
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
             for attr, block_key, field in (
                 ("_user_pp_strategy", "power_play", "strategy"),
                 ("_user_pk_strategy", "penalty_kill", "strategy"),

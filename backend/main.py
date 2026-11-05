@@ -1215,6 +1215,14 @@ def get_franchise_ahl_ledger(season: Optional[int] = None, x_franchise_session: 
     return build_ahl_ledger_payload(s, season)
 
 
+@app.get("/api/franchise/lines/hub")
+def get_franchise_lines_hub(x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    """Lines screen numbers: season stats, unit on-ice results, next opponent, PP/PK %, goalie usage."""
+    from services.lines_hub import build_lines_hub
+
+    return build_lines_hub(_session_or_404(x_franchise_session))
+
+
 @app.get("/api/franchise/lines/view")
 def get_franchise_team_lines_view(
     team_id: str,

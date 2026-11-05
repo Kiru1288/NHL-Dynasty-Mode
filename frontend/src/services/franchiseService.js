@@ -610,6 +610,12 @@ export async function getFranchiseLines() {
 }
 
 /** @param {{unit_type: string, lines: any}} payload */
+/** Lines screen numbers: season stats, unit on-ice results, next opponent, PP/PK %, goalie usage. */
+export async function getLinesHub() {
+  const { data } = await api.get("/api/franchise/lines/hub");
+  return data;
+}
+
 export async function saveFranchiseLines(payload) {
   const { data } = await api.post("/api/franchise/lines", payload);
   return data;
