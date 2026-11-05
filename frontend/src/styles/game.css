@@ -83039,3 +83039,147 @@ html:not(#_) .linebuilder-root.kl.kl-st .lb-board-region > .fm-scroll { flex: 1 
 html:not(#_) .linebuilder-root.kl.kl-st .lb-board-region > .fm-scroll > * { flex-shrink: 0 !important; }
 html:not(#_) .linebuilder-root.kl.kl-st .lb-inspector-region { display: flex !important; flex-direction: column; }
 html:not(#_) .linebuilder-root.kl.kl-st .lb-inspector-region .lb-inspector { flex: 1; min-height: 0; overflow-y: auto; }
+
+/* ═══ Setup: readable deed, black puck, paper team board, desk easter eggs (2026-11-04) ═══ */
+html:not(#_) .setup-root { --su-ink: #15112b; --su-paper: #fbf5e4; --su-yellow: #ffcf1f; --su-display: "Luckiest Guy", "Archivo Black", sans-serif; --su-pixel: "Silkscreen", monospace; }
+html:not(#_) .setup-root .setup-config-layout--desk { isolation: isolate; }
+html:not(#_) .setup-root .setup-config-grid { position: relative; z-index: 1; }
+
+/* Desk props (behind the panels, peeking out, soft-focus) */
+html:not(#_) .setup-root .setup-desk-props { position: absolute; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
+html:not(#_) .setup-root .setup-desk-props .sdp { position: absolute; filter: blur(1.4px) saturate(.9); opacity: .9; }
+html:not(#_) .setup-root .setup-desk-props .sdp-sticky {
+  width: 132px; min-height: 120px; padding: 12px 12px 10px; font: 700 13px/1.3 "Caveat", "Comic Sans MS", "Segoe Print", cursive; color: #3a2f12;
+  background: linear-gradient(180deg, #ffe873, #ffd84a); box-shadow: 3px 5px 10px rgba(0,0,0,.35);
+}
+html:not(#_) .setup-root .setup-desk-props .sdp-sticky b { display: block; font-family: var(--su-display); font-weight: 400; font-size: 15px; letter-spacing: .02em; color: #b5121b; }
+html:not(#_) .setup-root .setup-desk-props .sdp-sticky i { display: block; font-size: 11px; opacity: .75; }
+html:not(#_) .setup-root .setup-desk-props .sdp-s1 { left: -18px; top: 210px; transform: rotate(-9deg); }
+html:not(#_) .setup-root .setup-desk-props .sdp-s2 { right: -22px; top: 120px; transform: rotate(7deg); background: linear-gradient(180deg, #9af0d0, #6fe0b8); }
+html:not(#_) .setup-root .setup-desk-props .sdp-ticket {
+  left: 46%; top: -18px; width: 220px; height: 64px; display: flex; flex-direction: column; justify-content: center; padding: 0 16px;
+  background: repeating-linear-gradient(90deg, #f3e2b8 0 6px, #efd9a6 6px 12px); border: 2px dashed #b5121b; border-radius: 6px; transform: rotate(4deg);
+  color: #7a1010; font-family: var(--su-pixel); font-size: 9px; box-shadow: 2px 4px 10px rgba(0,0,0,.35);
+}
+html:not(#_) .setup-root .setup-desk-props .sdp-ticket b { font-family: var(--su-display); font-weight: 400; font-size: 22px; color: #b5121b; }
+html:not(#_) .setup-root .setup-desk-props .sdp-pencil {
+  left: 30px; top: 18px; width: 260px; height: 14px; border-radius: 3px; transform: rotate(-14deg);
+  background: linear-gradient(90deg, #f6b7c4 0 16px, #c9c9c9 16px 30px, #ffcf1f 30px calc(100% - 26px), #f2d2a6 calc(100% - 26px) calc(100% - 8px), #3a3a3a calc(100% - 8px));
+  box-shadow: 0 4px 6px rgba(0,0,0,.35);
+}
+html:not(#_) .setup-root .setup-desk-props .sdp-mug {
+  right: -40px; bottom: 60px; width: 140px; height: 140px; border-radius: 50%; display: grid; place-items: center;
+  background: radial-gradient(circle at 50% 50%, #3b2213 0 44%, #5a3620 45% 50%, #f5f0e6 51% 64%, #d8d0c0 65% 100%); box-shadow: 4px 8px 16px rgba(0,0,0,.45);
+}
+html:not(#_) .setup-root .setup-desk-props .sdp-mug span { position: absolute; left: -48px; top: 54px; font-family: var(--su-display); font-size: 12px; color: #b5121b; transform: rotate(-80deg); opacity: .8; }
+html:not(#_) .setup-root .setup-desk-props .sdp-mug::after { content: ""; position: absolute; left: -26px; top: 50px; width: 34px; height: 40px; border: 9px solid #e6dfcf; border-right: 0; border-radius: 20px 0 0 20px; }
+html:not(#_) .setup-root .setup-desk-props .sdp-ring { right: 30px; top: 470px; width: 110px; height: 110px; border-radius: 50%; border: 6px solid rgba(91, 52, 22, .32); filter: blur(2px); }
+html:not(#_) .setup-root .setup-desk-props .sdp-tape { left: -30px; bottom: 120px; width: 112px; height: 112px; border-radius: 50%; background: radial-gradient(circle, transparent 0 30%, #e9e9ea 31% 36%, #1d1d22 37% 100%); box-shadow: 3px 6px 12px rgba(0,0,0,.5); }
+html:not(#_) .setup-root .setup-desk-props .sdp-polaroid { left: 6px; bottom: -22px; width: 120px; padding: 8px 8px 22px; background: #fbfbf6; transform: rotate(12deg); box-shadow: 3px 6px 12px rgba(0,0,0,.45); }
+html:not(#_) .setup-root .setup-desk-props .sdp-polaroid em { display: block; margin-top: 4px; font: 700 12px "Caveat", "Comic Sans MS", cursive; color: #444; text-align: center; font-style: normal; }
+html:not(#_) .setup-root .setup-desk-props .sdp-cup { display: block; height: 84px; background:
+  radial-gradient(ellipse 22% 14% at 50% 22%, #e8e8ea 0 99%, transparent 100%),
+  linear-gradient(180deg, transparent 0 30%, #c9ccd2 30% 72%, #8a8f99 72% 80%, transparent 80%) 50% 0 / 34% 100% no-repeat,
+  linear-gradient(180deg, #6aa0d8, #2f5aa0); }
+html:not(#_) .setup-root .setup-desk-props .sdp-puck { right: 18px; top: 18px; width: 70px; height: 28px; border-radius: 50%; background: radial-gradient(ellipse at 50% 30%, #3a3a3e, #0b0b0d); box-shadow: 0 5px 0 #000, 2px 8px 10px rgba(0,0,0,.4); }
+html:not(#_) .setup-root .setup-desk-props .sdp-napkin { left: 44%; bottom: -26px; width: 170px; padding: 12px 14px 30px; background: #fff; transform: rotate(-5deg); font: 700 13px/1.25 "Caveat", "Comic Sans MS", cursive; color: #2c4a8c; box-shadow: 2px 4px 10px rgba(0,0,0,.35); }
+html:not(#_) .setup-root .setup-desk-props .sdp-phone { right: -16px; bottom: 260px; width: 74px; height: 140px; border-radius: 14px; background: #1b1b22; border: 4px solid #33333d; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; color: #fff; transform: rotate(-10deg); box-shadow: 3px 6px 12px rgba(0,0,0,.45); }
+html:not(#_) .setup-root .setup-desk-props .sdp-phone b { width: 26px; height: 26px; border-radius: 50%; background: #ee3b2f; display: grid; place-items: center; font: 900 14px var(--su-pixel); }
+html:not(#_) .setup-root .setup-desk-props .sdp-phone span { font: 700 8px/1.2 var(--su-pixel); text-align: center; text-transform: uppercase; opacity: .85; }
+
+/* Deed: club card, labels, tokens and input all high contrast */
+html:not(#_) .setup-root .setup-deed-club { background: var(--su-ink) !important; border: 3px solid var(--su-ink) !important; outline: 3px solid var(--team-accent, #ee3b2f); outline-offset: -8px; border-radius: 16px !important; box-shadow: 4px 5px 0 rgba(21,17,43,.35) !important; }
+html:not(#_) .setup-root .setup-deed-club * { text-shadow: none !important; }
+html:not(#_) .setup-root .setup-deed-club strong { color: #fff !important; font-size: clamp(18px, 1.6vw, 26px) !important; }
+html:not(#_) .setup-root .setup-deed-club small { color: var(--su-yellow) !important; font-family: var(--su-pixel) !important; font-size: 11px !important; letter-spacing: .04em; opacity: 1 !important; }
+html:not(#_) .setup-root .setup-deed-club em { color: #fff !important; font-style: normal; font-family: var(--su-display); }
+html:not(#_) .setup-root .setup-deed-club img { background: #fff; border-radius: 50%; padding: 4px; border: 3px solid var(--su-ink); }
+html:not(#_) .setup-root .setup-steps { background: #fff !important; border: 3px solid var(--su-ink) !important; color: var(--su-ink) !important; }
+html:not(#_) .setup-root .setup-steps li { color: var(--su-ink) !important; opacity: 1 !important; }
+html:not(#_) .setup-root .setup-steps li.is-done { color: #157a33 !important; }
+html:not(#_) .setup-root .setup-deed-gm input { background: #fff !important; color: var(--su-ink) !important; border: 3px solid var(--su-ink) !important; border-radius: 14px !important; font-family: var(--su-display) !important; }
+html:not(#_) .setup-root .setup-deed-gm input::placeholder { color: #8a83a8 !important; opacity: 1; }
+html:not(#_) .setup-root .setup-deed-options * { text-shadow: none !important; }
+html:not(#_) .setup-root .setup-deed-options legend { font-family: var(--su-pixel) !important; font-size: 12px !important; color: var(--su-ink) !important; background: var(--su-yellow); border: 2px solid var(--su-ink); border-radius: 7px; padding: 2px 8px !important; margin-bottom: 8px !important; text-transform: uppercase; opacity: 1 !important; }
+html:not(#_) .setup-root .setup-token { background: #fff !important; border: 3px solid var(--su-ink) !important; border-radius: 14px !important; box-shadow: 0 4px 0 var(--su-ink) !important; color: var(--su-ink) !important; opacity: 1 !important; filter: none !important; }
+html:not(#_) .setup-root .setup-token strong { font-family: var(--su-display) !important; font-weight: 400 !important; font-size: 18px !important; color: var(--su-ink) !important; letter-spacing: .02em; text-transform: none !important; }
+html:not(#_) .setup-root .setup-token .setup-token-orb { width: 16px !important; height: 16px !important; border: 3px solid var(--su-ink) !important; background: #fff !important; box-shadow: none !important; }
+html:not(#_) .setup-root .setup-token.is-on { background: linear-gradient(180deg, #fff17a, var(--su-yellow) 55%, #f2b400) !important; }
+html:not(#_) .setup-root .setup-token.is-on .setup-token-orb { background: #2fc25b !important; }
+
+/* Signature: a clear white slip with an X and a line */
+html:not(#_) .setup-root .setup-deed-sign { background: none !important; box-shadow: none !important; border: 0 !important; }
+html:not(#_) .setup-root .setup-signature-frame {
+  position: relative; background: #fff !important; border: 3px solid var(--su-ink) !important; border-radius: 16px !important;
+  box-shadow: 4px 5px 0 rgba(21,17,43,.3) !important; padding: 0 150px 0 0 !important; overflow: visible !important;
+}
+html:not(#_) .setup-root .setup-signature-frame::before, html:not(#_) .setup-root .setup-signature-frame::after { display: none !important; }
+html:not(#_) .setup-root .setup-signature-pad { position: relative; z-index: 2; background: transparent !important; cursor: crosshair; width: 100% !important; }
+html:not(#_) .setup-root .setup-signature-pad path { stroke: #10205a !important; stroke-width: 3.2px !important; fill: none !important; stroke-linecap: round; stroke-linejoin: round; }
+html:not(#_) .setup-root .setup-sign-x { position: absolute; left: 18px; bottom: 34px; z-index: 1; font-size: 26px; font-weight: 900; color: #b5121b; }
+html:not(#_) .setup-root .setup-sign-line { position: absolute; left: 50px; right: 170px; bottom: 38px; z-index: 1; border-bottom: 3px solid var(--su-ink); }
+html:not(#_) .setup-root .setup-sign-hint { position: absolute; left: 50px; bottom: 12px; z-index: 1; font-family: var(--su-pixel); font-size: 10px; text-transform: uppercase; color: #6c6587; }
+html:not(#_) .setup-root .setup-signature-frame.has-ink .setup-sign-hint { opacity: 0; }
+html:not(#_) .setup-root .setup-signature-clear { z-index: 3; position: absolute !important; right: 166px !important; top: 10px !important; bottom: auto !important; left: auto !important; font-weight: 900 !important; font-size: 12px !important; color: var(--su-ink) !important; background: #fff !important; border: 2px solid var(--su-ink) !important; border-radius: 8px !important; padding: 3px 10px !important; }
+
+/* NHL Hockey Ops puck: black */
+html:not(#_) .setup-root .setup-deed-seal {
+  width: 132px !important; height: 132px !important; right: 6px !important; top: 50% !important; left: auto !important; transform: translateY(-50%) !important;
+  border-radius: 50% !important; border: 0 !important; display: flex !important; flex-direction: column !important; align-items: center !important; justify-content: center !important;
+  background: radial-gradient(circle at 38% 30%, #4a4a52 0, #1a1a1f 38%, #050506 75%) !important;
+  box-shadow: inset 0 -8px 0 rgba(255,255,255,.06), inset 0 0 0 6px #111, inset 0 0 0 8px #2b2b31, 0 10px 0 #000, 0 16px 20px rgba(0,0,0,.45) !important;
+  filter: none !important;
+}
+html:not(#_) .setup-root .setup-deed-seal em { color: #fff !important; font-family: var(--su-display) !important; font-style: normal !important; font-size: 34px !important; line-height: 1 !important; text-shadow: 0 2px 0 #000 !important; }
+html:not(#_) .setup-root .setup-deed-seal span { color: var(--su-yellow) !important; font-family: var(--su-pixel) !important; font-size: 10px !important; letter-spacing: .08em; text-transform: uppercase; }
+html:not(#_) .setup-root .setup-deed-seal.is-struck { box-shadow: inset 0 -8px 0 rgba(255,255,255,.06), inset 0 0 0 6px #111, inset 0 0 0 9px #2fc25b, 0 10px 0 #000, 0 16px 20px rgba(0,0,0,.45) !important; }
+html:not(#_) .setup-root .setup-deed-seal.is-struck em, html:not(#_) .setup-root .setup-deed-seal.is-struck span { color: #fff !important; }
+html:not(#_) .setup-root .setup-deed-seal.is-struck span { color: #7cf0a0 !important; }
+html:not(#_) .setup-root .setup-deed-sign > [class*="sign-here"], html:not(#_) .setup-root .setup-deed-sign::before { font-family: var(--su-display) !important; }
+
+/* Begin button readable when locked */
+html:not(#_) .setup-root .setup-accept-btn { border: 4px solid var(--su-ink) !important; border-radius: 18px !important; font-family: var(--su-display) !important; color: var(--su-ink) !important; }
+html:not(#_) .setup-root .setup-accept-btn:disabled { background: repeating-linear-gradient(135deg, #e7dfc6 0 12px, #ddd3b4 12px 24px) !important; color: #4b4468 !important; opacity: 1 !important; box-shadow: 0 6px 0 var(--su-ink) !important; }
+html:not(#_) .setup-root .setup-accept-btn:not(:disabled) { background: linear-gradient(180deg, #5fe08a, #2fc25b 55%, #157a33) !important; color: #fff !important; text-shadow: 2px 2px 0 var(--su-ink) !important; }
+html:not(#_) .setup-root .setup-accept-btn small { font-family: var(--su-pixel) !important; font-size: 12px !important; color: #b5121b !important; text-shadow: none !important; }
+
+/* Notepad: soft coffee ring + doodle in the margin */
+html:not(#_) .setup-root .setup-deed-paper::after {
+  content: ""; position: absolute; right: 26px; bottom: 120px; width: 120px; height: 120px; border-radius: 50%; pointer-events: none;
+  border: 5px solid rgba(120, 72, 30, .16); box-shadow: 0 0 0 2px rgba(120, 72, 30, .06); filter: blur(1.2px); transform: rotate(10deg) scaleX(1.06);
+}
+
+/* Team board: paper like the deed */
+html:not(#_) .setup-root .setup-team-selector {
+  position: relative; background: repeating-linear-gradient(0deg, transparent 0 31px, rgba(47, 107, 255, .08) 31px 32px), var(--su-paper) !important;
+  border: 4px solid var(--su-ink) !important; border-radius: 18px !important; box-shadow: 8px 8px 0 rgba(0,0,0,.45) !important; overflow: hidden !important;
+}
+html:not(#_) .setup-root .setup-board-clip {
+  position: absolute; top: 10px; right: 26px; width: 92px; height: 34px; border-radius: 10px 10px 4px 4px; z-index: 2;
+  background: linear-gradient(180deg, #c9ccd4, #8d929d); border: 3px solid var(--su-ink); box-shadow: 0 4px 0 rgba(21,17,43,.35);
+}
+html:not(#_) .setup-root .setup-chalk-play { position: absolute; inset: 70px 18px 18px; width: calc(100% - 36px); height: calc(100% - 88px); z-index: 0; pointer-events: none; filter: blur(1.6px); opacity: .22; }
+html:not(#_) .setup-root .setup-chalk-play :is(rect, line, circle, path) { fill: none; stroke: #2f6bff; stroke-width: 4; stroke-dasharray: 2 0; }
+html:not(#_) .setup-root .setup-chalk-play path { stroke: #ee3b2f; stroke-dasharray: 10 8; }
+html:not(#_) .setup-root .setup-chalk-play text { font: 400 46px "Luckiest Guy", sans-serif; fill: #15112b; }
+html:not(#_) .setup-root .setup-chalk-play text.sm { font: 700 22px "Caveat", "Comic Sans MS", cursive; fill: #ee3b2f; }
+html:not(#_) .setup-root .setup-panel-heading { position: relative; z-index: 1; }
+html:not(#_) .setup-root .setup-panel-heading strong {
+  font-family: var(--su-display) !important; font-weight: 400 !important; color: var(--su-yellow) !important;
+  text-shadow: 3px 3px 0 var(--su-ink), -2px -2px 0 var(--su-ink), 2px -2px 0 var(--su-ink), -2px 2px 0 var(--su-ink) !important;
+}
+html:not(#_) .setup-root .setup-club-ball-grid { position: relative; z-index: 1; }
+html:not(#_) .setup-root .setup-club-ball {
+  background: rgba(255, 255, 255, .86) !important; border: 3px solid var(--su-ink) !important; border-radius: 16px !important; box-shadow: 0 4px 0 var(--su-ink) !important;
+}
+html:not(#_) .setup-root .setup-club-ball:hover { background: #fff6c9 !important; transform: translateY(-3px); box-shadow: 0 7px 0 var(--su-ink) !important; }
+html:not(#_) .setup-root .setup-club-ball.is-selected { background: linear-gradient(180deg, #fff17a, var(--su-yellow) 55%, #f2b400) !important; box-shadow: 0 0 0 4px var(--team-accent, #ee3b2f), 0 6px 0 var(--su-ink) !important; }
+html:not(#_) .setup-root .setup-club-ball-orb { background: #fff !important; border: 3px solid var(--su-ink) !important; box-shadow: 0 4px 0 rgba(21,17,43,.35) !important; }
+html:not(#_) .setup-root .setup-club-ball-orb img { filter: none !important; }
+html:not(#_) .setup-root .setup-club-ball strong { color: var(--su-ink) !important; text-shadow: none !important; font-family: var(--su-display) !important; font-weight: 400 !important; font-size: clamp(15px, 1.15vw, 20px) !important; letter-spacing: .04em; }
+
+html:not(#_) .setup-root .setup-signature-pad { background: transparent !important; border-radius: 0 !important; animation: none; }
+html:not(#_) .setup-root .setup-deed-seal { animation: none !important; color: #fff !important; }
+html:not(#_) .setup-root .setup-token { padding: 0 10px !important; gap: 8px !important; }
+html:not(#_) .setup-root .setup-token strong { font-size: 16px !important; white-space: nowrap; }
+html:not(#_) .setup-root .setup-deed-seal { opacity: 1 !important; }

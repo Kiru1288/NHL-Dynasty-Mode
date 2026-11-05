@@ -275,7 +275,10 @@ function SignaturePad({ onInkChange }) {
   };
 
   return (
-    <div className="setup-signature-frame">
+    <div className={`setup-signature-frame${paths.length ? " has-ink" : ""}`}>
+      <span className="setup-sign-x" aria-hidden="true">✕</span>
+      <span className="setup-sign-line" aria-hidden="true" />
+      <span className="setup-sign-hint" aria-hidden="true">Sign here: click and drag</span>
       <svg
         ref={svgRef}
         className="setup-signature-pad"
@@ -440,6 +443,43 @@ function AppointmentDeedSheet({
   );
 }
 
+/** Blurred desk clutter around the paperwork: a few in-jokes for the eagle-eyed GM. */
+function DeskProps() {
+  return (
+    <div className="setup-desk-props" aria-hidden="true">
+      <div className="sdp sdp-sticky sdp-s1"><b>CALL AGENT</b>re: the extension!!<i>(he's not budging)</i></div>
+      <div className="sdp sdp-sticky sdp-s2"><b>TO DO</b>✓ coffee<br />✗ fire coach<br />? cap space</div>
+      <div className="sdp sdp-ticket"><b>GAME 7</b><span>ADMIT ONE · SEC 101 · ROW C</span></div>
+      <div className="sdp sdp-pencil" />
+      <div className="sdp sdp-mug"><span>#1 GM</span></div>
+      <div className="sdp sdp-ring" />
+      <div className="sdp sdp-tape" />
+      <div className="sdp sdp-polaroid"><span className="sdp-cup" /><em>parade '94?</em></div>
+      <div className="sdp sdp-puck" />
+      <div className="sdp sdp-napkin">Zamboni driver<br />as backup goalie??</div>
+      <div className="sdp sdp-phone"><b>3</b><span>missed calls<br />· Owner</span></div>
+    </div>
+  );
+}
+
+/** Faint chalk X's and O's behind the team board. */
+function ChalkPlay() {
+  return (
+    <svg className="setup-chalk-play" viewBox="0 0 800 500" aria-hidden="true" preserveAspectRatio="xMidYMid slice">
+      <rect x="40" y="40" width="720" height="420" rx="160" />
+      <line x1="400" y1="40" x2="400" y2="460" />
+      <circle cx="400" cy="250" r="60" />
+      <circle cx="170" cy="150" r="40" /><circle cx="170" cy="350" r="40" />
+      <circle cx="630" cy="150" r="40" /><circle cx="630" cy="350" r="40" />
+      <text x="250" y="200">X</text><text x="300" y="320">X</text><text x="470" y="180">O</text><text x="520" y="300">O</text><text x="560" y="240">O</text>
+      <path d="M262 192 C 330 120, 420 130, 470 170" />
+      <path d="M312 310 C 380 360, 470 340, 515 295" />
+      <path d="M475 180 l 0 0" />
+      <text className="sm" x="600" y="440">PP1 · 1-3-1 ?</text>
+    </svg>
+  );
+}
+
 const TeamSelection = React.memo(function TeamSelection({
   teams,
   selectedIndex,
@@ -458,6 +498,8 @@ const TeamSelection = React.memo(function TeamSelection({
       <header className="setup-panel-heading">
         <strong>Select your team</strong>
       </header>
+      <ChalkPlay />
+      <span className="setup-board-clip" aria-hidden="true" />
       <ClubBallBoard teams={clubList} selectedIndex={selectedIndex} onSelect={onSelect} />
     </section>
   );
@@ -596,6 +638,7 @@ export function SetupScreen() {
     >
       {appStage === APP_STAGE.CONFIGURE ? (
         <main className="setup-config-layout setup-config-layout--desk">
+          <DeskProps />
           <div className="setup-config-grid">
             <AppointmentDeedSheet
               selected={selected}
