@@ -316,16 +316,16 @@ def assist_count_probability(chance_type: str, strength: str) -> Tuple[float, fl
     # Two-assist share. Raised so more goals carry a secondary assist
     # (about 86% on the light path). A set power play still chains more passes than a rush.
     if st == "PP":
-        p2 = 0.82 if ct in ("PP_ONE_TIMER", "PP_SLOT") else 0.76
+        p2 = 0.90 if ct in ("PP_ONE_TIMER", "PP_SLOT") else 0.86
     elif ct in ("RUSH_MEDIUM", "SH_RUSH"):
-        p2 = 0.54 if st == "SH" else 0.60
+        p2 = 0.70 if st == "SH" else 0.76
     elif ct in ("REBOUND", "NET_FRONT"):
-        p2 = 0.64
+        p2 = 0.80
     elif ct in ("POINT_SHOT", "SLOT", "HIGH_DANGER_SLOT", "ONE_TIMER"):
-        p2 = 0.70
+        p2 = 0.84
     else:
-        p2 = 0.66
-    p2 = max(0.0, min(0.90, p2))
+        p2 = 0.80
+    p2 = max(0.0, min(0.95, p2))
     p1 = max(0.0, 1.0 - p0 - p2)
     s = p0 + p1 + p2
     if s <= 0:

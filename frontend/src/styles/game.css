@@ -30495,7 +30495,7 @@ th,dt,legend,
 /* Roster rows: compact portrait, avail shown only when it is not the default */
 .nhlrost-board-row{min-height:48px!important}
 .nhlrost-board-row .nhlrost-headshot{transform:scale(.78);transform-origin:left center}
-.nhlrost-board-row__avail:is([data-avail="available"],[data-avail="active"]){color:transparent!important}
+.nhlrost-board-row__avail:is([data-avail="available"],[data-avail="active"]){color:#d6e2f4!important}
 
 /* Global sidebar rail: one active indicator, no boxed home tile */
 .nhlrost-sidebar button,.lb-sidebar button,[class*="side-nav"] button{text-transform:none!important;letter-spacing:.02em!important}
@@ -32064,7 +32064,13 @@ h1:not([class*="replay"] *){font-family:var(--dd-font-display)!important;font-we
 .draftreview-root :is(.draftreview-projection-card,.draftreview-prod-card,.draftreview-roadmap-card,.draftreview-bottom-band){background:transparent!important;border:0!important;border-radius:0!important;box-shadow:none!important;padding:0!important}
 .draftreview-root .draftreview-section-label,.draftreview-root .draftreview-kicker{font-size:12px!important;font-weight:800!important;color:var(--cs-soft)!important}
 .draftreview-root .draftreview-projection-role{font-size:18px!important;font-weight:900!important;color:#fff!important}
+.draftreview-root .draftreview-draft-card .draftreview-projection-role,
+.draftreview-root .draftreview-draft-card .draftreview-prod-stat :is(strong,b,span:last-child),
+.draftreview-root .draftreview-draft-card .draftreview-org-kv :is(strong,b),
+.draftreview-root .draftreview-draft-card .draftreview-prod-hero,
+.draftreview-root .draftreview-draft-card .draftreview-prod-hero *{color:var(--cs-ink)!important}
 .draftreview-root .draftreview-projection-eta{color:var(--cs-cream)!important;font-weight:800!important}
+.draftreview-root .draftreview-draft-card .draftreview-projection-eta{color:#a8300f!important}
 .draftreview-root .draftreview-meter-track{background:rgba(169,191,220,.18)!important;border:0!important}
 .draftreview-root .draftreview-meter-fill{background:var(--cs-cream)!important;box-shadow:none!important}
 .draftreview-root .draftreview-prod-hero,.draftreview-root .draftreview-prod-hero *{color:var(--cs-cream)!important;text-shadow:none!important}
@@ -82376,6 +82382,33 @@ html:not(#_) .edraft-root .edraft-floor { gap: 14px !important; padding: 14px 16
 html:not(#_) .edraft-root .edraft-pane, html:not(#_) .edraft-root .edraft-stage {
   background: var(--kd-paper) !important; border: 3px solid var(--kd-ink) !important; border-radius: 18px !important; box-shadow: var(--kd-shadow) !important; color: var(--kd-ink) !important;
 }
+/* Cream floor. Gradient-clipped and slate numbers were painted for the navy screen. */
+html:not(#_) .edraft-root :is(.edraft-pane, .edraft-stage, .edraft-haul) :is(.edraft-num-pop, .edraft-text-pop, .edraft-log-num, .edraft-log-ovr, .edraft-log-ovr b, .edraft-log-ovr i, .edraft-board-rank, .edraft-board-band, .edraft-haul-ovr, .edraft-log-body strong) {
+  background: none !important; background-image: none !important;
+  -webkit-background-clip: border-box !important; background-clip: border-box !important;
+  color: #15112b !important; -webkit-text-fill-color: #15112b !important;
+  filter: none !important; text-shadow: none !important; opacity: 1 !important;
+}
+html:not(#_) .edraft-root :is(.edraft-pane, .edraft-stage) :is(.edraft-log-body span, .edraft-log-round, .edraft-board-cols, .edraft-board-age, .edraft-board-stock) {
+  color: #4b4468 !important; -webkit-text-fill-color: #4b4468 !important;
+}
+html:not(#_) .edraft-root :is(.edraft-pane, .edraft-stage, .edraft-haul) :is(.edraft-num-pop, .edraft-text-pop, .edraft-log-ovr i).tone-gold,
+html:not(#_) .edraft-root :is(.edraft-pane, .edraft-stage) .edraft-board-band.is-soft {
+  color: #8a5a00 !important; -webkit-text-fill-color: #8a5a00 !important;
+}
+html:not(#_) .edraft-root :is(.edraft-pane, .edraft-stage, .edraft-haul) :is(.edraft-num-pop, .edraft-text-pop):is(.tone-green, .tone-steal, .tone-value, .tone-safe) {
+  color: #157a33 !important; -webkit-text-fill-color: #157a33 !important;
+}
+html:not(#_) .edraft-root :is(.edraft-pane, .edraft-stage, .edraft-haul) :is(.edraft-num-pop, .edraft-text-pop):is(.tone-orange, .tone-reach, .tone-early, .tone-danger, .tone-offboard) {
+  color: #a3160f !important; -webkit-text-fill-color: #a3160f !important;
+}
+html:not(#_) .edraft-root :is(.edraft-pane, .edraft-stage, .edraft-haul) :is(.edraft-num-pop, .edraft-text-pop).tone-blue,
+html:not(#_) .edraft-root :is(.edraft-pane, .edraft-stage) .edraft-board-you {
+  color: #16307f !important; -webkit-text-fill-color: #16307f !important;
+}
+html:not(#_) .edraft-root :is(.edraft-pane, .edraft-stage, .edraft-haul) :is(.edraft-num-pop, .edraft-text-pop).tone-muted {
+  color: #4b4468 !important; -webkit-text-fill-color: #4b4468 !important;
+}
 html:not(#_) .edraft-root .edraft-stage { background: rgba(251, 245, 228, .96) !important; padding: 12px !important; }
 html:not(#_) .edraft-root .edraft-tabs { display: flex !important; gap: 4px; padding: 6px !important; background: var(--kd-ink) !important; border-radius: 14px 14px 0 0; }
 html:not(#_) .edraft-root .edraft-tabs button { flex: 1; font-family: var(--kd-display) !important; font-size: 14px !important; color: #c9d3ff !important; background: transparent !important; border: 0 !important; border-radius: 9px !important; padding: 6px 6px 4px !important; text-transform: none !important; letter-spacing: 0 !important; }
@@ -82483,6 +82516,12 @@ html:not(#_) .edraft-pick-modal .edraft-tabs button { font-family: var(--kd-disp
 html:not(#_) .edraft-pick-modal .edraft-tabs button.is-active { color: var(--kd-ink) !important; background: var(--kd-yellow) !important; }
 html:not(#_) .edraft-pick-modal .edraft-sec, html:not(#_) .edraft-pick-modal .edraft-dossier-main > section {
   background: #fff !important; color: var(--kd-ink) !important; border: 2.5px solid var(--kd-ink) !important; border-radius: 14px !important; box-shadow: 2px 2px 0 var(--kd-ink) !important;
+}
+html:not(#_) .edraft-pick-modal :is(.edraft-sec, .edraft-pick-detail, .edraft-dossier) :is(.edraft-num-pop, .edraft-text-pop, .edraft-fact strong, .edraft-fact-value, .edraft-prod-cell strong) {
+  background: none !important; background-image: none !important;
+  -webkit-background-clip: border-box !important; background-clip: border-box !important;
+  color: #15112b !important; -webkit-text-fill-color: #15112b !important;
+  filter: none !important; text-shadow: none !important;
 }
 html:not(#_) .edraft-pick-modal .edraft-sec * , html:not(#_) .edraft-pick-modal .edraft-pick-detail p { color: var(--kd-ink); }
 html:not(#_) .edraft-pick-modal .edraft-sec-head h4 { font-family: var(--kd-display) !important; font-weight: 400 !important; font-size: 15px !important; letter-spacing: 0 !important; text-transform: none !important; color: var(--kd-ink) !important; }
@@ -82839,7 +82878,24 @@ html:not(#_) .linebuilder-root.kl .kl-match .ok { color: var(--kd-green-dk); fon
 html:not(#_) .linebuilder-root.kl .kl-match .bad { color: var(--kd-red-dk); font-weight: 900; }
 
 /* Strategy Board chip: slim, warnings feed the Fix tile instead */
-html:not(#_) .linebuilder-root.kl .kl-shell > :is(.sbd, [class*="strategy-board"]) { margin: 10px 18px 0 !important; }
+html:not(#_) .linebuilder-root.kl .kl-shell > :is(.sbd, [class*="strategy-board"]) { margin: 10px 18px 0 !important; position: relative; z-index: 8; }
+html:not(#_) .linebuilder-root.kl .sbd.is-open { z-index: 40; }
+html:not(#_) .linebuilder-root.kl .sbd-head { position: relative; z-index: 2; }
+html:not(#_) .linebuilder-root.kl .sbd-body {
+  position: absolute !important;
+  left: 0 !important;
+  right: 0 !important;
+  top: calc(100% - 2px) !important;
+  z-index: 41 !important;
+  margin: 0 !important;
+  max-height: min(440px, 54vh) !important;
+  overflow: auto !important;
+  padding: 12px !important;
+  background: #0c1a44 !important;
+  border: 3px solid #15112b !important;
+  border-radius: 0 0 14px 14px !important;
+  box-shadow: 0 12px 0 rgba(21, 17, 43, .35) !important;
+}
 
 /* Workspace: pool | board (drawer floats) */
 html:not(#_) .linebuilder-root.kl .lb-workspace { flex: 1 1 auto; min-height: 0; display: grid !important; grid-template-columns: 270px minmax(0, 1fr) !important; gap: 14px !important; padding: 12px 18px 16px !important; }
@@ -83183,3 +83239,274 @@ html:not(#_) .setup-root .setup-deed-seal { animation: none !important; color: #
 html:not(#_) .setup-root .setup-token { padding: 0 10px !important; gap: 8px !important; }
 html:not(#_) .setup-root .setup-token strong { font-size: 16px !important; white-space: nowrap; }
 html:not(#_) .setup-root .setup-deed-seal { opacity: 1 !important; }
+
+/* Free agency wire: the whole screen uses the draft-board rink, header, and paper sheets. */
+html:not(#_) .fa-root.fa-root--market {
+  background:
+    radial-gradient(ellipse at 50% -10%, rgba(255, 255, 255, .2), transparent 55%),
+    repeating-conic-gradient(rgba(255, 255, 255, .045) 0 25%, transparent 0 50%) 0 0 / 48px 48px,
+    linear-gradient(180deg, #2a55d8 0%, #1c35a0 55%, #14246f 100%) !important;
+  color: #15112b !important;
+}
+html:not(#_) .fa-root.fa-root--market .fa-topbar {
+  min-height: 64px !important;
+  padding: 10px 18px 12px !important;
+  background: linear-gradient(180deg, #8b4dff, #5a24c9) !important;
+  border-bottom: 4px solid #15112b !important;
+  box-shadow: inset 0 -6px 0 rgba(0, 0, 0, .18), 0 4px 0 #ffcf1f !important;
+}
+html:not(#_) .fa-root.fa-root--market .fa-phase-text {
+  font-family: "Luckiest Guy", "Archivo Black", sans-serif !important;
+  font-size: 32px !important;
+  font-weight: 400 !important;
+  letter-spacing: .02em !important;
+  color: #fff !important;
+  text-shadow: 3px 3px 0 #15112b, -2px -2px 0 #15112b, 2px -2px 0 #15112b, -2px 2px 0 #15112b !important;
+}
+html:not(#_) .fa-root.fa-root--market .fa-season {
+  color: #ffe9a8 !important;
+  font-weight: 800 !important;
+}
+html:not(#_) .fa-root.fa-root--market .fa-topbar .fa-ghost-btn {
+  font-family: "Luckiest Guy", "Archivo Black", sans-serif !important;
+  font-size: 16px !important;
+  color: #15112b !important;
+  background: #ffcf1f !important;
+  border: 3px solid #15112b !important;
+  border-radius: 12px !important;
+  box-shadow: 0 3px 0 #15112b !important;
+}
+html:not(#_) .fa-root.fa-root--market .fa-stage {
+  gap: 12px !important;
+  padding: 12px 14px 16px !important;
+  background: transparent !important;
+}
+html:not(#_) .fa-root.fa-root--market .fa-reveal {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
+}
+html:not(#_) .fa-root.fa-root--market .fa-panel {
+  background: #fbf5e4 !important;
+  color: #15112b !important;
+  border: 3px solid #15112b !important;
+  border-radius: 18px !important;
+  box-shadow: 4px 4px 0 #15112b !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+}
+html:not(#_) .fa-root.fa-root--market .fa-workspace {
+  margin: 8px 4px 0 !important;
+  padding: 0 !important;
+  gap: 0 !important;
+  background: #fbf5e4 !important;
+  color: #15112b !important;
+  border: 3px solid #15112b !important;
+  border-radius: 18px 18px 0 0 !important;
+  box-shadow: 4px 4px 0 #15112b !important;
+  overflow: hidden !important;
+}
+html:not(#_) .fa-root.fa-root--market .fa-fa-bar {
+  background: #f1e8cf !important;
+  border: 0 !important;
+  border-bottom: 2px solid rgba(21, 17, 43, .16) !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+html:not(#_) .fa-root.fa-root--market .fa-fa-phase h2 {
+  font-family: "Luckiest Guy", "Archivo Black", sans-serif !important;
+  font-weight: 400 !important;
+  color: #15112b !important;
+  -webkit-text-stroke: 0 !important;
+  text-shadow: none !important;
+}
+html:not(#_) .fa-root.fa-root--market .fa-fa-phase p,
+html:not(#_) .fa-root.fa-root--market .fa-fa-cap span {
+  color: #4b4468 !important;
+}
+html:not(#_) .fa-root.fa-root--market .fa-fa-cap strong {
+  color: #15112b !important;
+  background: #ffcf1f !important;
+  border: 2px solid #15112b !important;
+  border-radius: 8px !important;
+  padding: 2px 8px 0 !important;
+}
+html:not(#_) .fa-root.fa-root--market .fa-sim-btn {
+  color: #15112b !important;
+  background: #fff !important;
+  border: 2px solid #15112b !important;
+  border-radius: 10px !important;
+  box-shadow: 0 2px 0 #15112b !important;
+}
+html:not(#_) .fa-root.fa-root--market .fa-sim-btn.is-primary {
+  color: #15112b !important;
+  background: linear-gradient(180deg, #fff17a, #ffcf1f 55%, #f2b400) !important;
+  border: 2px solid #15112b !important;
+  text-shadow: none !important;
+}
+html:not(#_) .fa-root.fa-root--market .fa-fa-tools {
+  padding: 8px 12px !important;
+  background: #fbf5e4 !important;
+  border-bottom: 2px solid rgba(21, 17, 43, .12) !important;
+}
+html:not(#_) .fa-root.fa-root--market :is(.fa-fa-search, .fa-fa-sort) {
+  background: #fff !important;
+  color: #15112b !important;
+  border: 2px solid #15112b !important;
+  border-radius: 9px !important;
+}
+html:not(#_) .fa-root.fa-root--market .fa-fa-chip {
+  background: #fff !important;
+  color: #15112b !important;
+  border: 2px solid #15112b !important;
+  border-radius: 9px !important;
+  box-shadow: 0 2px 0 #15112b !important;
+}
+html:not(#_) .fa-root.fa-root--market .fa-fa-chip.is-active {
+  background: #2f6bff !important;
+  color: #fff !important;
+  border-color: #15112b !important;
+}
+html:not(#_) .fa-root.fa-root--market .fa-fa-layout {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  gap: 0 !important;
+}
+html:not(#_) .fa-root.fa-root--market .fa-fa-layout:has(.nd2) {
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 400px) !important;
+}
+html:not(#_) .fa-root.fa-root--market .fa-fa-desk:not(:has(.nd2)) {
+  display: none !important;
+}
+html:not(#_) .fa-root.fa-root--market .fa-fa-list,
+html:not(#_) .fa-root.fa-root--market .fa-fa-desk {
+  margin: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  background: transparent !important;
+}
+html:not(#_) .fa-root.fa-root--market .fa-fa-list {
+  padding: 0 8px 12px !important;
+}
+html:not(#_) .fa-root.fa-root--market .fa-fa-count {
+  position: sticky !important;
+  top: 0 !important;
+  z-index: 1 !important;
+  margin: 0 0 6px !important;
+  padding: 6px 10px !important;
+  background: #15112b !important;
+  color: #fff !important;
+  border-radius: 0 !important;
+  letter-spacing: .08em !important;
+}
+html:not(#_) .fa-root.fa-root--market .fa-fa-row {
+  grid-template-columns: 40px minmax(0, 1fr) auto auto auto auto !important;
+  justify-content: stretch !important;
+  gap: 10px !important;
+  margin: 0 0 6px !important;
+  padding: 6px 8px !important;
+  background: #fff !important;
+  color: #15112b !important;
+  border: 2px solid #15112b !important;
+  border-radius: 12px !important;
+  box-shadow: 2px 2px 0 #15112b !important;
+}
+html:not(#_) .fa-root.fa-root--market .fa-fa-row:hover,
+html:not(#_) .fa-root.fa-root--market .fa-fa-row.is-selected {
+  background: #fff6c9 !important;
+  box-shadow: 2px 2px 0 #15112b !important;
+}
+html:not(#_) .fa-root.fa-root--market .fa-fa-row-body strong,
+html:not(#_) .fa-root.fa-root--market .fa-fa-rating b,
+html:not(#_) .fa-root.fa-root--market .fa-fa-ask {
+  color: #15112b !important;
+  -webkit-text-fill-color: #15112b !important;
+  text-shadow: none !important;
+}
+html:not(#_) .fa-root.fa-root--market .fa-fa-row-body em,
+html:not(#_) .fa-root.fa-root--market .fa-fa-row-meta,
+html:not(#_) .fa-root.fa-root--market .fa-fa-rating i {
+  color: #4b4468 !important;
+}
+html:not(#_) .fa-root.fa-root--market .fa-fa-rating > span {
+  background: #ffcf1f !important;
+  border: 2px solid #15112b !important;
+  border-radius: 8px !important;
+}
+html:not(#_) .fa-root.fa-root--market .fa-fa-rating > span.is-pot {
+  background: #fff !important;
+}
+html:not(#_) .fa-root.fa-root--market .fa-fa-desk:has(.nd2) {
+  margin: 8px !important;
+  padding: 10px !important;
+  background: #fff !important;
+  color: #15112b !important;
+  border: 3px solid #15112b !important;
+  border-radius: 16px !important;
+  box-shadow: 4px 4px 0 #15112b !important;
+  overflow: auto !important;
+}
+html:not(#_) .fa-root.fa-root--market .fa-fa-desk :is(h3, p, span, em, strong, dt, dd, label) {
+  color: #15112b !important;
+  text-shadow: none !important;
+}
+html:not(#_) .fa-root.fa-root--market .fa-fa-desk .nd-btn--primary,
+html:not(#_) .fa-root.fa-root--market .fa-fa-desk .nd-btn--primary * {
+  color: #15112b !important;
+}
+html:not(#_) .fa-root.fa-root--market details.fa-fa-notice {
+  margin: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  border-bottom: 2px solid rgba(21, 17, 43, .12) !important;
+  background: #fff6c9 !important;
+  color: #15112b !important;
+}
+html:not(#_) .fa-root.fa-root--market details.fa-fa-notice p {
+  color: #4b4468 !important;
+}
+html:not(#_) .fa-root.fa-root--market .fa-rail-tabs {
+  display: grid !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  gap: 4px !important;
+  padding: 6px !important;
+  background: #15112b !important;
+  border: 0 !important;
+}
+html:not(#_) .fa-root.fa-root--market .fa-rail-tabs button {
+  font-family: "Luckiest Guy", "Archivo Black", sans-serif !important;
+  font-size: 14px !important;
+  font-weight: 400 !important;
+  letter-spacing: 0 !important;
+  text-transform: none !important;
+  color: #c9d3ff !important;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 9px !important;
+  box-shadow: none !important;
+}
+html:not(#_) .fa-root.fa-root--market .fa-rail-tabs button.is-active {
+  color: #15112b !important;
+  background: #ffcf1f !important;
+  box-shadow: inset 0 -3px 0 #d99a00 !important;
+}
+html:not(#_) .fa-root.fa-root--market .fa-rail-scroll {
+  background: #fbf5e4 !important;
+  color: #15112b !important;
+}
+html:not(#_) .fa-root.fa-root--market .fa-panel :is(h3, h4, p, span, em, strong, li, small) {
+  color: #15112b !important;
+  text-shadow: none !important;
+}
+html:not(#_) .fa-root.fa-root--market .fa-panel :is(.fa-day-row, .fa-wire-item, .fa-social-post) {
+  background: #fff !important;
+  border: 2px solid #15112b !important;
+  border-radius: 12px !important;
+  box-shadow: 2px 2px 0 #15112b !important;
+  color: #15112b !important;
+}

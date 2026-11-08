@@ -436,6 +436,16 @@ def _pick_trade_candidates(
                 pass
             elif motive == "depth_swap" and ovr < 81:
                 pass
+            elif (
+                motive == "star_acquisition"
+                and ovr <= 91
+                and (
+                    bool(getattr(p, "_trade_demand_active", False) or getattr(p, "trade_demand_active", False))
+                    or rental
+                    or _player_age(p) >= 26
+                )
+            ):
+                pass
             else:
                 continue
         if ovr >= 90 and motive not in ("star_acquisition", "desperation"):

@@ -780,6 +780,111 @@ def development_league_player_count(league: Any) -> int:
     return total
 
 
+def _junior_code_for_rights_player(player: Any, codes: set) -> str:
+    """A year-1 rights player needs a real junior home, not an empty pool slot."""
+    ident = getattr(player, "identity", None)
+    country = str(
+        getattr(ident, "birth_country", None)
+        or getattr(ident, "nationality", None)
+        or getattr(player, "nationality", "")
+        or ""
+    ).upper()
+    age = int(getattr(ident, "age", 18) or 18) if ident is not None else 18
+    name = str(getattr(ident, "name", "") or getattr(player, "id", "") or "")
+    if any(token in country for token in ("CAN", "CANADA")):
+        choices = [c for c in ("CHL_OHL", "CHL_WHL", "CHL_QMJHL") if c in codes]
+    elif any(token in country for token in ("USA", "UNITED STATES", "AMERICA")):
+        prefer = "USHL" if age <= 18 else "NCAA"
+        choices = [c for c in (prefer, "USHL", "NCAA") if c in codes]
+    else:
+        euro = [c for c in sorted(codes) if str(c).startswith("EU_")]
+        choices = euro or [c for c in ("CHL_OHL", "USHL", "NCAA") if c in codes]
+    if not choices:
+        return next(iter(codes), "")
+    return choices[sum(ord(ch) for ch in name) % len(choices)]
+
+
+def seat_rights_held_into_junior_leagues(league: Any) -> int:
+    """Put unsigned rights-held prospects onto a junior team when they have none.
+
+    Year 1 loads the real prospect pool without a league. Prospect scoring only
+    reads development-league rosters, so those players never received a line.
+    """
+    blocks = list(getattr(league, "development_leagues", None) or [])
+    if not blocks:
+        return 0
+    by_code: Dict[str, Dict[str, Any]] = {}
+    seated: set = set()
+    for block in blocks:
+        code = str(block.get("league_code") or "")
+        if code:
+            by_code[code] = block
+        for tm in block.get("teams") or []:
+            for p in tm.get("players") or []:
+                seated.add(id(p))
+                pid = str(getattr(p, "id", "") or "")
+                if pid:
+                    seated.add(pid)
+    for tm in list(getattr(league, "teams", None) or []):
+        for pool_name in ("roster", "ahl_roster", "echl_roster"):
+            for p in list(getattr(tm, pool_name, None) or []):
+                seated.add(id(p))
+                pid = str(getattr(p, "id", "") or "")
+                if pid:
+                    seated.add(pid)
+    placed = 0
+    for tm in list(getattr(league, "teams", None) or []):
+        for p in list(getattr(tm, "prospect_pool", None) or []):
+            if p is None or getattr(p, "retired", False):
+                continue
+            pid = str(getattr(p, "id", "") or "")
+            if id(p) in seated or (pid and pid in seated):
+                continue
+            if bool(getattr(p, "signed", False)):
+                continue
+            ident = getattr(p, "identity", None)
+            age = int(getattr(ident, "age", 18) or 18) if ident is not None else 18
+            if age > 22:
+                continue
+            code = _junior_code_for_rights_player(p, set(by_code))
+            block = by_code.get(code)
+            teams = list((block or {}).get("teams") or [])
+            if not teams:
+                continue
+            home = min(teams, key=lambda row: len(row.get("players") or []))
+            roster = home.get("players")
+            if not isinstance(roster, list):
+                roster = []
+                home["players"] = roster
+            roster.append(p)
+            club = str(home.get("name") or home.get("city") or code)
+            try:
+                ctx = getattr(p, "context", None)
+                if ctx is not None:
+                    ctx.current_team_id = str(home.get("team_id") or code)
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+            _set_assignment(p, level="junior", league_code=code, club=club, org_nhl_team_id=getattr(tm, "id", None))
+            try:
+                setattr(p, "current_league_id", code)
+                setattr(p, "development_path", code)
+                setattr(p, "post_draft_league", code)
+                setattr(p, "_dev_growth_league", code)
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+            try:
+                from app.sim_engine.generation.prospect_league_scoring import initialize_prospect_season
+
+                initialize_prospect_season(p, code)
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+            seated.add(id(p))
+            if pid:
+                seated.add(pid)
+            placed += 1
+    return placed
+
+
 def ensure_development_leagues_for_draft_board(
     league: Any,
     rng: random.Random,
@@ -1415,8 +1520,15 @@ def _apply_shaped_player(
         if gen_profile:
             setattr(p, "_generated_profile", gen_profile)
     except Exception:
-        return
-    p.ratings["dev_potential"] = rng_inst.randint(int(pot_lo), int(pot_hi))
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+        if not isinstance(getattr(p, "ratings", None), dict):
+            p.ratings = {}
+    pot = rng_inst.randint(int(pot_lo), int(pot_hi))
+    p.ratings["dev_potential"] = pot
+    try:
+        setattr(p, "potential", pot / 99.0)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         from app.sim_engine.progression.development import assign_prospect_realization
 
@@ -1839,10 +1951,170 @@ def _shape_draft_class_pipeline(
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
 
+    _enforce_high_end_draft_ceilings(
+        draft_age,
+        rng,
+        code_by_id=code_by_id,
+        draft_year=dy,
+    )
+
     try:
         setattr(league, "_pipeline_shaped_for_draft_year", dy)
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
+
+
+def _stored_potential99(player: Any) -> float:
+    ratings = getattr(player, "ratings", None)
+    raw = ratings.get("dev_potential") if isinstance(ratings, dict) else None
+    if raw is None:
+        raw = getattr(player, "potential", None)
+    try:
+        val = float(raw)
+    except (TypeError, ValueError):
+        return 0.0
+    if 0 < val <= 1.5:
+        val *= 99.0
+    return val
+
+
+def _enforce_high_end_draft_ceilings(
+    draft_age: List[Any],
+    rng: random.Random,
+    *,
+    code_by_id: dict,
+    draft_year: int,
+) -> None:
+    """Every draft class keeps a real high end, including the classes after year one.
+
+    The first franchise class is imported talent. Later classes are generated, and a
+    failed ratings rebuild used to leave the 'franchise' tag on a mid-60s ceiling.
+    """
+    from app.sim_engine.entities.player import Position
+
+    skaters = [
+        p for p in draft_age
+        if getattr(getattr(p, "identity", None), "position", None) != Position.G
+    ]
+    if len(skaters) < 8:
+        return
+
+    def _fill(floor: float, needed: int, tier: str, lo: float, hi: float, pot_lo: int, pot_hi: int) -> None:
+        have = sum(1 for p in skaters if _stored_potential99(p) >= floor)
+        short = int(needed) - have
+        if short <= 0:
+            return
+        order = sorted(skaters, key=_stored_potential99)
+        for p in order:
+            if short <= 0:
+                break
+            if _stored_potential99(p) >= floor:
+                continue
+            if str(getattr(p, "pipeline_tier", "") or "") == "transcendent":
+                continue
+            _apply_shaped_player(
+                p,
+                tier=tier,
+                lo=lo,
+                hi=hi,
+                pot_lo=pot_lo,
+                pot_hi=pot_hi,
+                rng=rng,
+                code_by_id=code_by_id,
+                rng_inst=rng,
+            )
+            if _stored_potential99(p) < floor:
+                ratings = getattr(p, "ratings", None)
+                if not isinstance(ratings, dict):
+                    ratings = {}
+                    p.ratings = ratings
+                ratings["dev_potential"] = int(pot_hi)
+                try:
+                    setattr(p, "potential", int(pot_hi) / 99.0)
+                except Exception:
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
+            setattr(p, "pipeline_tier", tier)
+            _stamp_pipeline_shaped(p, draft_year)
+            short -= 1
+
+    # The top of the class is a roll. A fixed four at 93 made every draft look the same.
+    n93 = rng.randint(2, 7)
+    n89 = rng.randint(n93 + 4, n93 + 14)
+    _fill(93, n93, "franchise", 0.80, 0.86, 93, 98)
+    _fill(89, n89, "elite", 0.74, 0.82, 89, 95)
+    _plant_later_round_ceilings(skaters, rng, draft_year=draft_year)
+
+
+def _display_ovr99(player: Any) -> float:
+    try:
+        from app.sim_engine.entities.player import display_rating, player_current_ovr_01
+
+        return float(display_rating(player_current_ovr_01(player)))
+    except Exception:
+        return 0.0
+
+
+def _plant_later_round_ceilings(
+    skaters: List[Any],
+    rng: random.Random,
+    *,
+    draft_year: int,
+) -> None:
+    """High ceilings that stay in the later rounds.
+
+    The franchise and elite fills raise current ability, so those players are
+    first-round picks. A class also needs players whose overall is a round-3
+    to round-7 number and whose true ceiling is still high. Current ability
+    is left alone, which is what keeps the board from promoting them.
+    """
+    later = [p for p in skaters if 0 < _display_ovr99(p) <= 74.0]
+    if len(later) < 8:
+        return
+
+    def _stamp(player: Any, pot: int) -> None:
+        ratings = getattr(player, "ratings", None)
+        if not isinstance(ratings, dict):
+            ratings = {}
+            player.ratings = ratings
+        ratings["dev_potential"] = int(pot)
+        try:
+            setattr(player, "potential", int(pot) / 99.0)
+            setattr(player, "pipeline_tier", "hidden_upside")
+            setattr(player, "later_round_upside", True)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+        _stamp_pipeline_shaped(player, draft_year)
+
+    def _plant(floor: float, needed: int, pot_lo: int, pot_hi: int) -> None:
+        have = sum(
+            1
+            for p in later
+            if _stored_potential99(p) >= floor and _display_ovr99(p) <= 74.0
+        )
+        short = int(needed) - have
+        if short <= 0:
+            return
+        order = sorted(later, key=_stored_potential99)
+        for p in order:
+            if short <= 0:
+                break
+            if _stored_potential99(p) >= floor:
+                continue
+            if str(getattr(p, "pipeline_tier", "") or "") == "transcendent":
+                continue
+            if _display_ovr99(p) > 74.0:
+                continue
+            _stamp(p, int(rng.randint(pot_lo, pot_hi)))
+            short -= 1
+
+    # Same idea as the year-1 class: a deep, uneven group of real ceilings
+    # behind the first-round talent, not a fixed handful. The roll changes
+    # with the class. Current ability stays a later-round number.
+    room = len(later)
+    n90 = min(room, rng.randint(14, 28))
+    n86 = min(room, rng.randint(max(n90 + 10, 26), max(n90 + 24, 46)))
+    _plant(90, n90, 90, 95)
+    _plant(86, n86, 86, 92)
 
 
 #: Chance a draft class gets one oddball (and a smaller chance of a second).

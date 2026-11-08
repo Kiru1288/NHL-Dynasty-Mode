@@ -14,6 +14,8 @@ for p in (ROOT, SIM, os.path.join(ROOT, "backend")):
         sys.path.insert(0, p)
 
 from app.sim_engine.franchise.conduct_incidents import (  # noqa: E402
+    _on_ice_suspension_chance,
+    _player_is_goalie,
     create_on_ice_discipline_incident,
     list_league_suspensions,
     serialize_incident_for_ui,
@@ -265,6 +267,30 @@ class ConductIncidentLifecycleTests(unittest.TestCase):
         self.assertEqual(row["status"], "disciplined")
         # Legally cleared path with league discipline still tracks separately.
         self.assertTrue(row["eligible_to_play"] or int(row.get("games_remaining") or 0) == 0)
+
+    def test_on_ice_suspensions_are_for_hotheads_and_almost_never_goalies(self):
+        hot = SimpleNamespace(
+            position="LW",
+            ratings={"per_emotional_stability": 34, "phy_aggression": 84},
+        )
+        steady = SimpleNamespace(
+            position="C",
+            ratings={"per_emotional_stability": 78, "phy_aggression": 70},
+        )
+        decent = SimpleNamespace(
+            position="D",
+            ratings={"per_emotional_stability": 58, "phy_aggression": 66},
+        )
+        goalie = SimpleNamespace(position="Goalie", ratings={"per_emotional_stability": 30, "phy_aggression": 90})
+        self.assertTrue(_player_is_goalie(goalie))
+        self.assertFalse(_player_is_goalie(hot))
+        hot_p = _on_ice_suspension_chance(hot, 3.4)
+        self.assertGreater(hot_p, 0.003)
+        self.assertLess(_on_ice_suspension_chance(decent, 3.4), hot_p * 0.2)
+        self.assertEqual(_on_ice_suspension_chance(steady, 4.0), 0.0)
+        # About a tenth of a percent across a season, not per game.
+        self.assertLess(_on_ice_suspension_chance(goalie, 1.0) * 82, 0.0015)
+        self.assertEqual(_on_ice_suspension_chance(goalie, 0.0), 0.0)
 
 
 if __name__ == "__main__":

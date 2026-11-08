@@ -25,7 +25,9 @@ def _iter_rights_players(league: Any) -> Iterable[Any]:
 
 
 def boosted_potential(pot99: float) -> float:
-    return min(99.0, float(pot99) + max(2.0, (99.0 - float(pot99)) * 0.25))
+    # Potential is the ceiling already on the card. A blanket lift, even +2,
+    # put the same green number on every rights-held prospect.
+    return float(pot99)
 
 
 def boost_rights_prospect_potential(session: Any) -> int:
@@ -33,7 +35,6 @@ def boost_rights_prospect_potential(session: Any) -> int:
     if league is None:
         return 0
     try:
-        from app.sim_engine.entities.player import player_current_ovr_01
         from app.sim_engine.progression.potential import (
             read_player_potential99,
             write_player_potential99,
@@ -48,11 +49,11 @@ def boost_rights_prospect_potential(session: Any) -> int:
         seen.add(id(p))
         try:
             pot = read_player_potential99(p)
-            ovr = float(player_current_ovr_01(p)) * 99.0
             if pot <= 0:
                 continue
-            new = max(boosted_potential(pot), ovr + 3.0)
-            write_player_potential99(p, new)
+            new = boosted_potential(pot)
+            if new > pot + 0.05:
+                write_player_potential99(p, new)
             setattr(p, _FLAG, True)
             n += 1
         except Exception:
@@ -81,6 +82,8 @@ def repair_rated_potential(session: Any) -> int:
     # Second pass, every load: any prospect whose shown ceiling fell under its rated
     # chapter (a stale copy written back by in-season development) is restored.
     for p in _iter_rights_players(league):
+        if getattr(p, "_pot_pyramid_v1", False):
+            continue
         try:
             chapters = (getattr(p, "attribute_profile", None) or {}).get("chapters") or {}
             rated = float(chapters.get("potential") or 0)
@@ -93,7 +96,7 @@ def repair_rated_potential(session: Any) -> int:
     for team in list(getattr(league, "teams", None) or []):
         for attr in ("roster", "ahl_roster", "echl_roster", "prospect_pool", "injured_reserve"):
             for p in list(getattr(team, attr, None) or []):
-                if getattr(p, _REPAIR_FLAG, False) or not getattr(p, "_dynasty_entry_key", None):
+                if getattr(p, _REPAIR_FLAG, False) or getattr(p, "_pot_pyramid_v1", False) or not getattr(p, "_dynasty_entry_key", None):
                     continue
                 try:
                     setattr(p, _REPAIR_FLAG, True)
@@ -105,4 +108,114 @@ def repair_rated_potential(session: Any) -> int:
                         n += 1
                 except Exception:
                     continue
+    return n
+
+
+_PYRAMID_FLAG = "_pot_pyramid_v1"
+_PYRAMID_SLOTS = (94.0, 88.0, 88.0, 84.0, 84.0, 84.0)
+
+
+def _player_age(player: Any) -> int:
+    ident = getattr(player, "identity", None)
+    raw = getattr(ident, "age", None) if ident is not None else None
+    if raw is None:
+        raw = getattr(player, "age", 21)
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return 21
+
+
+def _player_ovr(player: Any) -> float:
+    try:
+        from app.sim_engine.entities.player import display_rating, player_current_ovr_01
+
+        return float(display_rating(player_current_ovr_01(player)))
+    except Exception:
+        return 70.0
+
+
+def _rights_groups(league: Any) -> dict:
+    groups: dict = {}
+
+    def _add(player: Any, team_id: Any) -> None:
+        if player is None or getattr(player, "retired", False) or not team_id:
+            return
+        groups.setdefault(str(team_id), []).append(player)
+
+    for team in list(getattr(league, "teams", None) or []):
+        tid = getattr(team, "team_id", None) or getattr(team, "id", None)
+        for attr in ("prospect_pool", "ahl_roster", "echl_roster"):
+            for player in list(getattr(team, attr, None) or []):
+                _add(player, tid)
+    for block in list(getattr(league, "development_leagues", None) or []):
+        teams = (block or {}).get("teams") or [] if isinstance(block, dict) else []
+        for tm in teams:
+            for player in list((tm or {}).get("players") or []) if isinstance(tm, dict) else []:
+                rights = getattr(player, "nhl_rights_team_id", None) or getattr(player, "rights_team_id", None)
+                _add(player, rights)
+    return groups
+
+
+def rebalance_prospect_ceilings(session: Any) -> int:
+    """One high-end prospect per club. The rest of a rights list is not a 99.
+
+    A club has one kid who can be in the low 90s, a couple in the high 80s,
+    and a long list in the low 80s. The old lifts put the whole list at 93-99.
+    """
+    league = getattr(getattr(session, "sim", None), "league", None)
+    if league is None:
+        return 0
+    try:
+        from app.sim_engine.progression.potential import (
+            read_player_potential99,
+            write_player_potential99,
+        )
+    except Exception:
+        return 0
+    n = 0
+    for players in _rights_groups(league).values():
+        unique = []
+        seen: set = set()
+        for player in players:
+            if id(player) in seen or getattr(player, _PYRAMID_FLAG, False):
+                continue
+            seen.add(id(player))
+            unique.append(player)
+        ranked = []
+        for player in unique:
+            try:
+                pot = float(read_player_potential99(player))
+            except Exception:
+                pot = 0.0
+            ranked.append((pot, _player_ovr(player), player))
+        ranked.sort(key=lambda row: (row[0], row[1]), reverse=True)
+        for index, (pot, ovr, player) in enumerate(ranked):
+            try:
+                age = _player_age(player)
+                room = 14.0 if age <= 19 else (10.0 if age <= 21 else 7.0)
+                slot = _PYRAMID_SLOTS[index] if index < len(_PYRAMID_SLOTS) else 80.0
+                tier = str(getattr(player, "pipeline_tier", "") or "").lower()
+                if index == 0 and tier == "transcendent":
+                    ceiling = min(pot, 96.0)
+                else:
+                    ceiling = min(pot, slot, ovr + room)
+                ceiling = max(ovr, ceiling)
+                if pot > ceiling + 0.5:
+                    write_player_potential99(player, ceiling)
+                    profile = getattr(player, "development_profile", None)
+                    if isinstance(profile, dict):
+                        profile["expected_ceiling"] = ceiling / 99.0
+                        profile["maximum_ceiling"] = min(0.99, ceiling / 99.0 + 0.02)
+                    ratings = getattr(player, "ratings", None)
+                    if isinstance(ratings, dict) and ratings.get("dev_ceiling") is not None:
+                        ratings["dev_ceiling"] = float(min(99.0, ceiling + 2.0))
+                    try:
+                        setattr(player, "season_start_potential", int(round(ceiling)))
+                    except Exception:
+                        pass
+                    n += 1
+                setattr(player, _PYRAMID_FLAG, True)
+            except Exception:
+                continue
     return n

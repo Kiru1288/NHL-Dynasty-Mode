@@ -333,9 +333,9 @@ def nudge_shown_potential(
         age = int(raw_age) if raw_age is not None else 21
     except (TypeError, ValueError):
         age = 21
-    # Potential can rise only while the player is still young. From 28 it
-    # cannot sit above the overall on the card.
-    if age >= 28:
+    # Potential can rise only while the player is still young. From 32 the
+    # card cannot show a ceiling above the overall he already is.
+    if age >= 32:
         try:
             from app.sim_engine.entities.player import player_current_ovr_01
 
@@ -365,6 +365,14 @@ def nudge_shown_potential(
         step = max(0.0, 3.0 - moved)
     if moved + step < -2.0:
         step = min(0.0, -2.0 - moved)
+    if step > 0:
+        try:
+            from app.sim_engine.progression.development import _development_level
+
+            if _development_level(player) == "rights":
+                return 0.0
+        except Exception:
+            pass
     if abs(step) < 0.5:
         return 0.0
     write_player_potential99(player, pot + step)

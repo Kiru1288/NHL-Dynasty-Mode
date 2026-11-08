@@ -398,12 +398,17 @@ def set_form_baseline(baseline: Dict[str, float]) -> None:
 
 
 def raw_skater_form_perf_z(player: Any) -> Optional[float]:
-    """Unadjusted points per 60 versus the table line for his overall."""
+    """Unadjusted form versus the table line for his overall.
+
+    Forwards are still mostly points. Defencemen are mostly the defensive
+    results that make the rating: plus-minus, blocks, low goals against,
+    and positive possession.
+    """
     gp = _get_games_played(player)
     if gp <= 0:
         return None
     pts = float(getattr(player, "_dev_season_points", 0) or 0)
-    expected = float(expected_season_points_for_player(player, gp))
+    gap = season_points_surplus_vs_expectation(player, int(round(pts)), gp)
     toi = getattr(player, "_dev_toi_sec", None)
     if toi is None:
         toi = getattr(player, "toi_sec", None)
@@ -412,8 +417,8 @@ def raw_skater_form_perf_z(player: Any) -> Optional[float]:
     except (TypeError, ValueError):
         toi_f = 0.0
     if toi_f >= 60.0:
-        return (pts - expected) * 3600.0 / toi_f
-    return (pts - expected) / float(gp)
+        return gap * 3600.0 / toi_f
+    return gap / float(gp)
 
 
 def _skater_form_perf_z(player: Any) -> Optional[float]:
@@ -458,6 +463,8 @@ def _apply_veteran_form_pulse(
     form = _clamp(k * float(perf_z), -0.6, 0.6)
     if age >= 31 and form < 0:
         form *= 0.75
+    if form > 0:
+        form = min(form, max(0.0, _season_gain_room(player)))
     ceiling = _growth_ceiling99(player)
     if ceiling is not None and form > 0:
         # A veteran putting up big numbers can play past his listed potential.
@@ -774,7 +781,11 @@ def apply_in_season_performance_checkpoints(
         ovr_before_01 = float(player_current_ovr_01(player))
         delta_disp = 0.0
         if surplus > threshold:
-            raw = min(remaining_cap, (surplus - threshold) * 0.12 * pos_rate)
+            raw = min(
+                remaining_cap,
+                (surplus - threshold) * 0.12 * pos_rate,
+                max(0.0, _season_gain_room(player)),
+            )
             if raw > 0.02:
                 budget = raw / 99.0
                 deltas = allocate_growth_to_attributes(
@@ -863,11 +874,632 @@ def expected_season_points_for_player(player: Any, gp: int) -> float:
     ppg = _expected_ppg_for_ovr(ovr100) * _deployment_usage_factor(player)
     if _is_defense(player):
         ppg *= float(_DEFENSE_PPG_PERF_SCALE)
+    # The other team's best is on the ice against the top six and the top pair.
+    if _hard_matchup_role(player):
+        ppg *= 0.88
     return float(ppg * gp_i)
 
 
+def _defense_point_weight(player: Any) -> float:
+    """How much of a defenceman's rating is scoring. Shutdown work is the rest."""
+    blob = " ".join(
+        str(getattr(player, key, "") or "")
+        for key in ("player_type", "archetype", "role", "_dev_archetype")
+    ).lower()
+    if "offensive" in blob or "puck" in blob:
+        return 0.28
+    if "shutdown" in blob or "defensive" in blob or "stay" in blob:
+        return 0.10
+    return 0.16
+
+
+def _stamped_float(player: Any, name: str) -> Optional[float]:
+    raw = getattr(player, name, None)
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def defense_impact_point_credit(player: Any, gp: int) -> float:
+    """Point-equivalent credit from the results that make a defenceman's overall.
+
+    Plus-minus, blocked shots, a low expected-goals-against rate, a low
+    actual goals-against rate, and a positive possession share. Scoring is
+    not in this number.
+    """
+    gp_i = max(1, int(gp))
+    pm = _stamped_float(player, "_dev_plus_minus")
+    blk = _stamped_float(player, "_dev_blocks")
+    xgf_pct = _stamped_float(player, "_dev_xgf_pct")
+    gf_on = _stamped_float(player, "_dev_gf_on")
+    ga_on = _stamped_float(player, "_dev_ga_on")
+    xga = _stamped_float(player, "_dev_xga")
+    toi = _stamped_float(player, "_dev_toi_sec")
+    if all(v is None for v in (pm, blk, xgf_pct, gf_on, ga_on, xga)):
+        return 0.0
+    credit = 0.0
+    if pm is not None:
+        credit += pm * 0.40
+    if blk is not None:
+        credit += max(0.0, blk - 1.15 * gp_i) * 0.12
+    if xgf_pct is not None:
+        credit += (xgf_pct - 0.50) * 90.0
+    if gf_on is not None and ga_on is not None and (gf_on + ga_on) > 0.0:
+        share = gf_on / (gf_on + ga_on)
+        credit += (share - 0.50) * gp_i * 0.35
+    minutes = float(toi or 0.0)
+    if minutes > 60.0:
+        per60 = minutes / 3600.0
+        if xga is not None:
+            credit += (2.40 - (xga / per60)) * (gp_i / 82.0) * 14.0
+        elif ga_on is not None:
+            credit += (2.50 - (ga_on / per60)) * (gp_i / 82.0) * 12.0
+    return float(credit)
+
+
+def forward_impact_point_credit(player: Any, gp: int) -> float:
+    """The part of a forward's season that is not the scoresheet.
+
+    Plus-minus, possession, on-ice goal share, expected-goal share, and a
+    real power-play or penalty-kill role. A great year can be any of these.
+    """
+    gp_i = max(1, int(gp))
+    pm = _stamped_float(player, "_dev_plus_minus")
+    xgf_pct = _stamped_float(player, "_dev_xgf_pct")
+    gf_on = _stamped_float(player, "_dev_gf_on")
+    ga_on = _stamped_float(player, "_dev_ga_on")
+    cf = _stamped_float(player, "_dev_cf")
+    ca = _stamped_float(player, "_dev_ca")
+    pp_share = _stamped_float(player, "_dev_pp_share")
+    pk_share = _stamped_float(player, "_dev_pk_share")
+    pp_points = _stamped_float(player, "_dev_pp_points")
+    if all(v is None for v in (pm, xgf_pct, gf_on, ga_on, cf, ca, pp_share, pk_share, pp_points)):
+        return 0.0
+    credit = 0.0
+    if pm is not None:
+        credit += pm * 0.22
+    if xgf_pct is not None:
+        credit += (xgf_pct - 0.50) * 80.0
+    if cf is not None and ca is not None and (cf + ca) > 0.0:
+        credit += (cf / (cf + ca) - 0.50) * 70.0
+    if gf_on is not None and ga_on is not None and (gf_on + ga_on) > 0.0:
+        share = gf_on / (gf_on + ga_on)
+        credit += (share - 0.50) * gp_i * 0.28
+    if pp_share is not None and pp_share > 0.08:
+        credit += (pp_share - 0.08) * gp_i * 0.16
+    if pk_share is not None and pk_share > 0.06:
+        credit += (pk_share - 0.06) * gp_i * 0.12
+    if pp_points is not None:
+        credit += pp_points * 0.12
+    return float(credit)
+
+
+def _sheltered_depth_role(player: Any) -> bool:
+    """Third pair, bottom six, fourth line, or the minutes that go with them."""
+    blob = " ".join(
+        str(getattr(player, key, "") or "")
+        for key in ("role", "_dev_off_position_note", "player_type", "_dev_role")
+    ).lower().replace("-", " ").replace("_", " ")
+    if any(
+        token in blob
+        for token in ("third pair", "bottom six", "bottom 6", "fourth", "depth", "middle six", "pair 3", "line 3", "line 4")
+    ):
+        return True
+    return _deployment_usage_factor(player) <= 0.72
+
+
+def _hard_matchup_role(player: Any) -> bool:
+    """Top six and top pair. Those minutes are against the other team's best."""
+    blob = " ".join(
+        str(getattr(player, key, "") or "")
+        for key in ("role", "_dev_off_position_note", "player_type", "_dev_role")
+    ).lower().replace("-", " ").replace("_", " ")
+    if any(
+        token in blob
+        for token in (
+            "top six", "top 6", "top line", "first line", "top pair",
+            "top four", "top 4", "1st line", "1st pair", "line 1", "pair 1",
+        )
+    ):
+        return True
+    return _deployment_usage_factor(player) >= 1.08
+
+
+def _goalie_save_fraction(player: Any) -> Optional[float]:
+    for key in ("_dev_save_pct", "save_pct", "sv_pct"):
+        raw = getattr(player, key, None)
+        if raw is None:
+            continue
+        try:
+            sv = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if sv <= 0:
+            continue
+        if sv > 1.5:
+            sv = sv / 100.0
+        return sv
+    return None
+
+
+def _development_level(player: Any, bucket: str = "") -> str:
+    """Where this season is being played: the NHL, the AHL, or a rights-held league."""
+    name = str(bucket or "").lower()
+    if name == "ahl":
+        return "ahl"
+    if name == "prospect":
+        return "rights"
+    if name == "nhl":
+        return "nhl"
+    parts = [
+        str(getattr(player, key, "") or "")
+        for key in ("_dev_growth_league", "development_path", "current_league_id", "post_draft_league")
+    ]
+    assignment = getattr(player, "_franchise_assignment", None)
+    if isinstance(assignment, dict):
+        parts.append(str(assignment.get("league_code") or assignment.get("level") or ""))
+    blob = " ".join(parts).upper()
+    if "AHL" in blob:
+        return "ahl"
+    if any(token in blob for token in ("JUNIOR", "OHL", "WHL", "QMJHL", "NCAA", "USHL", "CHL", "EURO", "SHL", "LIIGA", "KHL", "RIGHTS")):
+        return "rights"
+    return "nhl"
+
+
+def _season_counting_line(player: Any) -> Tuple[int, Optional[float], Optional[float]]:
+    """Games, points per game, and save percentage from this year's line."""
+    stats = getattr(player, "_prospect_season_stats", None)
+    gp = 0
+    pts: Optional[float] = None
+    sv: Optional[float] = None
+    if isinstance(stats, dict):
+        try:
+            gp = int(stats.get("gp") or stats.get("games_played") or 0)
+        except (TypeError, ValueError):
+            gp = 0
+        if stats.get("points") is not None:
+            pts = _safe_float(stats.get("points"), 0.0)
+        elif stats.get("pts") is not None:
+            pts = _safe_float(stats.get("pts"), 0.0)
+        elif stats.get("goals") is not None or stats.get("assists") is not None:
+            pts = _safe_float(stats.get("goals"), 0.0) + _safe_float(stats.get("assists"), 0.0)
+        raw_sv = stats.get("save_pct", stats.get("sv_pct"))
+        if raw_sv is not None:
+            sv = _safe_float(raw_sv, 0.0)
+            if sv > 1.5:
+                sv = sv / 100.0
+    if gp <= 0:
+        gp = _get_games_played(player)
+        raw_pts = getattr(player, "_dev_season_points", None)
+        if raw_pts is not None:
+            pts = _safe_float(raw_pts, 0.0)
+        if sv is None:
+            sv = _goalie_save_fraction(player)
+    ppg = (float(pts) / float(gp)) if gp > 0 and pts is not None else None
+    return gp, ppg, sv
+
+
+def _open_ceiling_for_breakout(player: Any, *, big: bool) -> None:
+    """A real breakout may open the ceiling by a point, or two. Once a season.
+
+    The old lift added the whole gap between the season and the listed
+    potential, then did it again whenever that gap changed. A good junior
+    year walked the ceiling to 99 while overall barely moved.
+    """
+    if getattr(player, "_dev_outlook_probe", False):
+        return
+    token = str(getattr(player, "_active_dev_season", None) or "season")
+    if str(getattr(player, "_context_lift_token", "")) == token:
+        return
+    step = 2.0 if big else 1.0
+    pot = _scout_potential99(player)
+    if pot >= 99.0:
+        return
+    new = min(99.0, float(pot) + step)
+    ratings = getattr(player, "ratings", None)
+    if isinstance(ratings, dict):
+        ratings["dev_potential"] = new
+    try:
+        setattr(player, "potential", new / 99.0)
+        setattr(player, "_context_lift_token", token)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+
+
+def _player_is_happy(player: Any) -> bool:
+    """High morale, and nothing off the ice that says otherwise."""
+    if getattr(player, "_trade_demand_active", False):
+        return False
+    if getattr(player, "_conduct_incident_id", None):
+        return False
+    happy = getattr(player, "happiness", None)
+    psych = getattr(player, "psych", None)
+    if happy is None and psych is not None:
+        happy = getattr(psych, "happiness", None)
+    if happy is not None:
+        try:
+            value = float(happy)
+        except (TypeError, ValueError):
+            value = 0.5
+        if value > 1.5:
+            value = value / 100.0
+        if value >= 0.72:
+            return True
+    return _get_player_morale(player) >= 0.72
+
+
+def _flexible_surplus(player: Any, surplus: float) -> float:
+    """The points line bends for the job, the team, the on-ice results, and morale.
+
+    A fourth liner is not judged like a first liner. The same points mean more
+    on a bad team and a little less on a great one. Happiness eases the line.
+    A miserable year makes it harder.
+    """
+    adjusted = float(surplus)
+    morale = _get_player_morale(player)
+    if _player_is_happy(player):
+        adjusted += 6.0
+    elif morale < 0.35:
+        adjusted -= 8.0
+    role = str(getattr(player, "role", "") or "").lower()
+    if any(token in role for token in ("fourth", "bottom", "depth", "third_pair", "press", "scratch")):
+        adjusted += 4.0
+    elif any(token in role for token in ("elite", "top_line", "top_4", "first")):
+        adjusted -= 2.0
+    try:
+        pct = getattr(player, "_season_team_points_pct", None)
+        if pct is not None:
+            pct_f = float(pct)
+            if pct_f >= 0.60:
+                adjusted -= 3.0
+            elif pct_f <= 0.40:
+                adjusted += 3.0
+    except (TypeError, ValueError):
+        pass
+    pm = getattr(player, "_dev_plus_minus", None)
+    if pm is not None:
+        try:
+            adjusted += max(-6.0, min(6.0, float(pm) / 8.0))
+        except (TypeError, ValueError):
+            pass
+    return adjusted
+
+
+def season_growth_context(player: Any, *, bucket: str = "") -> Dict[str, Any]:
+    """How much overall this season has earned.
+
+    There is no separate ceiling. A league-average year earns a league-average
+    bump. A historic year earns as many points as that year is worth. The same
+    number is what the tick, the in-season pulse, and the year-end budget all
+    aim at, so they cannot stack on top of each other.
+    """
+    level = _development_level(player, bucket)
+    age = _get_player_age(player)
+    ovr = _get_player_ovr_0_100(player)
+    try:
+        pot = _scout_potential99(player)
+    except Exception:
+        pot = ovr
+    gap = max(0.0, float(pot) - float(ovr))
+    gp, ppg, sv = _season_counting_line(player)
+    reason = "ordinary season"
+    gain = 0.0
+
+    if level == "rights":
+        # No counting line, no jump. Room under the ceiling is not a season.
+        if gp < 10 or (ppg is None and not (_is_goalie(player) and sv is not None)):
+            gain = 0.0
+            reason = "rights-held, season has not produced a line yet"
+        elif _is_goalie(player) and sv is not None:
+            if getattr(player, "_dev_goalie_modest", False):
+                gain = 1.0
+                reason = "save percentage is ordinary once it is read as an NHL number"
+            else:
+                gain = max(0.3, (sv - 0.910) / 0.008)
+                reason = f"rights-held goalie, {sv:.3f} save percentage"
+        else:
+            # A normal junior year is a point or two. A real point-per-game
+            # season is the thing that moves a prospect several overall.
+            if ppg >= 1.55:
+                gain = 4.2
+                reason = f"rights-held breakout, {ppg:.2f} points per game"
+            elif ppg >= 1.15:
+                gain = 2.6
+                reason = f"rights-held strong year, {ppg:.2f} points per game"
+            elif ppg >= 0.80:
+                gain = 1.5
+                reason = f"rights-held production, {ppg:.2f} points per game"
+            elif ppg >= 0.50:
+                gain = 0.7
+                reason = f"rights-held ordinary year, {ppg:.2f} points per game"
+            else:
+                gain = 0.0
+                reason = f"quiet junior year, {ppg:.2f} points per game"
+            if gap < 4:
+                gain = min(gain, 0.8)
+            gain *= _junior_age_ppg_factor(age)
+        gain = max(-1.0, min(6.0, gain))
+    elif level == "ahl":
+        # The AHL is a development league and a place a journeyman can still
+        # get better. A kid with room grows on a real season. An older player
+        # grows when the year was actually productive. Neither grows on no games.
+        expected = 0.35 + max(0.0, ovr - 65.0) * 0.018
+        if _is_defense(player):
+            expected *= 0.62
+        developing = age <= 24 and gap >= 6.0
+        journeyman = age >= 25
+        if gp < 12 or ppg is None:
+            gain = 0.0
+            reason = "AHL season still early"
+        else:
+            beat = ppg - expected
+            if ppg >= 1.15 or beat >= 0.50:
+                gain = 3.6 + min(1.6, max(0.0, beat) * 2.5)
+                if journeyman and gap < 4.0:
+                    gain = min(gain, 2.4)
+                reason = f"AHL breakout, {ppg:.2f} points per game against a {expected:.2f} pace"
+            elif developing and (ppg >= 0.50 or beat >= 0.0):
+                gain = 2.6 if gap >= 10.0 else 2.0
+                reason = f"young AHL season with room to grow, {ppg:.2f} points per game"
+            elif ppg >= 0.90 or beat >= 0.22:
+                gain = 2.4 if developing else 2.2
+                reason = f"strong AHL year, {ppg:.2f} points per game"
+            elif ppg >= 0.70 or beat >= 0.15:
+                gain = 2.2 if developing else 1.6
+                reason = f"strong AHL year, {ppg:.2f} points per game"
+            elif developing and ppg >= 0.32:
+                gain = 1.6 if gap >= 8.0 else 1.2
+                reason = f"development year in the AHL, {ppg:.2f} points per game"
+            elif ppg >= 0.42 or beat >= -0.06:
+                gain = 1.2 if journeyman or gap >= 4.0 else 0.6
+                reason = f"productive AHL year, {ppg:.2f} points per game"
+            elif developing and gap >= 10.0 and ppg >= 0.22:
+                gain = 0.8
+                reason = f"tough AHL year, still a prospect with room, {ppg:.2f} points per game"
+            else:
+                gain = 0.0
+                reason = f"AHL year below the pace for this overall, {ppg:.2f} points per game"
+        gain = max(0.0, min(6.0, gain))
+        if _is_goalie(player) and sv is not None and gp >= 8:
+            if getattr(player, "_dev_goalie_modest", False):
+                gain = min(gain, 1.4)
+                reason = "AHL save percentage is ordinary once it is read as an NHL number"
+            else:
+                gain = max(gain, (sv - 0.905) / 0.006 + (1.5 if age <= 24 else 0.4))
+                reason = f"AHL goalie, {sv:.3f} save percentage"
+    else:
+        surplus = getattr(player, "_dev_season_points_surplus", None)
+        try:
+            surplus_f = float(surplus) if surplus is not None else 0.0
+        except (TypeError, ValueError):
+            surplus_f = 0.0
+        if _is_goalie(player):
+            save = sv if sv is not None else _goalie_save_fraction(player)
+            if save is None:
+                gain = 0.0
+                reason = "goalie season without a save percentage yet"
+            else:
+                # .905 is the league. Each chunk above it is a real year.
+                # Nothing here stops a historic save percentage.
+                gain = (save - 0.905) / 0.007
+                if age <= 26 and save >= 0.925:
+                    gain = max(gain, 4.0 + (save - 0.925) / 0.004)
+                elif age >= 33 and 0.0 < gain < 0.5:
+                    gain = min(gain, 0.4)
+                reason = f"goalie save percentage {save:.3f}"
+        else:
+            # The line moves with the job, the team, the on-ice results and
+            # how the player feels. Points are still the main number.
+            no_line = surplus is None or (gp < 8 and abs(surplus_f) < 1.0)
+            if no_line:
+                if _player_is_happy(player):
+                    gain = 0.8
+                    reason = "no games yet, morale is high"
+                elif _get_player_morale(player) < 0.35:
+                    gain = -0.8
+                    reason = "no games yet, morale is low"
+                else:
+                    gain = 0.0
+                    reason = "NHL season has no line to judge yet"
+            else:
+                judged = _flexible_surplus(player, surplus_f)
+                gain = judged / 11.0
+                reason = f"NHL season, {surplus_f:+.0f} points versus a line that fits the role"
+            if age <= 25 and sheltered_positive_season(player) and ovr < 86 and surplus_f >= -4:
+                gain = max(gain, 1.6 if age <= 21 else 1.0)
+                reason = "positive year in a depth role"
+            if (not no_line) and surplus_f > -1.0 and surplus_f < 8.0 and _player_is_happy(player) and gain < 0.8:
+                gain = max(gain, 0.8)
+                reason = "flat year, morale is high"
+            form, form_n = rolling_form_score(player)
+            really_bad = (not no_line) and surplus_f <= -28.0
+            continuous_bad = form_n >= 2 and form < -0.15 and surplus_f < -8.0
+            if really_bad:
+                gain = min(gain, -2.0)
+                reason = "one really bad season"
+            elif continuous_bad:
+                gain = min(gain, -1.0)
+                reason = "another bad season in a row"
+            great_year = (not no_line) and (surplus_f >= 12.0 or gain >= 1.5)
+            if age >= 36 and great_year:
+                gain = max(gain, 0.0)
+                reason = "great year cancels the age drop, " + reason
+            elif age >= 36 and gain > -0.5:
+                gain = min(gain, -0.5)
+                reason = "age raises the drop, the season did not buy it off"
+            elif age >= 34 and surplus_f < 12 and not great_year:
+                gain = min(gain, 0.6)
+            gain = max(-6.0, min(6.0, gain))
+
+    if _is_goalie(player) and gain < 0.0:
+        gain = 0.0
+        reason = "a poor save percentage does not lower the goalie"
+
+    try:
+        setattr(player, "_season_growth_context", {
+            "level": level,
+            "gain": round(float(gain), 2),
+            "reason": reason,
+        })
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    return {"level": level, "gain": float(gain), "reason": reason, "has_line": gp >= 8}
+
+
+def offseason_growth_points(player: Any) -> float:
+    """Overall the summer adds, on top of whatever the season already paid.
+
+    A good year is worth another point or two once the games stop. A flat
+    year for a young player is worth a point of summer work. A bad year
+    and a 36-year-old do not get a second raise.
+    """
+    age = _get_player_age(player)
+    season_id = getattr(player, "_active_dev_season", None)
+    if season_id is not None and getattr(player, "_offseason_growth_season", None) == season_id:
+        return 0.0
+    gain = float(season_growth_context(player).get("gain") or 0.0)
+    gp, _, _ = _season_counting_line(player)
+    if gain < 0.0:
+        return 0.0
+    extra = 0.0
+    if gain >= 0.5:
+        # The summer is its own period, and a good year is worth more than a point.
+        extra = max(1.5, min(3.0, gain * 0.70))
+    elif gain >= 0.0 and gp >= 25 and age <= 26:
+        extra = 1.0
+    return float(extra)
+
+
+def season_gain_cap_points(player: Any) -> float:
+    """Overall this season has earned. Kept as the number the other systems share."""
+    return max(0.0, float(season_growth_context(player).get("gain") or 0.0))
+
+
+def _season_ovr_gained(player: Any) -> float:
+    """Overall already added this season, from the October mark when we have one."""
+    start = getattr(player, "season_start_ovr", None)
+    if start is None:
+        start = getattr(player, "_season_start_ovr", None)
+    if start is not None:
+        try:
+            from app.sim_engine.entities.player import display_rating, player_current_ovr_01
+
+            now = int(round(display_rating(player_current_ovr_01(player))))
+            return float(now - int(start))
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    return float(getattr(player, "_in_season_ovr_delta_accum", 0.0) or 0.0)
+
+
+def _season_gain_room(player: Any) -> float:
+    return float(season_gain_cap_points(player) - _season_ovr_gained(player))
+
+
+def sheltered_positive_season(player: Any) -> bool:
+    """A young depth player who is helping without a scorer's points.
+
+    Third-pair and bottom-six jobs do not produce a top-line scoresheet.
+    Plus-minus, possession, expected goals and on-ice goal share are the
+    evidence that the year was a good one.
+    """
+    if _get_player_age(player) > 24:
+        return False
+    if _get_games_played(player) < 20:
+        return False
+    if not _sheltered_depth_role(player):
+        return False
+    gp = _get_games_played(player)
+    credit = (
+        defense_impact_point_credit(player, gp)
+        if _is_defense(player)
+        else forward_impact_point_credit(player, gp)
+    )
+    pm = _stamped_float(player, "_dev_plus_minus")
+    xgf = _stamped_float(player, "_dev_xgf_pct")
+    gf_on = _stamped_float(player, "_dev_gf_on")
+    ga_on = _stamped_float(player, "_dev_ga_on")
+    share = None
+    if gf_on is not None and ga_on is not None and (gf_on + ga_on) > 0:
+        share = gf_on / (gf_on + ga_on)
+    if pm is None and xgf is None and share is None and credit == 0.0:
+        return False
+    if pm is not None and pm >= 0:
+        return True
+    if xgf is not None and xgf >= 0.50:
+        return True
+    if share is not None and share >= 0.50:
+        return True
+    return credit >= 2.0
+
+
+def _lift_sheltered_potential(player: Any) -> int:
+    """Depth seasons move overall. They do not hand out potential."""
+    del player
+    return 0
+
+
+def prime_age_great_season(player: Any) -> bool:
+    """A 28-to-35-year-old who is clearly above the line for his overall.
+
+    Twelve points clear of the expectation, or a production score that far
+    above the deployment line, is the same bar the year-end pass calls a
+    career year. Ordinary seasons do not qualify.
+    """
+    age = _get_player_age(player)
+    if age < 28 or age > 35:
+        return False
+    gp = _get_games_played(player)
+    if gp < 20:
+        return False
+    pts = getattr(player, "_dev_season_points", None)
+    if pts is not None:
+        try:
+            if season_points_surplus_vs_expectation(player, int(pts), gp) >= 12.0:
+                return True
+        except (TypeError, ValueError):
+            pass
+    stamped = getattr(player, "_dev_season_points_surplus", None)
+    if stamped is not None:
+        try:
+            if float(stamped) >= 12.0:
+                return True
+        except (TypeError, ValueError):
+            pass
+    prod = _safe_attr_float(
+        player,
+        ["production_score", "recent_performance_score", "points_signal", "production"],
+        -1.0,
+    )
+    if prod >= 0.0:
+        expected = _expected_production_score_for_deployment(player, _get_player_ovr_0_100(player))
+        if prod - expected >= 0.08:
+            return True
+    return False
+
+
 def season_points_surplus_vs_expectation(player: Any, actual_pts: int, gp: int) -> float:
-    return float(actual_pts) - expected_season_points_for_player(player, gp)
+    raw = float(actual_pts) - expected_season_points_for_player(player, gp)
+    if _is_goalie(player):
+        return raw
+    if _is_defense(player):
+        # Scoring is a small slice of a defenceman's rating. The rest is the
+        # defensive result: plus-minus, blocks, goals against, possession.
+        result = raw * _defense_point_weight(player) + defense_impact_point_credit(player, gp)
+        if result < 0.0 and _hard_matchup_role(player):
+            result *= 0.50
+        return result
+    credit = forward_impact_point_credit(player, gp)
+    # Points are one part of a forward's year. A strong two-way, power-play,
+    # or penalty-kill season covers the rest, so the miss is not the whole story.
+    point_weight = 0.45 if credit >= 8.0 else 0.75
+    result = raw * point_weight + credit
+    # A modest miss against the hardest matchups is not a bad year.
+    if result < 0.0 and _hard_matchup_role(player):
+        result *= 0.50
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -2160,6 +2792,9 @@ def resolve_development_profile(player: Any, context: Optional[Any] = None) -> D
         if best_pot is not None and best_pot > expected + 0.005:
             expected = best_pot
             maximum = max(maximum, clamp01(min(0.99, expected + 0.03)))
+        # Pipeline tags are applied when the player is created. Re-applying
+        # the floor on every resolve walked ordinary prospects back up to
+        # 89, 93, and 99 after a correction.
         profile: Dict[str, Any] = dict(base or {})
         profile.update(
             {
@@ -2595,8 +3230,8 @@ def development_outlook(player: Any, context: Optional[Any] = None) -> Dict[str,
             pass
     lo, mid, hi = sorted(vals.values())
     age = _get_player_age(player)
-    # The age roll (career lifecycle) runs on top of the budget from 29: expected loss.
-    if age >= 29:
+    # The age roll starts at 36. Before that the outlook is the development budget.
+    if age >= 36:
         try:
             from app.sim_engine.engine import _aging_v3_base_decline_chance  # noqa: WPS433
 
@@ -2922,6 +3557,15 @@ def calculate_season_growth_budget(
         earned = min(0.026 if age <= 23 else 0.018, float(overperf) * (0.055 if age <= 23 else 0.04))
         budget = max(budget, earned * _clamp(fit_f, 0.8, 1.15))
 
+    if not for_in_season and sheltered_positive_season(player) and gap_exp > 0.008:
+        # The points line is the wrong test for a third-pair or bottom-six kid.
+        # A positive year in that role is worth about two overall, and the
+        # ceiling moves with it.
+        earned_depth = 0.013 if age <= 21 else 0.009
+        budget = max(float(budget), min(float(gap_exp), earned_depth))
+        if budget > 0:
+            _lift_sheltered_potential(player)
+
     if injury_days >= 40 and budget > 0:
         budget *= 0.62
     elif injury_days >= 20 and budget > 0:
@@ -2939,10 +3583,9 @@ def calculate_season_growth_budget(
             budget = max(budget, min(0.008, _form * 0.06))
 
     decline = str(profile.get("decline_state") or "none")
-    # Age-driven forced decline starts at 34 (was 33) and is smaller; strong rolling
-    # form softens it further. 28-35 year-olds were shedding OVR far too fast.
-    if age >= 34:
-        decline = "late_decline" if age >= 37 else "early_decline"
+    # Age-driven forced decline starts at 36. A strong year does not cancel it.
+    if age >= 36:
+        decline = "late_decline" if age >= 39 else "early_decline"
     elif decline in ("early_decline", "late_decline"):
         decline = "aging"
     _form_soft = _clamp(1.0 - _form * 4.0, 0.45, 1.25)
@@ -2972,6 +3615,7 @@ def calculate_season_growth_budget(
         _role_mult = getattr(player, "_role_accept_growth_mult", None)
         if _role_mult:
             budget *= max(1.0, min(1.30, float(_role_mult)))
+        budget = min(budget, max(0.0, _season_gain_room(player)) / 99.0)
 
     return float(budget)
 
@@ -3478,10 +4122,8 @@ def apply_player_development(player: Any, rng: Any) -> None:
         # A big young year can open the ceiling by a point. It does not chase overall.
         if age <= 23:
             lift = min(lift, 1.0 / 99.0)
-        if age >= 33:
-            lift *= 0.55
-        elif age >= 30:
-            lift *= 0.75
+        if age >= 36:
+            lift *= 0.70
         # A big year nudges the ceiling he already had. It does not adopt his overall as the new potential.
         new_exp = min(0.99, exp + lift)
         profile["expected_ceiling"] = new_exp
@@ -3507,7 +4149,7 @@ def apply_player_development(player: Any, rng: Any) -> None:
     calculate_age_decline_profile(player)
     apply_prime_refinement(player)
 
-    growth_eligible = age <= 31 or (career_year and age <= 35)
+    growth_eligible = age <= 35 or (career_year and age <= 38)
     if not growth_eligible:
         if _is_goalie(player) and 24 <= age <= 33 and (dev_type == "late_bloomer" or rng.random() <= 0.28):
             growth_eligible = True
@@ -3670,6 +4312,8 @@ def apply_player_development(player: Any, rng: Any) -> None:
     year_end_perf = max(0.0, target_perf_total - bump_so_far)
     if year_end_perf > 0.05 and dev_phase != "REGRESSION":
         budget += year_end_perf / 99.0
+    if budget > 0:
+        budget = min(budget, max(0.0, _season_gain_room(player)) / 99.0)
     # Winning clubs grow. Losing clubs slide, including players who were flat.
     try:
         _pts = getattr(player, "_season_team_points_pct", None)
@@ -3701,9 +4345,6 @@ def apply_player_development(player: Any, rng: Any) -> None:
         gap_now = float(normalize_rating_gap(ovr_before, potential))
     if gap_now <= 0.004 and dev_phase not in ("REGRESSION", "SPIKE") and not career_year:
         budget = min(max(budget, 0.0), 0.006)
-    elif gap_now <= 0.02 and dev_phase == "NORMAL" and budget > 0:
-        budget = max(budget, 0.018)
-
     # ONE annual budget: the year-end pass pays only what in-season pulses did not
     # already spend (it used to add its own 65-75% pool on top of a 45% in-season
     # pool, plus the ice-time boost: ~1.5x a year's growth).
@@ -3723,25 +4364,12 @@ def apply_player_development(player: Any, rng: Any) -> None:
         # The three in-season checkpoints already paid most of this year.
         # The offseason keeps only what is still unpaid.
         budget = min(budget, max(0.0, intended_year - _net_in))
-    elif career_year and budget >= 0 and dev_phase != "REGRESSION" and not young_minors:
-        # In-season pulses were calculated against the old ceiling. A year that
-        # beat his projection still has to land on the card.
-        floor = 0.030 if surplus_now < 25.0 else (0.045 if surplus_now < 40.0 else 0.060)
-        if age <= 22:
-            floor = min(floor, 0.018)
-        elif age <= 25:
-            floor = min(floor, 0.028)
-        if age >= 33:
-            floor *= 0.60
-        elif age >= 30:
-            floor *= 0.80
-        budget = max(budget, floor)
     elif budget < 0 and not young_minors:
         budget = min(0.0, float(budget) - min(0.0, _net_in))
         # The engine's age roll already takes the yearly aging loss; this budget only
         # adds a little for the oldest players so the two don't stack into -4 at 31.
         _age_now = _get_player_age(player)
-        budget *= 1.5 if _age_now >= 35 else (1.2 if _age_now >= 33 else 0.8)
+        budget *= 1.5 if _age_now >= 38 else (1.2 if _age_now >= 36 else 0.8)
     budget = _revert_checkpoint_tails(player, budget)
 
     # Prospects already received their in-season pulses: only pay what is still owed.
@@ -3759,6 +4387,18 @@ def apply_player_development(player: Any, rng: Any) -> None:
             intended_year = float(budget)
     elif _owed is not None and budget > 0:
         budget = min(float(budget), float(_owed))
+
+    # The offseason is its own period. It adds to the overall the season
+    # already produced. It does not replace that growth or give it back.
+    extra = offseason_growth_points(player)
+    if extra >= 0.5 and age < 36:
+        budget = max(0.0, float(budget)) + extra / 99.0
+        intended_year = (_season_ovr_gained(player) + float(budget) * 99.0) / 99.0
+        try:
+            setattr(player, "_offseason_growth_season", getattr(player, "_active_dev_season", None))
+            setattr(player, "_offseason_growth_points", round(extra, 2))
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     # One season does not walk through the hidden ceiling.
     _room = _realization_room99(player)
@@ -4006,21 +4646,21 @@ def apply_in_season_development_pulse(
     # 1.55-2.2x) moved the in-season cap around and scattered same-age players
     # from +1 to +16. The archetype now picks the phase, as for prospects.
     decline_now = str(profile.get("decline_state") or "none")
-    if age >= 37:
+    if age >= 39:
         decline_now = "late_decline"
-    elif age >= 34:
+    elif age >= 36:
         decline_now = "early_decline"
     elif decline_now in ("early_decline", "late_decline"):
         decline_now = "aging"
     # A declining veteran keeps a negative pulse only while he is under his
     # production line AND his multi-season form is weak. Producing holds him (STALL).
     _rf, _rn = rolling_form_score(player)
-    must_decline = (age >= 34 or decline_now in ("early_decline", "late_decline")) and (
+    must_decline = (age >= 36 or decline_now in ("early_decline", "late_decline")) and (
         rel_pulse < 0.35 or (perf_gap < 0.0 and _rf < 0.02)
     )
     plan = getattr(player, "_nhl_season_plan", None)
     if not isinstance(plan, dict):
-        if (not must_decline) and (age >= 32 or (age >= 29 and gap <= 0.015)):
+        if (not must_decline) and age >= 36 and gap <= 0.015:
             phase = "STALL"
         else:
             archetype_p = str(getattr(player, "_dev_archetype", "") or "")
@@ -4292,8 +4932,16 @@ def _prospect_payment_multiplier(player: Any) -> float:
 
 
 def prospect_year_payment(player: Any, phase: str = "NORMAL") -> float:
-    """Gap-scaled prospect year, after the age weight or the modest-goalie cut."""
-    return float(prospect_year_cap(player, phase)) * _prospect_payment_multiplier(player)
+    """Gap-scaled prospect year, after the age weight or the modest-goalie cut.
+
+    An AHL breakout or a big junior year replaces that with the season the
+    stats actually earned, which can run from a few points up to 10.
+    """
+    paid = float(prospect_year_cap(player, phase)) * _prospect_payment_multiplier(player)
+    ctx = season_growth_context(player)
+    if ctx.get("level") in ("ahl", "rights") and ctx.get("has_line") and float(ctx.get("gain") or 0.0) > 0:
+        paid = max(paid, float(ctx["gain"]) / 99.0)
+    return float(paid)
 
 
 def _sync_prospect_plan_payment(player: Any, plan: Dict[str, Any]) -> None:
@@ -4590,12 +5238,11 @@ def apply_prospect_potential_review(player: Any, rng: Any, season_id: Any) -> Di
     age_mult = 1.2 if age <= 19 else (1.0 if age <= 20 else (0.8 if age <= 21 else 0.6))
     sample = min(1.0, gp / 30.0)
     display_delta = 0.0
-    if evidence >= 0.6:
-        display_delta = rng.uniform(0.4, 1.2)
-    elif evidence >= 0.35:
-        display_delta = rng.uniform(0.25, 0.7)
-    elif evidence >= 0.2 and rng.random() < 0.5:
-        display_delta = rng.uniform(0.15, 0.4)
+    shown_pot = _scout_potential99(player)
+    if shown_pot >= 90 and evidence > -0.6:
+        return {"applied": False, "reason": "ceiling_already_high", "evidence": round(evidence, 3)}
+    if evidence >= 0.70:
+        display_delta = rng.uniform(0.4, 1.0)
     # Symmetric with the upside: prospects who keep under-producing lose ceiling
     # (busts). Previously only extreme evidence could move potential down at all.
     elif evidence <= -0.6:
@@ -4607,6 +5254,12 @@ def apply_prospect_potential_review(player: Any, rng: Any, season_id: Any) -> Di
     display_delta *= age_mult * sample
     if display_delta > 0:
         display_delta = min(display_delta, max(0.0, cap - gained))
+    if display_delta > 0 and _development_level(player) == "rights":
+        return {
+            "applied": False,
+            "reason": "potential_waits_for_ahl_or_nhl",
+            "evidence": round(evidence, 3),
+        }
     if abs(display_delta) < 0.25:
         return {"applied": False, "reason": "no_change", "evidence": round(evidence, 3)}
 
@@ -4617,8 +5270,9 @@ def apply_prospect_potential_review(player: Any, rng: Any, season_id: Any) -> Di
     if delta_01 > 0:
         room = maximum - expected
         if room < delta_01:
-            # At the ceiling of the ceiling: only an exceptional year moves it further.
-            delta_01 = max(0.0, room) + (delta_01 * 0.4 if evidence >= 0.6 else 0.0)
+            # Potential stays inside the ceiling already on the card.
+            # A breakout opens that ceiling by a point or two, not by walking it to 99.
+            delta_01 = max(0.0, room)
         if delta_01 < 0.0025:
             return {"applied": False, "reason": "at_maximum", "evidence": round(evidence, 3)}
         display_delta = delta_01 * 99.0
@@ -4645,3 +5299,108 @@ def apply_prospect_potential_review(player: Any, rng: Any, season_id: Any) -> Di
     res["evidence"] = round(evidence, 3)
     res["display_delta"] = round(display_delta, 2)
     return res
+
+
+_LIVE_OVR_SEASON_CAP = {"nhl": 4, "ahl": 5, "prospect": 6}
+
+
+def apply_live_overall_step(player: Any, *, season_id: Any, bucket: str, day: int = 0) -> int:
+    """Move displayed overall by one point, up or down.
+
+    A development tick used to leave most of the league unchanged. Every NHL,
+    AHL, and prospect or rights-held player now moves on every tick. The season
+    cap keeps a hot streak from running away: once the cap is hit, the next
+    tick goes the other way, so the rating is never frozen.
+    """
+    from app.sim_engine.entities.player import display_rating, player_current_ovr_01, persist_recomputed_ovr
+    from app.sim_engine.engine import _nudge_player_ovr_toward
+
+    if player is None or getattr(player, "retired", False):
+        return 0
+    if not isinstance(getattr(player, "ratings", None), dict):
+        return 0
+    try:
+        before = int(round(display_rating(player_current_ovr_01(player))))
+    except Exception:
+        return 0
+    if before <= 0:
+        return 0
+
+    book = getattr(player, "_live_ovr_step", None)
+    if not isinstance(book, dict) or book.get("season") != season_id:
+        book = {"season": season_id, "net": 0}
+    net = int(book.get("net") or 0)
+    ctx = season_growth_context(player, bucket=bucket)
+    target = float(ctx.get("gain") or 0.0)
+    gained = _season_ovr_gained(player)
+    # One whole point is the smallest step. Once the card is within a point of
+    # the season, stop. An older player with a small decline used to be forced
+    # down on every tick, which walked a 38-year-old down 25 overall.
+    if gained <= -6.0 and target < 0:
+        return 0
+    if gained >= 6.0 and target > 0:
+        return 0
+    if gained > target + 0.5:
+        direction = -1
+    elif gained < target - 0.5:
+        direction = 1
+    else:
+        return 0
+
+    target = max(40, min(99, before + direction))
+    target01 = target / 99.0
+    for strength in (1.35, 1.8, 2.4):
+        try:
+            _nudge_player_ovr_toward(player, target01, strength=strength)
+            persist_recomputed_ovr(player)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+        try:
+            now = int(round(display_rating(player_current_ovr_01(player))))
+        except Exception:
+            now = before
+        if now != before:
+            book["net"] = net + (1 if now > before else -1)
+            try:
+                setattr(player, "_live_ovr_step", book)
+                setattr(player, "_last_ovr_change_reason", "development tick")
+                spent = float(getattr(player, "_in_season_ovr_delta_accum", 0.0) or 0.0)
+                setattr(player, "_in_season_ovr_delta_accum", spent + float(now - before))
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+            return now - before
+
+    ratings = player.ratings
+    bumped = False
+    for key, raw in list(ratings.items()):
+        if key in ("dev_potential", "dev_ceiling", "true_potential"):
+            continue
+        try:
+            val = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if val <= 1.5:
+            ratings[key] = max(0.2, min(0.98, val + direction * 0.03))
+        else:
+            ratings[key] = int(max(20, min(99, round(val + direction * 3))))
+        bumped = True
+        break
+    if bumped:
+        try:
+            inval = getattr(player, "_invalidate_ovr_memo", None)
+            if callable(inval):
+                inval()
+            persist_recomputed_ovr(player)
+            now = int(round(display_rating(player_current_ovr_01(player))))
+        except Exception:
+            now = before
+        if now != before:
+            book["net"] = net + (1 if now > before else -1)
+            try:
+                setattr(player, "_live_ovr_step", book)
+                spent = float(getattr(player, "_in_season_ovr_delta_accum", 0.0) or 0.0)
+                setattr(player, "_in_season_ovr_delta_accum", spent + float(now - before))
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+            return now - before
+    return 0

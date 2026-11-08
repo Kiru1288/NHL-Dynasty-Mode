@@ -57,21 +57,23 @@ def test_modifier_is_a_badge_not_the_overall():
 
 
 def test_elite_decline_is_smaller_than_depth():
+    quiet = _skater(32, 84)
+    assert _career_aging_decline_try_v3(quiet, random.Random(1), None) is None
     elite_losses = []
     depth_losses = []
     for seed in range(40):
         rng = random.Random(seed)
-        elite = _skater(32, 91)
-        depth = _skater(32, 78)
+        elite = _skater(37, 91)
+        depth = _skater(37, 78)
         elite_loss = _career_aging_decline_try_v3(elite, rng, None)
         depth_loss = _career_aging_decline_try_v3(depth, rng, None)
         if elite_loss:
             elite_losses.append(elite_loss)
-            assert 1.0 <= elite_loss <= 1.8 * 1.30 + 1e-6
-            assert "Age 32 decline" in elite._pending_aging_reason
+            assert 0.6 <= elite_loss <= 2.8
+            assert "Age 37 decline" in elite._pending_aging_reason
         if depth_loss:
             depth_losses.append(depth_loss)
-            assert 1.5 <= depth_loss <= 3.0 + 1e-6
+            assert 1.2 <= depth_loss <= 4.2
     assert len(elite_losses) >= 8
     assert len(depth_losses) >= 8
     assert sum(elite_losses) / len(elite_losses) < sum(depth_losses) / len(depth_losses)

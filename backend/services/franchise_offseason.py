@@ -3080,6 +3080,18 @@ def _dev_parse_counting_line(row: Dict[str, Any], league: str, source: str) -> O
         pp_toi = int(row.get("pp_toi_sec") or row.get("pp_toi") or 0)
     except (TypeError, ValueError):
         pp_toi = 0
+    def _num(key: str, *alts: str) -> float:
+        raw = row.get(key)
+        for alt in alts:
+            if raw is None:
+                raw = row.get(alt)
+        try:
+            return float(raw or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    xgf = _num("xgf")
+    xga = _num("xga")
     return {
         "league": str(league or "NHL"),
         "source": source,
@@ -3092,6 +3104,16 @@ def _dev_parse_counting_line(row: Dict[str, Any], league: str, source: str) -> O
         "save_pct": row.get("sv_pct", row.get("save_pct")),
         "gaa": row.get("gaa", row.get("goals_against_avg")),
         "starts": int(row.get("starts", row.get("gs", 0)) or 0),
+        "plus_minus": _num("plus_minus"),
+        "blocks": _num("blk", "blocks"),
+        "gf_on": _num("gf_on"),
+        "ga_on": _num("ga_on"),
+        "cf": _num("cf"),
+        "ca": _num("ca"),
+        "xgf": xgf,
+        "xga": xga,
+        "pp_points": _num("pp_points", "ppp"),
+        "pk_toi_sec": _num("pk_toi_sec", "sh_toi_sec"),
     }
 
 
@@ -3181,6 +3203,16 @@ def _dev_season_stats(session: FranchiseSession, player: Any) -> Dict[str, Any]:
     pp_share = max(0.0, min(1.0, pp_share))
     if pp_share > 0:
         usage = max(0.42, min(1.25, usage * (1.0 + 0.18 * pp_share)))
+    plus_minus = sum(float(line.get("plus_minus") or 0.0) for line in lines)
+    blocks = sum(float(line.get("blocks") or 0.0) for line in lines)
+    gf_on = sum(float(line.get("gf_on") or 0.0) for line in lines)
+    ga_on = sum(float(line.get("ga_on") or 0.0) for line in lines)
+    xgf = sum(float(line.get("xgf") or 0.0) for line in lines)
+    xga = sum(float(line.get("xga") or 0.0) for line in lines)
+    cf = sum(float(line.get("cf") or 0.0) for line in lines)
+    ca = sum(float(line.get("ca") or 0.0) for line in lines)
+    pp_points = sum(float(line.get("pp_points") or 0.0) for line in lines)
+    pk_toi = sum(float(line.get("pk_toi_sec") or 0.0) for line in lines)
     out: Dict[str, Any] = {
         "gp": gp,
         "goals": goals,
@@ -3198,6 +3230,17 @@ def _dev_season_stats(session: FranchiseSession, player: Any) -> Dict[str, Any]:
         "pp_share": round(pp_share, 3),
         # NHL games are already on the NHL scale. The age weight is for the junior conversion.
         "age_ppg_factor": 1.0 if goalie or _dev_is_nhl_league(league) else round(age_factor, 3),
+        "plus_minus": round(plus_minus, 2),
+        "blocks": round(blocks, 2),
+        "gf_on": round(gf_on, 2),
+        "ga_on": round(ga_on, 2),
+        "xgf": round(xgf, 3),
+        "xga": round(xga, 3),
+        "xgf_pct": round(xgf / (xgf + xga), 4) if (xgf + xga) > 0 else None,
+        "cf": round(cf, 2),
+        "ca": round(ca, 2),
+        "pp_points": round(pp_points, 2),
+        "pk_share": round(pk_toi / float(toi), 4) if toi and pk_toi > 0 else None,
     }
     if toi:
         out["toi_sec"] = int(toi)
@@ -3770,6 +3813,28 @@ def _dev_stamp_season_production(session: FranchiseSession, player: Any) -> None
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
     league = str(stats.get("league") or "")
+    # AHL and junior growth read the raw counting line. The NHL-equivalent
+    # point total is for the NHL scale only, and it left minor-league seasons
+    # looking empty.
+    if league and "NHL" not in league.upper() and int(gp) > 0:
+        try:
+            existing = getattr(player, "_prospect_season_stats", None)
+            have = int(existing.get("gp") or 0) if isinstance(existing, dict) else 0
+            if have < int(gp):
+                setattr(
+                    player,
+                    "_prospect_season_stats",
+                    {
+                        "gp": int(gp),
+                        "goals": int(stats.get("goals") or 0),
+                        "assists": int(stats.get("assists") or 0),
+                        "points": int(stats.get("points") or 0),
+                        "league": league,
+                        "save_pct": stats.get("raw_save_pct") or stats.get("save_pct"),
+                    },
+                )
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         setattr(player, "_dev_growth_league", league)
         setattr(player, "_dev_usage_factor", float(stats.get("usage_factor") or 1.0))
@@ -3820,6 +3885,20 @@ def _dev_stamp_season_production(session: FranchiseSession, player: Any) -> None
             _swallowed_log.debug("suppressed exception", exc_info=True)
     else:
         # Score the NHL-equivalent rate, not raw junior points. Checkpoints use the same points.
+        for src, dest in (
+            ("plus_minus", "_dev_plus_minus"),
+            ("blocks", "_dev_blocks"),
+            ("gf_on", "_dev_gf_on"),
+            ("ga_on", "_dev_ga_on"),
+            ("xga", "_dev_xga"),
+            ("xgf_pct", "_dev_xgf_pct"),
+            ("cf", "_dev_cf"),
+            ("ca", "_dev_ca"),
+            ("pp_points", "_dev_pp_points"),
+            ("pk_share", "_dev_pk_share"),
+        ):
+            if stats.get(src) is not None:
+                setattr(player, dest, stats.get(src))
         ppg = float(stats.get("nhl_eq_ppg") or 0.0)
         eq_pts = float(stats.get("nhl_eq_points") or 0.0)
         score = 0.32 + ppg * 0.55

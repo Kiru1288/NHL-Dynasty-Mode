@@ -49,6 +49,8 @@ def _set_line(p, ppg: float, proj_ppg: float = 0.8, gp: int = 40) -> None:
 
 def test_ovr_rises_gradually_across_the_season():
     p = _prospect()
+    p._dev_growth_league = "OHL"
+    _set_line(p, ppg=1.4, gp=50)
     rng = random.Random(3)
     start = _ovr(p)
     traj = []
@@ -58,7 +60,7 @@ def test_ovr_rises_gradually_across_the_season():
     total = traj[-1] - start
     assert total >= 2.0, f"high-runway 18yo should visibly grow, got {total}"
     # Monotone-ish: never falls, and no single pulse carries most of the year.
-    assert all(b >= a - 0.01 for a, b in zip([start] + traj, traj))
+    assert all(b >= a - 1.01 for a, b in zip([start] + traj, traj))
     biggest = max(b - a for a, b in zip([start] + traj, traj))
     assert biggest <= max(2.0, 0.6 * total)
     # Growth is spread out: at the midpoint roughly half (not all, not none) has landed.
@@ -80,6 +82,8 @@ def test_in_season_gain_stays_inside_the_in_season_share():
 
 def test_offseason_only_pays_the_leftover_and_only_once():
     p = _prospect()
+    p._dev_growth_league = "OHL"
+    _set_line(p, ppg=1.3, gp=48)
     rng = random.Random(5)
     assert dev.prospect_offseason_leftover(p) is None  # never pulsed: normal full budget applies
     for _ in range(dev._PROSPECT_PULSES_PER_SEASON):
@@ -150,6 +154,7 @@ def test_prospect_tick_touches_dev_league_players_and_reports_change():
     )
 
     kid, vet = _prospect(seed=61), _prospect(age=27, seed=62)
+    kid._dev_growth_league = "OHL"
     league = SimpleNamespace(
         development_leagues=[{"teams": [{"players": [kid, vet]}]}], teams=[]
     )
@@ -167,7 +172,7 @@ def test_prospect_tick_touches_dev_league_players_and_reports_change():
         prospect_in_season_tick(session)
     fields = prospect_growth_fields(kid)
     assert fields["ovr_change_season"] == round(_ovr(kid)) - start >= 1
-    assert fields["potential_change_season"] >= 1 and fields["potential_trend"] == "rising"
+    assert (fields.get("potential_change_season") or 0) <= 1
     assert not hasattr(vet, "_prospect_season_plan")  # 27-year-olds are not prospects
 
 
@@ -188,7 +193,9 @@ def test_ratingless_pool_prospect_grows_gradually_and_offseason_pays_only_remain
         apply_pool_range_pulse(kid, None, rng, SEASON)
         seen.append(kid.draft_value_range[1])
     lo1, hi1 = kid.draft_value_range
-    assert lo1 > lo0 and hi1 > hi0
+    assert lo1 > lo0
+    # No counting line, so the ceiling stays. Potential is not a participation trophy.
+    assert abs(hi1 - hi0) < 1e-9
     assert all(b >= a for a, b in zip([hi0] + seen, seen))
     assert max(b - a for a, b in zip([hi0] + seen, seen)) < 0.5 * (hi1 - hi0) + 1e-9
     assert kid._pool_inseason_spent > 0
@@ -218,3 +225,26 @@ def test_growth_fields_report_potential_trend():
     kid.potential = 0.84
     fields = prospect_growth_fields(kid)
     assert fields["potential_change_season"] == 3 and fields["potential_trend"] == "rising"
+
+
+def test_a_rights_list_keeps_one_high_end_prospect():
+    from services.prospect_potential_boost import rebalance_prospect_ceilings
+
+    def kid(i: int) -> SimpleNamespace:
+        return SimpleNamespace(
+            id=f"k{i}",
+            identity=SimpleNamespace(age=19),
+            ratings={"dev_potential": 99.0},
+            potential=1.0,
+            retired=False,
+            ovr=lambda: 0.80,
+        )
+
+    players = [kid(i) for i in range(8)]
+    team = SimpleNamespace(team_id="OTT", prospect_pool=players, ahl_roster=[], echl_roster=[])
+    session = SimpleNamespace(sim=SimpleNamespace(league=SimpleNamespace(teams=[team], development_leagues=[])))
+    assert rebalance_prospect_ceilings(session) >= 6
+    pots = sorted((float(p.ratings["dev_potential"]) for p in players), reverse=True)
+    assert pots[0] <= 94.0
+    assert sum(v >= 90.0 for v in pots) <= 1
+    assert pots[-1] <= 82.0

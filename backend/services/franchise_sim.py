@@ -9803,6 +9803,16 @@ def _clamp_potential99(p: Any, ovr99: float, pot99: float) -> float:
         return float(pot99)
     if ovr <= 0:
         return pot
+    tier = str(getattr(p, "pipeline_tier", "") or "").lower()
+    tier_floor = {
+        "transcendent": 99.0,
+        "franchise": 93.0,
+        "elite": 89.0,
+        "top": 86.0,
+        "hidden_upside": 86.0,
+    }.get(tier, 0.0)
+    if tier_floor and pot >= tier_floor - 0.5:
+        return round(min(99.0, max(tier_floor, pot)), 1)
     lo, hi = _prospect_headroom_bounds(p, ovr)
     return round(max(lo, min(hi, pot)), 1)
 
@@ -13442,7 +13452,9 @@ def _franchise_daily_league_tick(session: FranchiseSession, calendar_idx: int) -
     light_bulk = bulk and bool(getattr(session, "_light_game_stat_accumulation", False))
     # Light season sim used to reopen the trade market every few days and rebuild
     # prospect/AHL data on the same cadence. A full year of that is the stall.
-    socio_gap = 14 if light_bulk else 8
+    # Year-2 bulk sims were opening the market about a dozen times and
+    # finishing with a handful of swaps. Look more often.
+    socio_gap = 7 if light_bulk else 4
     # C8: jitter the bulk cadence (3–5 / 7–9 days) so the market isn't a fixed every-4th-day beat.
     socio_gap = max(2, socio_gap - 1 + (zlib.crc32(f"socio|{int(calendar_idx)}".encode()) % 3))
     # Never throttle the deadline week — the trade market must run every one of those days.
@@ -14895,6 +14907,15 @@ def _sync_prospect_stats_to_calendar(session: FranchiseSession, *, force: bool =
         ensure_social_feed_current(session)
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
+    try:
+        from app.sim_engine.league_hierarchy_bootstrap import seat_rights_held_into_junior_leagues
+
+        seated = seat_rights_held_into_junior_leagues(getattr(sim, "league", None))
+        if seated:
+            session._prospect_sync_rows = None
+            session._prospect_sync_cache_key = ""
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     if not _prospect_sync_should_run(session, force=force):
         return 0
     iso = _scouting_calendar_iso(session)
@@ -14955,6 +14976,10 @@ def _sync_prospect_stats_to_calendar(session: FranchiseSession, *, force: bool =
             else:
                 invalidate_session_payload_caches(session, reason="prospect_stats")
                 _bump_prospect_revision(session)
+        try:
+            _apply_earned_minor_league_growth(session)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         return int(n)
     except Exception:
         return 0
@@ -15244,13 +15269,32 @@ def _run_due_development_ticks(session: FranchiseSession) -> None:
             setattr(session, attr, int(last) + n * int(every))
         return n
 
-    for _ in range(_due("_bulk_dev_tick_day", 8)):
+    # A season sim used to spend every growth tick first and play the AHL
+    # afterwards. The tick then saw no games and no AHL player moved.
+    dev_ticks = _due("_bulk_dev_tick_day", 8)
+    if dev_ticks:
+        try:
+            from services.ahl_league import sync_ahl_to_date
+
+            sync_ahl_to_date(session, _scouting_calendar_iso(session))
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    for _ in range(dev_ticks):
+        before_ovr: Dict[int, int] = {}
+        try:
+            before_ovr = _snapshot_live_overalls(session)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         try:
             _nhl_in_season_development_tick(session)
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
         try:
             _prospect_in_season_development_tick(session)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+        try:
+            _apply_flat_overall_steps(session, before_ovr)
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
     for _ in range(_due("_bulk_depth_tick_day", 5)):
@@ -15831,6 +15875,12 @@ def _actionable_interrupt_ids(session: FranchiseSession):
         elif p.get("interrupt_sim"):
             # GM alerts that must be seen before simming on (trade deadline approaching).
             pops.append("a:" + str(p.get("id") or ""))
+    for d in list(getattr(session, "pending_decisions", None) or []):
+        if not isinstance(d, dict):
+            continue
+        kind = str(d.get("kind") or d.get("type") or "")
+        if kind == "wjc_u20_loan" or d.get("requires_action"):
+            pops.append("perm:" + str(d.get("id") or kind))
     meetings = []
     day = int(getattr(session, "calendar_cursor", 0) or 0)
     for r in list(getattr(session, "universe_interaction_queue", None) or []):
@@ -16001,6 +16051,7 @@ def _finalize_regular_calendar_day(
     if not bulk:
         _run_due_development_ticks(session)
 
+    _sync_wjc_away_from_nhl(session, day_meta)
     _maybe_enqueue_wjc_loan_decisions(session, day_meta)
     _maybe_enqueue_showcase_popups(session, day_meta)
     _maybe_roll_storyline_arc(session, day_meta, session.sim.rng)
@@ -16141,6 +16192,132 @@ def _snapshot_season_start_ovrs(session: FranchiseSession) -> None:
                         _swallowed_log.debug("suppressed exception", exc_info=True)
                 except Exception:
                     continue
+
+
+def _iter_live_overall_players(session: FranchiseSession):
+    """NHL roster, every AHL player, and every prospect or rights-held junior, once each."""
+    league = getattr(getattr(session, "sim", None), "league", None)
+    if league is None:
+        return
+    seen: set = set()
+
+    def _emit(player: Any, bucket: str):
+        if player is None or getattr(player, "retired", False):
+            return
+        key = id(player)
+        if key in seen:
+            return
+        seen.add(key)
+        yield_slot.append((player, bucket))
+
+    yield_slot: List[Tuple[Any, str]] = []
+    for tm in list(getattr(league, "teams", None) or []):
+        for p in list(getattr(tm, "roster", None) or []):
+            _emit(p, "nhl")
+        for p in list(getattr(tm, "ahl_roster", None) or []):
+            _emit(p, "ahl")
+        for attr in ("echl_roster", "prospect_pool", "prospects"):
+            for p in list(getattr(tm, attr, None) or []):
+                _emit(p, "prospect")
+    for block in getattr(league, "development_leagues", None) or []:
+        if not isinstance(block, dict):
+            continue
+        for tm in block.get("teams") or []:
+            for p in tm.get("players") or []:
+                _emit(p, "prospect")
+    for player, bucket in yield_slot:
+        yield player, bucket
+
+
+def _snapshot_live_overalls(session: FranchiseSession) -> Dict[int, int]:
+    from app.sim_engine.entities.player import display_rating, player_current_ovr_01
+
+    out: Dict[int, int] = {}
+    for player, _bucket in _iter_live_overall_players(session):
+        try:
+            out[id(player)] = int(round(display_rating(player_current_ovr_01(player))))
+        except Exception:
+            continue
+    return out
+
+
+def _apply_flat_overall_steps(session: FranchiseSession, before: Dict[int, int]) -> int:
+    """Anyone the regular pulse left unchanged still gains or loses a point."""
+    from app.sim_engine.entities.player import display_rating, player_current_ovr_01
+    from app.sim_engine.progression.development import apply_live_overall_step
+
+    season_id = int(getattr(session, "season_calendar_year", 0) or 0)
+    day = int(getattr(session, "calendar_days_finished", 0) or 0)
+    moved = 0
+    try:
+        from services.franchise_offseason import _dev_stamp_season_production
+    except Exception:
+        _dev_stamp_season_production = None  # type: ignore
+    for player, bucket in _iter_live_overall_players(session):
+        try:
+            now = int(round(display_rating(player_current_ovr_01(player))))
+        except Exception:
+            continue
+        prior = before.get(id(player))
+        if prior is not None and now != prior:
+            continue
+        if _dev_stamp_season_production is not None:
+            try:
+                _dev_stamp_season_production(session, player)
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+        step = apply_live_overall_step(player, season_id=season_id, bucket=bucket, day=day)
+        if step:
+            moved += 1
+            try:
+                _record_rating_history(session, player)
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+    if moved:
+        try:
+            session._cached_roster_browser_payload = None
+            session._growth_needs_save = True
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    return moved
+
+
+def _apply_earned_minor_league_growth(session: FranchiseSession) -> int:
+    """Move AHL and junior overall up to the season the stat line already earned.
+
+    The in-season tick only steps one point, and a season sim can finish the
+    stat line after those ticks have already passed. This catches the card up
+    without going past the season's own number.
+    """
+    from app.sim_engine.progression.development import apply_live_overall_step
+
+    try:
+        from services.franchise_offseason import _dev_stamp_season_production
+    except Exception:
+        _dev_stamp_season_production = None  # type: ignore
+    season_id = int(getattr(session, "season_calendar_year", 0) or 0)
+    day = int(getattr(session, "calendar_days_finished", 0) or 0)
+    moved = 0
+    for player, bucket in _iter_live_overall_players(session):
+        if bucket == "nhl":
+            continue
+        if _dev_stamp_season_production is not None:
+            try:
+                _dev_stamp_season_production(session, player)
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+        for _ in range(8):
+            step = apply_live_overall_step(player, season_id=season_id, bucket=bucket, day=day)
+            if not step:
+                break
+            moved += 1
+    if moved:
+        try:
+            session._cached_roster_browser_payload = None
+            session._growth_needs_save = True
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    return moved
 
 
 def _prospect_in_season_development_tick(session: FranchiseSession) -> int:
@@ -17431,14 +17608,13 @@ def _wjc_org_candidates(
 
     for p in getattr(team, "roster", None) or []:
         pid = str(getattr(p, "id", "") or "")
-        if is_user_org:
-            if not _wjc_loan_mode_active(loans, pid):
-                continue
-            mode = loans.get(pid)
-            _add(p, roster="NHL (loaned)" if mode in (True, "full", "loan") else "NHL (RR only)")
-        elif _player_ovr01(p) < 0.78:
-            # CPU clubs release depth teenagers; core NHL teens stay with the big club.
-            _add(p, roster="NHL (released)")
+        # An NHL roster player cannot also play in the World Juniors. The only
+        # exception is a loan the club has already granted, which pulls him off
+        # the NHL lineup for the tournament.
+        if not _wjc_loan_mode_active(loans if is_user_org else (getattr(session, "wjc_nhl_u20_loan", None) or {}), pid):
+            continue
+        mode = (loans if is_user_org else (getattr(session, "wjc_nhl_u20_loan", None) or {})).get(pid)
+        _add(p, roster="NHL (loaned)" if mode in (True, "full", "loan") else "NHL (RR only)")
     return out
 
 
@@ -18020,9 +18196,13 @@ def _collect_wjc_tournament_prospects(
     # forwards; and never shut out a whole group — the elite draft-eligible kids and the
     # NHL-drafted prospects both get seats (ratings across those pools aren't calibrated
     # identically, so a pure OVR sort could leave Canada with zero of one group).
+    nhl_ids = _wjc_nhl_roster_ids(session)
     for c in codes:
         goalies, skaters = _wjc_pick_national_roster(cands[c])
         for r in goalies + skaters:
+            pid = str(r.get("player_id") or "")
+            if not _wjc_player_may_play_tournament(pid in nhl_ids, loans, pid):
+                continue
             r["made_wjc_team"] = True
             by_code[c].append(r)
             all_rows.append(r)
@@ -18131,6 +18311,23 @@ def _wjc_camp_make_team(
         cutoff -= 0.10
     jitter = rng.uniform(0.0, 0.05 if not relaxed else 0.02)
     return score >= cutoff + jitter
+
+
+def _wjc_player_may_play_tournament(on_nhl_roster: bool, loans: Dict[str, Any], player_id: str) -> bool:
+    """Juniors and minor-league players are eligible. NHL players are not, unless loaned."""
+    if not on_nhl_roster:
+        return True
+    return _wjc_loan_mode_active(loans, player_id)
+
+
+def _wjc_nhl_roster_ids(session: FranchiseSession) -> set:
+    ids: set = set()
+    for tm in (getattr(session, "team_by_id", None) or {}).values():
+        for p in getattr(tm, "roster", None) or []:
+            pid = str(getattr(p, "id", "") or "")
+            if pid:
+                ids.add(pid)
+    return ids
 
 
 def _wjc_loan_mode_active(loans: Dict[str, Any], player_id: str) -> bool:
@@ -19214,6 +19411,44 @@ def _wjc_loan_guidance(session: FranchiseSession, team: Any, p: Any) -> Dict[str
     }
 
 
+def _sync_wjc_away_from_nhl(session: FranchiseSession, day_meta: Dict[str, Any]) -> None:
+    """Loaned NHL players do not dress on World Juniors days. Everyone else stays."""
+    sy = int(session.season_calendar_year)
+    iso = str((day_meta or {}).get("iso") or "")
+    idx = _wjc_day_index_for_iso(iso, sy)
+    loans = getattr(session, "wjc_nhl_u20_loan", None) or {}
+    away_ids: set = set()
+    if idx is not None:
+        bundle = getattr(session, "wjc_tournament_bundle", None) or {}
+        if not isinstance(bundle, dict) or int(bundle.get("season_sy", -1)) != sy:
+            try:
+                _ensure_wjc_tournament_bundle(session)
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+            bundle = getattr(session, "wjc_tournament_bundle", None) or {}
+        rr_days = int(bundle.get("rr_days_total") or 9) if isinstance(bundle, dict) else 9
+        nhl_ids = _wjc_nhl_roster_ids(session)
+        for row in (bundle.get("tournament_prospects") or []) if isinstance(bundle, dict) else []:
+            if not isinstance(row, dict):
+                continue
+            pid = str(row.get("player_id") or "")
+            if not pid or pid not in nhl_ids:
+                continue
+            if not _wjc_loan_mode_active(loans, pid):
+                continue
+            mode = str(loans.get(pid) or row.get("wjc_loan_mode") or "")
+            if mode in ("partial", "loan_partial") and int(idx) >= rr_days:
+                continue
+            away_ids.add(pid)
+    for tm in (getattr(session, "team_by_id", None) or {}).values():
+        for p in getattr(tm, "roster", None) or []:
+            pid = str(getattr(p, "id", "") or "")
+            try:
+                setattr(p, "_wjc_away_from_nhl", pid in away_ids)
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+
+
 def _maybe_enqueue_wjc_loan_decisions(session: FranchiseSession, day_meta: Dict[str, Any]) -> None:
     """After Christmas Day, before the first WJC calendar date, offer NHL U20 loan releases (national teams)."""
     iso_done = str(day_meta.get("iso") or "")
@@ -19258,6 +19493,7 @@ def _maybe_enqueue_wjc_loan_decisions(session: FranchiseSession, day_meta: Dict[
                 "storyline_id": storyline_id,
                 "kind": "wjc_u20_loan",
                 "title": f"World Juniors — {nm}",
+                "requires_action": True,
                 "description": (
                     f"{nm} ({age}) is U20-eligible for {nat_lab} through Jan 4. "
                     "Release him for the full tournament, a round-robin-only loan, or keep him on your NHL roster."
@@ -19317,7 +19553,30 @@ def _maybe_enqueue_wjc_loan_decisions(session: FranchiseSession, day_meta: Dict[
         offered = True
     session.wjc_loan_prompts_enqueued = True
     if offered:
-        session.notifications.append("World Juniors: loan decisions needed for eligible U20 NHL players (Hub).")
+        session.notifications.append(
+            {
+                "id": f"wjc-permission-{sy}",
+                "type": "decision",
+                "priority": "HIGH",
+                "title": "World Juniors permission",
+                "text": "National teams want to borrow your U20 NHL players. Release them, or keep them on the NHL roster.",
+                "team_id": str(session.user_team_id),
+            }
+        )
+        _append_showcase_popup(
+            session,
+            f"wjc_permission_{sy}",
+            {
+                "kind": "wjc_loan_permission",
+                "interrupt_sim": True,
+                "requires_action": True,
+                "gm_alert": True,
+                "theme": "warning",
+                "headline": "World Juniors permission",
+                "summary": "A national team is asking to borrow a player on your NHL roster. He cannot play both.",
+                "team_id": str(session.user_team_id),
+            },
+        )
 
 
 def _simulate_showcase_score(rng: random.Random) -> Tuple[int, int, bool]:
@@ -19943,6 +20202,20 @@ def _auto_resolve_pending_decisions(session: FranchiseSession) -> None:
             continue
 
         first = opts[0] if isinstance(opts[0], dict) else {"id": str(opts[0])}
+        kind_now = str(d.get("kind") or d.get("type") or "")
+        if kind_now == "wjc_u20_loan" or d.get("requires_action"):
+            # Permission requests stay on the desk until the GM answers them.
+            session.timeline.append(
+                f"AUTO-RESOLVE: left {kind_now or 'decision'} {d.get('id') or ''} for the GM."
+            )
+            session.pending_decisions.append(session.pending_decisions.pop(0))
+            if all(
+                isinstance(item, dict)
+                and (str(item.get("kind") or item.get("type") or "") == "wjc_u20_loan" or item.get("requires_action"))
+                for item in session.pending_decisions
+            ):
+                break
+            continue
         if str(d.get("kind") or d.get("type") or "") == "retirement_decision":
             # Silence is not "let him retire": a veteran you never answered plays on.
             stay = next(
@@ -20608,7 +20881,8 @@ def _pending_decision_snapshot(session: FranchiseSession) -> List[Dict[str, Any]
                 {
                     "id": str(opt.get("id") or opt.get("choice_id") or ""),
                     "label": str(opt.get("label") or opt.get("title") or opt.get("text") or "Choice"),
-                    "description": str(opt.get("description") or opt.get("details") or ""),
+                    "description": str(opt.get("description") or opt.get("details") or opt.get("effect_summary") or ""),
+                    "recommended": bool(opt.get("recommended")),
                 }
             )
 
@@ -20624,6 +20898,7 @@ def _pending_decision_snapshot(session: FranchiseSession) -> List[Dict[str, Any]
                 ),
                 "message": str(
                     d.get("message")
+                    or d.get("description")
                     or d.get("text")
                     or d.get("details")
                     or meta.get("message")
@@ -21903,6 +22178,15 @@ def apply_decision(session: FranchiseSession, decision_id: str, choice_id: str) 
                 session.wjc_nhl_u20_loan[pid] = mode
                 effects["wjc_loan"] = 1 if mode in ("full", "partial") else 0
                 effects["wjc_loan_mode"] = mode or "none"
+                # Rosters named before this answer would still have him in the NHL
+                # and off the national team. Rebuild while the tournament has not started.
+                try:
+                    sy_now = int(session.season_calendar_year)
+                    iso_now = _calendar_iso_for_day(session, int(getattr(session, "calendar_cursor", 0) or 0)) or ""
+                    if _wjc_day_index_for_iso(iso_now, sy_now) is None:
+                        session.wjc_tournament_bundle = None
+                except Exception:
+                    _swallowed_log.debug("suppressed exception", exc_info=True)
 
                 player = _wjc_find_roster_player(session, pid)
                 if player is not None:
@@ -27428,9 +27712,14 @@ def build_state_payload_safe(session: FranchiseSession, *, include_heavy: bool =
 
     with span("state.build_safe", heavy=bool(include_heavy)):
         try:
-            from services.prospect_potential_boost import boost_rights_prospect_potential, repair_rated_potential
+            from services.prospect_potential_boost import (
+                boost_rights_prospect_potential,
+                rebalance_prospect_ceilings,
+                repair_rated_potential,
+            )
 
             fixed = repair_rated_potential(session)
+            fixed = rebalance_prospect_ceilings(session) or fixed
             if boost_rights_prospect_potential(session) or fixed:
                 invalidate_session_payload_caches(session, reason="prospect_potential")
         except Exception:

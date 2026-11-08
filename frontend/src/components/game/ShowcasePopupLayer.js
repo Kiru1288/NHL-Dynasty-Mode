@@ -35,7 +35,7 @@ const IMPORTANT_POPUP_KINDS = new Set(["injury", "legal_trouble", "player_death"
 function isImportantPopup(pop, userTeamId) {
   if (!pop) return false;
   const kind = String(pop.kind || "").toLowerCase();
-  if (IMPORTANT_POPUP_KINDS.has(kind)) return true;
+  if (IMPORTANT_POPUP_KINDS.has(kind) || kind === "wjc_loan_permission") return true;
   // Own-club GM alerts (suspension / return, playoff clinch, trade deadline).
   if (pop.gm_alert) return true;
   const pt = String(pop.presentation_type || "").toLowerCase();
@@ -970,8 +970,33 @@ function ShowcasePopupStyles() {
   );
 }
 
+function PermissionDecisionCard({ decision, onResolve }) {
+  const options = Array.isArray(decision?.options) ? decision.options : [];
+  return (
+    <div className="showcase-popup showcase-popup--v2" role="dialog" aria-label="Permission needed">
+      <div className="showcase-popup__sheet">
+        <p className="showcase-popup__kicker">Permission needed</p>
+        <h2 className="showcase-popup__title">{decision?.title || "Decision required"}</h2>
+        <p className="showcase-popup__summary">{decision?.message || decision?.description || "Choose before the day can advance."}</p>
+        <div className="media-alert__actions">
+          {options.map((opt) => (
+            <button
+              key={opt.id}
+              type="button"
+              className={`media-alert__action ${opt.recommended ? "is-primary" : ""}`}
+              onClick={() => onResolve?.(decision.id, opt.id)}
+            >
+              {opt.label || opt.id}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function ShowcasePopupLayer() {
-  const { franchiseState, onDismissShowcasePopups, setScreen, resumeInterruptedSim, cancelSimResume, setStatsCentralTab } = useGameUI();
+  const { franchiseState, onDismissShowcasePopups, setScreen, resumeInterruptedSim, cancelSimResume, setStatsCentralTab, onResolveDecision } = useGameUI();
   const userTeamId = franchiseState?.user_team_id || franchiseState?.team?.team_id || "";
   const rawQueue = (franchiseState?.pending_ui_popups || []).filter(
     (p) => p && !isFranchiseCinematicPopup(p) && isImportantPopup(p, userTeamId)
@@ -1014,6 +1039,12 @@ export function ShowcasePopupLayer() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [first, dismiss]);
+
+  const pendingDecisions = (Array.isArray(franchiseState?.pending_decisions) ? franchiseState.pending_decisions : [])
+    .filter((d) => d && Array.isArray(d.options) && d.options.length);
+  if (pendingDecisions.length) {
+    return <PermissionDecisionCard decision={pendingDecisions[0]} onResolve={onResolveDecision} />;
+  }
 
   if (!first) {
     return flash ? (

@@ -216,6 +216,45 @@ def _light_side_rows(
 _GM_LEAGUE_SCORING_PACE_MULT = 1.08
 # Goals per team-game (incl. OT/shootout winners) the light sim is anchored to.
 _GM_LEAGUE_TARGET_GPG = 3.32
+
+
+def _share_from_overall(ovr: float, skill: float) -> float:
+    """Goals and assists follow overall. Skill is a tilt, not a separate list.
+
+    A 95 and an 86 on the same shift are not the same player. A sniper and a
+    playmaker at the same overall both show up on both leaderboards.
+    """
+    try:
+        rating = float(ovr)
+    except (TypeError, ValueError):
+        rating = 78.0
+    try:
+        touch = float(skill)
+    except (TypeError, ValueError):
+        touch = 0.75
+    rating = max(62.0, min(99.0, rating))
+    touch = max(0.40, min(1.0, touch))
+    return (rating / 84.0) ** 1.25 * (0.70 + 0.50 * touch)
+
+
+def _assist_pull(ovr: float, passing: float) -> float:
+    """Who gets the helper on a goal that already happened.
+
+    Overall keeps a scorer on the scoresheet. Passing is what separates the
+    setup man, so a 95 who passes can live in the 80- and 90-assist range
+    while the trigger man on the same line still has a pile of assists.
+    """
+    try:
+        rating = float(ovr)
+    except (TypeError, ValueError):
+        rating = 78.0
+    try:
+        touch = float(passing)
+    except (TypeError, ValueError):
+        touch = 0.75
+    rating = max(62.0, min(99.0, rating))
+    touch = max(0.35, min(1.0, touch))
+    return (rating / 76.0) ** 3.1 * (0.28 + 1.20 * touch)
 # Light-path credit: how hard a line/pair's quality tilts who scores and who is on the
 # ice for goals for and against. Measured against what that slot usually is (a typical
 # top line is ~0.06 OVR above its club's average line, a typical 4th line ~0.05 below),
@@ -3106,26 +3145,20 @@ def late_bloomer_check(
 
 
 def _aging_v3_base_decline_chance(age: int) -> float:
-    # Through 28 this stays a light curve. From 29 it is a real year of decline:
-    # prospects and sheltered kids now gain a full season, and the league mean
-    # climbed when veterans did not give that back.
-    if age <= 24:
-        return 0.0
-    if age <= 28:
-        return 0.10
-    # 29 and up. Softened (was 0.45/0.60/0.78/0.90): 28-35 year-olds were losing
-    # OVR far faster than real NHL curves (gentle slide 29-31, real one from 34).
-    if age <= 30:
-        return 0.30
-    if age == 31:
-        return 0.42
-    if age <= 33:
-        return 0.60
+    """Age decline starts at 36. A 30-year-old does not slow down for being 30.
+
+    The chance is the age, not the season. A great year does not cancel it,
+    and an ordinary year does not start it early.
+    """
     if age <= 35:
-        return 0.78
+        return 0.0
     if age == 36:
-        return 0.88
-    return 0.95
+        return 0.40
+    if age == 37:
+        return 0.55
+    if age <= 39:
+        return 0.72
+    return 0.88
 
 
 def prime_league_season_aging_v3(league: Any, total_players: int) -> None:
@@ -3498,27 +3531,40 @@ def _career_aging_decline_try_v3(
     ovr = career_ovr_0_100(player)
 
     modifier, modifier_reasons = _aging_v3_player_modifiers(player)
-    elite = age >= 29 and ovr >= 88.0
+    elite = age >= 36 and ovr >= 88.0
+    try:
+        _surplus = getattr(player, "_dev_season_points_surplus", None)
+        _surplus_f = float(_surplus) if _surplus is not None else None
+    except (TypeError, ValueError):
+        _surplus_f = None
+    # Stats lead. A good year cancels the age drop. One awful year can
+    # drop a younger player. Age only raises the rate once the year is ordinary.
+    if _surplus_f is not None and _surplus_f >= 12.0:
+        return None
+    _morale = 0.5
+    try:
+        _psych = getattr(player, "psych", None)
+        if _psych is not None and getattr(_psych, "morale", None) is not None:
+            _morale = float(_psych.morale)
+        elif getattr(player, "morale", None) is not None:
+            _morale = float(player.morale)
+    except (TypeError, ValueError):
+        _morale = 0.5
+    _off_ice = _morale < 0.35 or bool(getattr(player, "_trade_demand_active", False)) or bool(
+        getattr(player, "_conduct_incident_id", None)
+    )
+    _really_bad = _surplus_f is not None and _surplus_f <= -28.0
 
     if _aging_v3_global_cap_reached(league):
         decline_chance = 0.0
+    elif age < 36:
+        # Younger players drop for a truly bad year or a real off-ice problem,
+        # not because the calendar turned.
+        decline_chance = 0.70 if (_really_bad or _off_ice) else 0.0
     else:
-        base = _aging_v3_base_decline_chance(age)
-        decline_chance = base
-        # Cumulative form (development.rolling_form_score): a strong 3-season run
-        # delays the slide; a sustained poor run speeds it. One season is shrunk.
-        try:
-            from app.sim_engine.progression.development import rolling_form_score
-
-            _rf, _rn = rolling_form_score(player)
-            decline_chance *= max(0.55, min(1.20, 1.0 - 3.0 * _rf))
-        except Exception:
-            _swallowed_log.debug("suppressed exception", exc_info=True)
-        if age <= 28:
-            decline_chance *= 0.4
-        # Elite peaks last longer. Above 88 the roll is less likely, not more.
+        decline_chance = _aging_v3_base_decline_chance(age)
         if elite:
-            decline_chance *= 0.70
+            decline_chance *= 0.85
         decline_chance *= modifier
         decline_chance = max(0.0, min(0.96, decline_chance))
 
@@ -11282,8 +11328,9 @@ class SimEngine:
             return 6.9
         if "power_play" in era or era_m >= 1.10:
             return 6.6
-        # Modern NHL combined GPG ~6.2–6.4; leave headroom for a lively franchise pace.
-        return 6.75
+        # Around 3.3 a side. One great club can still separate. The whole
+        # first-line class cannot all finish on 60 goals.
+        return 6.95
 
     def _era_scoring_mu_factor(self) -> float:
         """Dampened era lift so new franchise baseline + era modifiers do not stack into 8+ GPG."""
@@ -11842,6 +11889,8 @@ class SimEngine:
         for p in list(getattr(team, "roster", None) or []):
             if getattr(p, "retired", False):
                 continue
+            if getattr(p, "_wjc_away_from_nhl", False):
+                continue
             pid = _id_str(p, "id")
             if pid and pid in seen:
                 continue
@@ -12314,82 +12363,14 @@ class SimEngine:
         *,
         role: str,
     ) -> float:
-        """Force NHL-like splits: most players A > G; only true snipers stay goal-heavy."""
-        pid = str(getattr(p, "id", "") or "")
-        row = ledger.get(pid)
-        if not row:
-            return 1.0
-        g = int(row.get("g", 0) or 0)
-        a = int(row.get("a", 0) or 0)
-        if g + a < 2:
-            return 1.0
-        diff = g - a
-        goal_first = self._gm_is_goal_first_scorer(p)
-        playmaker = self._gm_is_certified_playmaker(p)
-        assist_lean = self._gm_is_assist_leaning_forward(p)
-        is_d = self._gm_pos_str(p).upper() == "D"
+        """Ratings and the line decide the shot. The running totals do not.
 
-        if is_d:
-            if role == "score":
-                if g >= 22:
-                    return 0.12
-                if g >= 16:
-                    return 0.28
-                if g >= 10:
-                    return 0.48
-                if diff >= 4:
-                    return 0.62
-                return 0.92
-            if g >= 14:
-                return 1.42
-            if diff >= 0:
-                return 1.28
-            return 1.12
-
-        if role == "score":
-            if goal_first:
-                if diff >= 18:
-                    return 0.58
-                if diff >= 12:
-                    return 0.74
-                if diff >= 8:
-                    return 0.86
-                if diff <= -4:
-                    return 1.08
-                return 1.04
-            if playmaker or assist_lean:
-                if diff >= 8:
-                    return 0.16
-                if diff >= 0:
-                    return 0.26
-                if diff >= -8:
-                    return 0.55
-                return 0.82
-            if diff >= 8:
-                return 0.14
-            if diff >= 2:
-                return 0.24
-            if diff >= 0:
-                return 0.38
-            if diff <= -12:
-                return 1.12
-            return 0.92
-
-        if role == "assist":
-            if goal_first:
-                if diff >= 16:
-                    return 1.18
-                if a > g + 10:
-                    return 0.88
-                return 0.96
-            if playmaker or assist_lean:
-                return 1.32 if diff >= -2 else 1.18
-            if diff >= 0:
-                return 1.52
-            if diff >= -6:
-                return 1.26
-            return 1.08
-
+        A player who is ahead in goals used to be pushed off the puck, and a
+        player who was behind was handed the next one. That is a quota. Who
+        shoots is his overall, his shot and pass ratings, and which line the
+        coach has on the ice.
+        """
+        del p, ledger, team_id, role
         return 1.0
 
     def _gm_scoring_hub_bonus(self, p: Any, team: Any) -> float:
@@ -12436,13 +12417,15 @@ class SimEngine:
         shoot = self._gm_rating_avg(p, OFFENSE_KEYS) / 99.0
         passing = self._gm_rating_avg(p, PASSING_KEYS) / 99.0
         gap_pts = (shoot - passing) * 99.0
-        tend = 0.65 + 0.70 * max(0.0, min(1.0, (gap_pts + 6.0) / 12.0))
+        # A sniper shoots more than a playmaker. The gap is a tilt: the
+        # playmaker still scores, and the sniper still ends up with assists.
+        tend = 0.84 + 0.32 * max(0.0, min(1.0, (gap_pts + 8.0) / 18.0))
         near = abs(gap_pts) < 4.0
         pt = self._gm_player_type_str(p)
         if "playmaker" in pt:
-            tend *= 0.84 if near else 0.92
+            tend *= 0.97 if near else 0.98
         elif any(k in pt for k in ("sniper", "finisher", "shooter")):
-            tend *= 1.12 if near else 1.06
+            tend *= 1.04 if near else 1.03
         elif "power" in pt or "net" in pt:
             tend *= 1.05
         if self._gm_pos_str(p).upper() == "D":
@@ -12475,18 +12458,45 @@ class SimEngine:
         edge = (_shooters(home) - _shooters(away)) * 0.004 + (_goalie(home) - _goalie(away)) * 0.006
         return max(0.35, min(0.65, 0.50 + edge))
 
+    def _gm_talent_share_weight(self, p: Any) -> float:
+        """Pull shots and assists toward overall. No fixed slice of the line.
+
+        A 97 is clearly ahead of an 88. A 99 is ahead of a 94, not a different
+        sport. An 80 still gets his looks.
+        """
+        try:
+            ovr = float(p) if isinstance(p, (int, float)) else float(self._gm_ovr_0_100(p))
+        except Exception:
+            ovr = 75.0
+        ovr = max(62.0, min(99.0, ovr))
+        return (ovr / 84.0) ** 1.25
+
     def _gm_shot_selection_weight(self, p: Any, *, strength: str = "EV") -> float:
         cache = self._gm_player_runtime_cache(p)
         if "bulk_tend" not in cache:
             cache["bulk_tend"] = self._gm_bulk_unit_shot_tendency(p)
         # Squaring the tendency handed one shooter per line ~4x his linemates' shots,
         # and finishing skill compounded it: one 50-goal man, everyone else assists.
-        w = float(cache["bulk_tend"]) ** 1.4
+        w = float(cache["bulk_tend"])
+        # Overall decides who shoots. A 97 takes more of the line than an 88.
+        # Close overalls stay close. Nobody is handed a fixed share of the five.
+        w *= self._gm_talent_share_weight(p)
         if str(strength or "").upper() == "PP" and self._gm_pos_str(p).upper() == "D":
             w *= 1.15
         # GM shooting directive (shoot more / less, pass more / less) from player meetings.
         w *= self._gm_franchise_alloc_mult(p, "shot_selection", lo=0.6, hi=1.45)
         return max(0.02, w)
+
+    def _gm_spread_unit_shot_weights(self, weights: Sequence[float], defense: Sequence[bool]) -> List[float]:
+        """Leave the weights the ratings produced.
+
+        Who finishes, and who gets the assist, already comes from overall,
+        shot and pass ratings, and which line is on the ice. Forcing the
+        leader to a fixed share of the five handed the top of every line
+        the points and left the other lines with the leftovers.
+        """
+        del defense
+        return [max(0.01, float(w)) for w in weights]
 
     def _gm_shot_quality_weight(self, p: Any) -> float:
         cache = getattr(p, "_gm_runtime_cache", None)
@@ -12766,7 +12776,7 @@ class SimEngine:
             fin *= 1.06
         elif "playmaker" in pt:
             fin *= 0.97
-        val = max(0.88, min(1.15, 0.86 + 0.32 * fin))
+        val = max(0.90, min(1.14, 0.88 + 0.28 * fin))
         if isinstance(cache, dict):
             cache["finishing_adj"] = val
         return val
@@ -12958,8 +12968,18 @@ class SimEngine:
             raise ValueError("empty unit")
         self._scoring_count_touch()
 
+        book = ledger if isinstance(ledger, dict) else {}
+        raw = [
+            self._gm_shot_selection_weight(p, strength=str(strength or "EV"))
+            * self._gm_goal_assist_balance_mult(p, book, team_id, role="score")
+            for p in unit
+        ]
+        spread = self._gm_spread_unit_shot_weights(
+            raw, [self._gm_is_defense(p) for p in unit]
+        )
+
         def _shooter_weight(p: Any) -> float:
-            return self._gm_shot_selection_weight(p, strength=str(strength or "EV"))
+            return spread[list(unit).index(p)]
 
         return self._gm_pick_weighted(rng, unit, _shooter_weight, temperature=1.0, weight_floor=0.02)
 
@@ -13727,6 +13747,10 @@ class SimEngine:
         setattr(team, "_user_scratched_ids", set())
 
         deployed = self._gm_try_resolve_saved_lineup(team)
+        if deployed is not None:
+            named = list(deployed.get("dressed_fw") or []) + list(deployed.get("dressed_d") or [])
+            if any(getattr(p, "_wjc_away_from_nhl", False) for p in named):
+                deployed = None
         if deployed is not None:
             setattr(team, "_franchise_deployed_lineup", deployed)
             scratch_ids = set(deployed.get("scratch_ids") or [])
@@ -15050,6 +15074,8 @@ class SimEngine:
 
         def _primary_w(p: Any) -> float:
             w = self._gm_primary_assist_weight(p, strength)
+            if isinstance(ledger, dict):
+                w *= self._gm_goal_assist_balance_mult(p, ledger, team_id, role="assist")
             # EV: D assist less than F, but not starved (bulk path uses separate assist prior).
             if str(strength or "EV").upper() == "EV" and self._gm_pos_str(p).upper() == "D":
                 w *= 0.78
@@ -16179,6 +16205,8 @@ class SimEngine:
         rd = getattr(player, "_rest_day", None)
         if rd is not None and rd == getattr(self, "_tactic_calendar_day", None):
             return True  # coach rest day (load management)
+        if getattr(player, "_wjc_away_from_nhl", False):
+            return True
         if int(getattr(player, "_world_injury_games_remaining", 0) or 0) > 0:
             return True
         h = getattr(player, "health", None)
@@ -16933,13 +16961,6 @@ class SimEngine:
             # forward goals against an NHL norm of 35-40%.
             gamma = (math.log(1.10) / 6.0) * (0.55 if defense else 1.0)
             rate = max(0.82, min(1.20, math.exp(gamma * (rating - baseline))))
-            # A superstar lifts his own line past what the slot average can see.
-            # exp(0.06 × max(0, best − 92)): a 98 is about 1.43×, a 94 about 1.13×.
-            if not defense:
-                best = max(self._gm_ovr_0_100(p) for p in members)
-                gap = max(0.0, best - 92.0)
-                if gap > 0.0:
-                    rate *= math.exp(0.035 * gap)
             return rate
         rating = sum(self._gm_attempt_defense_99(p) for p in members) / len(members)
         gamma_d = math.log(1.0 / 0.82) / 6.0
@@ -17075,6 +17096,39 @@ class SimEngine:
                 rate_memo[mk] = v
             return v
 
+        def _depth_leak(groups: Dict[int, List[Any]]) -> Dict[int, float]:
+            """A good top six takes the bottom six's scoring when that six is worse.
+
+            Ice time stays the coach's call. This only moves goals. A bottom
+            six that is close in overall and connected keeps its share.
+            """
+            ovr: Dict[int, float] = {}
+            chem: Dict[int, float] = {}
+            for key, members in groups.items():
+                if not members:
+                    continue
+                ovr[int(key)] = sum(self._gm_ovr_0_100(p) for p in members) / len(members)
+                chem[int(key)] = sum(float(getattr(p, "_gm_unit_chem", 55.0) or 55.0) for p in members) / len(members)
+            top_keys = [k for k in ovr if k <= 1]
+            bot_keys = [k for k in ovr if k >= 2]
+            if not top_keys or not bot_keys:
+                return {}
+            top = sum(ovr[k] for k in top_keys) / len(top_keys)
+            bot = sum(ovr[k] for k in bot_keys) / len(bot_keys)
+            bot_chem = sum(chem[k] for k in bot_keys) / len(bot_keys)
+            gap = top - bot
+            leak = 0.0
+            if gap >= 5.0:
+                leak = min(0.46, (gap - 4.0) * 0.055)
+            if bot_chem < 48.0:
+                leak += min(0.16, (48.0 - bot_chem) / 70.0)
+            leak = min(0.52, max(0.0, leak))
+            if leak <= 0.0:
+                return {}
+            top_mult = 1.0 + leak * (0.42 / 0.58)
+            bot_mult = max(0.40, 1.0 - leak)
+            return {k: (top_mult if k <= 1 else bot_mult) for k in ovr}
+
         def _pick_unit(
             groups: Dict[int, List[Any]],
             defense: bool,
@@ -17086,10 +17140,11 @@ class SimEngine:
             keys = list(groups.keys())
             if not keys:
                 return 0
+            leak = {} if defense or matching else _depth_leak(groups)
             weights: List[float] = []
             for key in keys:
                 members = groups[key]
-                share = _share(members, defense, key, live)
+                share = _share(members, defense, key, live) * float(leak.get(int(key), 1.0))
                 if not matching:
                     # Versus the league average for this slot, not the opponent's
                     # matching unit. A strong line stays strong against every opponent.
@@ -17185,22 +17240,37 @@ class SimEngine:
         _star_memo: Dict[int, float] = {}
 
         def _star(p: Any) -> float:
-            # Elite forwards take over shifts: from 84 OVR each point adds ~7% share of the
-            # unit's shots and helpers, so a 94 carries ~1.75x a 84 linemate. Depth (<84) is untouched.
+            # Overall, on top of the shot and pass ratings. Minutes still come
+            # from which line the coach has on the ice.
             hit = _star_memo.get(id(p))
             if hit is None:
-                ovr = float(self._gm_ovr_0_100(p))
-                if not self._gm_is_defense(p):
-                    # First-liners (82-89) carry real top-line shares, stars keep their spike.
-                    hit = 1.0 + 0.08 * max(0.0, ovr - 82.0) + 0.016 * max(0.0, ovr - 88.0) ** 2
-                else:
-                    hit = 1.0 + 0.045 * max(0.0, ovr - 83.0)
+                hit = 1.0
                 _star_memo[id(p)] = hit
             return hit
 
         def _shooter(five: List[Any], *, pp_lane: bool = False) -> Any:
             st = "PP" if pp_lane else "EV"
-            weights = [self._gm_shot_selection_weight(p, strength=st) * _star(p) for p in five]
+            book = getattr(self, "_gm_season_ledger_ref", None)
+            if not isinstance(book, dict):
+                book = getattr(self, "_gm_current_ledger", None)
+            if not isinstance(book, dict):
+                book = {}
+            raw = [
+                self._gm_shot_selection_weight(p, strength=st)
+                * _star(p)
+                * self._gm_goal_assist_balance_mult(p, book, tid, role="score")
+                for p in five
+            ]
+            weights = self._gm_spread_unit_shot_weights(
+                raw, [self._gm_is_defense(p) for p in five]
+            )
+            if len(weights) >= 2:
+                ordered = sorted(weights, reverse=True)
+                # Only a clear finisher pulls away. Two similar forwards
+                # keep splitting the goals.
+                if ordered[0] >= ordered[1] * 1.18:
+                    lead = ordered[0]
+                    weights = [w * 1.48 if w >= lead * 0.97 else w for w in weights]
             return rng.choices(five, weights=weights, k=1)[0]
 
         _aw_memo: Dict[int, float] = {}
@@ -17210,16 +17280,40 @@ class SimEngine:
             if hit is not None:
                 return hit
             comp = self._gm_playmaking_99(p) / 99.0
-            ovr = self._gm_ovr_0_100(p)
-            star = _star(p)
-            # comp^3 handed nearly every helper on a line to its best passer, so the
-            # same two players topped the league every year. comp^2.2 plus a season
-            # playmaking form draw spreads the helpers without flattening talent.
-            w = max(0.02, (comp ** 2.2) * star * self._gm_season_playmaking_form(p))
+            # Overall picks the point getters. Passing is a tilt, so the same
+            # player can lead goals and lead assists.
+            w = max(
+                0.02,
+                _assist_pull(self._gm_ovr_0_100(p), comp)
+                * self._gm_season_playmaking_form(p),
+            )
+            book = getattr(self, "_gm_season_ledger_ref", None)
+            if not isinstance(book, dict):
+                book = getattr(self, "_gm_current_ledger", None)
+            if isinstance(book, dict):
+                w *= self._gm_goal_assist_balance_mult(p, book, tid, role="assist")
             if self._gm_is_defense(p):
                 w *= 0.46 / 0.83
             _aw_memo[id(p)] = w
             return w
+
+        def _assist_weights(mates: List[Any]) -> List[float]:
+            raw = [_assist_w(p) for p in mates]
+            if len(raw) < 2:
+                return raw
+            # The two best players on the ice take the helpers, whether the
+            # second one is a passer or the finisher. Depth does not.
+            order = sorted(range(len(mates)), key=lambda i: self._gm_ovr_0_100(mates[i]), reverse=True)
+            out = list(raw)
+            out[order[0]] *= 2.3
+            if len(order) > 1 and not self._gm_is_defense(mates[order[1]]):
+                out[order[1]] *= 2.0
+            # The finisher is on the ice for the goals he did not score too.
+            shots = [self._gm_shot_selection_weight(p) for p in mates]
+            best_shot = max(range(len(mates)), key=lambda i: shots[i])
+            if not self._gm_is_defense(mates[best_shot]):
+                out[best_shot] *= 2.15
+            return out
 
         events: List[Dict[str, Any]] = []
         pp1_u = [p for p in list(pp1 or []) if p is not None][:5]
@@ -17242,7 +17336,7 @@ class SimEngine:
                 # funnelled nearly every PP point to the same four or five players).
                 # 0.68 -> 0.62: PP1 forwards are mostly the top line, which still took
                 # ~58% of forward PP goals and pushed line 1 past 42% of forward goals.
-                atk = list(pp1_u if (pp1_u and (not pp2_u or rng.random() < 0.62)) else pp2_u)
+                atk = list(pp1_u if (pp1_u and (not pp2_u or rng.random() < 0.64)) else pp2_u)
                 dfd = list(pk1_u if (pk1_u and (not pk2_u or rng.random() < 0.70)) else (pk2_u or []))
             else:
                 atk, atk_key = _five_from(atk_fwd, atk_d, None, False, True, live_atk)
@@ -17318,7 +17412,7 @@ class SimEngine:
                     _bump([shooter], sog=1.0, ixg=xg)
                     mates = [p for p in atk if p is not shooter]
                     if mates and xg > 0:
-                        primary = rng.choices(mates, weights=[_assist_w(p) for p in mates], k=1)[0]
+                        primary = rng.choices(mates, weights=_assist_weights(mates), k=1)[0]
                         _bump([primary], xa=xg * 0.58)
                 continue
             _bump(atk, cf=1.0)
@@ -17349,7 +17443,7 @@ class SimEngine:
                     _bump([shooter], sog=1.0, ixg=xg)
                     mates = [p for p in atk if p is not shooter]
                     if mates and xg > 0:
-                        primary = rng.choices(mates, weights=[_assist_w(p) for p in mates], k=1)[0]
+                        primary = rng.choices(mates, weights=_assist_weights(mates), k=1)[0]
                         _bump([primary], xa=xg * 0.58)
                 _bump(atk, xgf=xg)
                 _bump(dfd, xga=xg)
@@ -17421,11 +17515,12 @@ class SimEngine:
                 _bump(dfd, plus_minus=-1.0)
             mates = [p for p in atk if p is not shooter]
             roll = rng.random()
-            n_ast = 0 if roll < 0.05 else (2 if roll < 0.78 else 1)
+            # About 1.92 assists per goal. Almost every goal has two helpers.
+            n_ast = 0 if roll < 0.015 else (2 if roll < 0.94 else 1)
             shot_xg = float(e.get("xg") or 0.0)
             assist_ids: List[str] = []
             if n_ast and mates:
-                primary = rng.choices(mates, weights=[_assist_w(p) for p in mates], k=1)[0]
+                primary = rng.choices(mates, weights=_assist_weights(mates), k=1)[0]
                 ast_tag: Dict[str, float] = {"a": 1.0, "primary_assists": 1.0}
                 if is_pp:
                     ast_tag["ppa"] = 1.0
@@ -17434,15 +17529,13 @@ class SimEngine:
                 _bump([primary], **ast_tag)
                 assist_ids.append(_id_str(primary, "id"))
                 if n_ast == 2:
-                    if (not is_pp) and (not is_sh) and rng.random() < 0.18:
-                        elsewhere = [p for p in skaters if p is not shooter and p is not primary and not self._gm_is_defense(p)]
-                    else:
-                        elsewhere = []
-                    pool = elsewhere or [p for p in mates if p is not primary]
+                    # Both helpers were on the ice. A random forward off the
+                    # bench was taking the second assist from the top line.
+                    pool = [p for p in mates if p is not primary]
                     if not pool:
                         pool = [p for p in skaters if p is not shooter and p is not primary]
                     if pool:
-                        second = rng.choices(pool, weights=[_assist_w(p) for p in pool], k=1)[0]
+                        second = rng.choices(pool, weights=_assist_weights(pool), k=1)[0]
                         ast2: Dict[str, float] = {"a": 1.0, "secondary_assists": 1.0}
                         if is_pp:
                             ast2["ppa"] = 1.0
@@ -18874,8 +18967,8 @@ class SimEngine:
             _swallowed_log.debug("suppressed exception", exc_info=True)
         # Clamps and the combined cap scale with the Board's scoring rules; before, a
         # passed "more goals" rule raised the base and the cap took it straight back.
-        home_mu = max(1.85 * _board_m, min(3.85 * _board_m, home_mu))
-        away_mu = max(1.75 * _board_m, min(3.70 * _board_m, away_mu))
+        home_mu = max(1.85 * _board_m, min(3.90 * _board_m, home_mu))
+        away_mu = max(1.75 * _board_m, min(3.75 * _board_m, away_mu))
         # Coaching tactics and back-to-backs act on top of the talent cap; before,
         # a capped contender's tactics and fatigue changed nothing.
         if _tac is not None:
@@ -19054,7 +19147,7 @@ class SimEngine:
         lg = getattr(self, "league", None)
         st = getattr(lg, "_gm_pace_anchor", None) if lg is not None else None
         if isinstance(st, dict):
-            return max(0.90, min(1.12, float(st.get("mult", 1.0) or 1.0)))
+            return max(0.92, min(1.20, float(st.get("mult", 1.0) or 1.0)))
         return 1.0
 
     def _gm_pace_anchor_update(self, goals: int, target: float, mult_used: float) -> None:
@@ -19069,7 +19162,7 @@ class SimEngine:
         st["ema_raw"] = 0.9975 * float(st.get("ema_raw", 1.0) or 1.0) + 0.0025 * raw
         st["n"] = int(st.get("n", 0) or 0) + 1
         if st["n"] >= 200:
-            st["mult"] = max(0.90, min(1.12, 1.0 / max(0.5, float(st["ema_raw"]))))
+            st["mult"] = max(0.92, min(1.20, 1.0 / max(0.5, float(st["ema_raw"]))))
         try:
             setattr(lg, "_gm_pace_anchor", st)
         except Exception:
@@ -19403,7 +19496,7 @@ class SimEngine:
         # Market cadence: GMs look at the market every so often; urgency climbs into the
         # real deadline and deadline day is a frenzy. No seasonal trade quota — the
         # proposer only executes deals that fill a need, so a quiet market stays quiet.
-        trade_prob = 0.20 + 0.40 * float(deadline_phase)
+        trade_prob = 0.24 + 0.40 * float(deadline_phase)
         max_exec = 2 + (1 if deadline_phase > 0.35 else 0) + (1 if deadline_phase > 0.7 else 0)
         forced_market_check = False
         if 0 <= days_left <= DEADLINE_WEEK_DAYS:
@@ -19430,7 +19523,7 @@ class SimEngine:
         if bulk_comp > 1 and days_left > DEADLINE_WEEK_DAYS:
             # Bulk sims tick the market every few days — compensate the skipped looks.
             trade_prob = 1.0 - (1.0 - min(0.95, trade_prob)) ** bulk_comp
-            max_exec = min(4, int(max_exec) + max(0, bulk_comp // 3))
+            max_exec = min(6, int(max_exec) + max(0, bulk_comp // 2))
         # Open CPU trade demands pull GMs to the phone.
         try:
             from app.sim_engine.trades.cpu_trade_proposer import collect_cpu_trade_demands

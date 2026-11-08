@@ -188,8 +188,6 @@ def apply_pool_range_pulse(p: Any, team: Optional[Any], rng: random.Random, seas
     need not move together. The offseason pass subtracts ``_pool_inseason_spent``.
     """
     from app.sim_engine.progression.development import (
-        _POOL_RANGE_SEASON_CAP,
-        _PROSPECT_POT_SEASON_CAP_TRANSCENDENT,
         _PROSPECT_PULSES_PER_SEASON,
         prospect_performance_evidence,
     )
@@ -224,15 +222,31 @@ def apply_pool_range_pulse(p: Any, team: Optional[Any], rng: random.Random, seas
     step = min(remaining, plan["total"] / _PROSPECT_PULSES_PER_SEASON * rng.uniform(0.7, 1.3))
 
     evidence, gp = prospect_performance_evidence(p)
+    stats = getattr(p, "_prospect_season_stats", None) or {}
+    projected = getattr(p, "_prospect_projected_stats", None) or {}
+    try:
+        ppg = float(stats.get("ppg") or stats.get("points_per_game") or 0.0)
+        proj = float(projected.get("ppg") or projected.get("points_per_game") or 0.0)
+        line_gp = int(stats.get("gp") or 0)
+    except (TypeError, ValueError):
+        ppg, proj, line_gp = 0.0, 0.0, 0
+    # A point-per-game jump over the projection is a breakout even when the
+    # analytics card cannot be read. An ordinary year does not move the ceiling.
+    if line_gp >= 12 and proj > 0.2 and ppg >= proj + 0.35:
+        evidence = max(float(evidence), 0.70)
+        gp = max(int(gp), line_gp)
     factor = max(0.4, min(1.6, 1.0 + 0.8 * evidence * min(1.0, gp / 30.0)))
-    cap = (
-        _PROSPECT_POT_SEASON_CAP_TRANSCENDENT
-        if getattr(p, "_pipeline_franchise_flag", False)
-        else _POOL_RANGE_SEASON_CAP
-    ) / 99.0
-    hi_gain = min(step * factor, max(0.0, cap - plan["hi_gain"]))
+    # The floor (current ability) is the growth. The ceiling stays put unless
+    # the year is actually a breakout, and then it moves by about a point.
+    hi_gain = 0.0
+    if evidence >= 0.55 and gp >= 12:
+        room = max(0.0, (1.0 / 99.0) - float(plan.get("hi_gain") or 0.0))
+        hi_gain = min(step * 0.25 * factor, room)
     ceil = float(getattr(p, "_pipeline_ceiling", plan["start_hi"]))
-    new_hi = max(lo, min(hi + hi_gain, ceil + 0.04, 0.99))
+    # One display point of room above the listed ceiling, and only when the
+    # year earned a breakout step. Ordinary pulses do not spend it.
+    ceiling_cap = max(hi, ceil) + (1.0 / 99.0 if hi_gain > 0.0 else 0.0)
+    new_hi = max(lo, min(hi + hi_gain, ceiling_cap, 0.99))
     new_lo = min(lo + step * 0.55, new_hi - 0.02)
     p.draft_value_range = (new_lo, new_hi)
     plan["spent"] += step

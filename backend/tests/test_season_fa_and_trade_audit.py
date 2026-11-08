@@ -318,10 +318,9 @@ def test_trade_frequency_target_band_lowered():
     import inspect
     from app.sim_engine.engine import SimEngine
 
-    src = inspect.getsource(SimEngine._season_daily_socio_economics)
-    assert "max(30, min(48" in src or "max(30, min(48," in src
-    assert "0.030 +" in src or "0.030+" in src
-    assert "min(4, max_exec)" in src or "min(4, max_exec)" in src.replace(" ", "")
+    src = inspect.getsource(SimEngine._daily_trade_market)
+    assert "0.24 +" in src
+    assert "max(30, min(48" not in src
 
 
 def test_dismiss_all_trade_popups_helper():

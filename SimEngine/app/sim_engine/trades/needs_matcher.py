@@ -559,6 +559,76 @@ def _hockey_swap_plans(
     return plans
 
 
+def _star_market_plans(
+    team_by_tid: Dict[str, Any],
+    assessments: Dict[str, TeamAssessment],
+    *,
+    rng: Any,
+    used_players: set,
+) -> List[DealPlan]:
+    """Real hockey deals for 84–91 overall players.
+
+    After year 1 the roster holes are gone, so the surplus market is depth
+    swaps and then almost nothing. A rebuilder, a rental, or a player who
+    has asked out can still be the center of a deal.
+    """
+    buyers = [
+        (tid, tm, assessments[tid])
+        for tid, tm in team_by_tid.items()
+        if tid in assessments
+        and (assessments[tid].is_buyer or assessments[tid].status == STATUS_CONTENDER)
+    ]
+    plans: List[DealPlan] = []
+    for sid, tm in team_by_tid.items():
+        seller_view = assessments.get(sid)
+        if seller_view is None:
+            continue
+        selling = seller_view.is_seller or seller_view.status in (STATUS_SELLER, STATUS_TANK)
+        for p in list(getattr(tm, "roster", None) or []):
+            if player_pid(p) in used_players:
+                continue
+            ovr = player_ovr(p)
+            demand = bool(
+                getattr(p, "_trade_demand_active", False) or getattr(p, "trade_demand_active", False)
+            )
+            rental = is_rental(p)
+            if ovr < 84.0 or (ovr > 91.0 and not demand):
+                continue
+            if player_age(p) < 26 and not demand and not rental:
+                continue
+            if not (selling or rental or demand):
+                continue
+            hit = cap_hit_m(p)
+            fits = [
+                row for row in buyers
+                if row[0] != sid and row[2].cap_space_m + 2.5 >= hit
+            ]
+            if not fits:
+                continue
+            fits.sort(key=lambda row: -row[2].cap_space_m)
+            _bid, buyer, _ba = fits[int(rng.random() * min(3, len(fits))) % len(fits)]
+            score = (
+                0.52
+                + min(0.20, (ovr - 84.0) * 0.035)
+                + (0.14 if demand else 0.0)
+                + (0.08 if rental else 0.0)
+                + _daily_jitter(rng)
+            )
+            plans.append(
+                DealPlan(
+                    motive="star_acquisition",
+                    buyer=buyer,
+                    seller=tm,
+                    target=p,
+                    score=round(score, 3),
+                    need_fill=0.40,
+                    motivated_seller=bool(demand or rental or selling),
+                )
+            )
+    plans.sort(key=lambda row: -row.score)
+    return plans[:8]
+
+
 def _depth_market_plans(
     team_by_tid: Dict[str, Any],
     assessments: Dict[str, TeamAssessment],
@@ -838,7 +908,9 @@ def generate_plans(
     # 4) Deadline-week depth/insurance adds.
     if 0 <= days_left <= 7:
         plans.extend(_depth_market_plans(team_by_tid, assessments, rng=rng, used_players=excluded, taste=taste))
-    # 5) Upgrades / all-in pushes / summer re-tools: no roster hole required.
+    # 5) Stars. Year 2 has no holes left, so this is what keeps real players moving.
+    plans.extend(_star_market_plans(team_by_tid, assessments, rng=rng, used_players=excluded))
+    # 6) Upgrades / all-in pushes / summer re-tools: no roster hole required.
     _have = {(team_id_of(p.buyer), player_pid(p.target)) for p in plans}
     plans.extend(
         p for p in _motive_market_plans(
@@ -1076,7 +1148,7 @@ def build_package_for_plan(
                 tools, buyer_a=ba, seller_a=sa, buyer=plan.buyer, seller=plan.seller,
                 target_value=pay, used=used_players,
             )
-            if ret is None and plan.motive in ("upgrade_buy", "all_in_push"):
+            if ret is None and plan.motive in ("upgrade_buy", "all_in_push", "star_acquisition"):
                 # Upgrade: the buyer pays with youth (prospect / young spare) and picks.
                 young = _young_currency(tools, plan, ba, pay * 0.7, used_players)
                 rv = 0.0
@@ -1085,8 +1157,8 @@ def build_package_for_plan(
                     plan.return_player = ret
                 picks, ptot = _pick_bundle(
                     tools, league, plan.buyer, ctx, target=max(0.0, pay - rv), protect_first=ba.protects_first,
-                    acquirer=plan.seller, max_firsts=1 if (firsts_ok or plan.motive == "all_in_push") else 0,
-                    max_picks=2 if plan.motive == "upgrade_buy" else 3,
+                    acquirer=plan.seller, max_firsts=1 if (firsts_ok or plan.motive in ("all_in_push", "star_acquisition")) else 0,
+                    max_picks=2 if plan.motive in ("upgrade_buy", "star_acquisition") else 3,
                 )
                 if not picks and ret is None:
                     plan.fail_reason = "upgrade_cant_pay"

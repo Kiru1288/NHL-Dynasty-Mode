@@ -976,16 +976,66 @@ def _player_hits_per_game(player: Any, host: Any) -> float:
     return float(hits) / float(gp)
 
 
-def _player_composure_factor(player: Any) -> float:
+def _rating_100(player: Any, keys: tuple, default: float) -> float:
     ratings = getattr(player, "ratings", None)
-    comp = None
     if isinstance(ratings, dict):
-        comp = ratings.get("per_emotional_stability")
-    try:
-        c = float(comp) if comp is not None else 70.0
-    except (TypeError, ValueError):
-        c = 70.0
-    return max(0.35, (100.0 - c) / 100.0)
+        for key in keys:
+            raw = ratings.get(key)
+            if raw is None:
+                continue
+            try:
+                value = float(raw)
+            except (TypeError, ValueError):
+                continue
+            if value <= 1.5:
+                value *= 100.0
+            return max(0.0, min(100.0, value))
+    return float(default)
+
+
+def _player_is_goalie(player: Any) -> bool:
+    pos = getattr(player, "position", None) or getattr(getattr(player, "identity", None), "position", "")
+    token = str(getattr(pos, "value", pos) or "").upper().replace(".", " ").replace("_", " ")
+    parts = [p for p in token.replace("-", " ").split() if p]
+    if any(p in ("G", "GK", "GOALIE", "GOALTENDER") for p in parts):
+        return True
+    return "GOAL" in token
+
+
+def _on_ice_suspension_chance(player: Any, hpg: float) -> float:
+    """Per game. Hotheads with a low mental rating. Almost never a goalie.
+
+    A stable player can still throw one bad hit. That is rare. A goalie
+    leaving the crease is about a tenth of a percent across a season.
+    """
+    hits = max(0.0, float(hpg))
+    if _player_is_goalie(player):
+        if hits < 0.25:
+            return 0.0
+        return 0.001 / 82.0
+    if hits < 1.4:
+        return 0.0
+    mental = _rating_100(
+        player,
+        ("per_emotional_stability", "emotional_stability", "iqm_composure", "composure"),
+        68.0,
+    )
+    temper = _rating_100(player, ("phy_aggression", "aggression"), 50.0)
+    volume = min(1.5, hits / 3.2)
+    if mental <= 42 and temper >= 62:
+        return min(0.0065, 0.0042 * volume)
+    if mental <= 50 and temper >= 72:
+        return min(0.0035, 0.0022 * volume)
+    if mental <= 60:
+        return min(0.00045, 0.00028 * volume)
+    if mental <= 72 and temper >= 80:
+        return min(0.0002, 0.00012 * volume)
+    return 0.0
+
+
+def _player_composure_factor(player: Any) -> float:
+    mental = _rating_100(player, ("per_emotional_stability", "emotional_stability"), 70.0)
+    return max(0.35, (100.0 - mental) / 100.0)
 
 
 def maybe_roll_on_ice_suspension_after_game(
@@ -1001,9 +1051,6 @@ def maybe_roll_on_ice_suspension_after_game(
         return None
     if getattr(player, "retired", False):
         return None
-    pos = str(getattr(player, "position", "") or getattr(getattr(player, "identity", None), "position", "") or "")
-    if str(getattr(pos, "value", pos) or "").upper() == "G":
-        return None
     if getattr(player, PLAYER_INCIDENT_KEY, None):
         return None
     try:
@@ -1013,10 +1060,8 @@ def maybe_roll_on_ice_suspension_after_game(
         pass
     r = _rng(rng)
     hpg = _player_hits_per_game(player, host)
-    comp_f = _player_composure_factor(player)
-    # ~0.05% base per game at 2 H/G and average composure; scales up with hits and volatility.
-    chance = min(0.0045, 0.00022 * max(0.5, hpg) * comp_f * (1.0 + 0.35 * hpg))
-    if r.random() > chance:
+    chance = _on_ice_suspension_chance(player, hpg)
+    if chance <= 0.0 or r.random() > chance:
         return None
     weights = [float(w) for *_, w in ON_ICE_SUSPENSION_REASONS]
     pick = r.choices(ON_ICE_SUSPENSION_REASONS, weights=weights, k=1)[0]

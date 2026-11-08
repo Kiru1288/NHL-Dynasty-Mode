@@ -183,17 +183,13 @@ def _is_elite_veteran(player: Any) -> bool:
 
 
 def apply_regression(player: Any, rng: Any) -> None:
-    """
-    A small extra cut only when the year was actually bad off the ice.
+    """Cut skills when the year, the mood, or the injuries call for it.
 
-    Age alone is the career-lifecycle roll. A quiet veteran does not lose
-    overall here, and the cut stays near one overall point.
+    Age makes a justified drop a little larger. Age by itself does not.
+    A clearly good season is the highest indicator, so it buys the drop off.
+    Potential is left alone.
     """
     age = _age(player)
-    peak = _peak_age(player)
-    if age <= peak:
-        return
-
     reasons: List[str] = []
     morale = _morale(player)
     if morale < 0.35:
@@ -211,23 +207,50 @@ def apply_regression(player: Any, rng: Any) -> None:
             injury_games = 0
     if injury_games >= 20 or len(_injury_history(player)) >= 3:
         reasons.append("major injury")
+    surplus = getattr(player, "_dev_season_points_surplus", None)
+    try:
+        surplus_f = float(surplus) if surplus is not None else None
+    except (TypeError, ValueError):
+        surplus_f = None
+    if surplus_f is not None and surplus_f <= -28.0:
+        reasons.append("one really bad season")
+    try:
+        from app.sim_engine.progression.development import rolling_form_score
+
+        form, form_n = rolling_form_score(player)
+        if form_n >= 2 and form < -0.15:
+            reasons.append("continuous bad seasons")
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    if surplus_f is not None and surplus_f >= 12.0:
+        return
     if not reasons:
         return
 
-    decline = min(0.012, 0.007 + 0.002 * (len(reasons) - 1))
+    drop = 1
+    if "one really bad season" in reasons or "continuous bad seasons" in reasons:
+        drop = 2
+    if age >= 36:
+        drop += 1
+    elif age >= 32:
+        drop += 0
+    drop = max(1, min(3, drop))
     if _is_elite_veteran(player):
-        decline *= 0.65
-    decline *= float(getattr(player, "_narrative_regression_rate_mult", 1.0) or 1.0)
-    if decline <= 0.0:
-        return
+        drop = max(1, drop - 1)
 
     ratings = getattr(player, "ratings", None)
     if not ratings or not isinstance(ratings, dict) or not ratings:
         return
 
-    per_k = decline * 99.0 / len(ratings)
+    skip = ("potential", "ceiling", "overall", "ovr")
     for k in list(ratings.keys()):
-        ratings[k] = _clamp_rating(ratings[k] - per_k)
+        name = str(k).lower()
+        if any(token in name for token in skip):
+            continue
+        try:
+            ratings[k] = _clamp_rating(float(ratings[k]) - float(drop))
+        except (TypeError, ValueError):
+            continue
 
 
 def career_aging_decline_try(player: Any, rng: Any, league: Any = None) -> Optional[float]:
@@ -263,8 +286,22 @@ def career_aging_decline_try(player: Any, rng: Any, league: Any = None) -> Optio
     age = _age(player)
     ovr100 = _ovr_0_100(player)
     phase = str(getattr(player, "career_phase", "") or career_phase_for_age(age))
+    surplus = getattr(player, "_dev_season_points_surplus", None)
+    try:
+        surplus_f = float(surplus) if surplus is not None else None
+    except (TypeError, ValueError):
+        surplus_f = None
+    # A good season is the highest indicator. Getting older is not a reason by itself.
+    if surplus_f is not None and surplus_f >= 12.0:
+        setattr(
+            player,
+            "_aging_decline_last_reason",
+            {"triggered": False, "age": age, "blocked": "good season"},
+        )
+        return None
+    really_bad = surplus_f is not None and surplus_f <= -28.0
 
-    if age <= 24:
+    if age < 36 and not really_bad:
         setattr(
             player,
             "_aging_decline_last_reason",
