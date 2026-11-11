@@ -44,6 +44,7 @@ const FreeAgency = React.lazy(() => import("./screens/FreeAgency"));
 const LeagueOperations = React.lazy(() => import("./screens/LeagueOperations"));
 const FranchiseIdentity = React.lazy(() => import("./screens/FranchiseIdentity"));
 const LegacyHall = React.lazy(() => import("./screens/LegacyHall"));
+const SimTracker = React.lazy(() => import("./screens/SimTracker"));
 
 function ScreenLoadingFallback({ label = "Loading…" }) {
   return (
@@ -162,7 +163,7 @@ function useSetupSoundtrack(screen) {
 }
 
 function GameRoot() {
-  const { screen, hydrateFranchiseHeavyState, franchiseState } = useGameUI();
+  const { screen, setScreen, hydrateFranchiseHeavyState, franchiseState } = useGameUI();
   const [hubKept, setHubKept] = React.useState(false);
   useEffect(() => {
     if (screen === SCREENS.HUB) setHubKept(true);
@@ -210,6 +211,9 @@ function GameRoot() {
         )}
         {screen === SCREENS.ROSTER && <RosterScreen />}
         {screen === SCREENS.CALENDAR && <CalendarScreen />}
+        {screen === SCREENS.SIM_TRACKER && (
+          <SimTracker onExit={() => setScreen(SCREENS.CALENDAR)} />
+        )}
         {screen === SCREENS.STORYLINES && <StorylinesScreen />}
         {screen === SCREENS.CHEMISTRY && <ChemistryScreen />}
         {screen === SCREENS.EDIT_LINES && <EditLines />}

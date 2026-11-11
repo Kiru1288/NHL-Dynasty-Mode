@@ -370,6 +370,14 @@ function formatSignedNumber(value, decimals = 1) {
 }
 
 
+// Save percentage reads ".916" everywhere in the dossier.
+function formatSvPct(value, empty = "—") {
+  const n = safeNumOrNull(value);
+  if (n === null || n <= 0) return empty;
+  const v = n > 1.5 ? n / 100 : n;
+  return v.toFixed(3).replace(/^0/, "");
+}
+
 function formatDecimal(value, digits = 3, empty = "—") {
   const n = safeNumOrNull(value);
   if (n === null) return empty;
@@ -2134,7 +2142,7 @@ function compactBoardStats(player) {
 
     if (!gp && !wins && !losses && !otl && !sv && !gaa) return lastCareerSeasonSummary(player) || "—";
 
-    return `${gp} GP · ${wins}-${losses}-${otl} · ${sv ? formatDecimal(sv, 3) : "—"} SV% · ${gaa ? gaa.toFixed(2) : "—"} GAA`;
+    return `${gp} GP · ${wins}-${losses}-${otl} · ${sv ? formatSvPct(sv) : "—"} SV% · ${gaa ? gaa.toFixed(2) : "—"} GAA`;
   }
 
   const gp = safeNum(stats.gp, 0);
@@ -2722,15 +2730,25 @@ function buildPlayerNote(player) {
 
 // Strictly evidence-driven — only concrete rating rows (top/bottom) and
 // measured analytics facts, never generic scouting buzzwords.
+const DOSSIER_GOALIE_RATING_RE =
+  /goal|glove|blocker|stick|reflex|positioning|rebound|crease|angle|recovery|butterfly|lateral|post|five.?hole|save|tracking|puck handling|puckhandling|composure|consistency|vision|high shot|low shot|screen|breakaway|agility|flexibility/i;
+
 function buildStrengthsConcerns(player) {
   if (!player) return { strengths: [], concerns: [] };
 
   const groups = Array.isArray(player.rating_groups) ? player.rating_groups : EMPTY_ARRAY;
   const rows = [];
+  const goalieCard = isGoaliePosition(player.position);
   groups.forEach((group) => {
     (group?.rows || EMPTY_ARRAY).forEach((row) => {
       const value = safeNumOrNull(row?.value);
-      if (value !== null && row?.label) rows.push({ label: row.label, value });
+      if (value === null || !row?.label) return;
+      // Potential / overall are ceilings, not skills.
+      if (/potential|overall|ceiling/i.test(row.label)) return;
+      // Goalies carried the skater rating groups too, so a keeper's "strengths"
+      // read Board Battles and Transition Speed.
+      if (goalieCard && !DOSSIER_GOALIE_RATING_RE.test(`${group?.label || ""} ${row.label}`)) return;
+      rows.push({ label: row.label, value });
     });
   });
 
@@ -2753,8 +2771,8 @@ function buildStrengthsConcerns(player) {
 
   if (gp >= 15) {
     if (isGoalie) {
-      if (stats.svPct >= 0.918) strengths.push(`${formatDecimal(stats.svPct, 3)} SV% over ${gp} GP`);
-      if (stats.svPct > 0 && stats.svPct <= 0.897) concerns.push(`${formatDecimal(stats.svPct, 3)} SV% over ${gp} GP`);
+      if (stats.svPct >= 0.918) strengths.push(`${formatSvPct(stats.svPct)} SV% over ${gp} GP`);
+      if (stats.svPct > 0 && stats.svPct <= 0.897) concerns.push(`${formatSvPct(stats.svPct)} SV% over ${gp} GP`);
     } else {
       if (stats.shots >= 40 && stats.shootingPct <= 0.06) {
         concerns.push(`${(stats.shootingPct * 100).toFixed(1)}% shooting on ${displayStatValue(stats.shots)} shots`);
@@ -3967,7 +3985,10 @@ function resolveDossierToi(player, gpHint) {
   const stats = player?.season_stats || EMPTY_OBJECT;
   const statsGp = safeNum(stats.gp, 0);
   const statsToi = statsGp > 0 ? safeNum(getAverageTOIMinutes({ toi: stats.toi, gp: statsGp }), 0) : 0;
-  if (statsGp > 0 && statsToi > 0 && statsToi <= 40) return { avg: statsToi };
+  // A starting goalie plays ~60 minutes a night; the 40-minute skater cap threw
+  // his real line away and fell back to a stale 6:03.
+  const toiCap = isGoaliePosition(player?.position) ? 66 : 40;
+  if (statsGp > 0 && statsToi > 0 && statsToi <= toiCap) return { avg: statsToi };
 
   const raw = safeNumOrNull(pickFirstDefined(player?.explicitMinutes, player?.minutes));
   if (raw === null || raw <= 0) return null;
@@ -4190,7 +4211,7 @@ function buildDossierSeasonLine(player) {
   if (gp > 0) {
     if (isGoaliePosition(player.position)) {
       return `${gp} GP · ${safeNum(stats.wins, 0)}-${safeNum(stats.losses, 0)}-${safeNum(stats.otl, 0)} · ${
-        stats.svPct ? formatDecimal(stats.svPct, 3) : "—"
+        stats.svPct ? formatSvPct(stats.svPct) : "—"
       } SV%`;
     }
     return `${gp} GP · ${safeNum(stats.g, 0)} G · ${safeNum(stats.a, 0)} A · ${safeNum(stats.pts, 0)} PTS`;
@@ -4204,7 +4225,14 @@ function PlayerOverviewPanel({ player, franchiseState }) {
   }
 
   const contract = player.contract || EMPTY_OBJECT;
-  const chapterRows = chapterAttributeRows(player);
+  // Attributes read the same POT / OVR as the header (86 vs 87 before).
+  const heroPot = safeNum(player.potentialScore, 0);
+  const heroOvr = safeNum(getUniversalOverall(player), 0);
+  const chapterRows = chapterAttributeRows(player).map(([label, value]) => {
+    if (/^potential$/i.test(label) && heroPot > 0 && typeof value === "number") return [label, round0(heroPot)];
+    if (/^overall$/i.test(label) && heroOvr > 0 && typeof value === "number") return [label, round0(heroOvr)];
+    return [label, value];
+  });
   const { strengths, concerns } = buildStrengthsConcerns(player);
   const tradeConcern = player.tradeStabilityConcern || resolvePlayerTradeStabilityConcern(player, franchiseState);
   const moraleBand = dossierMoraleBand(player.morale);
@@ -4495,7 +4523,8 @@ function ProductionPanel({ player, franchiseState }) {
 
   return (
     <section className="pdx-stack">
-      {hasSeasonGames ? (
+      {/* An NHL goalie's game-by-game card is a full superset of this one. */}
+      {hasSeasonGames && !(isGoalie && !isAhlLine) ? (
         <DossierCard
           eyebrow={`${isAhlLine ? "AHL season" : "Current season"}${seasonLabel ? ` · ${seasonLabel}` : ""}`}
           title={
@@ -4512,7 +4541,7 @@ function ProductionPanel({ player, franchiseState }) {
                 label="Record"
                 value={`${displayStatValue(stats.wins)}-${displayStatValue(stats.losses)}-${displayStatValue(stats.otl)}`}
               />
-              <DossierTile label="SV%" value={stats.svPct ? formatDecimal(stats.svPct, 3) : "—"} />
+              <DossierTile label="SV%" value={stats.svPct ? formatSvPct(stats.svPct) : "—"} />
               <DossierTile label="GAA" value={stats.gaa ? Number(stats.gaa).toFixed(2) : "—"} />
               <DossierTile label="Saves" value={displayStatValue(stats.saves)} />
               <DossierTile label="Shots against" value={displayStatValue(stats.shotsAgainst)} />
@@ -4521,25 +4550,19 @@ function ProductionPanel({ player, franchiseState }) {
             </DossierTiles>
           ) : (
             <DossierTiles dense>
-              <DossierTile label="GP" value={displayStatValue(stats.gp)} />
-              <DossierTile label="G" value={displayStatValue(stats.g)} />
-              <DossierTile label="A" value={displayStatValue(stats.a)} />
-              <DossierTile label="PTS" value={displayStatValue(stats.pts)} />
+              {/* The game-by-game card below carries the full counting line (GP, G, A,
+                  PTS, +/-, PIM, SOG, SH%, hits, blocks). This card keeps the rates and
+                  impact numbers it doesn't show, so nothing appears twice. */}
               <DossierTile label="P/GP" value={stats.ppg ? Number(stats.ppg).toFixed(2) : "0.00"} />
-              <DossierTile label="SOG" value={displayStatValue(stats.shots)} />
-              <DossierTile label="SH%" value={stats.shootingPct ? `${(stats.shootingPct * 100).toFixed(1)}%` : "—"} />
+              <DossierTile label="TOI/GP" value={stats.toi ? formatDossierClock(stats.toi) : "—"} />
+              <DossierTile label="WAR" value={stats.war != null ? Number(stats.war).toFixed(2) : "—"} />
+              {!isAhlLine ? <DossierTile label="CF%" value={formatDossierPct(stats.cfPct)} /> : null}
+              {!isAhlLine ? <DossierTile label="xGF%" value={formatDossierPct(stats.xgfPct)} /> : null}
               <DossierTile
                 label="+/-"
                 value={stats.plusMinus != null ? formatSignedNumber(stats.plusMinus, 0) : "—"}
                 tone={stats.plusMinus > 0 ? "good" : stats.plusMinus < 0 ? "warn" : "neutral"}
               />
-              <DossierTile label="TOI/GP" value={stats.toi ? formatDossierClock(stats.toi) : "—"} />
-              <DossierTile label="Hits" value={displayStatValue(stats.hits)} />
-              <DossierTile label="Blocks" value={displayStatValue(stats.blocks)} />
-              <DossierTile label="PIM" value={displayStatValue(stats.pim)} />
-              <DossierTile label="WAR" value={stats.war != null ? Number(stats.war).toFixed(2) : "—"} />
-              {!isAhlLine ? <DossierTile label="CF%" value={formatDossierPct(stats.cfPct)} /> : null}
-              {!isAhlLine ? <DossierTile label="xGF%" value={formatDossierPct(stats.xgfPct)} /> : null}
             </DossierTiles>
           )}
         </DossierCard>
@@ -4631,10 +4654,14 @@ function ContractPanel({ player }) {
   const rightsHeadline = (() => {
     if (contract.isSigned && (rightsStatus || contractRights)) {
       let code = rightsStatus || contractRights;
-      const age = Number(player.age);
+      // UFA / RFA is decided by his age when the deal ends, not today: a 24-year-old
+      // on a five-year deal is 29 at expiry and walks as a UFA.
+      const yearsLeft = safeNum(pickFirstDefined(contract.yearsLeft, contract.years_left, contract.term), 0);
+      const age = Number(player.age) > 0 ? Number(player.age) + Math.max(0, yearsLeft) : 0;
       const source = String(contract.rights_source || contract.rightsSource || player.rights_source || "").toLowerCase();
       const trustedUfa = source === "spotrac" || source === "capwages" || source === "user";
       if (String(code).toUpperCase() === "UFA" && age > 0 && age < 27 && !trustedUfa) code = "RFA";
+      if (String(code).toUpperCase() === "RFA" && age >= 27) code = "UFA";
       if (/^[ur]fa$/i.test(code)) return `Expires as ${code.toUpperCase()}`;
       return humanizeDossierValue(code);
     }
@@ -4717,7 +4744,10 @@ function ContractPanel({ player }) {
               {orgStatus ? <DossierTile label="Org status" value={humanizeDossierValue(orgStatus)} /> : null}
               {signedStatus ? <DossierTile label="Signed" value={humanizeDossierValue(signedStatus)} /> : null}
               {rightsStatus || contractRights ? (
-                <DossierTile label="Expiry status" value={humanizeDossierValue(rightsStatus || contractRights)} />
+                <DossierTile
+                  label="Expiry status"
+                  value={rightsHeadline.startsWith("Expires as ") ? rightsHeadline.slice(11) : humanizeDossierValue(rightsStatus || contractRights)}
+                />
               ) : null}
               {rosterLocation || inMinors ? (
                 <DossierTile label="Location" value={rosterLocation ? humanizeDossierLocation(rosterLocation) : "Minors"} />
@@ -5062,7 +5092,7 @@ function UsagePanel({ player, onRefresh, canManage = true }) {
           <DossierTile label="League" value={humanizeDossierValue(player.league)} />
           <DossierTile label="Location" value={location ? humanizeDossierLocation(location) : humanizeDossierValue(player.league)} />
           {canManage ? <DossierTile label="NHL GP" value={nhlGp !== null ? nhlGp : "—"} /> : null}
-          {canManage ? (
+          {canManage && meta.slide_games_threshold != null && (meta.slide_eligible || meta.elc_slide_eligible || meta.is_elc || player.contract?.isElc || pickFirstDefined(player.elc_slide_eligible, player.elcSlideEligible) === true) ? (
             <DossierTile
               label="Slide threshold"
               value={meta.slide_games_threshold != null ? `< ${meta.slide_games_threshold} GP` : "—"}
@@ -5107,7 +5137,10 @@ function UsagePanel({ player, onRefresh, canManage = true }) {
         <DossierCard
           eyebrow="Roster moves"
           title="Call-ups & assignments"
-          aside={<DossierChip>{moves.length ? `${moves.length} available` : "None"}</DossierChip>}
+          aside={(() => {
+            const open = moves.filter((m) => m.enabled !== false).length;
+            return <DossierChip>{open ? `${open} available` : moves.length ? "Locked" : "None"}</DossierChip>;
+          })()}
         >
           {error ? <p className="pdx-note is-bad">{error}</p> : null}
           {note ? <DossierNote>{note}</DossierNote> : null}
@@ -5209,7 +5242,7 @@ function CareerTotalsCard({ totals, isGoalie }) {
           <DossierTile label="W" value={displayStatValue(wins)} />
           <DossierTile label="L" value={displayStatValue(losses)} />
           <DossierTile label="OTL" value={displayStatValue(pickFirstDefined(totals.otl))} />
-          <DossierTile label="SV%" value={svPct != null ? formatDecimal(svPct, 3) : "—"} />
+          <DossierTile label="SV%" value={svPct != null ? formatSvPct(svPct) : "—"} />
           <DossierTile label="GAA" value={gaa != null ? Number(gaa).toFixed(2) : "—"} />
         </DossierTiles>
       </DossierCard>
@@ -5235,9 +5268,10 @@ function CareerTotalsCard({ totals, isGoalie }) {
 
 function CareerSeasonsTable({ seasons, isGoalie }) {
   if (!Array.isArray(seasons) || !seasons.length) return null;
-  const showWar =
-    !isGoalie &&
-    seasons.some((row) => row?.war != null && row?.war !== "" && !Number.isNaN(Number(row.war)));
+  // Imported real seasons carry no WAR: one simulated season left a column of
+  // dashes. Show it once at least two seasons (or the only season) have a value.
+  const warSeasons = seasons.filter((row) => row?.war != null && row?.war !== "" && !Number.isNaN(Number(row.war))).length;
+  const showWar = !isGoalie && warSeasons >= Math.min(2, seasons.length) && warSeasons > 0;
 
   return (
     <DossierCard eyebrow="Career" title="Season by season">
@@ -5848,8 +5882,9 @@ function MediaPanel({ player, storylines, franchiseState }) {
           </ul>
         ) : (
           <DossierNote>
-            No recorded storyline events yet. Coverage appears as the league reacts to performance, trades, injuries, and
-            off-ice incidents.
+            {maxHeat >= 45
+              ? "Plenty of chatter around him, but nothing has turned into a storyline yet."
+              : "No storylines yet. Coverage builds as the league reacts to performance, trades, injuries and off-ice events."}
           </DossierNote>
         )}
       </DossierCard>

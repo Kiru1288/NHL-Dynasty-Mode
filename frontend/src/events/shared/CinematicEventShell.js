@@ -84,6 +84,7 @@ export default function CinematicEventShell({
     register === "office" ? "register-office" : register === "shell" ? "register-shell" : "register-ops";
   const rootClasses = [
     `${p}-root`,
+    "cine-kart",
     registerClass,
     titleVariant ? `${p}-root--${titleVariant}` : "",
     rootClassName,

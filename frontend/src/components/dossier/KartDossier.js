@@ -548,6 +548,7 @@ function mergeWar(local, remote) {
 }
 
 export default function KartDossier({
+  isTranscendent = false,
   model,
   profile,
   portrait,
@@ -566,7 +567,8 @@ export default function KartDossier({
   staff = [],
   budgetFallback = null,
 }) {
-  const [tab, setTab] = useState("report");
+  const isTransFile = Boolean(isTranscendent);
+  const [tab, setTab] = useState(isTransFile ? "production" : "report");
   const remoteWar = profile?.war_room || null;
   const filePct = n(remoteWar?.file?.yours) ?? n(model?.file?.pct) ?? 0;
   const pubPct = n(remoteWar?.file?.public) ?? n(model?.file?.consensusPct) ?? 0;
@@ -594,7 +596,7 @@ export default function KartDossier({
     || "auto";
 
   return (
-    <div className="kdd-shell">
+    <div className={`kdd-shell${isTransFile ? " is-perfect" : ""}`}>
       <header className="kdd-hero">
         <div className="kdd-portrait">{portrait}</div>
         <div className="kdd-ident">
@@ -626,7 +628,7 @@ export default function KartDossier({
       </header>
 
       <nav className="kdd-tabs" role="tablist">
-        {TABS.map(([k, label]) => (
+        {TABS.filter(([k]) => !(isTransFile && k === "report")).map(([k, label]) => (
           <button key={k} type="button" role="tab" aria-selected={tab === k} className={`kdd-tab${tab === k ? " is-on" : ""}`} onClick={() => setTab(k)}>
             {label}
           </button>
@@ -634,11 +636,12 @@ export default function KartDossier({
         {enriching ? <span className="kdd-sync">Syncing file…</span> : null}
       </nav>
 
-      <div className="kdd-body">
-        {tab === "report" ? <ReportTab model={model} profile={profile} filePct={filePct} pubPct={pubPct} /> : null}
-        {tab === "production" ? <ProductionTab model={model} profile={profile} war={war} /> : null}
-        {tab === "outlook" ? <OutlookTab model={model} profile={profile} war={war} /> : null}
-        {tab === "desk" ? <DeskTab war={war} busy={busy} onAssign={onAssign} onAction={onAction} meta={meta} /> : null}
+      <div className={`kdd-body${isTransFile ? " kdd-body--perfect" : ""}`}>
+        {isTransFile ? <div className="kdd-perfect" aria-hidden="true">PERFECT</div> : null}
+        {!isTransFile && tab === "report" ? <ReportTab model={model} profile={profile} filePct={filePct} pubPct={pubPct} /> : null}
+        {!isTransFile && tab === "production" ? <ProductionTab model={model} profile={profile} war={war} /> : null}
+        {!isTransFile && tab === "outlook" ? <OutlookTab model={model} profile={profile} war={war} /> : null}
+        {!isTransFile && tab === "desk" ? <DeskTab war={war} busy={busy} onAssign={onAssign} onAction={onAction} meta={meta} /> : null}
       </div>
 
       <footer className="kdd-dock">

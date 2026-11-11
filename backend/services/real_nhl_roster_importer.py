@@ -1531,6 +1531,7 @@ def _ensure_estimated_contract(player: Any, *, season_year: int, rng: Any = None
     """
     try:
         from services.contract_economy import (
+            ELC_AAV_M,
             apply_contract_to_player,
             compute_market_value,
             has_active_contract,
@@ -1540,9 +1541,32 @@ def _ensure_estimated_contract(player: Any, *, season_year: int, rng: Any = None
             return
         age = int(getattr(player, "age", 0) or getattr(getattr(player, "identity", None), "age", 0) or 27)
         r = (rng.random() if rng is not None else 0.5)
-        if age <= 21:
-            years, rights = 2 + int(r * 2), "RFA"
-        elif age <= 25:
+        if 0 < age <= 21:
+            # Unmatched rookies were getting market AAVs ($3M–$9M). An ELC cap hit
+            # cannot exceed $999,999; the standard entry-level AAV is $950,000.
+            apply_contract_to_player(
+                player,
+                {
+                    "aav_m": ELC_AAV_M,
+                    "cap_hit_m": ELC_AAV_M,
+                    "salary_m": ELC_AAV_M,
+                    "years": 3,
+                    "years_remaining": 3,
+                    "expiry_year": int(season_year) + 3,
+                    "contract_type": "ELC",
+                    "type": "ELC",
+                    "is_entry_level": True,
+                    "rights_status": "RFA",
+                    "two_way": True,
+                    "minor_salary_m": 0.085,
+                    "source": "estimated",
+                    "is_nhl_spc": True,
+                },
+                int(season_year),
+            )
+            setattr(player, "contract_source", "estimated")
+            return
+        if age <= 25:
             years, rights = 1 + int(r * 3), "RFA"
         elif age <= 30:
             years, rights = 2 + int(r * 4), "UFA"

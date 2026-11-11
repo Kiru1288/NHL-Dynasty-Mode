@@ -1,0 +1,10 @@
+# Neural TTS worker (separate venv: backend/tts_worker/venv). Installed by backend/start_tts.ps1.
+# kokoro-onnx supports Python 3.10-3.13 (not 3.14 yet).
+kokoro-onnx>=0.4.9,<0.7        # MIT  - Kokoro-82M runner on onnxruntime (pulls phonemizer + espeakng-loader)
+onnxruntime>=1.20.1,<2         # MIT  - CPU inference
+numpy>=2.0.2,<3                # BSD
+soundfile>=0.12.1,<0.14        # BSD  - OGG/Opus encoding (bundled libsndfile, LGPL)
+phonemizer>=3.3,<4             # GPL-3.0 - espeak-ng phonemes (worker process only)
+espeakng-loader>=0.2.4,<0.3    # espeak-ng shared library + data (GPL-3.0, worker process only)
+# Optional, installed separately by start_tts.ps1 (falls back to a built-in onnxruntime route if it fails):
+#   piper-tts>=1.3,<2            # GPL-3.0 (OHF-Voice/piper1-gpl); the original rhasspy/piper is MIT

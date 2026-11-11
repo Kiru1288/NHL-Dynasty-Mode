@@ -3,3 +3,8 @@ __pycache__/
 *.py[cod]
 .Python
 tmp/
+
+# Neural TTS worker: downloaded models, clip cache, worker venv
+data/tts/
+data/tts_cache/
+tts_worker/venv/

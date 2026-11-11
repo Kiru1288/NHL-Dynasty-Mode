@@ -1775,6 +1775,8 @@ def propose_and_execute_cpu_trades(
             selloff_cap = 2  # C5: the deadline week moves real volume
         else:
             selloff_cap = 1  # sellers hold inventory for deadline day
+        if getattr(league, "transcendent_active", False) and league_gp >= 15 and selloff_cap < 6:
+            selloff_cap = 6
         selloffs_done = 0
         panic_counts = partner_memory.setdefault("season_panic_buys", {})
         season_motive_counts = partner_memory.setdefault("season_motive_counts", {})
@@ -1785,6 +1787,10 @@ def propose_and_execute_cpu_trades(
                 return False
             if not (0 <= days_left_ctx <= 7) and not ctx.get("cpu_offseason_market"):
                 cap = min(cap, CPU_SEASON_MOTIVE_CAPS_EARLY.get(motive, cap))
+            if getattr(league, "transcendent_active", False) and motive in (
+                "tank_selloff", "seller_futures", "late_selloff", "rental_purchase", "cap_dump",
+            ):
+                cap = max(int(cap or 0), 48)
             return int(season_motive_counts.get(motive, 0) or 0) >= cap
         # GMs who just dealt with each other talk again quickly in the deadline crunch.
         pair_cooldown = 0 if days_left_ctx == 0 else (3 if 0 <= days_left_ctx <= 7 else CPU_PAIR_COOLDOWN_DAYS)

@@ -1168,6 +1168,63 @@ def _flexible_surplus(player: Any, surplus: float) -> float:
     return adjusted
 
 
+def player_is_transcendent(player: Any) -> bool:
+    """The 1-in-10,000 draft talent. He arrives at 99 and stays there."""
+    if bool(getattr(player, "is_transcendent", False) or getattr(player, "transcendent_talent", False)):
+        return True
+    return str(getattr(player, "pipeline_tier", "") or "").lower() == "transcendent"
+
+
+def lock_transcendent_overall(player: Any) -> None:
+    """Force every skill and the ceiling to 99. Career drops do not stick."""
+    if player is None or not player_is_transcendent(player):
+        return
+    ratings = getattr(player, "ratings", None)
+    if not isinstance(ratings, dict):
+        ratings = {}
+        try:
+            setattr(player, "ratings", ratings)
+        except Exception:
+            return
+    for key, value in list(ratings.items()):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        name = str(key).lower()
+        if "potential" in name or "ceiling" in name:
+            continue
+        ratings[key] = 99
+    ratings["dev_potential"] = 99
+    try:
+        setattr(player, "potential", 1.0)
+        setattr(player, "is_transcendent", True)
+        setattr(player, "transcendent_talent", True)
+        setattr(player, "pipeline_tier", "transcendent")
+        setattr(player, "cant_miss", True)
+        setattr(player, "character_concerns", False)
+        setattr(player, "pipeline_bust", False)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    psych = getattr(player, "psych", None) or getattr(player, "psychology", None)
+    if psych is not None:
+        try:
+            setattr(psych, "coachability", 0.99)
+            setattr(psych, "anxiety", 0.05)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    inval = getattr(player, "_invalidate_ovr_memo", None)
+    if callable(inval):
+        try:
+            inval()
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    try:
+        from app.sim_engine.entities.player import persist_recomputed_ovr
+
+        persist_recomputed_ovr(player)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+
+
 def season_growth_context(player: Any, *, bucket: str = "") -> Dict[str, Any]:
     """How much overall this season has earned.
 
@@ -1177,6 +1234,22 @@ def season_growth_context(player: Any, *, bucket: str = "") -> Dict[str, Any]:
     aim at, so they cannot stack on top of each other.
     """
     level = _development_level(player, bucket)
+    if player_is_transcendent(player):
+        lock_transcendent_overall(player)
+        try:
+            setattr(player, "_season_growth_context", {
+                "level": level,
+                "gain": 0.0,
+                "reason": "transcendent overall stays at 99",
+            })
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+        return {
+            "level": level,
+            "gain": 0.0,
+            "reason": "transcendent overall stays at 99",
+            "has_line": False,
+        }
     age = _get_player_age(player)
     ovr = _get_player_ovr_0_100(player)
     try:
@@ -1262,6 +1335,24 @@ def season_growth_context(player: Any, *, bucket: str = "") -> Dict[str, Any]:
             else:
                 gain = 0.0
                 reason = f"AHL year below the pace for this overall, {ppg:.2f} points per game"
+        # Journeymen: the AHL rarely makes a 27-year-old better. Taper growth with
+        # age (a true breakout still pays something) and let 30+ slip on a quiet year.
+        # Without this every AHL veteran gained ~+2 a season and none ever declined.
+        if journeyman and gain > 0.0:
+            breakout = reason.startswith("AHL breakout")
+            if age >= 31:
+                taper = 0.35 if breakout else 0.0
+            elif age >= 29:
+                taper = 0.5 if breakout else 0.25
+            elif age >= 27:
+                taper = 0.7 if breakout else 0.45
+            else:
+                taper = 0.85 if breakout else 0.75
+            gain *= taper
+            if taper < 1.0:
+                reason += f" (age {age} slows AHL growth)"
+        # Age decline for minor-leaguers is applied once at year end
+        # (_apply_minor_and_fa_aging_decline), not by the in-season tick.
         gain = max(0.0, min(6.0, gain))
         if _is_goalie(player) and sv is not None and gp >= 8:
             if getattr(player, "_dev_goalie_modest", False):
@@ -2647,12 +2738,18 @@ def _lazy_assign_dev_archetype(player: Any, potential: float, rng: random.Random
     return str(rng.choices(names, weights=wn, k=1)[0])
 
 
-def _ice_time_modifier(player: Any) -> float:
-    """Higher role / opportunity = higher development runway."""
+def _ice_time_modifier(player: Any, *, full_season: bool = False) -> float:
+    """Higher role / opportunity = higher development runway.
+
+    full_season=True scores the role as if the season were complete (the
+    dossier outlook): the games-played tiers below are a season-end weight,
+    and mid-season they made every top-liner read 0.55x.
+    """
     gp = _games_played(player)
     role = getattr(player, "role", None) or ""
-    role_low = str(role).lower()
-    if "elite" in role_low or "top_line" in role_low or "top_4" in role_low:
+    # Roles arrive as "Top Line" / "Top Pair" as well as top_line: normalise.
+    role_low = str(role).lower().replace(" ", "_").replace("-", "_")
+    if any(tag in role_low for tag in ("elite", "top_line", "top_4", "top_pair", "first_line", "first_pair", "starter", "1st")):
         base = 1.2
     elif "middle" in role_low:
         base = 1.0
@@ -2670,7 +2767,7 @@ def _ice_time_modifier(player: Any) -> float:
         base *= 0.90
     if scratches >= 20:
         base *= 0.84
-    if gp >= 70:
+    if full_season or gp >= 70:
         return base * 1.0
     if gp >= 50:
         return base * 0.9
@@ -3244,7 +3341,7 @@ def development_outlook(player: Any, context: Optional[Any] = None) -> Dict[str,
     ovr = _player_ovr99(player)
     pot = _scout_potential99(player)
     morale = _get_player_morale(player)
-    ice = _clamp(_ice_time_modifier(player), 0.55, 1.22)
+    ice = _clamp(_ice_time_modifier(player, full_season=True), 0.55, 1.22)
     league = str(getattr(player, "_dev_growth_league", "") or "NHL").upper() or "NHL"
     form, n_form = rolling_form_score(player)
     role_mult = getattr(player, "_role_accept_growth_mult", None)
@@ -4072,6 +4169,9 @@ def apply_player_development(player: Any, rng: Any) -> None:
     )
     from app.sim_engine.progression.potential import ensure_development_ledger
 
+    if player_is_transcendent(player):
+        lock_transcendent_overall(player)
+        return
     if not isinstance(rng, random.Random):
         rng = random.Random()
 
@@ -5312,6 +5412,9 @@ def apply_live_overall_step(player: Any, *, season_id: Any, bucket: str, day: in
     cap keeps a hot streak from running away: once the cap is hit, the next
     tick goes the other way, so the rating is never frozen.
     """
+    if player_is_transcendent(player):
+        lock_transcendent_overall(player)
+        return 0
     from app.sim_engine.entities.player import display_rating, player_current_ovr_01, persist_recomputed_ovr
     from app.sim_engine.engine import _nudge_player_ovr_toward
 

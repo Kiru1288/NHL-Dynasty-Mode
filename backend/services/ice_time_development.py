@@ -230,11 +230,18 @@ def apply_season_performance_potential(session: Any) -> Dict[str, Any]:
                 if age <= 26:
                     age_mult = 1.0
                 elif age <= 30:
-                    age_mult = 0.7
-                elif age <= 34:
-                    age_mult = 0.45
+                    age_mult = 0.5
                 else:
-                    age_mult = 0.25
+                    # A 31+ ceiling is the player he already is. A great year shows
+                    # up as an OVR career year (below), not a higher potential.
+                    age_mult = 0.0
+                if age >= 27 and perf >= 0.35 and gp >= 50:
+                    try:
+                        p._dev_season_points_surplus = max(
+                            float(getattr(p, "_dev_season_points_surplus", 0.0) or 0.0), 12.0
+                        )
+                    except Exception:
+                        _swallowed_log.debug("suppressed exception", exc_info=True)
                 new_exp = exp
                 if perf > 0.12:
                     new_exp += min(0.035, (perf - 0.12) * 0.045) * age_mult * weight
@@ -251,15 +258,6 @@ def apply_season_performance_potential(session: Any) -> Dict[str, Any]:
                     continue
                 if new_exp > exp:
                     raised += 1
-                    # Older players who blew past expectations also get a real OVR bump
-                    # through the existing career-year path in apply_player_development.
-                    if age >= 27 and perf >= 0.35 and gp >= 50:
-                        try:
-                            p._dev_season_points_surplus = max(
-                                float(getattr(p, "_dev_season_points_surplus", 0.0) or 0.0), 12.0
-                            )
-                        except Exception:
-                            _swallowed_log.debug("suppressed exception", exc_info=True)
                 else:
                     lowered += 1
                 profile["expected_ceiling"] = new_exp

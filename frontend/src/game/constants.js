@@ -30,6 +30,7 @@ export const SCREENS = {
   LEGACY_HALL: "legacy_hall",
   SETTINGS: "settings",
   PLACEHOLDER: "placeholder",
+  SIM_TRACKER: "sim_tracker",
 };
 
 /** Hub left-rail entries (controller order). */

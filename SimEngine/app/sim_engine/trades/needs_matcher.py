@@ -875,10 +875,19 @@ def generate_plans(
     #    In the summer any club over ~97% of the cap with a bad deal tries to clear it.
     for sid, seller in team_by_tid.items():
         sa = assessments.get(sid)
-        if sa is None or not (sa.cap_tight or (ctx.get("offseason_trade") and sa.cap_space_m < 2.5)):
+        if sa is None:
+            continue
+        transcendent = bool(getattr(league, "transcendent_active", False)) if league is not None else False
+        dumping = sa.cap_tight or (ctx.get("offseason_trade") and sa.cap_space_m < 2.5) or (
+            transcendent and sa.status in (STATUS_SELLER, STATUS_TANK)
+        )
+        if not dumping:
             continue
         for item in sa.surplus:
-            if item.reason != "bad_contract" or player_pid(item.player) in used_players:
+            salary_dump = item.reason == "salary_dump" and transcendent
+            if item.reason != "bad_contract" and not salary_dump:
+                continue
+            if player_pid(item.player) in used_players:
                 continue
             hit = cap_hit_m(item.player)
             takers = [
@@ -922,10 +931,15 @@ def generate_plans(
     # Seller patience: rentals and sell-offs fetch the most at the deadline, so sellers
     # mostly hold their veterans until then (a few sell early).
     timing = 0.25 + 0.75 * deadline_phase
+    transcendent = bool(getattr(league, "transcendent_active", False))
     plans = [
         p for p in plans
         if p.score >= MIN_PLAN_SCORE
-        and (p.motive not in SELLOFF_MOTIVES or rng.random() < timing)
+        and (
+            p.motive not in SELLOFF_MOTIVES
+            or rng.random() < timing
+            or (transcendent and p.motive in ("tank_selloff", "seller_futures", "late_selloff", "rental_purchase"))
+        )
     ]
     plans.sort(key=lambda p: -p.score)
     # One surplus player who fits many clubs' holes (a spare goalie, say) used to fill the

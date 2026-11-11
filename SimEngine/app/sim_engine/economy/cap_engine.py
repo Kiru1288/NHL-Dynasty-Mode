@@ -242,6 +242,12 @@ def player_full_cap_hit_millions(player: Any) -> float:
     """This year's cap charge. AAV already includes a signing bonus, so a stored
     cap hit that sits well above AAV is the bonus counted a second time.
     """
+    try:
+        from services.contract_economy import enforce_rookie_elc_maximum
+
+        enforce_rookie_elc_maximum(player)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     if _contract_type_token(player) in (
         "AHL", "ECHL", "AHL_ECHL", "PTO", "ATO", "TRYOUT", "AHL_ONLY", "ECHL_ONLY", "MINORS", "MINOR",
     ):

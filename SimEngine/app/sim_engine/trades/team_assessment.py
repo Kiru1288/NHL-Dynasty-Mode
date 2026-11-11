@@ -432,6 +432,7 @@ def _find_surplus(
     slot_avgs: Dict[str, float],
     medians: Dict[str, float],
     cap_tight: bool,
+    lottery_dumps: bool = False,
 ) -> Tuple[List[SurplusItem], List[Any]]:
     items: List[SurplusItem] = []
     seen: set = set()
@@ -516,6 +517,14 @@ def _find_surplus(
             vets = sorted((p for p in nhl if player_age(p) >= 29 and player_ovr(p) >= 74), key=player_ovr, reverse=True)
             for p in vets[:3]:
                 add(p, "veteran_selloff", position_group(p), 0.6)
+        if lottery_dumps:
+            pricey = [
+                p for p in nhl
+                if player_age(p) >= 27 and player_ovr(p) >= 70 and cap_hit_m(p) >= 4.0 and player_pid(p) not in core
+            ]
+            pricey.sort(key=cap_hit_m, reverse=True)
+            for p in pricey[:3]:
+                add(p, "salary_dump" if cap_hit_m(p) >= 5.0 else "veteran_selloff", position_group(p), 0.8)
 
     # Lineup regulars who are underperforming their rating this season — the GM is
     # open to moving them (a change of scenery), not just its 13th forward.
@@ -636,6 +645,17 @@ def assess_team(
             a.status = STATUS_SELLER
             a.notes.append("Fell out of the race — flipping to seller")
 
+    if getattr(league, "transcendent_active", False):
+        mode = str(getattr(team, "_franchise_tank_mode", "none") or "none")
+        if mode == "hard_tank":
+            a.status = STATUS_TANK
+            a.panic_buyer = False
+            a.notes.append("Transcendent lottery — hard tank")
+        elif mode in ("seller", "soft_sell"):
+            a.status = STATUS_SELLER
+            a.panic_buyer = False
+            a.notes.append("Transcendent lottery — seller")
+
     a.cap_space_m = round(_cap_space(team, league), 2)
     cap_pressure = getattr(team, "cap_pressure", "")
     a.cap_tight = a.cap_space_m < 1.5 or str(cap_pressure).lower() in ("cap_hell", "critical")
@@ -681,6 +701,7 @@ def assess_team(
 
     a.surplus, a.spend_prospects = _find_surplus(
         team, lineup, status=a.status, slot_avgs=slot_avgs, medians=medians, cap_tight=a.cap_tight,
+        lottery_dumps=bool(getattr(league, "transcendent_active", False)),
     )
     prof = (getattr(league, "cpu_franchise_profiles", None) or {}).get(tid) or {}
     ideo = prof.get("ideology") or {}

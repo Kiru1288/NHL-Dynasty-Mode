@@ -2410,6 +2410,17 @@ def start_franchise(
             materialize_roster_chemistry_profiles(user_team)
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
+    # Generated ages were set without a birth date check, so NHL rows started a year
+    # young (and some minor-leaguers a year old). The first year-end DOB sync then
+    # aged NHL players +2 in one season. Sync everyone to DOB once at creation.
+    try:
+        resync_league_ages_to_session(session)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    try:
+        floor_league_potential_to_ovr(session)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     _franchise_startup_stage("start_franchise complete; returning session")
     return session
 
@@ -3117,6 +3128,24 @@ class _GeneratedContract:
         self.years_remaining = max(0, int(self.years_remaining) - 1)
 
 
+def _stored_contract_money_m(player: Any) -> float:
+    """AAV written on the contract, ignoring the $0 cap charge used for ELCs."""
+    contract = getattr(player, "contract", None)
+    if contract is None:
+        return 0.0
+    for key in ("cap_hit_m", "aav_m", "salary_m", "aav", "cap_hit"):
+        raw = contract.get(key) if isinstance(contract, dict) else getattr(contract, key, None)
+        try:
+            value = float(raw or 0)
+        except (TypeError, ValueError):
+            continue
+        if value > 250.0:
+            value = value / 1_000_000.0
+        if value > 0:
+            return value
+    return 0.0
+
+
 def _ensure_player_contract(
     player: Any,
     season_year: int,
@@ -3133,7 +3162,9 @@ def _ensure_player_contract(
     if getattr(player, "retired", False):
         return False
     hydrate_player_contract(player, season_year)
-    if _player_cap_hit_millions(player) > 0 and getattr(player, "contract", None) is not None:
+    # ELCs and league-minimum deals charge $0 against the cap. That is not "no
+    # contract" — replacing them is what turned $950k rookies into $3M–$11M hits.
+    if getattr(player, "contract", None) is not None and _stored_contract_money_m(player) > 0:
         return False
     if rng is None:
         seed = abs(_stable_hash(str(getattr(player, "id", "") or _name_str(player)))) & 0xFFFFFFFF
@@ -4010,6 +4041,11 @@ def _franchise_resolve_game_score(
     is_user_game: bool = False,
 ) -> Any:
     from app.sim_engine.engine import ScoreResult
+
+    override = getattr(session, "_live_score_override", None)
+    if override and override.get("key") == (str(hid), str(aid), int(calendar_day)):
+        session._live_score_override = None
+        return override["score_result"]
 
     import zlib as _zlib
 
@@ -6356,6 +6392,12 @@ def _build_team_analytics_rows(session: FranchiseSession) -> List[Dict[str, Any]
             ht["pp_games"] += 1.0
             at["pp_games"] += 1.0
 
+        # Saves from before the on-ice fix stored Fenwick as on-ice credits (~5x).
+        # Fenwick can never exceed Corsi: descale those games when read.
+        if h_cf > 0 and h_ff > h_cf * 1.02:
+            h_ff = min(h_cf, h_ff / 5.0)
+        if a_cf > 0 and a_ff > a_cf * 1.02:
+            a_ff = min(a_cf, a_ff / 5.0)
         # Include light_strength CF/xGF — CPU–CPU bulk games write these now.
         if h_cf > 0 or a_cf > 0 or h_xgf > 0 or a_xgf > 0:
             ht["cf"] += h_cf
@@ -10606,7 +10648,9 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
         compute_enhanced_draft_score,
         compute_prospect_outcome_band,
         log_draft_class_audit,
+        pin_transcendent_first,
         scouting_confidence_for_entry,
+        stamp_transcendent_public_entry,
         transcendent_storyline_event,
     )
 
@@ -10682,6 +10726,7 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
     enforce_goalie_scatter_final(board_prospects, goalie_class_strength=goalie_class_strength)
     # After goalie scatter, so shifting a goalie down cannot pull a 19 or 20 back into round 1.
     enforce_first_round_draft_age(board_prospects)
+    pin_transcendent_first(board_prospects)
     # Top board slots must carry realistic current ability (not raw ~50 junior OVR
     # promoted only by early-season PPG). Reshape live players in place.
     try:
@@ -11093,6 +11138,7 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
                     ]
         except (TypeError, ValueError):
             pass
+        stamp_transcendent_public_entry(entry)
 
         _ov = _scout_prospects.get(key) if isinstance(_scout_prospects, dict) else None
         if isinstance(_ov, dict):
@@ -11193,6 +11239,8 @@ def build_draft_class_rankings(session: FranchiseSession, sim: Any) -> Dict[str,
         entries = cleaned_entries
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
+    for entry in entries:
+        stamp_transcendent_public_entry(entry)
 
     audit = log_draft_class_audit(entries, label=str(getattr(league, "draft_class_strength", "")))
 
@@ -15222,6 +15270,16 @@ def publish_trade_deadline_state(session: FranchiseSession) -> Dict[str, Any]:
     freeze = (left < 0 and freeze_applies_to_phase(phase)) or phase.lower() in ("playoff_ready", "playoffs", "postseason")
     try:
         setattr(holder, "_trade_deadline_passed", bool(freeze))
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    try:
+        if getattr(session, "transcendent_draft_prospect_id", None) and league is not None:
+            from services.transcendent_tank_behavior import maybe_refresh_tank_pressure
+
+            reason = "deadline" if idx is not None and cursor == int(idx) else "standings"
+            sim = getattr(session, "sim", None)
+            if sim is not None:
+                maybe_refresh_tank_pressure(session, sim, reason=reason)
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
     return {
@@ -20147,6 +20205,15 @@ def _run_franchise_season_end_progression(session: FranchiseSession) -> Dict[str
             out["lifecycle"] = {"skipped": True}
 
     try:
+        out["minor_fa_aging"] = _apply_minor_and_fa_aging_decline(session, league, rng, sy)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    try:
+        out["potential_floor"] = floor_league_potential_to_ovr(session)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+
+    try:
         from app.sim_engine.engine import apply_league_ovr_soft_regression_if_needed
 
         # No fixed 78. The first call records this save's opening average.
@@ -20166,6 +20233,122 @@ def _run_franchise_season_end_progression(session: FranchiseSession) -> Dict[str
     # Season calendar year advances only in generate_next_season (authoritative transition).
     out["season_calendar_year_unchanged"] = sy
     return out
+
+
+def floor_league_potential_to_ovr(session: Any) -> int:
+    """Potential is a ceiling: it can never read below the overall a player already is.
+
+    Generation left ~half the free-agent pool (and ~1 in 6 NHL players) with
+    potential 1-8 under overall. NHL players were floored by in-season passes,
+    unsigned players never were, so their cards showed POT < OVR forever.
+    """
+    league = getattr(getattr(session, "sim", None), "league", None)
+    if league is None:
+        return 0
+    try:
+        from app.sim_engine.progression.potential import read_player_potential99, write_player_potential99
+    except Exception:
+        return 0
+    fixed = 0
+    for p in _iter_league_players_for_aging(league):
+        try:
+            ovr = _player_display_ovr99(p)
+            if ovr <= 0:
+                continue
+            pot = read_player_potential99(p)
+            if pot + 0.5 < ovr:
+                write_player_potential99(p, min(99.0, ovr))
+                fixed += 1
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    return fixed
+
+
+def _apply_minor_and_fa_aging_decline(session: Any, league: Any, rng: Any, season_year: int) -> Dict[str, int]:
+    """Year-end aging for veterans outside NHL rosters.
+
+    The career lifecycle (aging decline) only walks NHL rosters, so AHL / ECHL
+    veterans and unsigned free agents never declined: a 34-year-old sat at the
+    same overall forever and FA pools filled with ageless depth. Same age curve
+    as the NHL pass, once per player per season.
+    """
+    if league is None:
+        return {"declined": 0, "checked": 0}
+    try:
+        from app.sim_engine.engine import _career_apply_rating_delta_0_100, career_ovr_0_100
+    except Exception:
+        return {"declined": 0, "checked": 0}
+    pool: List[Any] = []
+    for tm in getattr(league, "teams", None) or []:
+        for attr in ("ahl_roster", "echl_roster"):
+            pool.extend(list(getattr(tm, attr, None) or []))
+    for attr in ("free_agents", "overseas_free_agents"):
+        pool.extend(list(getattr(league, attr, None) or []))
+    seen: set = set()
+    checked = declined = grown = 0
+    fa_ids = {id(p) for attr in ("free_agents", "overseas_free_agents") for p in (getattr(league, attr, None) or [])}
+    for p in pool:
+        if p is None or getattr(p, "retired", False) or id(p) in seen:
+            continue
+        seen.add(id(p))
+        if int(getattr(p, "_minor_aging_season", 0) or 0) == int(season_year):
+            continue
+        age = _player_age_int(p)
+        if age <= 24 and id(p) in fa_ids:
+            # Unsigned kids still train and play somewhere. Without this a
+            # 21-year-old free agent stayed at the same overall forever.
+            try:
+                setattr(p, "_minor_aging_season", int(season_year))
+                from app.sim_engine.progression.potential import read_player_potential99
+
+                room = read_player_potential99(p) - _player_display_ovr99(p)
+                if room >= 2.0 and rng.random() < 0.6:
+                    gain = min(room - 0.5, float(rng.uniform(0.5, 1.6 if age <= 22 else 1.1)))
+                    if gain > 0.3:
+                        _career_apply_rating_delta_0_100(p, gain)
+                        from app.sim_engine.entities.player import persist_recomputed_ovr
+
+                        persist_recomputed_ovr(p)
+                        grown += 1
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+            continue
+        if age < 30:
+            continue
+        try:
+            setattr(p, "_minor_aging_season", int(season_year))
+            checked += 1
+            # A productive AHL year already bought the season off (the tick paid it).
+            start = getattr(p, "season_start_ovr", None)
+            try:
+                if start is not None and _player_display_ovr99(p) - float(start) >= 1.0:
+                    continue
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+            if age <= 31:
+                chance, lo, hi = 0.45, 0.5, 1.5
+            elif age <= 34:
+                chance, lo, hi = 0.70, 1.0, 2.2
+            elif age <= 36:
+                chance, lo, hi = 0.85, 1.5, 3.0
+            else:
+                chance, lo, hi = 0.90, 2.0, 3.5
+            if rng.random() >= chance:
+                continue
+            loss = float(rng.uniform(lo, hi))
+            _career_apply_rating_delta_0_100(p, -float(loss))
+            try:
+                setattr(p, "rating", round(career_ovr_0_100(p), 3))
+                setattr(p, "_last_ovr_change_reason", f"age {age} decline")
+                from app.sim_engine.entities.player import persist_recomputed_ovr
+
+                persist_recomputed_ovr(p)
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+            declined += 1
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    return {"declined": declined, "checked": checked, "young_fa_grown": grown}
 
 
 def _auto_resolve_pending_decisions(session: FranchiseSession) -> None:
@@ -28841,6 +29024,11 @@ def _build_league_teams_payload(
         away_cf = int(g.get("away_shot_attempts", g.get("away_cf", away_shots)) or 0)
         home_ff = int(g.get("home_ff", g.get("home_fenwick", home_shots)) or 0)
         away_ff = int(g.get("away_ff", g.get("away_fenwick", away_shots)) or 0)
+        # Pre-fix games stored on-ice Fenwick credits (~5x); FF can't exceed CF.
+        if home_cf > 0 and home_ff > home_cf * 1.02:
+            home_ff = int(round(min(home_cf, home_ff / 5.0)))
+        if away_cf > 0 and away_ff > away_cf * 1.02:
+            away_ff = int(round(min(away_cf, away_ff / 5.0)))
         home_xgf = float(g.get("home_xgf", g.get("home_xg", 0)) or 0)
         away_xgf = float(g.get("away_xgf", g.get("away_xg", 0)) or 0)
 

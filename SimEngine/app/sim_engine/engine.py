@@ -3299,6 +3299,13 @@ def apply_league_ovr_soft_regression_if_needed(
     for pl, _ovr, age in measured:
         if age <= 23:
             continue
+        try:
+            from app.sim_engine.progression.development import player_is_transcendent
+
+            if player_is_transcendent(pl):
+                continue
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         if str(getattr(pl, "progression_event_this_season", "") or "") == "major_decline":
             continue
         ledger = getattr(pl, "development_ledger", None) or {}
@@ -3522,6 +3529,17 @@ def _career_aging_decline_try_v3(
     """
     if getattr(player, "retired", False):
         return None
+    try:
+        from app.sim_engine.progression.development import (
+            lock_transcendent_overall,
+            player_is_transcendent,
+        )
+
+        if player_is_transcendent(player):
+            lock_transcendent_overall(player)
+            return None
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     ratings = getattr(player, "ratings", None)
     if not ratings or not isinstance(ratings, dict) or not ratings:
         return None
@@ -5460,11 +5478,19 @@ def _ovr_nhl_scale(player: Any) -> float:
     return _player_ovr01(player) * 99.0
 
 
+# Ceiling keys live in ``ratings`` but are not skills. Scaling them with every OVR
+# nudge walked potential up point-for-point with overall (a 74->82 prospect went
+# 87->99 potential with no potential event at all).
+_CEILING_RATING_KEYS = frozenset({"dev_potential", "dev_ceiling", "true_potential"})
+
+
 def _scale_player_ratings(player: Any, factor: float) -> None:
     r = getattr(player, "ratings", None)
     if not isinstance(r, dict) or factor <= 0:
         return
     for k in list(r.keys()):
+        if k in _CEILING_RATING_KEYS:
+            continue
         try:
             r[k] = clamp_rating(float(r[k]) * factor)
         except (TypeError, ValueError):
@@ -5492,7 +5518,7 @@ def _random_rating_keys_bump(player: Any, rng: random.Random, delta: int) -> Non
     r = getattr(player, "ratings", None)
     if not isinstance(r, dict) or not r:
         return
-    keys = list(r.keys())
+    keys = [k for k in r.keys() if k not in _CEILING_RATING_KEYS]
     n = max(1, min(12, len(keys) // 6 + 4))
     rng.shuffle(keys)
     for k in keys[:n]:
@@ -13724,17 +13750,35 @@ class SimEngine:
         if getattr(p, "_gm_game_line_idx", None) is not None or getattr(p, "_gm_game_pair_idx", None) is not None:
             role_u = self._gm_role_usage_mult(p)
             score *= 0.90 + 0.10 * min(2.2, role_u)
+        if pos == "D":
+            score = 0.52 * ovr + 0.18 * off + 0.24 * df + 0.06 * iq
         if tank_pressure >= 50:
             try:
                 age = int(career_player_age(p) or 0)
             except Exception:
                 age = 0
-            if age <= 22:
-                score += 2.0 + tank_pressure / 40.0
-            elif age >= 32 and tank_pressure >= 70:
-                score -= 3.0
-        if pos == "D":
-            score = 0.52 * ovr + 0.18 * off + 0.24 * df + 0.06 * iq
+            if age <= 23:
+                score += 3.0 + tank_pressure / 30.0
+            elif age >= 29 and tank_pressure >= 70:
+                score -= 5.0
+            try:
+                hit = 0.0
+                contract = getattr(p, "contract", None)
+                for obj in (contract, p):
+                    if obj is None:
+                        continue
+                    raw = obj.get("cap_hit_m") if isinstance(obj, dict) else getattr(obj, "cap_hit_m", None)
+                    if raw is None and not isinstance(obj, dict):
+                        raw = getattr(obj, "aav_m", None)
+                    if raw:
+                        hit = float(raw)
+                        break
+                if age >= 28 and hit >= 4.0:
+                    score -= 3.0
+                elif age >= 27 and ovr < 78 and hit <= 1.5:
+                    score += 1.5
+            except Exception:
+                pass
         score += self._gm_hot_hand_adj(p)
         return float(score)
 
@@ -13745,8 +13789,14 @@ class SimEngine:
         tank_scratches = set(str(x) for x in (getattr(team, "_tank_scratched_ids", None) or []))
         setattr(team, "_franchise_deployed_lineup", None)
         setattr(team, "_user_scratched_ids", set())
-
-        deployed = self._gm_try_resolve_saved_lineup(team)
+        mode = str(getattr(team, "_franchise_tank_mode", "none") or "none")
+        user_tid = str(getattr(self.league, "_franchise_user_team_id", "") or "")
+        tid = str(getattr(team, "team_id", getattr(team, "id", "")) or "")
+        if mode in ("seller", "hard_tank") and tid != user_tid:
+            # CPU lottery clubs dress by the tank sort, not a saved top line.
+            deployed = None
+        else:
+            deployed = self._gm_try_resolve_saved_lineup(team)
         if deployed is not None:
             named = list(deployed.get("dressed_fw") or []) + list(deployed.get("dressed_d") or [])
             if any(getattr(p, "_wjc_away_from_nhl", False) for p in named):
@@ -17586,8 +17636,12 @@ class SimEngine:
             side = tid if id(p) in atk_ids else def_tid
             self._gm_ledger_add(ledger, p, side, **kw)
 
-        team_ff = sum(float(s.get("ff") or 0) for s in buckets.values())
-        team_fa = sum(float(s.get("fa") or 0) for s in buckets.values())
+        # Buckets are on-ice credits: every unblocked attempt lands on all five
+        # skaters on the ice, so the plain sum was ~5x the team's Fenwick (FF read
+        # higher than CF, MISS ~2000, and the danger split collapsed to LD only).
+        _on_ice = 5.0
+        team_ff = sum(float(s.get("ff") or 0) for s in buckets.values()) / _on_ice
+        team_fa = sum(float(s.get("fa") or 0) for s in buckets.values()) / _on_ice
         return int(sum(int(s["sog"]) for s in buckets.values())), int(ppg), float(team_xg), {
             "ff": team_ff,
             "fa": team_fa,
@@ -19542,7 +19596,9 @@ class SimEngine:
         if getattr(self.league, "transcendent_active", False):
             tank_sellers = sum(1 for tm in teams if int(getattr(tm, "_franchise_tank_pressure", 0) or 0) >= 50)
             if tank_sellers:
-                trade_prob += min(0.06, 0.010 * tank_sellers)
+                trade_prob += min(0.22, 0.012 * tank_sellers)
+                if int(day) % 7 == 0:
+                    forced_market_check = True
         trade_prob = max(0.0, min(1.0, trade_prob))
         market_state["last_trade_prob"] = round(trade_prob, 3)
         market_state["days_to_deadline"] = int(days_left)

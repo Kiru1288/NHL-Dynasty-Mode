@@ -1435,7 +1435,7 @@ _CLASS_STRENGTH_TIERS = [
 # Minimum current OVR (0–1) for shaped pipeline stars — used to repair older saves
 # that were generated under the too-low 0.50–0.58 franchise bands.
 _PIPELINE_OVR_REPAIR = {
-    "transcendent": (0.82, 0.84, 0.90),
+    "transcendent": (0.995, 1.0, 1.0),
     "franchise": (0.78, 0.79, 0.86),
     "elite": (0.74, 0.74, 0.82),
     "top": (0.70, 0.70, 0.78),
@@ -1543,6 +1543,12 @@ def _apply_shaped_player(
     if tier == "transcendent":
         setattr(p, "is_transcendent", True)
         setattr(p, "transcendent_talent", True)
+        try:
+            from app.sim_engine.progression.development import lock_transcendent_overall
+
+            lock_transcendent_overall(p)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     if tier == "nhl_floor":
         _boost_defensive_tools(p, rng_inst)
     try:
@@ -1551,7 +1557,11 @@ def _apply_shaped_player(
         ensure_player_chemistry_profile(p, rng_inst)
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
-    if rng_inst.random() < 0.12:
+    if tier == "transcendent":
+        setattr(p, "character_concerns", False)
+        setattr(p, "pipeline_bust", False)
+        setattr(p, "cant_miss", True)
+    elif rng_inst.random() < 0.12:
         setattr(p, "character_concerns", True)
     code = code_by_id.get(id(p), "JUNIOR")
     try:
@@ -1818,7 +1828,7 @@ def _shape_draft_class_pipeline(
     if transcendent_roll:
         tp = _next_skater(0.99)
         if tp is not None:
-            chosen.append((tp, "transcendent", top_range[1], min(0.92, top_range[1] + 0.08), 99, 99))
+            chosen.append((tp, "transcendent", 1.0, 1.0, 99, 99))
             setattr(tp, "is_transcendent", True)
             setattr(tp, "transcendent_talent", True)
             setattr(tp, "aura_tier", "gold")

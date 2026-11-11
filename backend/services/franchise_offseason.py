@@ -4436,7 +4436,17 @@ def _run_draft_lottery(session: FranchiseSession) -> Dict[str, Any]:
             LotteryTeam(team_id=str(row.get("team_id", "")), points=int(row.get("pts", 0)))
             for row in ordered
         ]
-        result = run_draft_lottery(teams=lot_teams, seed=seed)
+        from app.sim_engine.draft.draft_lottery import ODDS_PCT, adjust_odds_for_tank_pressure
+
+        tank_map = getattr(session, "transcendent_tank_pressure", None) or {}
+        pressures = []
+        for row in ordered:
+            tid = str(row.get("team_id") or "")
+            payload = tank_map.get(tid) if isinstance(tank_map, dict) else {}
+            pressures.append(int((payload or {}).get("tank_pressure") or 0))
+        base_pct = list(ODDS_PCT[: len(ordered)])
+        weighted_pct = adjust_odds_for_tank_pressure(base_pct, pressures) if any(pressures) else base_pct
+        result = run_draft_lottery(teams=lot_teams, seed=seed, odds_pct=weighted_pct)
         order = list(getattr(result, "pick_order", None) or [])
         winners = list(getattr(result, "lottery_winners", None) or [])
         for i, tid in enumerate(winners[:2], start=1):
@@ -4459,7 +4469,8 @@ def _run_draft_lottery(session: FranchiseSession) -> Dict[str, Any]:
                 "lottery_team_name": _display_team(tm) if tm else str(tid),
                 "original_rank": orig_rank,
                 "movement": orig_rank - pick_num,
-                "odds": ODDS_PCT[orig_rank - 1] if 1 <= orig_rank <= len(ODDS_PCT) else None,
+                "odds": round(weighted_pct[orig_rank - 1], 2) if 1 <= orig_rank <= len(weighted_pct) else None,
+                "base_odds": ODDS_PCT[orig_rank - 1] if 1 <= orig_rank <= len(ODDS_PCT) else None,
                 "won_pick": pick_num if pick_num <= 2 and str(tid) in {str(w) for w in winners[:2]} else None,
             })
     except Exception:
@@ -8668,6 +8679,7 @@ def generate_next_season(session: FranchiseSession) -> Dict[str, Any]:
     for _team in list(getattr(getattr(session.sim, "league", None), "teams", None) or []):
         try:
             _team._contract_year_burned = False
+            _team._tank_scratched_ids = set()
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
     try:

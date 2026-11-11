@@ -8,7 +8,11 @@ import { formatFranchiseApiError } from "../services/api";
 import WorldJuniorsEvent from "../events/worldJuniors/WorldJuniorsEvent";
 import { resolveWorldJuniorsPayload } from "../events/worldJuniors/wjcPayload";
 import { BoxScoreModal } from "../components/dossier/ProspectVisuals";
-import { getBoxScore } from "../services/franchiseService";
+import {
+  getBoxScore,
+  liveOpen,
+  liveStart,
+} from "../services/franchiseService";
 
 /**
  * CalendarScreen.js
@@ -1371,6 +1375,7 @@ function CalendarScreen(props = {}) {
   const [choiceError, setChoiceError] = useState("");
   const [advanceBlockedMessage, setAdvanceBlockedMessage] = useState("");
   const [advanceErrorMessage, setAdvanceErrorMessage] = useState("");
+  const [liveOpenId, setLiveOpenId] = useState(null);
   const [simStopNotice, setSimStopNotice] = useState("");
   const [legendFilter, setLegendFilter] = useState(null);
   const [worldJuniorsMenuOpen, setWorldJuniorsMenuOpen] = useState(false);
@@ -1419,6 +1424,25 @@ function CalendarScreen(props = {}) {
   useEffect(() => {
     setExpandedGameKey("");
   }, [selectedDateISO, denseMode, showOnlyTeamGames]);
+
+  useEffect(() => {
+    let cancelled = false;
+  const poll = () => {
+      liveOpen()
+        .then((data) => {
+          if (!cancelled) setLiveOpenId(data?.open ? data.live_id : null);
+        })
+        .catch(() => {
+          if (!cancelled) setLiveOpenId(null);
+        });
+    };
+    poll();
+    const id = setInterval(poll, 12000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [currentDate, isAdvancing]);
 
   useEffect(() => {
     try {
@@ -2002,9 +2026,17 @@ function CalendarScreen(props = {}) {
         if (process.env.NODE_ENV !== "production") {
           console.warn("[CalendarScreen] advance failed:", formatFranchiseApiError(error) || error);
         }
-        setAdvanceErrorMessage(
-          formatFranchiseApiError(error) || error?.message || "Could not advance the calendar."
-        );
+        const reason = error?.response?.data?.detail?.reason;
+        if (reason === "live_game_open") {
+          setAdvanceBlockedMessage(
+            error?.response?.data?.detail?.message || "Finish or abort the live game first."
+          );
+          setLiveOpenId(error?.response?.data?.detail?.live_id || liveOpenId);
+        } else {
+          setAdvanceErrorMessage(
+            formatFranchiseApiError(error) || error?.message || "Could not advance the calendar."
+          );
+        }
       }
     },
     [isAdvancing, gameUI, rootState]
@@ -2013,6 +2045,29 @@ function CalendarScreen(props = {}) {
   const handleAdvanceDay = useCallback(() => {
     return handleAdvanceCalendar({ mode: "day", count: 1 });
   }, [handleAdvanceCalendar]);
+
+  const canLiveSimToday = useMemo(() => {
+    const phase = String(rootState?.phase || rootState?.season_phase || "").toLowerCase();
+    if (phase !== "regular" && phase !== "preseason") return false;
+    return Boolean(todayTeamGame && isTeamGame(todayTeamGame, activeTeam) && !isCompletedGame(todayTeamGame));
+  }, [todayTeamGame, activeTeam, rootState]);
+
+  const handleLiveSimStart = useCallback(async () => {
+    setAdvanceErrorMessage("");
+    try {
+      await liveStart();
+      setLiveOpenId("open");
+      if (typeof setScreen === "function") setScreen(SCREENS.SIM_TRACKER);
+    } catch (error) {
+      setAdvanceErrorMessage(
+        error?.response?.data?.detail?.message || error?.message || "Could not start live sim."
+      );
+    }
+  }, [setScreen]);
+
+  const handleResumeLiveSim = useCallback(() => {
+    if (typeof setScreen === "function") setScreen(SCREENS.SIM_TRACKER);
+  }, [setScreen]);
 
   const handleAdvance15Days = useCallback(() => {
     return handleAdvanceCalendar({ mode: "days", count: 15 });
@@ -2478,11 +2533,44 @@ function CalendarScreen(props = {}) {
                 </button>
               ) : null}
 
+              {liveOpenId ? (
+                <button
+                  className="ccx-btn ccx-btn--primary nhlcal-live-resume"
+                  type="button"
+                  onClick={handleResumeLiveSim}
+                  title="Live game in progress"
+                >
+                  Resume Live
+                </button>
+              ) : canLiveSimToday ? (
+                <>
+                  <button
+                    className="ccx-btn ccx-btn--primary"
+                    type="button"
+                    onClick={handleLiveSimStart}
+                    disabled={isAdvancing}
+                    title="Play tonight's game in the live tracker"
+                  >
+                    Live Sim
+                  </button>
+                  <button
+                    className="ccx-btn"
+                    type="button"
+                    onClick={handleAdvanceDay}
+                    disabled={isAdvancing}
+                    title="Fast-sim tonight with the calendar advance"
+                  >
+                    Fast Sim
+                  </button>
+                </>
+              ) : null}
+
               <button
                 className={`nhlcal-advance-button ${isAdvancing ? "is-busy" : ""}`}
                 type="button"
                 onClick={handleAdvanceDay}
-                disabled={isAdvancing}
+                disabled={isAdvancing || Boolean(liveOpenId)}
+                title={liveOpenId ? "Live game in progress" : "Sim the next calendar day"}
               >
                 <span>{isAdvancing ? "…" : "▶"}</span>
                 {isAdvancing ? "Advancing" : "Advance Day"}

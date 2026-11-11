@@ -424,22 +424,27 @@ def _ai_interest_for_team(
     tank_row = tank_map.get(str(team_id)) or {}
     tank_pressure = int(tank_row.get("tank_pressure") or getattr(team, "_franchise_tank_pressure", 0) or 0)
     tank_mode = str(tank_row.get("tank_mode") or getattr(team, "_franchise_tank_mode", "none") or "none")
-    if tank_pressure >= 30 and window != "contender":
+    strength_contender = bool((getattr(team, "_tank_strength", None) or {}).get("is_contender"))
+    if tank_pressure >= 50 and tank_mode in ("seller", "hard_tank", "soft_sell") and not strength_contender:
         outgoing_assets = package.outgoing_by_team.get(team_id, [])
         incoming_assets = package.incoming_by_team.get(team_id, [])
         outgoing_players = [a for a in outgoing_assets if isinstance(a, PlayerTradeAsset)]
         incoming_picks = [a for a in incoming_assets if isinstance(a, DraftPickTradeAsset)]
-        if outgoing_players and incoming_picks and tank_pressure >= 50:
-            bonus = 0.05 + max(0.0, (tank_pressure - 50) * 0.003)
+        if outgoing_players and incoming_picks:
+            bonus = 0.12 + max(0.0, (tank_pressure - 50) * 0.004)
             if tank_mode == "hard_tank" and tank_row.get("owns_own_first", True):
-                bonus += 0.04
-            if tank_mode == "hard_tank" and not tank_row.get("owns_own_first", True):
-                bonus = min(bonus, 0.03)
-            interest = min(1.0, interest + bonus)
+                bonus += 0.08
+            firsts = [a for a in incoming_picks if int(getattr(a, "round", 0) or 0) == 1]
+            if firsts:
+                bonus += 0.12
+                if str(tank_row.get("lottery_pick_intent") or "") == "buy":
+                    bonus += 0.10
+                    reasons.append("Bidding for a lottery pick")
+            interest = min(1.0, interest + min(0.40, bonus))
             reasons.append("Transcendent lottery chase — willing to move veterans for futures")
-        if tank_pressure >= 70 and net >= -4:
-            interest = min(1.0, interest + 0.04)
-    if tank_pressure >= 50 and window != "contender" and _deadline_phase(context) > 0.25:
+            if net >= -12:
+                interest = min(1.0, interest + 0.08)
+    if tank_pressure >= 50 and tank_mode in ("seller", "hard_tank") and not strength_contender and _deadline_phase(context) > 0.25:
         incoming_players = [a for a in package.incoming_by_team.get(team_id, []) if isinstance(a, PlayerTradeAsset)]
         for asset in incoming_players:
             src = team_by_id.get(str(asset.source_team_id or "")) or team

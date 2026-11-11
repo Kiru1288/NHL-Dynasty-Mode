@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import random
 import traceback
 from pathlib import Path
@@ -315,8 +316,62 @@ def reset_franchise_sessions() -> dict[str, Any]:
     return {"ok": True, "cleared_sessions": cleared, "active_sessions": active_session_count()}
 
 
+_ONCE_TRANSCENDENT_REQUEST = Path(__file__).resolve().parent / "data" / "once_transcendent.request"
+_ONCE_TRANSCENDENT_SPENT = Path(__file__).resolve().parent / "data" / "once_transcendent.spent"
+
+
+def _once_transcendent_armed() -> bool:
+    """True only for the single start requested by the one-shot command file."""
+    if _ONCE_TRANSCENDENT_SPENT.exists():
+        return False
+    return _ONCE_TRANSCENDENT_REQUEST.is_file()
+
+
+def _mark_once_transcendent_spent() -> None:
+    try:
+        _ONCE_TRANSCENDENT_SPENT.parent.mkdir(parents=True, exist_ok=True)
+        _ONCE_TRANSCENDENT_SPENT.write_text("used\n", encoding="utf-8")
+    except Exception:
+        log.debug("once transcendent spent marker failed", exc_info=True)
+    try:
+        _ONCE_TRANSCENDENT_REQUEST.unlink(missing_ok=True)
+    except Exception:
+        log.debug("once transcendent request clear failed", exc_info=True)
+
+
+def _transcendent_on_league(session: Any) -> Optional[dict[str, Any]]:
+    from app.sim_engine.entities.player import display_rating, player_current_ovr_01
+
+    league = getattr(getattr(session, "sim", None), "league", None)
+    for block in getattr(league, "development_leagues", None) or []:
+        for team in block.get("teams") or []:
+            for player in team.get("players") or []:
+                if not getattr(player, "is_transcendent", False):
+                    continue
+                ident = getattr(player, "identity", None)
+                overall = int(round(display_rating(player_current_ovr_01(player))))
+                potential = 0
+                ratings = getattr(player, "ratings", None)
+                if isinstance(ratings, dict):
+                    try:
+                        potential = int(round(float(ratings.get("dev_potential") or 0)))
+                    except (TypeError, ValueError):
+                        potential = 0
+                return {
+                    "name": str(getattr(ident, "name", "") or ""),
+                    "position": str(getattr(getattr(ident, "position", None), "value", "") or ""),
+                    "overall": overall,
+                    "potential": potential,
+                    "league": str(block.get("league_code") or ""),
+                }
+    return None
+
+
 @app.post("/api/franchise/start")
 def post_franchise_start(body: FranchiseStartBody, background_tasks: BackgroundTasks) -> Any:
+    force_transcendent = _once_transcendent_armed()
+    if force_transcendent:
+        os.environ["NHL_FORCE_TRANSCENDENT"] = "1"
     try:
         session = franchise_sim.start_franchise(
             team_query=body.team_query,
@@ -329,6 +384,19 @@ def post_franchise_start(body: FranchiseStartBody, background_tasks: BackgroundT
             player_universe=str(getattr(body, "player_universe", None) or "generated"),
             warm_draft_cache=False,
         )
+        transcendent = None
+        if force_transcendent and _transcendent_on_league(session) is None:
+            from app.sim_engine.league_hierarchy_bootstrap import prepare_draft_class_for_season
+
+            prepare_draft_class_for_season(
+                session.sim.league,
+                session.sim.rng,
+                season_year=int(getattr(session, "season_calendar_year", 0) or 0),
+            )
+        if force_transcendent:
+            transcendent = _transcendent_on_league(session)
+            if transcendent and int(transcendent.get("overall") or 0) == 99:
+                _mark_once_transcendent_spent()
     except ValueError as e:
         log.warning("POST /api/franchise/start validation: %s", e)
         return JSONResponse(
@@ -350,6 +418,9 @@ def post_franchise_start(body: FranchiseStartBody, background_tasks: BackgroundT
                 "message": str(e),
             },
         )
+    finally:
+        if force_transcendent:
+            os.environ.pop("NHL_FORCE_TRANSCENDENT", None)
     try:
         save_session(session)
     except Exception as e:
@@ -378,7 +449,10 @@ def post_franchise_start(body: FranchiseStartBody, background_tasks: BackgroundT
         session.session_id,
         len(getattr(session, "schedule", None) or []),
     )
-    return {"ok": True, "session_id": session.session_id, "state": state}
+    payload: dict[str, Any] = {"ok": True, "session_id": session.session_id, "state": state}
+    if force_transcendent:
+        payload["transcendent"] = transcendent
+    return payload
 
 
 @app.get("/api/franchise/session")
@@ -1355,6 +1429,18 @@ def _post_franchise_advance_impl(
     x_franchise_session: Optional[str] = Header(default=None),
 ) -> dict[str, Any]:
     s = _session_or_404(x_franchise_session)
+    from services.player_tracking_sim import has_open_live_game
+
+    live_id = has_open_live_game(str(x_franchise_session or ""))
+    if live_id:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "reason": "live_game_open",
+                "live_id": live_id,
+                "message": "Finish or abort the live game first.",
+            },
+        )
     b = body or FranchiseAdvanceBody()
     mode = (b.mode or "day").strip().lower()
     allowed = {"day", "days", "game", "games", "season", "next_game", "to_date"}
@@ -2657,3 +2743,8 @@ app.include_router(_creation_report_router)
 from services.prospect_rights_talk_api import router as _prospect_talk_router  # noqa: E402
 
 app.include_router(_prospect_talk_router)
+
+# Live sim tracker (services/player_tracking_sim.py).
+from services.player_tracking_sim import router as _live_sim_router  # noqa: E402
+
+app.include_router(_live_sim_router)

@@ -202,6 +202,8 @@ def cba_max_term(league: Any = None, *, own_team: bool = True) -> int:
         return 7 if own_team else 6
     return 8 if own_team else 7
 ELC_AAV_M = 0.95
+# CBA entry-level maximum the roster may show. $950,000 AAV sits under this ceiling.
+ROOKIE_ELC_MAX_AAV_M = 0.999999
 CONTRACT_SLOTS_LIMIT = 50
 CAP_SAFE_CORE_TOP_N = 6
 CAP_SAFE_STAR_OVR = 88.0
@@ -1701,6 +1703,7 @@ def hydrate_player_contract(player: Any, season_year: Optional[int] = None) -> N
         player.aav_m = normalized["aav_m"]
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
+    enforce_rookie_elc_maximum(player)
     if normalized.get("pending_july1_expiry"):
         try:
             setattr(player, "pending_july1_expiry", True)
@@ -1772,6 +1775,10 @@ def apply_contract_to_player(player: Any, contract: Dict[str, Any], season_year:
         player.rights_status = normalized["rights_status"]
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
+    if enforce_rookie_elc_maximum(player):
+        fixed = _get(player, "contract", None)
+        if isinstance(fixed, dict):
+            normalized = fixed
 
     # Extension / re-sign replaces the pending July-1 burn — clear exclusivity flags
     # so the player is not force-expired into free agency on market open.
@@ -2700,6 +2707,108 @@ def resolved_rights_status(player: Any, contract: Any = None) -> str:
     return "UFA"
 
 
+def _elc_years_already_burned(player: Any) -> bool:
+    """Three pro seasons means the entry-level deal is done and a bridge is legal."""
+    for key in ("pro_seasons", "nhl_seasons", "seasons_pro"):
+        raw = _get(player, key, None)
+        if raw is None:
+            continue
+        try:
+            if int(raw) >= 3:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
+def _contract_money_m(contract: Any) -> float:
+    for key in ("cap_hit_m", "aav_m", "aav", "cap_hit", "salary_m"):
+        raw = _get(contract, key, None)
+        if raw is None:
+            continue
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if value > 250.0:
+            value = value / 1_000_000.0
+        if value > 0:
+            return value
+    return 0.0
+
+
+def rookie_elc_cap_required(player: Any, contract: Any = None) -> bool:
+    """True when this cap hit is an entry-level deal above $999,999."""
+    contract = _get(player, "contract", None) if contract is None else contract
+    if contract is None:
+        return False
+    if _contract_money_m(contract) <= ROOKIE_ELC_MAX_AAV_M:
+        return False
+    source = str(_get(contract, "source", None) or _get(player, "contract_source", "") or "").lower()
+    # A Spotrac/CapWages row is the real hit. "bootstrap" on a real player means
+    # that row was thrown away and replaced with a market AAV.
+    if source.startswith("real_nhl") or "spotrac" in source or "capwages" in source:
+        return False
+    ctype = str(_get(contract, "contract_type", None) or _get(contract, "type", "") or "").upper()
+    if ctype == "ELC" or bool(_get(contract, "is_entry_level", False)):
+        return True
+    age = _player_age(player)
+    if not (0 < age <= 21) or _elc_years_already_burned(player):
+        return False
+    if bool(_get(contract, "user_signed", False)) or source in ("user", "user_signed"):
+        return False
+    return True
+
+
+def enforce_rookie_elc_maximum(player: Any) -> bool:
+    """Rewrite a rookie ELC whose cap hit is above $999,999 down to the ELC AAV."""
+    contract = _get(player, "contract", None)
+    if contract is None or not rookie_elc_cap_required(player, contract):
+        return False
+    hit = float(ELC_AAV_M)
+    money_keys = ("cap_hit_m", "aav_m", "salary_m", "base_salary_m", "aav", "cap_hit", "salary")
+    if isinstance(contract, dict):
+        for key in money_keys:
+            if key in contract:
+                contract[key] = hit
+        contract["cap_hit_m"] = hit
+        contract["aav_m"] = hit
+        contract["salary_m"] = hit
+        contract["base_salary_m"] = hit
+        contract["type"] = "ELC"
+        contract["contract_type"] = "ELC"
+        contract["is_entry_level"] = True
+        contract["rights_status"] = "RFA"
+        contract["rights"] = "RFA"
+        try:
+            years = max(1, min(3, int(contract.get("years_remaining") or contract.get("years") or 3)))
+        except (TypeError, ValueError):
+            years = 3
+        contract["years"] = years
+        contract["years_remaining"] = years
+        hits = contract.get("season_cap_hits")
+        if isinstance(hits, list) and hits:
+            contract["season_cap_hits"] = [hit for _ in hits]
+    else:
+        for key in money_keys:
+            try:
+                setattr(contract, key, hit)
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+        try:
+            contract.contract_type = "ELC"
+            years = max(1, min(3, int(getattr(contract, "years_remaining", 3) or 3)))
+            contract.years_remaining = years
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    try:
+        player.cap_hit_m = hit
+        player.aav_m = hit
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    return True
+
+
 def contract_type_and_rights(age: int, ovr: float, *, true_elc: bool = False) -> Tuple[str, str]:
     if true_elc:
         return ("ELC", "RFA")
@@ -2736,6 +2845,12 @@ def build_contract_for_player(
     ctype, rights = contract_type_and_rights(age, ovr)
     if contract_type:
         ctype = str(contract_type).upper()
+    # First NHL deal at 18–21 is an ELC. Market AAV was writing $3M–$9M cap hits.
+    # real_nhl_contract stays set even when this function is inventing the deal.
+    if 0 < age <= 21 and not _elc_years_already_burned(player):
+        ctype = "ELC"
+        aav = ELC_AAV_M
+        years = 3
     if ctype == "ELC":
         aav = ELC_AAV_M
         ctype = "ELC"

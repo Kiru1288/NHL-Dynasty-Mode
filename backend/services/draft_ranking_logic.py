@@ -776,6 +776,14 @@ def _resolve_character_chapter_score(
 
 
 def _character_concerns_flag(row: Mapping[str, Any], player: Any = None) -> bool:
+    if _row_is_transcendent(row):
+        return False
+    if player is not None and (
+        getattr(player, "is_transcendent", False)
+        or getattr(player, "transcendent_talent", False)
+        or str(getattr(player, "pipeline_tier", "") or "").lower() == "transcendent"
+    ):
+        return False
     if bool(row.get("character_concerns")):
         return True
     if player is not None:
@@ -1393,15 +1401,79 @@ def _production_ceiling_lift(row: Mapping[str, Any], prod: float, ppg: float) ->
     return max(0.0, min(16.0, _PRODUCTION_LIFT_NEUTRAL + (earned - expected)))
 
 
-def compute_consensus_potential_evaluation(row: Dict[str, Any]) -> float:
-    """League/market-facing ceiling estimate from observable signals only.
+def _row_is_transcendent(row: Mapping[str, Any]) -> bool:
+    if row.get("is_transcendent") or row.get("transcendent_talent") or row.get("cant_miss"):
+        return True
+    return str(row.get("pipeline_tier") or "").lower() == "transcendent"
 
-    Does NOT read hidden truth: no true_potential_score, and no is_transcendent /
-    transcendent_talent / generational_goalie flags. The public market must earn
-    its ceiling read from production, tools, size, age and league — a truly
-    special player rises because his observable evidence is elite, not because a
-    backend flag revealed the truth. This preserves realistic public mistakes.
+
+def stamp_transcendent_public_entry(entry: Dict[str, Any]) -> None:
+    """The transcendent is public knowledge: rank-ready 99, full file, no fog."""
+    if not _row_is_transcendent(entry):
+        return
+    entry["is_transcendent"] = True
+    entry["transcendent_talent"] = True
+    entry["cant_miss"] = True
+    entry["pipeline_tier"] = "transcendent"
+    entry["true_ovr"] = 99.0
+    entry["overall"] = 99
+    entry["ovr_revealed"] = True
+    entry["current_ovr_estimate"] = 99.0
+    entry["current_ovr_range"] = [99.0, 99.0]
+    entry["public_ovr_low"] = 99.0
+    entry["public_ovr_high"] = 99.0
+    entry["public_ovr_spread"] = 0.0
+    entry["ovr_range"] = {"low": 99.0, "high": 99.0}
+    entry["potential_score"] = 99.0
+    entry["true_potential_score"] = 99.0
+    entry["consensus_potential_score"] = 99.0
+    entry["expected_ceiling_estimate"] = 99.0
+    entry["potential_range"] = {"low": 99.0, "high": 99.0}
+    entry["ceiling_range"] = {"low": 99.0, "high": 99.0}
+    entry["floor_score"] = 99.0
+    entry["ceiling_score"] = 99.0
+    entry["outcome_band"] = "Can't Miss"
+    entry["ceiling_hidden"] = False
+    entry["ceiling_state"] = "revealed"
+    entry["ceiling_visibility"] = 1.0
+    entry["scouted_percentage"] = 100.0
+    entry["user_scouted_percentage"] = 100.0
+    entry["public_scouting_confidence"] = 100.0
+    entry["scouting_confidence"] = 100.0
+    entry["character_concerns"] = False
+    entry["is_bust_risk"] = False
+    entry["boom_bust"] = False
+    entry["risk"] = "Low"
+    entry["scout_confidence"] = "High"
+    entry["scout_projection"] = "Can't Miss"
+    tags = [
+        str(t)
+        for t in (entry.get("scout_tags") or [])
+        if "conf" not in str(t).lower() and str(t).lower() != "character"
+    ]
+    if "Can't Miss" not in tags:
+        tags.insert(0, "Can't Miss")
+    entry["scout_tags"] = tags[:4]
+    entry["intel_label"] = "Can't Miss"
+
+
+def pin_transcendent_first(prospects: List[Dict[str, Any]]) -> None:
+    """Public and internal order both open with the transcendent."""
+    idx = next((i for i, row in enumerate(prospects) if _row_is_transcendent(row)), None)
+    if idx is None or idx == 0:
+        return
+    prospects.insert(0, prospects.pop(idx))
+
+
+def compute_consensus_potential_evaluation(row: Dict[str, Any]) -> float:
+    """League/market-facing ceiling estimate from observable signals.
+
+    A transcendent is already public: the market reads him at 99. Everyone else
+    is earned from production, tools, size, age and league, with no hidden
+    potential or generational-goalie shortcut.
     """
+    if _row_is_transcendent(row):
+        return 99.0
     ovr = float(row.get("true_ovr") or 0)
     prod = float(row.get("production_adjusted_score") or 0)
     ppg = float(row.get("ppg") or row.get("points_per_game") or 0)
@@ -1559,6 +1631,14 @@ def compute_prospect_outcome_band(row: Dict[str, Any]) -> Dict[str, Any]:
     (ceiling - current ability) and youth, and falls for older/known/steady prospects. The
     floor is then the ceiling minus a spread that widens with that volatility, so risky
     high-ceiling players fall far below their ceiling while safe players sit just under it."""
+    if _row_is_transcendent(row):
+        return {
+            "floor_score": 99.0,
+            "ceiling_score": 99.0,
+            "outcome_volatility": 0.0,
+            "outcome_band": "Can't Miss",
+            "outcome_band_width": 0.0,
+        }
     ceiling = float(row.get("potential_score") or row.get("true_potential_score") or 0)
     current = float(row.get("true_ovr") or 0)
     if ceiling <= 0:
@@ -3020,46 +3100,55 @@ def compute_tank_pressure_for_team(
         "tank_mode": "none",
         "owns_own_first": bool(owns_own_first),
         "pick_ownership_reason": str(pick_ownership_reason or "unknown"),
+        "lottery_pick_intent": "none",
+        "is_contender": False,
     }
     if not transcendent_present:
         return base
 
-    status = str(getattr(team, "team_status", "") or getattr(team, "strategy", "") or "").lower()
-    if "playoff" in status or "contend" in status:
-        base["tank_pressure"] = min(28, 12)
+    strength = getattr(team, "_tank_strength", None)
+    if isinstance(strength, dict) and "is_contender" in strength:
+        contender = bool(strength.get("is_contender"))
+        gap = float(strength.get("playoff_gap_pts") or 0.0)
+        rank = int(strength.get("strength_rank") or 16)
+    else:
+        status = str(getattr(team, "team_status", "") or getattr(team, "strategy", "") or "").lower()
+        if "playoff" in status or "contend" in status:
+            contender, gap, rank = True, -8.0, 3
+        elif "rebuild" in status or "tank" in status:
+            contender, gap, rank = False, 20.0, 30
+        elif "middling" in status or "collapse" in status:
+            contender, gap, rank = False, 8.0, 18
+        else:
+            contender, gap, rank = False, 6.0, 16
+
+    base["is_contender"] = bool(contender)
+    base["strength_rank"] = int(rank)
+    base["playoff_gap_pts"] = round(float(gap), 1)
+    if contender:
+        base["tank_pressure"] = 12
+        base["tank_mode"] = "none"
         return base
 
-    pressure = 0
-    if "rebuild" in status or "tank" in status:
-        pressure = 78
-    elif "middling" in status or "collapse" in status:
-        pressure = 52
-    else:
-        pressure = 40
-
-    pressure = min(95, pressure + 12)
-
-    if not owns_own_first:
-        pressure = min(pressure, 68)
-    elif owns_protected_first:
-        pressure = min(pressure, 82)
-
-    mode = "none"
-    if pressure >= 90 and owns_own_first and not owns_protected_first:
+    # Every non-contender is at least a seller. Distance from the playoff line raises it.
+    pressure = 62.0 + min(33.0, max(0.0, gap) * 0.9 + max(0, rank - 8) * 0.7)
+    pressure = int(min(95, max(62, round(pressure))))
+    far = gap >= 10.0 or rank >= 22
+    intent = "hold"
+    if owns_own_first and not owns_protected_first and far:
         mode = "hard_tank"
-    elif pressure >= 70:
+        pressure = max(pressure, 90)
+    else:
         mode = "seller"
-    elif pressure >= 50:
-        mode = "soft_sell"
-    elif pressure >= 30:
-        mode = "soft_sell"
-
-    if mode == "hard_tank" and not owns_own_first:
-        mode = "seller"
-        pressure = min(pressure, 88)
-
+        pressure = max(70, pressure)
+        if not owns_own_first:
+            pressure = min(pressure, 88)
+            intent = "buy"
+        elif owns_protected_first:
+            pressure = min(pressure, 82)
     base["tank_pressure"] = int(pressure)
-    base["tank_mode"] = mode if pressure >= 30 else "none"
+    base["tank_mode"] = mode
+    base["lottery_pick_intent"] = intent
     return base
 
 

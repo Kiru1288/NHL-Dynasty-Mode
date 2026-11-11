@@ -21,30 +21,13 @@ import { buildProspectDossierModel } from "../components/dossier/prospectDossier
 import { useDossierTab } from "../components/dossier/ProspectDossierView";
 import KartDossier from "../components/dossier/KartDossier";
 import { resolveOvrBands, buildStubProspectProfile } from "./prospectDossierHelpers";
+import TranscendentNotepad from "../components/draft/TranscendentNotepad";
 
 let TRANSCENDENT_BOSS_AUDIO_URL = null;
 try {
-  // Optional asset — safe when missing from build.
   TRANSCENDENT_BOSS_AUDIO_URL = require("../soundtrack/Super Mario 64 Soundtrack - Stage Boss - RadiatorRampardos.mp3");
 } catch {
   TRANSCENDENT_BOSS_AUDIO_URL = null;
-}
-
-function playTranscendentBossSting() {
-  if (!TRANSCENDENT_BOSS_AUDIO_URL) return;
-  if (typeof window === "undefined") return;
-  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-  try {
-    const audio = new Audio(TRANSCENDENT_BOSS_AUDIO_URL);
-    audio.volume = 0.42;
-    audio.loop = false;
-    const p = audio.play();
-    if (p && typeof p.catch === "function") {
-      p.catch(() => {});
-    }
-  } catch {
-    // Missing codec / autoplay blocked — ignore.
-  }
 }
 
 /** Backend ETA is often `{ label, years, confidence }` — never render the object as a React child. */
@@ -433,6 +416,9 @@ function potentialTier(value) {
  */
 function resolvePotentialEstimate(player) {
   const blank = (detail) => ({ text: "—", value: null, exact: false, tier: null, detail });
+  if (player?.isTranscendent || player?.cantMiss) {
+    return { text: "99", value: 99, exact: true, tier: potentialTier(99), detail: "Can't miss" };
+  }
   if (player?.ceilingHidden) return blank("Ceiling unreported — assign a scout");
 
   const pct = prospectEffectivePct(player);
@@ -1063,12 +1049,17 @@ function mapBackendDraftBoard(entries, dateContext) {
     const ambientRaw = coalesce(row?.public_scouting_confidence, row?.scouting_confidence, row?.scout_grade, base.completion);
     const scoutedNum = scoutedRaw != null && scoutedRaw !== "" ? Number(scoutedRaw) : null;
     const ambientNum = ambientRaw != null && ambientRaw !== "" ? Number(ambientRaw) : null;
-    const dedicatedScoutingPct = Number.isFinite(scoutedNum) && scoutedNum > 0
-      ? Math.round(Math.min(100, Math.max(0, scoutedNum)))
-      : null;
-    const publicScoutingConfidence = Number.isFinite(ambientNum)
-      ? Math.round(Math.min(100, Math.max(0, ambientNum)))
-      : null;
+    const isTranscendentRow = Boolean(row?.is_transcendent ?? row?.isTranscendent ?? row?.transcendent_talent ?? row?.cant_miss);
+    const dedicatedScoutingPct = isTranscendentRow
+      ? 100
+      : (Number.isFinite(scoutedNum) && scoutedNum > 0
+        ? Math.round(Math.min(100, Math.max(0, scoutedNum)))
+        : null);
+    const publicScoutingConfidence = isTranscendentRow
+      ? 100
+      : (Number.isFinite(ambientNum)
+        ? Math.round(Math.min(100, Math.max(0, ambientNum)))
+        : null);
     const completion = dedicatedScoutingPct ?? publicScoutingConfidence ?? (Number(base.completion) || 40);
     // Only YOUR dedicated file reveals the real OVR (it fell back to league-wide
     // coverage, so well-known prospects you never scouted showed an exact OVR).
@@ -1131,10 +1122,12 @@ function mapBackendDraftBoard(entries, dateContext) {
       stockLabel: coalesce(row?.stock_label, row?.stockLabel),
       stockReason: coalesce(row?.stock_reason, row?.stockReason),
       stockDirection: coalesce(row?.stock_direction, row?.stockDirection),
-      characterConcerns: Boolean(row?.character_concerns ?? row?.characterConcerns),
+      characterConcerns: isTranscendentRow ? false : Boolean(row?.character_concerns ?? row?.characterConcerns),
+      originStory: row?.origin_story && typeof row.origin_story === "object" ? row.origin_story : null,
       scoutingConfidence: Number(coalesce(row?.scouting_confidence, row?.scoutingConfidence)) || null,
       intelLabel: coalesce(row?.intel_label, row?.intelLabel),
-      isTranscendent: Boolean(row?.is_transcendent ?? row?.isTranscendent ?? row?.transcendent_talent),
+      isTranscendent: Boolean(row?.is_transcendent ?? row?.isTranscendent ?? row?.transcendent_talent ?? row?.cant_miss),
+      cantMiss: Boolean(row?.cant_miss ?? row?.cantMiss ?? row?.is_transcendent ?? row?.isTranscendent),
       classTier: row?.class_tier || row?.classTier || null,
       classIndicators: row?.class_indicators || row?.classIndicators || null,
       hometown: coalesce(row?.hometown, row?.birth_city, row?.birthCity),
@@ -2714,6 +2707,9 @@ function wrNumClassForTier(tierKey) {
 
 /** Current ability estimate for the board column. Ceiling fog does not blank present skill. */
 function resolveCurrentEstimate(player, profile, ceilingHidden, dedicatedFile) {
+  if (player?.isTranscendent || player?.cantMiss) {
+    return { text: "99", detail: "Can't miss", exact: true };
+  }
   const exact = Number(profile?.scoutedOverall ?? profile?.currentOvrEstimate ?? player?.ovrHint);
   const revealed = false;
   if (revealed && (!ceilingHidden || dedicatedFile) && Number.isFinite(exact) && exact > 0) {
@@ -2731,7 +2727,29 @@ function resolveCurrentEstimate(player, profile, ceilingHidden, dedicatedFile) {
   return { text: "\u2014", detail: "Not revealed", exact: false };
 }
 
+function useCountUp(target, active) {
+  const [value, setValue] = useState(active ? 90 : target);
+  useEffect(() => {
+    if (!active) {
+      setValue(target);
+      return undefined;
+    }
+    let current = 90;
+    setValue(90);
+    const timer = window.setInterval(() => {
+      current += 1;
+      setValue(current);
+      if (current >= target) window.clearInterval(timer);
+    }, 80);
+    return () => window.clearInterval(timer);
+  }, [active, target]);
+  return value;
+}
+
 function ProspectBoardRow({ player, index, selected, onSelect, onPrefetch, meta, showConsensus, checked = false, onToggleCheck, onToggleWatch }) {
+  const star = Boolean(player?.isTranscendent);
+  const nowCount = useCountUp(99, star);
+  const ceilCount = useCountUp(99, star);
   const rank = player.boardRank || prospectRank(player, index);
   const countryCode = normalizeCountryCode(player);
   const pub = prospectPublicPct(player);
@@ -2766,18 +2784,21 @@ function ProspectBoardRow({ player, index, selected, onSelect, onPrefetch, meta,
     <div
       role="button"
       tabIndex={0}
-      className={`dkb-row rank-${rankTone}${selected ? " is-open" : ""}${checked ? " is-checked" : ""}${meta?.doNotDraft ? " is-dnd" : ""}${player?.isTranscendent ? " is-transcendent" : ""}`}
+      className={`dkb-row rank-${rankTone}${selected ? " is-open" : ""}${checked ? " is-checked" : ""}${meta?.doNotDraft ? " is-dnd" : ""}${star ? " is-transcendent" : ""}`}
       onClick={onSelect}
       onKeyDown={(e) => { if (e.key === "Enter") onSelect?.(); }}
       onMouseEnter={() => onPrefetch?.(player)}
       style={tier ? { "--tier-color": tier.color } : undefined}
     >
+      {star ? <span className="dkb-cantmiss">Can&apos;t Miss</span> : null}
+      {star ? <span className="dkb-shimmer" aria-hidden="true" /> : null}
+      {star ? <span className="dkb-sparks" aria-hidden="true"><i /><i /><i /><i /></span> : null}
       <span className="dkb-check" onClick={(e) => { e.stopPropagation(); onToggleCheck?.(); }} role="checkbox" aria-checked={checked} title="Select for bulk actions">
         <i>{checked ? "✓" : ""}</i>
       </span>
-      <span className="dkb-rank" title={`Board rank ${rank}`}>
-        <b>{rank}</b>
-        {delta ? <em className={delta > 0 ? "is-up" : "is-down"}>{delta > 0 ? "▲" : "▼"}{Math.abs(delta)}</em> : wasRank && wasRank !== rank ? <em>was {wasRank}</em> : null}
+      <span className="dkb-rank" title={star ? "Franchise talent" : `Board rank ${rank}`}>
+        {star ? <b className="dkb-crown" aria-label="Franchise talent">★</b> : <b>{rank}</b>}
+        {star ? <em className="dkb-lock">Franchise talent</em> : delta ? <em className={delta > 0 ? "is-up" : "is-down"}>{delta > 0 ? "▲" : "▼"}{Math.abs(delta)}</em> : wasRank && wasRank !== rank ? <em>was {wasRank}</em> : null}
       </span>
       <span className="dkb-face">
         <DraftClassHeadshot player={player} size="md" board />
@@ -2796,24 +2817,24 @@ function ProspectBoardRow({ player, index, selected, onSelect, onPrefetch, meta,
           {statLine ? <span className="dkb-stat">{statLine}</span> : null}
         </span>
         <span className="dkb-chips">
-          {projection ? <i className="dkb-chip is-proj">{projection}</i> : null}
-          {Array.isArray(player.scoutTags) ? player.scoutTags.slice(0, 2).map((t) => <i key={t} className="dkb-chip">{t}</i>) : null}
-          {player.scoutConfidence ? <i className={`dkb-chip is-conf conf-${String(player.scoutConfidence).toLowerCase()}`}>{player.scoutConfidence} conf.</i> : null}
-          {player.overager ? <i className="dkb-chip is-warn">Overager</i> : null}
-          {player.characterConcerns ? <i className="dkb-chip is-bad">Character</i> : null}
-          {reasonLabel ? <i className="dkb-chip">{reasonLabel}</i> : null}
-          {divergence ? <i className="dkb-chip is-div">You #{divergence.scoutRank} · Pub #{divergence.publicRank}</i> : null}
+          {star ? null : projection ? <i className="dkb-chip is-proj">{projection}</i> : null}
+          {star ? null : Array.isArray(player.scoutTags) ? player.scoutTags.slice(0, 2).map((t) => <i key={t} className="dkb-chip">{t}</i>) : null}
+          {star || !player.scoutConfidence ? null : <i className={`dkb-chip is-conf conf-${String(player.scoutConfidence).toLowerCase()}`}>{player.scoutConfidence} conf.</i>}
+          {player.overager && !star ? <i className="dkb-chip is-warn">Overager</i> : null}
+          {player.characterConcerns && !star ? <i className="dkb-chip is-bad">Character</i> : null}
+          {star || !reasonLabel ? null : <i className="dkb-chip">{reasonLabel}</i>}
+          {star || !divergence ? null : <i className="dkb-chip is-div">You #{divergence.scoutRank} · Pub #{divergence.publicRank}</i>}
         </span>
       </span>
       <span className={`dkb-pos pos-${posGroup}`}>{pos}</span>
       <span className="dkb-league" title={league}><LeagueBadge league={league} /></span>
       <span className="dkb-now" title={ovr.detail || "Present ability"}>
         <em>NOW</em>
-        <b>{ovr.text}</b>
+        <b>{star ? nowCount : ovr.text}</b>
       </span>
       <span className={`dkb-ceil tier-${potKey}`} title={`${pot.tier ? `${pot.tier.label} · ` : ""}${pot.detail}`}>
         <em>CEILING</em>
-        <b>{pot.text}</b>
+        <b>{star ? ceilCount : pot.text}</b>
         {player.potentialTrend === "rising" || player.potentialTrend === "falling" ? (
           <i className={`dkb-trend is-${player.potentialTrend}`}>{player.potentialTrend === "rising" ? "▲" : "▼"}</i>
         ) : null}
@@ -2955,7 +2976,7 @@ function ProspectBoardPanel({
 
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return prospects.filter((p) => {
+    const rows = prospects.filter((p) => {
       const meta = getScoutingMeta(scoutingStore, p.id);
       if (listFilter === "shortlist" && !meta.watchlist) return false;
       if (listFilter === "assigned" && !meta.assignedScout) return false;
@@ -2965,6 +2986,11 @@ function ProspectBoardPanel({
       if (q && !`${p.firstName} ${p.lastName} ${p.team || ""} ${p.league || ""}`.toLowerCase().includes(q)) return false;
       return true;
     });
+    const star = prospects.find((p) => p.isTranscendent);
+    if (!star) return rows;
+    const queryHitsStar = !q || `${star.firstName} ${star.lastName}`.toLowerCase().includes(q);
+    if (!queryHitsStar) return rows;
+    return [star, ...rows.filter((p) => p.id !== star.id)];
   }, [prospects, scoutingStore, listFilter, region, query]);
 
   const visible = shown.slice(0, limit);
@@ -3234,6 +3260,10 @@ function ProspectProfileModal({
     userScoutPct: Number(profile?.war_room?.file?.yours ?? profile?.userScoutPct ?? player?.dedicatedScoutingPct ?? player?.scoutedPercentage ?? 0),
   });
   const countryLabel = model.identity.nation || countryDisplayLabel(player, profile);
+  const origin = player?.originStory || profile?.origin_story || null;
+  const rivals = isTranscendent
+    ? (allProspects || []).filter((p) => p.id !== player.id).slice(0, 3)
+    : [];
 
   return (
     <div
@@ -3243,7 +3273,25 @@ function ProspectProfileModal({
       aria-label={`${player.firstName} ${player.lastName} scouting profile`}
     >
       <button type="button" className="kdd-backdrop" onClick={onClose} aria-label="Close" />
+      {isTranscendent ? (
+        <div className="kdd-transcendent-stage">
+          <div className="kdd-seal" title="One in ten thousand">1 / 10,000</div>
+          <div className="kdd-origin">
+            <span className="kdd-tag">Transcendent file</span>
+            <b>{origin?.title || "Origin"}</b>
+            <p>{origin?.full_text || origin?.summary || "The file the league already knows by heart."}</p>
+          </div>
+          {rivals.length ? (
+            <div className="kdd-rivals">
+              {rivals.map((rival) => (
+                <span key={rival.id}>{rival.firstName} {rival.lastName}</span>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       <KartDossier
+        isTranscendent={isTranscendent}
         model={model}
         profile={profile || {}}
         meta={scoutMeta}
@@ -3273,11 +3321,13 @@ function ProspectProfileModal({
 
 function IntelFeed({ prospects }) {
   const movers = useMemo(() => weeklyStockMovers(prospects, { minAbs: 1, limit: 80 }), [prospects]);
-  const idle = !movers.length;
+  const star = (prospects || []).find((p) => p.isTranscendent);
+  const idle = !movers.length && !star;
   return (
-    <footer className={`dc-intel-feed dc-intel-feed--weekly${idle ? " is-idle" : ""}`}>
+    <footer className={`dc-intel-feed dc-intel-feed--weekly${idle ? " is-idle" : ""}${star ? " is-transcendent" : ""}`}>
       <h3>Weekly stock</h3>
       <ul>
+        {star ? <li className="is-star">{star.firstName} {star.lastName} · Franchise talent · 99</li> : null}
         {idle ? (
           <li>No weekly movement reported yet</li>
         ) : (
@@ -3764,10 +3814,6 @@ export default function DraftClass() {
 
   const openProspect = useCallback((player) => {
     if (!player?.id) return;
-    const transcendent = Boolean(player.isTranscendent || player?.profile?.is_transcendent);
-    if (transcendent) {
-      playTranscendentBossSting();
-    }
     setSelectedProspect(player);
     requestProspectProfile(player.id);
   }, [requestProspectProfile]);
@@ -3936,6 +3982,57 @@ export default function DraftClass() {
     const withProfiles = mapped.map((p) => ({ ...p, profile: profiles[p.id] || null }));
     return enrichProspectsForWarRoom(withProfiles, profiles);
   }, [franchiseState?.draft_class_rankings?.entries, franchiseState?.draft_class_hud?.prospect_profiles_by_id, dateContext]);
+  const transcendentOnBoard = rawProspects.some((p) => p.isTranscendent);
+  const revealStartedRef = useRef(false);
+  const [transcendentReveal, setTranscendentReveal] = useState(null);
+  useEffect(() => {
+    if (revealStartedRef.current) return undefined;
+    const star = rawProspects.find((p) => p.isTranscendent);
+    if (!star) return undefined;
+    const storageKey = `nhl_transcendent_unsealed_${star.id}`;
+    if (window.sessionStorage.getItem(storageKey)) return undefined;
+    revealStartedRef.current = true;
+    const events = franchiseState?.storyline_events || [];
+    const hit = events.find((event) => String(event?.type || "") === "TRANSCENDENT_DRAFT_PROSPECT");
+    setTranscendentReveal({
+      id: star.id,
+      storageKey,
+      name: `${star.firstName} ${star.lastName}`,
+      headline: hit?.headline || "A Once-in-a-Lifetime Prospect Has Arrived",
+      phase: "unseal",
+    });
+    document.body.classList.add("dc-transcendent-shake");
+    const shakeTimer = window.setTimeout(() => document.body.classList.remove("dc-transcendent-shake"), 600);
+    return () => {
+      window.clearTimeout(shakeTimer);
+      document.body.classList.remove("dc-transcendent-shake");
+    };
+  }, [transcendentOnBoard]);
+  useEffect(() => {
+    if (!transcendentOnBoard || !TRANSCENDENT_BOSS_AUDIO_URL) return undefined;
+    const audio = new Audio(TRANSCENDENT_BOSS_AUDIO_URL);
+    audio.loop = true;
+    audio.volume = 0.42;
+    let playing = false;
+    const start = () => {
+      if (playing) return;
+      const pending = audio.play();
+      if (pending && typeof pending.then === "function") {
+        pending.then(() => { playing = true; }).catch(() => {});
+      } else {
+        playing = true;
+      }
+    };
+    start();
+    window.addEventListener("pointerdown", start);
+    window.addEventListener("keydown", start);
+    return () => {
+      window.removeEventListener("pointerdown", start);
+      window.removeEventListener("keydown", start);
+      audio.pause();
+      audio.src = "";
+    };
+  }, [transcendentOnBoard]);
   rawProspectsRef.current = rawProspects;
   selectedProspectIdRef.current = selectedProspect?.id || null;
 
@@ -4062,7 +4159,19 @@ export default function DraftClass() {
   return (
     <div className="game-root">
       <div className="game-canvas">
-        <main className="dc-root dk-root dc-screen register-ops" data-register="ops">
+        {transcendentReveal?.phase === "unseal" ? (
+          <div className="dk-unseal" role="dialog" aria-label="Transcendent reveal">
+            <TranscendentNotepad
+              name={transcendentReveal.name}
+              headline={transcendentReveal.headline}
+              onDone={() => {
+                window.sessionStorage.setItem(transcendentReveal.storageKey, "1");
+                setTranscendentReveal(null);
+              }}
+            />
+          </div>
+        ) : null}
+        <main className={`dc-root dk-root dc-screen register-ops${transcendentOnBoard ? " has-transcendent" : ""}`} data-register="ops">
           <TopHeader
             onBack={handleBack}
             dateContext={dateContext}

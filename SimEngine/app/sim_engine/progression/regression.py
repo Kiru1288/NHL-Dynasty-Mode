@@ -189,6 +189,17 @@ def apply_regression(player: Any, rng: Any) -> None:
     A clearly good season is the highest indicator, so it buys the drop off.
     Potential is left alone.
     """
+    try:
+        from app.sim_engine.progression.development import (
+            lock_transcendent_overall,
+            player_is_transcendent,
+        )
+
+        if player_is_transcendent(player):
+            lock_transcendent_overall(player)
+            return
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     age = _age(player)
     reasons: List[str] = []
     morale = _morale(player)
@@ -263,6 +274,13 @@ def career_aging_decline_try(player: Any, rng: Any, league: Any = None) -> Optio
     """
     if getattr(player, "retired", False):
         return None
+    try:
+        from app.sim_engine.progression.development import player_is_transcendent
+
+        if player_is_transcendent(player):
+            return None
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     if not isinstance(rng, random.Random):
         rng = random.Random()

@@ -36,6 +36,30 @@ MAX_JUMP = 10
 NHL_LOTTERY_WEIGHTS_16: List[float] = [pct / 100.0 for pct in ODDS_PCT]
 
 
+def adjust_odds_for_tank_pressure(
+    odds_pct: Sequence[float],
+    pressures: Sequence[float],
+) -> List[float]:
+    """Reweight non-playoff lottery odds by tank pressure. The list is already non-playoff clubs.
+
+    A club at pressure 90 keeps a larger share than a club at pressure 0 in the same slot.
+    The result is in percent and sums to the same total as the input table.
+    """
+    base = [max(0.0, float(o)) for o in odds_pct]
+    if not base:
+        return []
+    scaled: List[float] = []
+    for i, o in enumerate(base):
+        p = float(pressures[i]) if i < len(pressures) else 0.0
+        p = max(0.0, min(100.0, p))
+        # Squared so a hard tank (90+) pulls away from a mild seller in the same lottery.
+        factor = 1.0 + ((p / 100.0) ** 2) * 2.5
+        scaled.append(o * factor)
+    total_in = sum(base) or 1.0
+    total = sum(scaled) or 1.0
+    return [s / total * total_in for s in scaled]
+
+
 def generate_lottery_odds(num_teams: int) -> List[float]:
     """
     Worst team gets highest odds.
@@ -86,6 +110,7 @@ def run_draft_lottery(
     *,
     teams: List[LotteryTeam],
     seed: Optional[int] = None,
+    odds_pct: Optional[Sequence[float]] = None,
 ) -> LotteryResult:
     """
     Runs NHL-style draft lottery for picks #1 and #2.
@@ -109,11 +134,12 @@ def run_draft_lottery(
         # Current NHL format: two draws over all 16 clubs by their odds. A club may move
         # up at most 10 spots; a winner outside that range jumps exactly 10 places and the
         # drawn pick goes to the worst remaining club instead.
+        table = list(odds_pct) if odds_pct is not None and len(odds_pct) >= n else list(ODDS_PCT)
         assigned: dict[int, str] = {}
         winners: list[str] = []
         remaining = list(ordered)
         for pick_no in (1, 2):
-            weights = [ODDS_PCT[orig_rank[str(t.team_id)] - 1] for t in remaining]
+            weights = [table[orig_rank[str(t.team_id)] - 1] for t in remaining]
             won = _weighted_draw(remaining, weights, rng)
             wid = str(won.team_id)
             winners.append(wid)

@@ -1354,7 +1354,7 @@ export function GameUIProvider({ children }) {
     const r = simResumeRef.current;
     simResumeRef.current = null;
     if (!r) return false;
-    const st = franchiseStateRef.current || {};
+    const st = franchiseState || {};
     // Stale resume (the calendar moved since the stop): drop it.
     if (r.cursor != null && st.calendar_cursor != null && Number(st.calendar_cursor) !== Number(r.cursor)) return false;
     if (r.cursor == null && r.iso && st.franchise_today_iso && st.franchise_today_iso !== r.iso) return false;
@@ -1363,7 +1363,7 @@ export function GameUIProvider({ children }) {
       onAdvanceFranchiseRef.current?.(opts);
     }, 300);
     return true;
-  }, []);
+  }, [franchiseState]);
 
   const cancelSimResume = useCallback(() => {
     simResumeRef.current = null;

@@ -882,3 +882,74 @@ export async function prospectTalk(payload) {
   const { data } = await api.post("/api/franchise/prospect-talk", payload || {});
   return data;
 }
+
+const liveHeaders = (sessionId) => (sessionId ? { headers: { "X-Franchise-Session": sessionId } } : {});
+
+export async function liveOpen(sessionId) {
+  const { data } = await api.get("/api/franchise/live/open", { ...liveHeaders(sessionId), timeout: 15000 });
+  return data;
+}
+
+export async function liveStart(sessionId, body = {}) {
+  const { data } = await api.post("/api/franchise/live/start", body, { ...liveHeaders(sessionId), timeout: 120000 });
+  return data;
+}
+
+export async function liveState(sessionId) {
+  const { data } = await api.get("/api/franchise/live/state", { ...liveHeaders(sessionId), timeout: 30000 });
+  return data;
+}
+
+export async function liveEvents(sessionId, sinceSeq = 0) {
+  const { data } = await api.get("/api/franchise/live/events", {
+    params: { since_seq: sinceSeq },
+    ...liveHeaders(sessionId),
+    timeout: 30000,
+  });
+  return data;
+}
+
+export async function liveAdvance(sessionId, body) {
+  const { data } = await api.post("/api/franchise/live/advance", body || {}, {
+    ...liveHeaders(sessionId),
+    timeout: 120000,
+  });
+  return data;
+}
+
+export async function liveCoach(sessionId, order) {
+  const { data } = await api.post("/api/franchise/live/coach", order || {}, {
+    ...liveHeaders(sessionId),
+    timeout: 30000,
+  });
+  return data;
+}
+
+export async function livePause(sessionId) {
+  const { data } = await api.post("/api/franchise/live/pause", {}, { ...liveHeaders(sessionId), timeout: 15000 });
+  return data;
+}
+
+export async function liveResume(sessionId) {
+  const { data } = await api.post("/api/franchise/live/resume", {}, { ...liveHeaders(sessionId), timeout: 15000 });
+  return data;
+}
+
+export async function liveCommit(sessionId) {
+  const { data } = await api.post("/api/franchise/live/commit", {}, { ...liveHeaders(sessionId), timeout: 300000 });
+  return data;
+}
+
+export async function liveAbort(sessionId) {
+  const { data } = await api.post("/api/franchise/live/abort", {}, { ...liveHeaders(sessionId), timeout: 30000 });
+  return data;
+}
+
+export function liveTtsUrl(audioKey) {
+  return `${baseURL}/api/franchise/live/tts/${encodeURIComponent(audioKey || "")}`;
+}
+
+export async function liveTtsStatus() {
+  const { data } = await api.get("/api/franchise/live/tts-status", { timeout: 8000 });
+  return data;
+}

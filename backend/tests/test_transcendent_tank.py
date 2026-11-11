@@ -95,3 +95,66 @@ def test_protected_pick_caps_hard_tank():
         owns_protected_first=True,
     )
     assert row["tank_mode"] != "hard_tank"
+    assert row["tank_mode"] == "seller"
+
+
+def test_non_contender_at_any_strength_is_at_least_a_seller():
+    tm = _Team("AAA", "playoff_contender")
+    tm.gm_window = "contender"
+    tm._tank_strength = {"is_contender": False, "playoff_gap_pts": 2.0, "strength_rank": 14}
+    row = compute_tank_pressure_for_team(
+        tm,
+        transcendent_present=True,
+        owns_own_first=True,
+    )
+    assert row["is_contender"] is False
+    assert row["tank_mode"] in ("seller", "hard_tank")
+    assert row["tank_pressure"] >= 70
+
+
+def test_true_top_group_stays_a_contender_even_if_the_label_says_tank():
+    tm = _Team("AAA", "tanking")
+    tm.gm_window = "contend"
+    tm._tank_strength = {"is_contender": True, "playoff_gap_pts": -8.0, "strength_rank": 2}
+    row = compute_tank_pressure_for_team(
+        tm,
+        transcendent_present=True,
+        owns_own_first=True,
+    )
+    assert row["is_contender"] is True
+    assert row["tank_mode"] == "none"
+    assert row["tank_pressure"] <= 12
+
+
+def test_traded_own_pick_still_bids_for_a_lottery_pick():
+    tm = _Team("AAA", "tanking")
+    row = compute_tank_pressure_for_team(
+        tm,
+        transcendent_present=True,
+        owns_own_first=False,
+        pick_ownership_reason="pick_traded",
+    )
+    assert row["tank_mode"] == "seller"
+    assert row["lottery_pick_intent"] == "buy"
+    assert row["tank_pressure"] >= 70
+
+
+def test_scratches_clear_at_season_change():
+    from services.transcendent_tank_behavior import clear_tank_scratches
+
+    tm = _Team("AAA", "tanking")
+    tm._tank_scratched_ids = {"vet-1", "vet-2"}
+    clear_tank_scratches([tm])
+    assert tm._tank_scratched_ids == set()
+
+
+def test_lottery_odds_rise_for_high_pressure_non_playoff_clubs():
+    from app.sim_engine.draft.draft_lottery import ODDS_PCT, adjust_odds_for_tank_pressure
+
+    pressures = [95, 90, 40, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    adjusted = adjust_odds_for_tank_pressure(ODDS_PCT, pressures)
+    assert len(adjusted) == 16
+    assert abs(sum(adjusted) - sum(ODDS_PCT)) < 0.05
+    assert adjusted[0] > ODDS_PCT[0]
+    assert adjusted[-1] < ODDS_PCT[-1]
+

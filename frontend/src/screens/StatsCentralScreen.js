@@ -1703,6 +1703,8 @@ const TABS = [
   { id: "prospects", label: "PROSPECTS" },
 ];
 
+const AHL_TABS = ["team_stats", "player_stats", "league_leaders"];
+
 function normalizeStatsMenu(tabId) {
   if (tabId === "team" || tabId === "overview") return "team_stats";
   if (["players", "goalies", "advanced", "compare"].includes(tabId)) return "player_stats";
@@ -2095,6 +2097,9 @@ export function StatsCentralScreen() {
   });
   const chooseLeague = (next) => {
     setLeague(next);
+    // Playoffs / Prospects have no AHL view: land on Player Stats instead of a
+    // tab that silently shows the same ledger.
+    if (next === "ahl") setTab((cur) => (AHL_TABS.includes(cur) ? cur : "player_stats"));
     try {
       window.sessionStorage.setItem("statsCentralLeague", next);
     } catch {
@@ -2239,7 +2244,7 @@ export function StatsCentralScreen() {
             </nav>
 
             <nav className="sc-mode-rail sc-tabs-rail" aria-label="Stats Central modes">
-              {TABS.map((item) => (
+              {TABS.filter((item) => league !== "ahl" || AHL_TABS.includes(item.id)).map((item) => (
                 <button
                   key={item.id}
                   type="button"
@@ -2306,6 +2311,7 @@ function AhlStatsPage({ tab, franchiseState }) {
   const [sortKey, setSortKey] = useState("p");
   const [sortDir, setSortDir] = useState("desc");
   const [teamSort, setTeamSort] = useState({ key: "pts", dir: "desc" });
+  const [dossierPlayer, setDossierPlayer] = useState(null);
 
   useEffect(() => {
     let active = true;
@@ -2351,8 +2357,8 @@ function AhlStatsPage({ tab, franchiseState }) {
   const skaterCols = [
     { label: "#", key: "rank", className: "is-rank-col", render: (row) => (scoped(sortBy(d.skaters, sortKey, sortDir)).indexOf(row) + 1) || "—" },
     col("Player", "name", { left: true, className: "is-player-col", render: playerCell }),
-    col("Team", "team", { left: true }),
-    col("Age", "age"),
+    col("Team", "team", { left: true, className: "is-team-col" }),
+    col("Age", "age", { className: "is-age-col" }),
     col("GP", "gp"),
     col("G", "g"),
     col("A", "a"),
@@ -2361,17 +2367,17 @@ function AhlStatsPage({ tab, franchiseState }) {
     col("PIM", "pim"),
     col("SOG", "sog"),
     col("P/GP", "ppg", { render: (r) => Number(r.ppg || 0).toFixed(2) }),
-    col("TOI", "toi", { render: (r) => Number(r.toi || 0).toFixed(1) }),
+    col("TOI", "toi", { render: (r) => (r.toi ? formatClockFromMinutes(Number(r.toi)) : "—") }),
   ];
   const goalieCols = [
     col("Goalie", "name", { left: true, className: "is-player-col", render: playerCell }),
-    col("Team", "team", { left: true }),
-    col("Age", "age"),
+    col("Team", "team", { left: true, className: "is-team-col" }),
+    col("Age", "age", { className: "is-age-col" }),
     col("GP", "gp"),
     col("W", "w"),
     col("L", "l"),
     col("OTL", "otl"),
-    col("SV%", "sv_pct", { render: (r) => (r.sv_pct != null ? Number(r.sv_pct).toFixed(3) : "—") }),
+    col("SV%", "sv_pct", { render: (r) => (r.sv_pct != null ? Number(r.sv_pct).toFixed(3).replace(/^0/, "") : "—") }),
     col("GAA", "gaa", { render: (r) => (r.gaa != null ? Number(r.gaa).toFixed(2) : "—") }),
     col("SO", "so"),
   ];
@@ -2389,11 +2395,11 @@ function AhlStatsPage({ tab, franchiseState }) {
     { label: "#", key: "rank", className: "is-rank-col", render: (row) => (d.teams || []).indexOf(row) + 1 },
     tcol("Team", "name", { left: true, className: "is-player-col", render: (r) => <strong>{r.name}{r.parent_abbr ? <em style={{ marginLeft: 6, opacity: 0.6, fontStyle: "normal" }}>{r.parent_abbr}</em> : null}</strong> }),
     tcol("GP", "gp"), tcol("W", "w"), tcol("L", "l"), tcol("OTL", "otl"), tcol("PTS", "pts"),
-    tcol("P%", "pts_pct", { render: (r) => Number(r.pts_pct || 0).toFixed(3) }),
+    tcol("P%", "pts_pct", { render: (r) => Number(r.pts_pct || 0).toFixed(3).replace(/^0/, "") }),
     tcol("GF", "gf"), tcol("GA", "ga"), tcol("DIFF", "diff", { render: (r) => (r.diff > 0 ? `+${r.diff}` : r.diff) }),
     tcol("SF", "shots"), tcol("SA", "shots_against"),
-    tcol("SH%", "sh_pct", { render: (r) => Number(r.sh_pct || 0).toFixed(1) }),
-    tcol("SV%", "sv_pct", { render: (r) => Number(r.sv_pct || 0).toFixed(3) }),
+    tcol("SH%", "sh_pct", { render: (r) => `${Number(r.sh_pct || 0).toFixed(1)}%` }),
+    tcol("SV%", "sv_pct", { render: (r) => Number(r.sv_pct || 0).toFixed(3).replace(/^0/, "") }),
     tcol("L10", "last10", { left: true }), tcol("STRK", "streak", { left: true }),
   ];
   const mine = (d.teams || []).find((t) => t.user);
@@ -2417,7 +2423,7 @@ function AhlStatsPage({ tab, franchiseState }) {
               sortKey={teamSort.key}
               sortDir={teamSort.dir}
               density="compact"
-              tableClassName="sc-skaters-table-v2 sc-skaters-table-v3"
+              tableClassName="sc-skaters-table-v2 sc-skaters-table-v3 sc-ahl-table sc-ahl-team-table"
               getRowId={(row) => row.team_id}
               rowClassName={(row) => (row.user ? "is-user-team" : "")}
               empty="No AHL games played yet."
@@ -2435,9 +2441,13 @@ function AhlStatsPage({ tab, franchiseState }) {
       <section className="sc-overview-module sc-overview-scoring-leaders">
         <header className="sc-player-table-header">
           <div>
-            <span>AHL PLAYER STATS</span>
+            <span>{tab === "league_leaders" ? "AHL LEADERS" : "AHL PLAYER STATS"}</span>
             <strong>{scope === "mine" ? "Our Affiliate" : "All AHL"}</strong>
-            <em>{(view === "skaters" ? skaters : goalies).length} players · {through}</em>
+            <em>
+              {tab === "league_leaders"
+                ? `Top ${Math.min(25, (view === "skaters" ? skaters : goalies).length)}`
+                : `${(view === "skaters" ? skaters : goalies).length} players`} · {through}
+            </em>
           </div>
           <div className="sc-overview-board-controls">
             <StatsChipGroup label="Scope" value={scope} onChange={setScope} options={[["mine", "Our affiliate"], ["all", "All AHL"]]} />
@@ -2455,16 +2465,18 @@ function AhlStatsPage({ tab, franchiseState }) {
         <div className="sc-overview-table-fill">
           <DataTable
             columns={view === "skaters" ? skaterCols : goalieCols}
-            rows={view === "skaters" ? (tab === "league_leaders" ? skaters.slice(0, 25) : skaters) : goalies}
+            rows={tab === "league_leaders" ? (view === "skaters" ? skaters : goalies).slice(0, 25) : view === "skaters" ? skaters : goalies}
             sortKey={sortKey}
             sortDir={sortDir}
             density="compact"
-            tableClassName="sc-skaters-table-v2 sc-skaters-table-v3 sc-overview-scoring-table"
+            tableClassName="sc-skaters-table-v2 sc-skaters-table-v3 sc-overview-scoring-table sc-ahl-table"
             getRowId={(row) => row.player_id}
+            onRowClick={(row) => row?.player_id && setDossierPlayer(row)}
             empty="No AHL games played yet."
           />
         </div>
       </section>
+      {dossierPlayer ? <StatsDossierHost player={dossierPlayer} onClose={() => setDossierPlayer(null)} /> : null}
     </div>
   );
 }
@@ -2497,6 +2509,7 @@ function PlayerStatsPage({
   const [density, setDensity] = useState("compact");
   const [page, setPage] = useState(1);
   const [selectedPlayerId, setSelectedPlayerId] = useState("");
+  const [dossierPlayer, setDossierPlayer] = useState(null);
   const [pinnedIds, setPinnedIds] = useState([]);
   const [compareLeftId, setCompareLeftId] = useState("");
   const [compareRightId, setCompareRightId] = useState("");
@@ -2754,7 +2767,7 @@ function PlayerStatsPage({
         submenu={submenu}
         onSubmenuChange={(id) => {
           setSubmenu(id);
-          setSortKey("pts");
+          setSortKey(id === "goalies" ? "sv_pct" : "pts");
           setSortDir("desc");
           setPage(1);
         }}
@@ -2769,6 +2782,7 @@ function PlayerStatsPage({
 
       {showFilters ? (
         <PlayerFilterBar
+          hidePositions={submenu === "goalies"}
           scope={scope}
           position={position}
           onPositionChange={setPosition}
@@ -2924,10 +2938,26 @@ function PlayerStatsPage({
           onClose={() => setSelectedPlayerId("")}
           onTogglePin={() => togglePin(selectedPlayer)}
           onCompare={() => sendToCompare(selectedPlayer)}
+          onOpenDossier={() => setDossierPlayer(selectedPlayer)}
+        />
+      ) : null}
+      {dossierPlayer ? (
+        <StatsDossierHost
+          player={dossierPlayer}
+          onClose={() => setDossierPlayer(null)}
         />
       ) : null}
     </div>
   );
+}
+
+// NHL rows used to stop at the quick card; only the prospect ledger could open
+// the full dossier. Same AnyPlayerDossier the ledger uses.
+function StatsDossierHost({ player, onClose }) {
+  const franchiseState = useFranchiseState();
+  const id = String(player?.player_id || player?.id || "");
+  if (!id) return null;
+  return <AnyPlayerDossier playerId={id} seed={null} franchiseState={franchiseState} onClose={onClose} />;
 }
 
 
@@ -3025,6 +3055,7 @@ function PlayerStatsWorkspaceHeader({
 }
 
 function PlayerFilterBar({
+  hidePositions = false,
   scope,
   position,
   onPositionChange,
@@ -3042,7 +3073,7 @@ function PlayerFilterBar({
 }) {
   return (
     <section className="sc-player-filter-bar">
-      <div className="sc-player-filter-group is-positions">
+      <div className="sc-player-filter-group is-positions" hidden={hidePositions}>
         {[
           ["all", "All"],
           ["F", "F"],
@@ -3811,7 +3842,11 @@ function OverviewFeaturedLeaderCard({
       type="button"
       disabled={!player}
       onClick={() => player && onSelectPlayer(player)}
+      className="sc-leader-card-face"
     >
+      {player ? (
+        <PlayerHeadshot player={player} size="md" className="sc-leader-card-face__shot" style={{ "--size": "var(--scx-leader-face, 56px)" }} showFlag={false} preferPhoto />
+      ) : null}
       <span>{eyebrow}</span>
       <strong>{player?.name || "—"}</strong>
       <em>{player ? `${primaryValue} ${primaryLabel}` : "—"}</em>
@@ -3855,7 +3890,7 @@ function OverviewScoringLeadersPanel({
         <div>
           <span>SCORING LEADERS</span>
           <strong>
-            {scope === "team" ? "Roster Performance" : "League Skaters"}
+            Roster Performance
           </strong>
           <em>{rows.length} results · sorted by {String(sortKey).toUpperCase()}</em>
         </div>
@@ -3911,6 +3946,7 @@ function PlayerDetailDrawer({
   onClose,
   onTogglePin,
   onCompare,
+  onOpenDossier,
 }) {
   const isGoalie =
     normalizePosition(player.position) === "G";
@@ -3973,7 +4009,7 @@ function PlayerDetailDrawer({
           }
           onClick={onTogglePin}
         >
-          {isPinned ? "Pinned" : "Pin Player"}
+          {isPinned ? "Pinned" : "Pin"}
         </button>
 
         <button
@@ -3982,6 +4018,16 @@ function PlayerDetailDrawer({
         >
           Compare
         </button>
+
+        {onOpenDossier ? (
+          <button
+            type="button"
+            className="is-primary"
+            onClick={onOpenDossier}
+          >
+            Full dossier
+          </button>
+        ) : null}
       </div>
 
       <div className="sc-player-drawer-metrics">
@@ -4444,17 +4490,21 @@ function PlayerNameCell({
 
   return (
     <div className="sc-name-cell sc-player-name-cell-simple">
-      {logoSrc ? (
-        <div className="sc-player-team-logo" title={getPlayerTeamLabel(player)}>
-          <img src={logoSrc} alt="" />
-        </div>
-      ) : (
-        <div className="sc-player-team-logo is-fallback" title={getPlayerTeamLabel(player)}>
-          {String(getPlayerTeamLabel(player) || "TM")
-            .slice(0, 2)
-            .toUpperCase()}
-        </div>
-      )}
+      <div className="sc-player-face" title={getPlayerTeamLabel(player)}>
+        <PlayerHeadshot
+          player={{ ...player, position: player?.position || player?.pos || position }}
+          size="sm"
+          className="sc-player-face__shot"
+          style={{ "--size": "var(--scx-face, 44px)" }}
+          showFlag={false}
+          preferPhoto
+        />
+        {logoSrc ? (
+          <i className="sc-player-face__logo">
+            <img src={logoSrc} alt="" />
+          </i>
+        ) : null}
+      </div>
 
       <div className="sc-player-name-copy">
         <strong>{player?.name || "Unknown Player"}</strong>
@@ -4585,10 +4635,10 @@ function TeamNameCell({
 
         {overallLeagueRank > 0 ? (
           <small
-            className="sc-team-overall-rank"
-            title="Overall league standings rank"
+            className={`sc-team-standings-chip ${podiumTone(overallLeagueRank, 32)}`}
+            title="League standings rank (points, then NHL tiebreakers)"
           >
-            OVERALL LEAGUE #{overallLeagueRank}
+            Standings <b>{ordinal(overallLeagueRank)}</b>
           </small>
         ) : null}
 
@@ -5092,6 +5142,9 @@ function DataTable({
                             ? "is-right"
                             : "",
                           column.className || "",
+                          column.sortKey && column.sortKey === sortKey
+                            ? "is-sorted"
+                            : "",
                         ]
                           .filter(Boolean)
                           .join(" ")}
@@ -6641,7 +6694,7 @@ function GoaliesTab({
           </strong>
           <em>
             {qualified.length} qualified · sorted by{" "}
-            {String(sortKey).toUpperCase()}{" "}
+            {String(sortKey).toUpperCase().replace(/_PCT$/, "%").replace(/_/g, " ")}{" "}
             {sortDir === "desc" ? "↓" : "↑"}
           </em>
         </div>
@@ -6734,7 +6787,11 @@ function GoalieLeaderCard({
       onClick={() =>
         goalie && onSelect(goalie)
       }
+      className="sc-leader-card-face"
     >
+      {goalie ? (
+        <PlayerHeadshot player={{ ...goalie, position: "G" }} size="md" className="sc-leader-card-face__shot" style={{ "--size": "var(--scx-leader-face, 56px)" }} showFlag={false} preferPhoto />
+      ) : null}
       <span>{label}</span>
       <strong>{goalie?.name || "—"}</strong>
       <em>{value}</em>
@@ -6944,7 +7001,7 @@ function AdvancedTab({
             Possession, Expected Goals, WAR
           </strong>
           <em>
-            Backend ledger metrics only
+            Process vs results, league-wide
           </em>
         </div>
       </header>
@@ -7732,8 +7789,21 @@ function getTeamRankTone(metric, rank, total) {
   return "";
 }
 
+const TEAM_ALWAYS_SHOWN_COLUMNS = new Set([
+  "view_rank", "name", "team", "gp", "games_played", "wins", "losses", "otl", "points",
+  "points_pct", "goal_diff", "goals_for", "goals_against",
+]);
+
+// Shot / goal counts are whole numbers; "2324.0" read like a rate.
+const TEAM_COUNT_METRICS = new Set([
+  "hd_sf", "md_sf", "ld_sf", "hd_sa", "md_sa", "ld_sa",
+  "hd_gf", "md_gf", "ld_gf", "hd_ga", "rebound_gf", "rebound_ga",
+  "shots_blocked", "missed_shots",
+]);
+
 function formatTeamStatValue(metric, value) {
   if (!hasTeamNumber(value)) return "—";
+  if (TEAM_COUNT_METRICS.has(metric)) return fmtZero(value);
 
   if (metric === "sv_pct") {
     return fmtPct(value, 3);
@@ -7903,10 +7973,30 @@ function filterTeamRows({
   });
 }
 
+function ordinal(n) {
+  const v = Math.abs(Math.floor(Number(n) || 0));
+  const mod100 = v % 100;
+  const suffix =
+    mod100 >= 11 && mod100 <= 13
+      ? "th"
+      : ["th", "st", "nd", "rd"][v % 10] || "th";
+  return `${v}${suffix}`;
+}
+
+function podiumTone(rank, total) {
+  if (!rank || !total) return "";
+  if (rank <= 3) return "is-podium";
+  if (rank > total - 3) return "is-cellar";
+  return "";
+}
+
 function getTeamColumnDefinitions({
   data,
   rankMaps,
   onSort,
+  sortKey = "points",
+  sortLabel = "PTS",
+  standingsRankMap = null,
 }) {
   const metricColumn = (
     key,
@@ -7933,11 +8023,23 @@ function getTeamColumnDefinitions({
       key: "view_rank",
       label: "RK",
       className: "is-rank-col",
-      render: (row) => (
-        <span className="sc-team-view-pos">
-          {String(row._viewRank || 0).padStart(2, "0")}
-        </span>
-      ),
+      render: (row) => {
+        const total = rankMaps?.__total || 0;
+        const statRank =
+          sortKey === "name"
+            ? 0
+            : getTeamLeagueRank(rankMaps, row, sortKey) || row._viewRank || 0;
+        const hasPlayed = Number(row?.gp ?? row?.games_played ?? 0) > 0;
+        return (
+          <span
+            className={`sc-stat-rank-badge ${hasPlayed ? podiumTone(statRank, total) : ""}`}
+            title={statRank ? `${ordinal(statRank)} in the league in ${sortLabel}` : undefined}
+          >
+            <b>{statRank ? ordinal(statRank) : "—"}</b>
+            <small>{sortKey === "name" ? "A–Z" : sortLabel}</small>
+          </span>
+        );
+      },
     },
 
     team: {
@@ -7947,11 +8049,9 @@ function getTeamColumnDefinitions({
       className: "is-team-col",
       onClick: () => onSort("name"),
       render: (row) => {
-        const overallLeagueRank = getTeamLeagueRank(
-          rankMaps,
-          row,
-          "points"
-        );
+        const overallLeagueRank =
+          standingsRankMap?.get(String(teamRowId(row))) ||
+          getTeamLeagueRank(rankMaps, row, "points");
 
         return (
           <TeamNameCell
@@ -8547,10 +8647,10 @@ function TeamStatsProfile({
 /* NHL standings: Division / Wild Card / Conference / League. Order comes from the
    backend (points, P%, RW, ROW, W, head-to-head, GD) via standings_order. */
 const STANDINGS_MODES = [
+  { id: "league", label: "League" },
+  { id: "conference", label: "Conference" },
   { id: "division", label: "Division" },
   { id: "wildcard", label: "Wild Card" },
-  { id: "conference", label: "Conference" },
-  { id: "league", label: "League" },
 ];
 
 function standingsFallbackCompare(a, b) {
@@ -8603,75 +8703,117 @@ const CLINCH_TITLES = {
   e: "Eliminated",
 };
 
-function StandingsGroupTable({ title, rows, data, cutAfter = 0, note }) {
-  const hasClinch = rows.some((t) => t && t.clinch);
+function StandingsRow({ t, rankLabel, data, extraClass = "" }) {
+  const diff = t.gf - t.ga;
+  const classes = [
+    isUserTeamRow(t, data) ? "is-user-team-row" : "",
+    t.clinch === "e" ? "is-eliminated" : "",
+    extraClass,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return (
+    <tr className={classes}>
+      <td className="is-rk">{rankLabel}</td>
+      <td className="is-team">
+        <TeamLogoMark team={t} size="table" />
+        <span className="sc-standings-team-name">{teamDisplayLabel(t)}</span>
+        {t.clinch ? (
+          <span className={`sc-clinch-mark sc-clinch-mark--${t.clinch}`} title={CLINCH_TITLES[t.clinch] || ""}>
+            {t.clinch}
+          </span>
+        ) : null}
+      </td>
+      <td>{t.gp}</td>
+      <td>{t.w}</td>
+      <td>{t.l}</td>
+      <td>{t.otl}</td>
+      <td className="is-pts">{t.pts}</td>
+      <td>{t.gp > 0 ? (t.pts / (t.gp * 2)).toFixed(3).replace(/^0/, "") : ".000"}</td>
+      <td className="is-opt">{t.rw}</td>
+      <td className="is-opt">{t.row}</td>
+      <td className="is-opt">{t.gf}</td>
+      <td className="is-opt">{t.ga}</td>
+      <td className={diff > 0 ? "is-pos" : diff < 0 ? "is-neg" : ""}>{diff > 0 ? `+${diff}` : diff}</td>
+    </tr>
+  );
+}
+
+const STANDINGS_COL_COUNT = 13;
+
+/**
+ * sections: [{ label, rows, rankLabel?: (i) => string, cutAfter?: n, cutLabel? }]
+ */
+function StandingsGroupTable({ title, note, sections, data }) {
   return (
     <section className="sc-standings-block">
-      <header>
-        <strong>{title}</strong>
-        {note ? <span>{note}</span> : null}
-      </header>
+      {title ? (
+        <header>
+          <strong>{title}</strong>
+          {note ? <span>{note}</span> : null}
+        </header>
+      ) : null}
       <table className="sc-standings-table">
         <thead>
           <tr>
-            <th>#</th>
+            <th className="is-rk">#</th>
             <th className="is-team">Team</th>
             <th>GP</th>
             <th>W</th>
             <th>L</th>
             <th>OTL</th>
-            <th>PTS</th>
+            <th className="is-pts">PTS</th>
             <th>P%</th>
-            <th>RW</th>
-            <th>ROW</th>
-            <th>GF</th>
-            <th>GA</th>
+            <th className="is-opt">RW</th>
+            <th className="is-opt">ROW</th>
+            <th className="is-opt">GF</th>
+            <th className="is-opt">GA</th>
             <th>DIFF</th>
           </tr>
         </thead>
-        <tbody>
-          {rows.map((t, i) => {
-            const diff = t.gf - t.ga;
-            const classes = [
-              isUserTeamRow(t, data) ? "is-user-team-row" : "",
-              cutAfter && i === cutAfter - 1 && rows.length > cutAfter ? "is-cutline" : "",
-            ]
-              .filter(Boolean)
-              .join(" ");
-            return (
-              <tr key={t.team_id} className={classes}>
-                <td>{i + 1}</td>
-                <td className="is-team">
-                  <TeamLogoMark team={t} size="table" />
-                  {t.clinch ? (
-                    <span className={`sc-clinch-mark sc-clinch-mark--${t.clinch}`} title={CLINCH_TITLES[t.clinch] || ""}>
-                      {t.clinch}
-                    </span>
-                  ) : null}
-                  <span>{teamDisplayLabel(t)}</span>
-                </td>
-                <td>{t.gp}</td>
-                <td>{t.w}</td>
-                <td>{t.l}</td>
-                <td>{t.otl}</td>
-                <td className="is-pts">{t.pts}</td>
-                <td>{t.gp > 0 ? (t.pts / (t.gp * 2)).toFixed(3).replace(/^0/, "") : ".000"}</td>
-                <td>{t.rw}</td>
-                <td>{t.row}</td>
-                <td>{t.gf}</td>
-                <td>{t.ga}</td>
-                <td>{diff > 0 ? `+${diff}` : diff}</td>
+        {sections.map((section) => (
+          <tbody key={section.label || "rows"}>
+            {section.label ? (
+              <tr className={`sc-standings-section ${section.tone || ""}`}>
+                <td colSpan={STANDINGS_COL_COUNT}>{section.label}</td>
               </tr>
-            );
-          })}
-        </tbody>
+            ) : null}
+            {section.rows.length ? (
+              section.rows.map((t, i) => (
+                <React.Fragment key={t.team_id}>
+                  <StandingsRow
+                    t={t}
+                    data={data}
+                    rankLabel={section.rankLabel ? section.rankLabel(i) : i + 1}
+                    extraClass={section.cutAfter && i < section.cutAfter ? "is-in" : ""}
+                  />
+                  {section.cutAfter && i === section.cutAfter - 1 && section.rows.length > section.cutAfter ? (
+                    <tr className="sc-standings-cutline">
+                      <td colSpan={STANDINGS_COL_COUNT}>
+                        <span>{section.cutLabel || "Playoff line"}</span>
+                      </td>
+                    </tr>
+                  ) : null}
+                </React.Fragment>
+              ))
+            ) : (
+              <tr>
+                <td className="is-empty" colSpan={STANDINGS_COL_COUNT}>No teams yet.</td>
+              </tr>
+            )}
+          </tbody>
+        ))}
       </table>
-      {hasClinch ? (
-        <p className="sc-clinch-legend">
-          p – Presidents' Trophy · z – conference · y – division · x – playoff spot · e – eliminated
-        </p>
-      ) : null}
     </section>
+  );
+}
+
+function StandingsClinchLegend({ rows }) {
+  if (!rows.some((t) => t && t.clinch)) return null;
+  return (
+    <p className="sc-clinch-legend">
+      <b>p</b> Presidents' Trophy · <b>z</b> conference · <b>y</b> division · <b>x</b> playoff spot · <b>e</b> eliminated
+    </p>
   );
 }
 
@@ -8688,73 +8830,78 @@ function TeamStandingsBoard({ rows, data }) {
     Array.from(
       new Set(standings.filter((t) => t.conference === conf).map((t) => t.division).filter(Boolean))
     ).sort();
+  const confLabel = (conf) => (/conference/i.test(conf) ? conf : `${conf} Conference`);
+  const divLabel = (div) => (/division/i.test(div) ? div : `${div} Division`);
 
-  let body = null;
-  if (mode === "league" || !conferences.length) {
-    body = <StandingsGroupTable title="League" rows={standings} data={data} />;
-  } else if (mode === "conference") {
-    body = conferences.map((conf) => (
-      <StandingsGroupTable
-        key={conf}
-        title={`${conf} Conference`}
-        rows={standings.filter((t) => t.conference === conf)}
-        data={data}
-      />
-    ));
-  } else if (mode === "division") {
-    body = conferences.map((conf) =>
-      divisionsOf(conf).map((div) => (
+  const renderConference = (conf) => {
+    const confRows = standings.filter((t) => t.conference === conf);
+    if (mode === "conference") {
+      return (
         <StandingsGroupTable
-          key={`${conf}-${div}`}
-          title={`${div} Division`}
-          note={`${conf} Conference`}
-          rows={standings.filter((t) => t.conference === conf && t.division === div)}
           data={data}
-          cutAfter={3}
+          sections={[{ label: "", rows: confRows }]}
         />
-      ))
+      );
+    }
+    if (mode === "division") {
+      return divisionsOf(conf).map((div) => (
+        <StandingsGroupTable
+          key={div}
+          title={divLabel(div)}
+          data={data}
+          sections={[{ label: "", rows: confRows.filter((t) => t.division === div), cutAfter: 3, cutLabel: "Top 3 · division seeds" }]}
+        />
+      ));
+    }
+    // Wild card: NHL format. Top 3 per division qualify, then the two best
+    // remaining clubs in the conference (WC1/WC2). Everyone below is out.
+    const top = new Set();
+    const sections = divisionsOf(conf).map((div) => {
+      const leaders = confRows.filter((t) => t.division === div).slice(0, 3);
+      leaders.forEach((t) => top.add(t.team_id));
+      return { label: divLabel(div), rows: leaders };
+    });
+    const rest = confRows.filter((t) => !top.has(t.team_id));
+    sections.push({
+      label: "Wild Card",
+      tone: "is-wildcard",
+      rows: rest,
+      cutAfter: 2,
+      cutLabel: "Playoff line",
+      rankLabel: (i) => (i < 2 ? `WC${i + 1}` : String(i + 1)),
+    });
+    return <StandingsGroupTable data={data} sections={sections} />;
+  };
+
+  let body;
+  if (mode === "league" || !conferences.length) {
+    body = (
+      <div className="sc-standings-league">
+        <StandingsGroupTable title="League" note="Points, then NHL tiebreakers" data={data} sections={[{ label: "", rows: standings }]} />
+      </div>
     );
   } else {
-    body = conferences.map((conf) => {
-      const top = new Set();
-      const blocks = divisionsOf(conf).map((div) => {
-        const leaders = standings
-          .filter((t) => t.conference === conf && t.division === div)
-          .slice(0, 3);
-        leaders.forEach((t) => top.add(t.team_id));
-        return (
-          <StandingsGroupTable
-            key={`${conf}-${div}`}
-            title={div}
-            note={`${conf} · top 3`}
-            rows={leaders}
-            data={data}
-          />
-        );
-      });
-      const rest = standings.filter((t) => t.conference === conf && !top.has(t.team_id));
-      return (
-        <React.Fragment key={conf}>
-          {blocks}
-          <StandingsGroupTable
-            title={`${conf} Wild Card`}
-            note="Top 2 qualify"
-            rows={rest}
-            data={data}
-            cutAfter={2}
-          />
-        </React.Fragment>
-      );
-    });
+    body = (
+      <div className="sc-standings-confs">
+        {conferences.map((conf) => (
+          <div key={conf} className={`sc-standings-conf ${/east/i.test(conf) ? "is-east" : "is-west"}`}>
+            <h3 className="sc-standings-conf__title">{confLabel(conf)}</h3>
+            {renderConference(conf)}
+          </div>
+        ))}
+      </div>
+    );
   }
 
   return (
     <section className="sc-team-table-panel sc-standings-board">
-      <div className="sc-team-scope-control sc-standings-modes">
+      <div className="sc-team-scope-control sc-standings-modes" role="tablist" aria-label="Standings view">
         {STANDINGS_MODES.map((m) => (
           <button
             key={m.id}
             type="button"
+            role="tab"
+            aria-selected={mode === m.id}
             className={mode === m.id ? "is-active" : ""}
             onClick={() => setMode(m.id)}
           >
@@ -8762,7 +8909,10 @@ function TeamStandingsBoard({ rows, data }) {
           </button>
         ))}
       </div>
-      <div className="sc-standings-scroll">{body}</div>
+      <div className="sc-standings-scroll">
+        {standings.length ? body : <div className="sc-empty">Standings appear once the schedule is loaded.</div>}
+        <StandingsClinchLegend rows={standings} />
+      </div>
     </section>
   );
 }
@@ -8951,14 +9101,32 @@ function TeamTab({ data, loadState }) {
     setSortDir(currentView.defaultDir);
   }, [view]);
 
+  const standingsSrc = data?.franchiseState?.standings;
+  const standingsRankMap = useMemo(() => {
+    const map = new Map();
+    buildStandingsRows(rows, standingsSrc).forEach((team, index) => {
+      map.set(String(team.team_id), index + 1);
+    });
+    return map;
+  }, [rows, standingsSrc]);
+
+  const sortLabel = useMemo(() => {
+    const base = getTeamColumnDefinitions({ data, rankMaps, onSort: () => {} });
+    const hit = Object.values(base).find((c) => c && c.sortKey === sortKey);
+    return hit?.label || String(sortKey || "").toUpperCase();
+  }, [data, rankMaps, sortKey]);
+
   const columnDefinitions = useMemo(
     () =>
       getTeamColumnDefinitions({
         data,
         rankMaps,
         onSort: handleSort,
+        sortKey,
+        sortLabel,
+        standingsRankMap,
       }),
-    [data, rankMaps, handleSort]
+    [data, rankMaps, handleSort, sortKey, sortLabel, standingsRankMap]
   );
 
   const columns = (TEAM_COLUMN_PRESETS[view] || [])
@@ -8975,7 +9143,16 @@ function TeamTab({ data, loadState }) {
           .join(" "),
       };
     })
-    .filter(Boolean);
+    .filter(Boolean)
+    // A column with no value on any club (BLK, MISS, SH% CF, HD splits the sim
+    // doesn't track) printed 32 rows of "—" / 0. Drop it instead.
+    .filter((column) => {
+      if (TEAM_ALWAYS_SHOWN_COLUMNS.has(column.key) || !rows.length) return true;
+      return rows.some((team) => {
+        const v = Number(team?.[column.key]);
+        return Number.isFinite(v) && v !== 0;
+      });
+    });
   const wideTable = columns.length >= 16;
 
   if (
@@ -9655,7 +9832,8 @@ function getAwardSecondaryLine(row) {
     return `${fmtZero(row.wins)}-${fmtZero(row.losses)}-${fmtZero(row.otl)} · GF ${fmtZero(row.gf)} · GA ${fmtZero(row.ga)}`;
   }
 
-  return `${fmtZero(row.g)}G · ${fmtZero(row.a)}A · ${fmtZero(row.pts)}PTS · ${fmtMaybePct(row.xgf_pct)} xGF%`;
+  const xgf = fmtMaybePct(row.xgf_pct);
+  return `${fmtZero(row.g)}G · ${fmtZero(row.a)}A · ${fmtZero(row.pts)} PTS${xgf && xgf !== "—" ? ` · ${xgf} xGF%` : ""}`;
 }
 
 function getAwardBoardSummary(rows, teamId, teamInfo = {}) {
@@ -9698,7 +9876,34 @@ function getAwardBoardSummary(rows, teamId, teamInfo = {}) {
 function AwardsTab({ data }) {
   const [awardView, setAwardView] = useState(AWARD_GROUPS.nhl);
 
-  const backendAwards = buildAwardsRowsFromPayload(data.awardsWatch, data.teamId);
+  // Award candidates carry a thin stat line (assists missing, goals stale).
+  // Read G / A / PTS from the live skater ledger, and rank inside each race.
+  const skaterById = new Map(
+    (data.skaters || []).map((sk) => [String(sk.player_id || sk.id || ""), sk])
+  );
+  const raceCount = {};
+  const backendAwards = buildAwardsRowsFromPayload(data.awardsWatch, data.teamId).map((row) => {
+    const live = skaterById.get(String(row.player_id || row.id || ""));
+    raceCount[row.award_key] = (raceCount[row.award_key] || 0) + 1;
+    const rank = raceCount[row.award_key];
+    return live
+      ? {
+          ...row,
+          rank,
+          g: live.g,
+          a: live.a,
+          pts: live.pts,
+          xgf_pct: firstPresent(live.xgf_pct, row.xgf_pct),
+          // Candidates carry the numeric team id as "abbr", which drew "13" in
+          // the logo bubble. Use the ledger's team identity.
+          team_id: live.team_id ?? row.team_id,
+          team_abbr: live.team_abbr ?? row.team_abbr,
+          team: live.team ?? row.team,
+          team_name: live.team_name ?? row.team_name,
+          team_logo_src: live.team_logo_src ?? row.team_logo_src,
+        }
+      : { ...row, rank };
+  });
   const allRows = mergeAwardRows(backendAwards, []);
 
   const rows = allRows
@@ -9774,7 +9979,7 @@ function AwardsTab({ data }) {
           className={awardView === AWARD_GROUPS.custom ? "is-active" : ""}
           onClick={() => setAwardView(AWARD_GROUPS.custom)}
         >
-          <strong>Made-Up Awards</strong>
+          <strong>Franchise Awards</strong>
           <span>Custom analytics awards only</span>
         </button>
       </section>
@@ -9804,7 +10009,7 @@ function AwardsTab({ data }) {
           title={
             awardView === AWARD_GROUPS.nhl
               ? "Official NHL Award Races"
-              : "Made-Up Franchise Award Races"
+              : "Franchise Award Races"
           }
           right={<Pill>{rows.length} / 25 rows</Pill>}
         >
@@ -9857,6 +10062,11 @@ function AwardsTab({ data }) {
 function AwardLeaderCard({ row }) {
   return (
     <article className={`sc-awards-leader-card ${row.award_group === AWARD_GROUPS.custom ? "is-custom" : ""}`}>
+      {row.player_id ? (
+        <PlayerHeadshot player={row} size="md" className="sc-leader-card-face__shot" style={{ "--size": "var(--scx-leader-face, 56px)" }} showFlag={false} preferPhoto />
+      ) : row.team_id ? (
+        <TeamLogoMark team={row} size="table" />
+      ) : null}
       <div>
         <span>{row.award_short_label || row.award_label}</span>
         <strong>{row.name || row.team_id || row.team || "—"}</strong>
@@ -10157,7 +10367,7 @@ function TrendsTab({
               : "League Movement"}
           </strong>
           <em>
-            Recent splits appear only when supplied by the backend
+            Pace and process since opening night
           </em>
         </div>
       </header>
@@ -10295,7 +10505,7 @@ function TrendsTab({
             </div>
           ) : (
             <div className="sc-empty">
-              Backend last-10 player splits are not available yet.
+              Last-10 splits unlock after ten games.
             </div>
           )}
         </div>
@@ -10377,7 +10587,7 @@ function TrendsTab({
             </div>
           ) : (
             <div className="sc-empty">
-              Backend recent goalie splits are not available yet.
+              Recent goalie splits unlock after ten games.
             </div>
           )}
         </div>
@@ -11255,6 +11465,8 @@ function ProspectLedgerPage() {
   const [pos, setPos] = useState("all");
   const [sort, setSort] = useState("pts");
   const [q, setQ] = useState("");
+  const [rightsTeam, setRightsTeam] = useState("all");
+  const [limit, setLimit] = useState(300);
   useEffect(() => {
     let alive = true;
     getProspectLedger()
@@ -11273,12 +11485,22 @@ function ProspectLedgerPage() {
       if (status !== "All" && r.status !== status) return false;
       if (pos === "F" && (r.position === "D" || r.position === "G")) return false;
       if (pos !== "all" && pos !== "F" && r.position !== pos) return false;
-      if (needle && !String(r.name || "").toLowerCase().includes(needle) && !String(r.club || "").toLowerCase().includes(needle)) return false;
+      if (rightsTeam !== "all" && String(r.rights_team_abbr || r.rights_team || "") !== rightsTeam) return false;
+      if (needle && ![r.name, r.club, r.league, r.rights_team, r.rights_team_abbr].some((v) => String(v || "").toLowerCase().includes(needle))) return false;
       return true;
     });
     const key = sort;
     return [...list].sort((a, b) => Number(b[key] || 0) - Number(a[key] || 0) || Number(b.pts || 0) - Number(a.pts || 0));
-  }, [data.rows, leagueCode, status, pos, sort, q]);
+  }, [data.rows, leagueCode, status, pos, sort, q, rightsTeam]);
+
+  const rightsTeams = useMemo(() => {
+    const seen = new Map();
+    (Array.isArray(data.rows) ? data.rows : []).forEach((r) => {
+      const abbr = String(r.rights_team_abbr || r.rights_team || "");
+      if (abbr && !seen.has(abbr)) seen.set(abbr, String(r.rights_team || abbr));
+    });
+    return [...seen.entries()].sort((a, b) => a[1].localeCompare(b[1]));
+  }, [data.rows]);
 
   if (state.loading) return <div className="sc-po-empty">Loading prospect ledger…</div>;
   if (state.error) return <div className="sc-po-empty">{state.error}</div>;
@@ -11311,7 +11533,13 @@ function ProspectLedgerPage() {
           <option value="D">D</option>
           <option value="G">G</option>
         </select>
-        <input type="search" placeholder="Search player or club" value={q} onChange={(e) => setQ(e.target.value)} />
+        <select value={rightsTeam} onChange={(e) => { setRightsTeam(e.target.value); setLimit(300); }} aria-label="NHL rights team">
+          <option value="all">All NHL rights ({rightsTeams.length})</option>
+          {rightsTeams.map(([abbr, name]) => (
+            <option key={abbr} value={abbr}>{name}</option>
+          ))}
+        </select>
+        <input type="search" placeholder="Search player, club, league or NHL team" value={q} onChange={(e) => { setQ(e.target.value); setLimit(300); }} />
         <UniversalPlayerSearch franchiseState={franchiseState} placeholder="Any player, any league…" />
         <div className="sc-po-toggle">
           {sortBtn("pts", "Points")}
@@ -11320,14 +11548,14 @@ function ProspectLedgerPage() {
           {sortBtn("ppg", "P/GP")}
         </div>
       </div>
-      <p className="sc-pl-count">{rows.length} of {data.count || 0} prospects · real-world prospects show their NHL rights; their real careers are not simulated</p>
-      <div className="sc-po-tablewrap">
+      <p className="sc-pl-count">{rows.length} of {data.count || 0} prospects</p>
+      <div className="sc-po-tablewrap sc-pl-scroll">
         <table className="sc-po-table">
           <thead>
             <tr><th>#</th><th className="l">Player</th><th>Age</th><th>Pos</th><th className="l">League</th><th className="l">Club</th><th>NHL rights</th><th>GP</th><th>G</th><th>A</th><th>PTS</th><th>P/GP</th><th className="l">Status</th></tr>
           </thead>
           <tbody>
-            {rows.slice(0, 300).map((r, i) => (
+            {rows.slice(0, limit).map((r, i) => (
               <tr
                 key={r.player_id || i}
                 className="sc-pl-row is-clickable"
@@ -11375,6 +11603,12 @@ function ProspectLedgerPage() {
             ))}
           </tbody>
         </table>
+        {/* Inside the scroller: below it, the button was cut off by the page edge. */}
+        {rows.length > limit ? (
+          <button type="button" className="sc-pl-more" onClick={() => setLimit((n) => n + 300)}>
+            Show more ({rows.length - limit} left)
+          </button>
+        ) : null}
       </div>
       {dossierRow ? (
         <AnyPlayerDossier

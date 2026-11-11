@@ -996,6 +996,13 @@ function PermissionDecisionCard({ decision, onResolve }) {
 }
 
 export function ShowcasePopupLayer() {
+  // Hold league pop-ups (waivers, injuries…) while a live game is on screen; they show after the game.
+  const [liveOn, setLiveOn] = React.useState(() => typeof document !== "undefined" && !!document.querySelector(".st-root"));
+  React.useEffect(() => {
+    const on = (e) => setLiveOn(!!e?.detail);
+    window.addEventListener("nhl-live-sim", on);
+    return () => window.removeEventListener("nhl-live-sim", on);
+  }, []);
   const { franchiseState, onDismissShowcasePopups, setScreen, resumeInterruptedSim, cancelSimResume, setStatsCentralTab, onResolveDecision } = useGameUI();
   const userTeamId = franchiseState?.user_team_id || franchiseState?.team?.team_id || "";
   const rawQueue = (franchiseState?.pending_ui_popups || []).filter(
@@ -1032,16 +1039,18 @@ export function ShowcasePopupLayer() {
   }, [first, onDismissShowcasePopups, queueLen, resumeInterruptedSim]);
 
   useEffect(() => {
-    if (!first) return undefined;
+    if (!first || liveOn) return undefined;
     const onKey = (event) => {
       if (event.key === "Escape") dismiss();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [first, dismiss]);
+  }, [first, dismiss, liveOn]);
 
   const pendingDecisions = (Array.isArray(franchiseState?.pending_decisions) ? franchiseState.pending_decisions : [])
     .filter((d) => d && Array.isArray(d.options) && d.options.length);
+  if (liveOn) return null;
+
   if (pendingDecisions.length) {
     return <PermissionDecisionCard decision={pendingDecisions[0]} onResolve={onResolveDecision} />;
   }

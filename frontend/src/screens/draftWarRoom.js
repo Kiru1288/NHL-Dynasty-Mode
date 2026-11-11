@@ -199,11 +199,15 @@ export function enrichProspectsForWarRoom(prospects, profilesById = {}) {
   const weak = classIsWeak(list);
   const withFiles = list.map((p) => {
     const profile = p.profile || profilesById[p.id] || null;
-    const characterFile = resolveCharacterFile(p, profile);
+    const characterFile = p?.isTranscendent || p?.cantMiss
+      ? { flagged: false, title: "Clean file", story: "Can't miss.", stockHit: 0, hitPctHit: 0 }
+      : resolveCharacterFile(p, profile);
     const publicRank = Number(p.rank) || 999;
     const age = prospectAge(p);
     const charPenalty = characterFile.flagged ? characterFile.stockHit : 0;
-    const scoutScore = publicRank + overageRankPenalty(p) + charPenalty;
+    const scoutScore = (p?.isTranscendent || p?.cantMiss)
+      ? 0
+      : publicRank + overageRankPenalty(p) + charPenalty;
     return {
       ...p,
       profile,
@@ -299,21 +303,26 @@ export function publicationScore(player, pubId) {
 
 export function rankProspectsForSource(prospects, sourceId) {
   const list = Array.isArray(prospects) ? prospects : [];
-  const copy = [...list];
+  let copy = [...list];
   if (sourceId === "scout") {
     copy.sort((a, b) => (a.scoutRank || a.rank) - (b.scoutRank || b.rank));
-    return copy.map((p, i) => ({ ...p, boardRank: i + 1, rank: p.scoutRank || i + 1 }));
-  }
-  if (sourceId === "central") {
+    copy = copy.map((p, i) => ({ ...p, boardRank: i + 1, rank: p.scoutRank || i + 1 }));
+  } else if (sourceId === "central") {
     copy.sort((a, b) => (Number(a.centralRank) || a.publicRank || 999) - (Number(b.centralRank) || b.publicRank || 999));
-    return copy.map((p, i) => ({ ...p, boardRank: i + 1, rank: Number(p.centralRank) || i + 1 }));
-  }
-  if (sourceId === "consensus") {
+    copy = copy.map((p, i) => ({ ...p, boardRank: i + 1, rank: Number(p.centralRank) || i + 1 }));
+  } else if (sourceId === "consensus") {
     copy.sort((a, b) => (a.publicRank || 999) - (b.publicRank || 999));
-    return copy.map((p, i) => ({ ...p, boardRank: i + 1, rank: p.publicRank || i + 1 }));
+    copy = copy.map((p, i) => ({ ...p, boardRank: i + 1, rank: p.publicRank || i + 1 }));
+  } else {
+    copy.sort((a, b) => publicationScore(a, sourceId) - publicationScore(b, sourceId));
+    copy = copy.map((p, i) => ({ ...p, boardRank: i + 1, rank: i + 1 }));
   }
-  copy.sort((a, b) => publicationScore(a, sourceId) - publicationScore(b, sourceId));
-  return copy.map((p, i) => ({ ...p, boardRank: i + 1, rank: i + 1 }));
+  const starAt = copy.findIndex((p) => p.isTranscendent || p.cantMiss);
+  if (starAt > 0) {
+    const [star] = copy.splice(starAt, 1);
+    copy.unshift(star);
+  }
+  return copy;
 }
 
 export function groupByPyramid(prospects) {
