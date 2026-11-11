@@ -148,7 +148,7 @@ const MAX_EVENTS = 500;
 const MAX_LINES = 120;
 const SHOT_MARKERS = 6;
 const SHOT_FADE_SEC = 45; // shot markers fade out over this many presentation seconds
-const TRAIL_LEN = 12;
+const TRAIL_LEN = 16;
 
 const TACTICS = [
   { key: "forecheck", label: "Forecheck", opts: [["passive", "Sit back"], ["balanced", "Balanced"], ["aggressive", "Hard"]], tip: "How hard your forwards chase the puck in the other team's zone." },
@@ -331,12 +331,6 @@ function resolveAudioUrl(u) {
 }
 /** Presentation time of a frame / event / line: `pt` when the server sends it, else `t`. */
 const ptOf = (o, d = 0) => (has(o?.pt) ? num(o.pt) : has(o?.t) ? num(o.t) : d);
-/** Catmull-Rom between p1 and p2 (velocity-aware smoothing, D21). */
-function cr(p0, p1, p2, p3, k) {
-  const k2 = k * k;
-  const k3 = k2 * k;
-  return 0.5 * (2 * p1 + (-p0 + p2) * k + (2 * p0 - 5 * p1 + 4 * p2 - p3) * k2 + (-p0 + 3 * p1 - 3 * p2 + p3) * k3);
-}
 function firstSentence(s, max = 90) {
   const t = String(s || "").split(/(?<=[.!?])\s/)[0] || "";
   return t.length > max ? `${t.slice(0, max - 1)}…` : t;
@@ -1018,6 +1012,10 @@ function useCrowdAudio({ enabled, level, mood, duck, goalPulse, hornPulse, volum
           tone("square", f, f, i * step, dur, 0.035);
           tone("sine", f / 2, f / 2, i * step, dur, 0.05);
         });
+      } else if (kind === "alert") {
+        // coaching decision chime (priority 3)
+        tone("sine", 880, 880, 0, 0.18, 0.09);
+        tone("sine", 1318.5, 1318.5, 0.14, 0.3, 0.08);
       } else if (kind === "horn") {
         [69, 138, 174].forEach((f) => tone("sawtooth", f, f, 0, 2.2, 0.06));
       }
@@ -1204,14 +1202,74 @@ function starPoints(cx, cy, r) {
   }
   return out.join(" ");
 }
+// Ice is 200 x 85 ft; the SVG adds boards, glass, benches / boxes and a ring of seats around it.
+const VB = { x: -110, y: -52, w: 220, h: 104 };
 // Players may stand in the benches (+y) and penalty boxes (-y), just outside the boards.
-const clampX = (x) => Math.max(-99, Math.min(99, num(x)));
-const clampY = (y) => Math.max(-48.5, Math.min(48.5, num(y)));
-const RED = "#d3283a";
-const BLUE = "#2556c4";
+const clampX = (x) => Math.max(-99.5, Math.min(99.5, num(x)));
+const clampY = (y) => Math.max(-50.5, Math.min(50.5, num(y)));
+const RED = "#c8102e";
+const BLUE = "#0b3d91";
+const ICE_LINE = 2 / 12; // 2-inch lines (goal lines, circles, hashes, creases)
+// Marker sizes in feet (true-ish scale): skaters 2.4 ft, goalies 3 ft.
+const SK_R = 1.2;
+const G_R = 1.5;
+const PUCK_R = 0.8; // drawn at 1.6 ft so it reads (a real puck is 3 in)
+const SHOT_TYPES = new Set(["slap", "one_timer", "onetimer", "snap", "wrist", "backhand", "tip", "wraparound", "deke"]);
+const PUFFS = 6;
+const AD_TEXT = ["NHL DYNASTY", "", "ZAMBONI FUEL", "PUCKSTOP", "NHL DYNASTY", "", "ICEBOX COLA", "BENCH BOSS"];
 
-/** NHL markings (D16-D18): logo disc under the lines, proper hash marks, creases and nets on the goal line. */
+/** Rounded rect as a path (for even-odd rings). */
+function rrPath(x, y, w, h, r) {
+  return `M${x + r},${y} H${x + w - r} A${r},${r} 0 0 1 ${x + w},${y + r} V${y + h - r} A${r},${r} 0 0 1 ${x + w - r},${y + h} H${x + r} A${r},${r} 0 0 1 ${x},${y + h - r} V${y + r} A${r},${r} 0 0 1 ${x + r},${y} Z`;
+}
+
+/** Arena around the sheet: seats (muted), benches and boxes behind the glass, the white board face with dasher ads. */
+function Arena({ colors, teams, boxed }) {
+  const area = (side, x0, x1, y0, y1, label) => (
+    <g key={`${label}${side}`} className={`st-area is-${side}${label === "box" && boxed?.[side] ? " is-busy" : ""}`}>
+      <rect x={x0} y={y0} width={x1 - x0} height={y1 - y0} rx="1.2" className="st-area__floor" />
+      <rect x={x0} y={label === "box" ? y1 - 0.9 : y0} width={x1 - x0} height="0.9" fill={colors[side].kit} stroke={colors[side].trim} strokeWidth="0.2" />
+      <text x={(x0 + x1) / 2} y={(y0 + y1) / 2 + (label === "box" ? -0.4 : 0.5)} textAnchor="middle" dominantBaseline="middle" className="st-area__txt">
+        {label === "box" ? `${teams?.[side]?.abbr || ""} BOX` : `${teams?.[side]?.abbr || ""} BENCH`}
+      </text>
+    </g>
+  );
+  // Ads on the board face, top and bottom straights only.
+  const ads = [];
+  [-1, 1].forEach((sy) => {
+    for (let i = 0; i < 8; i += 1) {
+      const x = -68 + i * 17;
+      const txt = AD_TEXT[(i + (sy > 0 ? 3 : 0)) % AD_TEXT.length] || teams?.home?.abbr || "";
+      const y = sy < 0 ? -44.4 : 42.6;
+      ads.push(
+        <g key={`ad${sy}${i}`} className={`st-ad${i % 3 === 1 ? " is-team" : ""}`} style={i % 3 === 1 ? { "--st-bg": colors.home.kit, "--st-fg": colors.home.kitInk } : undefined}>
+          <rect x={x - 7.6} y={y} width="15.2" height="1.8" rx="0.4" />
+          <text x={x} y={y + 0.95} textAnchor="middle" dominantBaseline="middle">
+            {txt}
+          </text>
+        </g>
+      );
+    }
+  });
+  return (
+    <g className="st-arena" aria-hidden="true">
+      <path className="st-seats" d={`${rrPath(-110, -52, 220, 104, 36)} ${rrPath(-102.4, -44.9, 204.8, 89.8, 30.4)}`} fillRule="evenodd" />
+      <rect className="st-seats__row" x="-107.6" y="-49.6" width="215.2" height="99.2" rx="33.6" />
+      <rect className="st-seats__row" x="-105.2" y="-47.3" width="210.4" height="94.6" rx="31.4" />
+      {area("home", -36, -6, 44.9, 50.6, "bench")}
+      {area("away", 6, 36, 44.9, 50.6, "bench")}
+      {area("home", -14, -2.5, -50.6, -44.9, "box")}
+      {area("away", 2.5, 14, -50.6, -44.9, "box")}
+      <path className="st-boardface" d={`${rrPath(-102, -44.5, 204, 89, 30)} ${rrPath(-100, -42.5, 200, 85, 28)}`} fillRule="evenodd" />
+      {ads}
+      <rect className="st-glass" x="-102.2" y="-44.7" width="204.4" height="89.4" rx="30.2" />
+    </g>
+  );
+}
+
+/** NHL markings at true widths: 1 ft red / blue lines, 2 in goal lines, circles, hashes, L-marks, creases, trapezoids. */
 function RinkMarkings({ colors, teams }) {
+  const L = ICE_LINE;
   const circles = [
     [-69, -22],
     [-69, 22],
@@ -1227,54 +1285,43 @@ function RinkMarkings({ colors, teams }) {
   const net = (side) => {
     const s = side === "right" ? 1 : -1;
     const gx = 89 * s;
-    // Crease: 8 ft wide, straight sides 4.5 ft out, then a 6 ft radius arc.
     const cx = gx - 4.47 * s;
     return (
       <g key={side}>
-        <path d={`M${gx},-4 L${cx},-4 A6,6 0 0 ${s > 0 ? 0 : 1} ${cx},4 L${gx},4 Z`} fill="#9fd8ff" fillOpacity="0.75" stroke={RED} strokeWidth="0.3" />
-        {/* net: 6 ft mouth on the goal line, ~3.3 ft deep, rounded back, inside the end boards */}
-        <path
-          d={`M${gx},-3 L${gx + 2.2 * s},-3 Q${gx + 3.4 * s},-3 ${gx + 3.4 * s},-1.8 L${gx + 3.4 * s},1.8 Q${gx + 3.4 * s},3 ${gx + 2.2 * s},3 L${gx},3`}
-          fill="url(#st-net-mesh)"
-          stroke="#2b2f3c"
-          strokeWidth="0.35"
-        />
-        <line x1={gx} y1="-3" x2={gx} y2="3" stroke={RED} strokeWidth="0.75" strokeLinecap="round" />
+        <path d={`M${gx},-4 L${cx},-4 A6,6 0 0 ${s > 0 ? 0 : 1} ${cx},4 L${gx},4 Z`} className="st-crease" strokeWidth={L} />
+        <path d={`M${gx},-3 L${gx + 2.2 * s},-3 Q${gx + 3.4 * s},-3 ${gx + 3.4 * s},-1.8 L${gx + 3.4 * s},1.8 Q${gx + 3.4 * s},3 ${gx + 2.2 * s},3 L${gx},3`} fill="url(#st-net-mesh)" stroke="#3a3f4f" strokeWidth="0.28" />
+        <line x1={gx} y1="-3" x2={gx} y2="3" stroke={RED} strokeWidth="0.55" strokeLinecap="round" />
+        {/* trapezoid: 18 ft at the goal line, 28 ft at the end boards */}
+        <path d={`M${gx},-9 L${100 * s},-14 M${gx},9 L${100 * s},14`} stroke={RED} strokeWidth={L} fill="none" />
       </g>
     );
   };
   return (
     <g className="st-rink-lines">
-      {/* centre-ice logo: home abbreviation in a disc, under the lines */}
-      <circle cx="0" cy="0" r="9" fill={colors.home.kit} fillOpacity="0.14" stroke={colors.home.kit} strokeOpacity="0.35" strokeWidth="0.5" />
-      <text x="0" y="0.4" className="st-rink-logo" fill={colors.home.kit} fillOpacity="0.32" textAnchor="middle" dominantBaseline="middle">
+      <circle cx="0" cy="0" r="9" fill={colors.home.kit} fillOpacity="0.1" stroke={colors.home.kit} strokeOpacity="0.25" strokeWidth="0.4" />
+      <text x="0" y="0.4" className="st-rink-logo" fill={colors.home.kit} fillOpacity="0.26" textAnchor="middle" dominantBaseline="middle">
         {teams?.home?.abbr || ""}
       </text>
-      {/* trapezoids */}
-      <path d="M89,-11 L100,-14 M89,11 L100,14 M-89,-11 L-100,-14 M-89,11 L-100,14" stroke={RED} strokeWidth="0.3" fill="none" />
-      <line x1="89" y1="-43" x2="89" y2="43" stroke={RED} strokeWidth="0.35" />
-      <line x1="-89" y1="-43" x2="-89" y2="43" stroke={RED} strokeWidth="0.35" />
-      <line x1="25" y1="-43" x2="25" y2="43" stroke={BLUE} strokeWidth="1" />
-      <line x1="-25" y1="-43" x2="-25" y2="43" stroke={BLUE} strokeWidth="1" />
-      {/* centre red line, broken around the logo so the logo reads as a logo */}
-      <path d="M0,-43 V-10.5 M0,10.5 V43" stroke={RED} strokeWidth="1" />
-      <circle cx="0" cy="0" r="15" fill="none" stroke={BLUE} strokeWidth="0.35" />
-      {/* referee crease, scorer's side (-y, penalty boxes) */}
-      <path d="M-10,-42.5 A10,10 0 0 0 10,-42.5" fill="none" stroke={RED} strokeWidth="0.3" />
+      <line x1="89" y1="-43" x2="89" y2="43" stroke={RED} strokeWidth={L} />
+      <line x1="-89" y1="-43" x2="-89" y2="43" stroke={RED} strokeWidth={L} />
+      <line x1="25.5" y1="-43" x2="25.5" y2="43" stroke={BLUE} strokeWidth="1" />
+      <line x1="-25.5" y1="-43" x2="-25.5" y2="43" stroke={BLUE} strokeWidth="1" />
+      <path d="M0,-43 V-9 M0,9 V43" stroke={RED} strokeWidth="1" />
+      <path d="M0,-43 V-9 M0,9 V43" stroke="#ffffff" strokeWidth="0.12" strokeDasharray="1 1" opacity="0.7" />
+      <circle cx="0" cy="0" r="15" fill="none" stroke={BLUE} strokeWidth={L} />
+      <circle cx="0" cy="0" r="0.5" fill={BLUE} />
+      <path d="M-10,-42.5 A10,10 0 0 0 10,-42.5" fill="none" stroke={RED} strokeWidth={L} />
       {circles.map(([cx, cy]) => (
         <g key={`c${cx}${cy}`}>
-          <circle cx={cx} cy={cy} r="15" fill="none" stroke={RED} strokeWidth="0.35" />
+          <circle cx={cx} cy={cy} r="15" fill="none" stroke={RED} strokeWidth={L} />
           <circle cx={cx} cy={cy} r="1" fill={RED} />
-          {/* hash marks: two pairs on the circle edge, 2 ft long, pointing out */}
-          <path d={[-2.9, 2.9].map((dx) => `M${cx + dx},${cy - 14.72} v-2 M${cx + dx},${cy + 14.72} v2`).join(" ")} stroke={RED} strokeWidth="0.3" />
-          {/* L marks beside the dot: 4 ft legs along x, 3 ft legs along y, opening away from the dot */}
+          <path d={[-2.9, 2.9].map((dx) => `M${cx + dx},${cy - 14.72} v-2 M${cx + dx},${cy + 14.72} v2`).join(" ")} stroke={RED} strokeWidth={L} />
           <path
             d={[-1, 1]
               .flatMap((sx) => [-1, 1].map((sy) => `M${cx + sx * 6},${cy + sy * 0.75} H${cx + sx * 2} V${cy + sy * 3.75}`))
               .join(" ")}
             stroke={RED}
-            strokeWidth="0.2"
-            strokeOpacity="0.85"
+            strokeWidth={L}
             fill="none"
           />
         </g>
@@ -1288,39 +1335,32 @@ function RinkMarkings({ colors, teams }) {
   );
 }
 
-/** Benches (+y) and penalty boxes (-y) outside the boards (D28). Home bench nearest the end it defends in the 1st. */
-function BenchAreas({ colors, teams, boxed }) {
-  const area = (side, x0, x1, y0, y1, label) => (
-    <g key={`${label}${side}`} className={`st-area is-${side}${label === "box" && boxed?.[side] ? " is-busy" : ""}`}>
-      <rect x={x0} y={y0} width={x1 - x0} height={y1 - y0} rx="1.6" fill={colors[side].kit} fillOpacity={side === "away" ? 0.85 : 0.55} stroke={colors[side].trim} strokeWidth="0.45" />
-      <text x={(x0 + x1) / 2} y={(y0 + y1) / 2 + 0.2} textAnchor="middle" dominantBaseline="middle" className="st-area__txt" fill={colors[side].kitInk}>
-        {label === "box" ? `${teams?.[side]?.abbr || ""} BOX` : `${teams?.[side]?.abbr || ""} BENCH`}
-      </text>
-    </g>
-  );
-  return (
-    <g className="st-areas" aria-hidden="true">
-      {area("home", -36, -6, 43.4, 49.6, "bench")}
-      {area("away", 6, 36, 43.4, 49.6, "bench")}
-      {area("home", -14, -3, -49.6, -43.4, "box")}
-      {area("away", 3, 14, -49.6, -43.4, "box")}
-    </g>
-  );
-}
-
 const overlaps = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
-const toPct = (x, y) => ({ left: `${((clampX(x) + 100) / 200) * 100}%`, top: `${((clampY(y) + 50) / 100) * 100}%` });
+const toPct = (x, y) => ({ left: `${((clampX(x) - VB.x) / VB.w) * 100}%`, top: `${((clampY(y) - VB.y) / VB.h) * 100}%` });
 
 /**
  * The rink. Markers render once per on-ice set; the playback loop writes their
- * transforms through `apiRef.current.draw()`. Label collision runs only when
- * `layout` is true (~10 Hz).
+ * transforms through `apiRef.current.draw()`. Label collision and overlay
+ * dodging run only when `layout` is true (~10 Hz).
  */
-function Rink({ apiRef, onIce, roster, colors, teams, period, shots, headPt, celebration, saveFlash, drama, dramaText, alert, onAlertAction, onAlertDismiss, tracking, buffering, stop, faceoff, foWin, danger, hit, delayed, statPop, replay, onSkipReplay, boxed }) {
+function Rink({ apiRef, onIce, roster, colors, teams, period, shots, headPt, celebration, saveFlash, drama, dramaText, alert, onAlertAction, onAlertDismiss, tracking, buffering, stop, faceoff, foWin, danger, hit, delayed, statPop, replay, onSkipReplay, boxed, scale = 1, strip = null, names = "key" }) {
   const markRef = useRef(new Map());
+  const scaleRef = useRef(scale);
+  scaleRef.current = scale;
+  const namesRef = useRef(names);
+  namesRef.current = names;
+  const hoverRef = useRef(null);
+  const selRef = useRef(null);
   const puckRef = useRef(null);
+  const puckBodyRef = useRef(null);
+  const puckShadowRef = useRef(null);
+  const haloRef = useRef(null);
   const trailRef = useRef([]);
+  const passRef = useRef(null);
+  const puffRef = useRef([]);
   const svgRef = useRef(null);
+  const rinkRef = useRef(null);
+  const stRef = useRef({ lift: -1, loose: null, shot: null });
 
   useEffect(() => {
     apiRef.current = {
@@ -1346,35 +1386,50 @@ function Rink({ apiRef, onIce, roster, colors, teams, period, shots, headPt, cel
           if (list) list.push({ id, el, cx, cy });
         });
         if (list) {
-          // Priority: carrier, goalies (always labelled), then nearest the puck. Lower ones hide on collision.
+          // Names (HFM style): numbers only by default; names for the carrier, the last passer / receiver,
+          // goalies and hovered / selected players. "all" labels everyone that fits; "off" only hover / selection.
+          const mode = namesRef.current;
+          const recent = fr.recent || null;
+          const hov = hoverRef.current;
+          const sel = selRef.current;
+          const sc = scaleRef.current;
+          const half = SK_R * sc + 0.25;
+          const off = half + 1.45;
           const px = fr.pk ? fr.pk[0] : 0;
           const py = fr.pk ? fr.pk[1] : 0;
           list.forEach((m) => {
-            m.pr = m.id === car ? -1e6 : m.el.g0 ? -1e5 : (m.cx - px) ** 2 + (m.cy - py) ** 2;
+            const key = m.id === car || m.id === hov || m.id === sel || (recent && recent.has(m.id));
+            m.want = mode === "all" || (mode === "key" ? key || m.el.g0 : m.id === hov || m.id === sel);
+            m.force = m.id === car || m.id === hov || m.id === sel || (mode !== "off" && m.el.g0);
+            m.pr = m.id === hov || m.id === sel ? -2e6 : m.id === car ? -1e6 : m.el.g0 ? -1e5 : (m.cx - px) ** 2 + (m.cy - py) ** 2;
           });
           list.sort((a, b) => a.pr - b.pr);
-          const placed = list.map((m) => ({ x: m.cx - 1.95, y: m.cy - 1.95, w: 3.9, h: 3.9 }));
+          // Bodies and the puck are obstacles for labels.
+          const placed = list.map((m) => ({ x: m.cx - half, y: m.cy - half, w: 2 * half, h: 2 * half }));
+          if (fr.pk) placed.push({ x: px - 1.6, y: py - 1.6, w: 3.2, h: 3.2 });
           for (const m of list) {
             const { el, cx, cy } = m;
             if (!el.tag) continue;
-            const w = el.w;
-            const h = 2.4;
-            const tries = [
-              [0, 3.6],
-              [0, -3.6],
-              [w / 2 + 2.6, 0],
-              [-(w / 2 + 2.6), 0],
-            ];
             let pick = null;
-            for (const [dx, dy] of tries) {
-              const r = { x: cx + dx - w / 2, y: cy + dy - h / 2, w, h };
-              if (r.x < -99.5 || r.x + r.w > 99.5 || r.y < -49.5 || r.y + r.h > 49.5) continue;
-              if (!placed.some((q) => overlaps(q, r))) {
-                pick = [dx, dy, r];
-                break;
+            if (m.want) {
+              const w = el.w;
+              const h = 2.3;
+              const tries = [
+                [0, off],
+                [0, -off],
+                [w / 2 + half + 0.5, 0],
+                [-(w / 2 + half + 0.5), 0],
+              ];
+              for (const [dx, dy] of tries) {
+                const r = { x: cx + dx - w / 2, y: cy + dy - h / 2, w, h };
+                if (r.x < -101 || r.x + r.w > 101 || r.y < -51 || r.y + r.h > 51) continue;
+                if (!placed.some((q) => overlaps(q, r))) {
+                  pick = [dx, dy, r];
+                  break;
+                }
               }
+              if (!pick && m.force) pick = [0, cy > 40 ? -off : off, null];
             }
-            if (!pick && (el.g0 || m.id === car)) pick = [0, cy > 40 ? -3.6 : 3.6, null];
             if (pick) {
               if (pick[2]) placed.push(pick[2]);
               el.tag.setAttribute("transform", `translate(${pick[0].toFixed(2)} ${pick[1].toFixed(2)})`);
@@ -1387,22 +1442,71 @@ function Rink({ apiRef, onIce, roster, colors, teams, period, shots, headPt, cel
               el.hidden = true;
             }
           }
+          // Overlays must not sit on the puck: nudge them away.
+          const rink = rinkRef.current;
+          if (rink && fr.pk) {
+            const rr = rink.getBoundingClientRect();
+            const sx = rr.left + ((fr.pk[0] - VB.x) / VB.w) * rr.width;
+            const sy = rr.top + ((fr.pk[1] - VB.y) / VB.h) * rr.height;
+            const els = [...rink.querySelectorAll("[data-avoid]")];
+            const stack = document.querySelector(".st-nstack");
+            if (stack) els.push(stack);
+            const pad = Math.max(18, rr.width * 0.02);
+            for (const o of els) {
+              const r = o.getBoundingClientRect();
+              const dy0 = o._dodge || 0;
+              const top = r.top - dy0;
+              const bottom = r.bottom - dy0;
+              const hitP = sx > r.left - pad && sx < r.right + pad && sy > top - pad && sy < bottom + pad;
+              let dy = 0;
+              if (hitP) dy = sy < (top + bottom) / 2 ? bottom - sy + pad : -(sy - top + pad);
+              if (Math.abs(dy - dy0) > 2 && (hitP || dy0)) {
+                o._dodge = dy;
+                o.style.setProperty("--st-dodge", `${Math.round(dy)}px`);
+                o.classList.toggle("is-dodge", !!dy);
+              }
+            }
+          }
         }
+
+        // Puck: on the stick in front of a moving carrier, lifted when pz says so, halo pulses only while loose.
         const pk = puckRef.current;
+        const S = stRef.current;
         if (pk) {
           if (fr.pk) {
             pk.setAttribute("transform", `translate(${clampX(fr.pk[0]).toFixed(2)} ${clampY(fr.pk[1]).toFixed(2)})`);
             if (pk.style.visibility !== "visible") pk.style.visibility = "visible";
+            const lift = Math.round(Math.min(6, Math.max(0, num(fr.pz))) * 10) / 10;
+            if (lift !== S.lift) {
+              S.lift = lift;
+              const s = 1 + Math.min(0.5, lift * 0.12);
+              puckBodyRef.current?.setAttribute("transform", lift > 0 ? `translate(0 ${(-lift * 0.45).toFixed(2)}) scale(${s.toFixed(2)})` : "");
+              if (puckShadowRef.current) puckShadowRef.current.style.opacity = lift > 0 ? String(Math.min(0.45, 0.15 + lift * 0.08)) : "0";
+            }
+            const loose = !car;
+            if (loose !== S.loose) {
+              S.loose = loose;
+              haloRef.current?.classList.toggle("is-loose", loose);
+            }
           } else if (pk.style.visibility !== "hidden") pk.style.visibility = "hidden";
         }
+        // Trail: longer and brighter when the puck is fast; a sharp streak on shots.
         const tr = fr.trail || [];
         const lines = trailRef.current;
+        const spd = num(fr.puckSpeed);
+        const shown = Math.min(lines.length, Math.round(3 + spd / 9));
+        const bright = Math.min(1, 0.25 + spd / 90);
+        const shot = !!fr.shot;
+        if (shot !== S.shot) {
+          S.shot = shot;
+          lines.forEach((ln) => ln && ln.classList.toggle("is-shot", shot));
+        }
         for (let i = 0; i < lines.length; i += 1) {
           const ln = lines[i];
           if (!ln) continue;
           const a = tr[tr.length - 2 - i];
           const b = tr[tr.length - 1 - i];
-          if (!a || !b) {
+          if (!a || !b || i >= shown || spd < 6) {
             if (ln.style.visibility !== "hidden") ln.style.visibility = "hidden";
             continue;
           }
@@ -1411,8 +1515,37 @@ function Rink({ apiRef, onIce, roster, colors, teams, period, shots, headPt, cel
           ln.setAttribute("x2", clampX(b[0]).toFixed(2));
           ln.setAttribute("y2", clampY(b[1]).toFixed(2));
           ln.style.visibility = "visible";
-          ln.style.opacity = String(0.7 * (1 - i / (TRAIL_LEN - 1)));
+          ln.style.opacity = String((bright * (1 - i / shown)).toFixed(2));
         }
+        // Pass: faint dotted path for 0.6 s.
+        const pl = passRef.current;
+        if (pl) {
+          const P = fr.pass;
+          if (P && fr.pk && P.age < 600) {
+            pl.setAttribute("x1", clampX(P.x).toFixed(2));
+            pl.setAttribute("y1", clampY(P.y).toFixed(2));
+            pl.setAttribute("x2", clampX(fr.pk[0]).toFixed(2));
+            pl.setAttribute("y2", clampY(fr.pk[1]).toFixed(2));
+            pl.style.opacity = String((0.55 * (1 - P.age / 600)).toFixed(2));
+            pl.style.visibility = "visible";
+          } else if (pl.style.visibility !== "hidden") pl.style.visibility = "hidden";
+        }
+        // Snow puffs on hard stops (frame `sp`).
+        const puffs = fr.puffs || [];
+        puffRef.current.forEach((c, i) => {
+          if (!c) return;
+          const p = puffs[i];
+          if (!p || p.age > 700) {
+            if (c.style.visibility !== "hidden") c.style.visibility = "hidden";
+            return;
+          }
+          const k = p.age / 700;
+          c.setAttribute("cx", clampX(p.x).toFixed(2));
+          c.setAttribute("cy", clampY(p.y).toFixed(2));
+          c.setAttribute("r", (0.8 + k * 1.8).toFixed(2));
+          c.style.opacity = String((0.8 * (1 - k)).toFixed(2));
+          c.style.visibility = "visible";
+        });
         const svg = svgRef.current;
         if (svg && svg.dataset.ph !== (fr.ph || "play")) svg.dataset.ph = fr.ph || "play";
       },
@@ -1431,7 +1564,8 @@ function Rink({ apiRef, onIce, roster, colors, teams, period, shots, headPt, cel
     const isG = upper(info.pos) === "G";
     const numTxt = has(info.number) ? String(info.number) : "";
     const name = shortName(info, id);
-    const w = Math.max(3.8, name.length * 1.17 + 1.8);
+    const w = Math.max(3.6, name.length * 1.12 + 1.6);
+    const r = isG ? G_R : SK_R;
     const reg = (g) => {
       const k = String(id);
       if (!g) {
@@ -1441,111 +1575,148 @@ function Rink({ apiRef, onIce, roster, colors, teams, period, shots, headPt, cel
       const prev = markRef.current.get(k);
       if (prev && prev.g === g) return;
       const tag = g.querySelector(".st-tag");
-      markRef.current.set(k, { g, tag, w, g0: isG, car: g.classList.contains("is-carrier"), hidden: !!tag && tag.style.visibility === "hidden", shown: g.style.visibility === "visible" });
+      markRef.current.set(k, { g, tag, w, g0: isG, car: g.classList.contains("is-carrier"), hidden: !tag || tag.style.visibility !== "visible", shown: g.style.visibility === "visible" });
     };
     const tip = [numTxt ? `#${numTxt}` : "", info.name || name, info.pos || "", teams?.[side]?.abbr || ""].filter(Boolean).join(" · ");
+    const k = String(id);
     return (
-      <g key={`${side}-${id}`} ref={reg} className={`st-tok is-${side}${isG ? " is-g" : ""}`} style={{ visibility: "hidden" }}>
+      <g
+        key={`${side}-${id}`}
+        ref={reg}
+        className={`st-tok is-${side}${isG ? " is-g" : ""}`}
+        style={{ visibility: "hidden" }}
+        onMouseEnter={() => {
+          hoverRef.current = k;
+        }}
+        onMouseLeave={() => {
+          if (hoverRef.current === k) hoverRef.current = null;
+        }}
+        onClick={() => {
+          selRef.current = selRef.current === k ? null : k;
+        }}
+      >
         <title>{`${tip} (position estimated)`}</title>
-        <circle className="st-tok__carry" r="3" />
-        {side === "away" ? (
-          <rect x={isG ? -2.2 : -1.8} y={isG ? -2.2 : -1.8} width={isG ? 4.4 : 3.6} height={isG ? 4.4 : 3.6} rx="0.9" fill={col.kit} stroke={col.trim} strokeWidth={isG ? 0.7 : 0.55} />
-        ) : (
-          <circle r={isG ? 2.25 : 1.85} fill={col.kit} stroke={isG ? "#fbfbf6" : "#071233"} strokeWidth={isG ? 0.6 : 0.38} />
-        )}
-        <text y="0.15" textAnchor="middle" dominantBaseline="middle" fill={col.kitInk} className="st-tok__num">
-          {numTxt || (isG ? "G" : "")}
-        </text>
+        <g transform={scale !== 1 ? `scale(${scale})` : undefined}>
+          <circle className="st-tok__carry" r={r + 0.9} />
+          {side === "away" ? (
+            <rect x={-r} y={-r} width={2 * r} height={2 * r} rx={r * 0.35} fill={col.kit} stroke={col.trim} strokeWidth={isG ? 0.42 : 0.34} />
+          ) : (
+            <circle r={r} fill={col.kit} stroke={isG ? "#fbfbf6" : "#071233"} strokeWidth={isG ? 0.38 : 0.26} />
+          )}
+          <text y="0.08" textAnchor="middle" dominantBaseline="middle" fill={col.kitInk} className={`st-tok__num${numTxt.length > 1 ? " is-2" : ""}`}>
+            {numTxt || (isG ? "G" : "")}
+          </text>
+        </g>
         {name ? (
-          <g className="st-tag">
-            <rect x={-w / 2} y="-1.2" width={w} height="2.4" rx="1.2" />
-            <text y="0.12" textAnchor="middle" dominantBaseline="middle">
+          <g className="st-tag" style={{ visibility: "hidden" }}>
+            <rect x={-w / 2} y="-1.15" width={w} height="2.3" rx="1.15" />
+            <text y="0.1" textAnchor="middle" dominantBaseline="middle">
               {name}
             </text>
           </g>
-        ) : null}
-        {info.pos ? (
-          <text className="st-tok__pos" y="-3.3" textAnchor="middle">
-            {upper(info.pos)}
-          </text>
         ) : null}
       </g>
     );
   };
 
-  // Shot markers fade with age (D19); hover explains.
+  // Shot markers: small and faint so the ice stays clean (D19, round 5).
   const shotMark = (e) => {
     const age = Math.max(0, headPt - ptOf(e));
     if (age > SHOT_FADE_SEC) return null;
     const x = clampX(e.shot_loc.x);
     const y = clampY(e.shot_loc.y);
     const out = upper(e.outcome) || (e.type === "goal" ? "GOAL" : "");
-    const op = Math.max(0.12, 0.85 * (1 - age / SHOT_FADE_SEC));
+    const op = Math.max(0.08, 0.45 * (1 - age / SHOT_FADE_SEC));
     const col = colors[e.side]?.trim || "#a9bfdc";
     const label = `${e.description || "Shot attempt"} — ${out === "GOAL" || e.type === "goal" ? "goal" : out === "SAVED" ? "saved" : out === "BLOCKED" ? "blocked" : "missed"}`;
     if (out === "GOAL" || e.type === "goal")
       return (
-        <polygon key={`s${e.seq}`} points={starPoints(x, y, 2.4)} className="st-mk is-goal" opacity={op}>
+        <polygon key={`s${e.seq}`} points={starPoints(x, y, 1.6)} className="st-mk is-goal" opacity={Math.min(0.8, op + 0.25)}>
           <title>{label}</title>
         </polygon>
       );
     return (
-      <circle key={`s${e.seq}`} cx={x} cy={y} r="1.15" className={`st-mk is-${out === "SAVED" ? "save" : out === "BLOCKED" ? "block" : "miss"}`} stroke={col} opacity={op}>
+      <circle key={`s${e.seq}`} cx={x} cy={y} r="0.7" className={`st-mk is-${out === "SAVED" ? "save" : out === "BLOCKED" ? "block" : "miss"}`} stroke={col} opacity={op}>
         <title>{label}</title>
       </circle>
     );
   };
 
   const foArrow = foWin ? (() => {
-    // The winning centre draws the puck back toward his own end.
     const winDefendsLeft = (foWin.side === "home") === homeRight;
     const dx = winDefendsLeft ? -1 : 1;
     const x = clampX(foWin.x);
     const y = clampY(foWin.y);
     return (
       <g key={foWin.key} className="st-fo-arrow" style={colors[foWin.side]?.chip}>
-        <path d={`M${x},${y} L${x + dx * 10},${y}`} />
-        <path d={`M${x + dx * 10},${y} l${-dx * 2.6},-2 M${x + dx * 10},${y} l${-dx * 2.6},2`} />
+        <path d={`M${x},${y} L${x + dx * 8},${y}`} />
+        <path d={`M${x + dx * 8},${y} l${-dx * 2},-1.6 M${x + dx * 8},${y} l${-dx * 2},1.6`} />
       </g>
     );
   })() : null;
 
   return (
     <div className="st-rinkcell">
-      <div className={`st-rink${replay ? " is-replay" : ""}`}>
-        <svg ref={svgRef} viewBox="-100 -50 200 100" preserveAspectRatio="xMidYMid meet" className="st-rink-svg" role="img" aria-label="Rink" data-ph="play">
+      <div ref={rinkRef} className={`st-rink${replay ? " is-replay" : ""}`}>
+        <svg ref={svgRef} viewBox={`${VB.x} ${VB.y} ${VB.w} ${VB.h}`} preserveAspectRatio="xMidYMid meet" className="st-rink-svg" role="img" aria-label="Rink" data-ph="play">
           <defs>
             <clipPath id="st-rink-clip">
               <rect x="-100" y="-42.5" width="200" height="85" rx="28" ry="28" />
             </clipPath>
-            <pattern id="st-ice-scratch" width="9" height="9" patternUnits="userSpaceOnUse" patternTransform="rotate(28)">
-              <line x1="0" y1="0" x2="0" y2="9" stroke="#7aa3c9" strokeOpacity="0.16" strokeWidth="0.14" />
+            <pattern id="st-ice-scratch" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(24)">
+              <line x1="0" y1="0" x2="0" y2="7" stroke="#8fb2d1" strokeOpacity="0.12" strokeWidth="0.09" />
+              <line x1="3.4" y1="1" x2="3.4" y2="4.6" stroke="#8fb2d1" strokeOpacity="0.09" strokeWidth="0.07" />
             </pattern>
-            <pattern id="st-net-mesh" width="0.8" height="0.8" patternUnits="userSpaceOnUse">
-              <rect width="0.8" height="0.8" fill="#f4f6fb" />
-              <path d="M0 0L.8 .8M.8 0L0 .8" stroke="#9aa6bd" strokeWidth="0.12" />
+            <linearGradient id="st-ice-sheen" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stopColor="#ffffff" stopOpacity="0" />
+              <stop offset="0.45" stopColor="#ffffff" stopOpacity="0.55" />
+              <stop offset="0.55" stopColor="#ffffff" stopOpacity="0" />
+            </linearGradient>
+            <radialGradient id="st-ice-vignette" cx="0.5" cy="0.5" r="0.62">
+              <stop offset="0.72" stopColor="#9fb7d0" stopOpacity="0" />
+              <stop offset="1" stopColor="#9fb7d0" stopOpacity="0.3" />
+            </radialGradient>
+            <pattern id="st-net-mesh" width="0.7" height="0.7" patternUnits="userSpaceOnUse">
+              <rect width="0.7" height="0.7" fill="#f6f8fc" />
+              <path d="M0 0L.7 .7M.7 0L0 .7" stroke="#a3adc2" strokeWidth="0.08" />
             </pattern>
           </defs>
-          <BenchAreas colors={colors} teams={teams} boxed={boxed} />
+          {/* layer order: arena -> ice -> markings -> shot marks -> trails -> players -> puck */}
+          <Arena colors={colors} teams={teams} boxed={boxed} />
           <g clipPath="url(#st-rink-clip)">
-            <rect x="-100" y="-42.5" width="200" height="85" fill="#eef7ff" />
+            <rect x="-100" y="-42.5" width="200" height="85" className="st-ice" />
             <rect x="-100" y="-42.5" width="200" height="85" fill="url(#st-ice-scratch)" />
+            <rect x="-100" y="-42.5" width="200" height="85" fill="url(#st-ice-sheen)" opacity="0.35" />
             <RinkMarkings colors={colors} teams={teams} />
-            {enOf ? <circle cx={(enOf === "home" ? !homeRight : homeRight) ? 90.6 : -90.6} cy="0" r="7" className="st-emptynet" /> : null}
+            <rect x="-100" y="-42.5" width="200" height="85" fill="url(#st-ice-vignette)" />
+            {enOf ? <circle cx={(enOf === "home" ? !homeRight : homeRight) ? 90.6 : -90.6} cy="0" r="6" className="st-emptynet" /> : null}
           </g>
-          <rect x="-99.4" y="-41.9" width="198.8" height="83.8" rx="27.4" ry="27.4" className="st-rink-kick" />
+          <rect x="-99.55" y="-42.05" width="199.1" height="84.1" rx="27.55" ry="27.55" className="st-rink-kick" />
           <rect x="-100" y="-42.5" width="200" height="85" rx="28" ry="28" className="st-rink-boards" />
           <rect x="-98.6" y="-41.1" width="197.2" height="82.2" rx="26.6" ry="26.6" className="st-rink-inner" />
 
-          {shots.map(shotMark)}
+          <g className="st-shots">{shots.map(shotMark)}</g>
           {faceoff ? (
             <g className="st-fo" aria-hidden="true">
-              <circle cx={clampX(faceoff.x)} cy={clampY(faceoff.y)} r="5" />
+              <circle cx={clampX(faceoff.x)} cy={clampY(faceoff.y)} r="4" />
             </g>
           ) : null}
           {foArrow}
-          {hit ? <circle key={hit.key} cx={clampX(hit.x)} cy={clampY(hit.y)} r="3" className="st-hitring" /> : null}
+          {hit ? <circle key={hit.key} cx={clampX(hit.x)} cy={clampY(hit.y)} r="2.2" className="st-hitring" /> : null}
 
+          <g className="st-puffs" aria-hidden="true">
+            {Array.from({ length: PUFFS }, (_, i) => (
+              <circle
+                key={i}
+                ref={(el) => {
+                  puffRef.current[i] = el;
+                }}
+                r="1"
+                style={{ visibility: "hidden" }}
+              />
+            ))}
+          </g>
+          <line ref={passRef} className="st-passline" style={{ visibility: "hidden" }} />
           <g className="st-trail" aria-hidden="true">
             {Array.from({ length: TRAIL_LEN - 1 }, (_, i) => (
               <line
@@ -1553,7 +1724,7 @@ function Rink({ apiRef, onIce, roster, colors, teams, period, shots, headPt, cel
                 ref={(el) => {
                   trailRef.current[i] = el;
                 }}
-                strokeWidth={1.05 - i * 0.07}
+                strokeWidth={Math.max(0.2, 0.9 - i * 0.06)}
                 style={{ visibility: "hidden" }}
               />
             ))}
@@ -1562,10 +1733,15 @@ function Rink({ apiRef, onIce, roster, colors, teams, period, shots, headPt, cel
           {onIce.map(marker)}
 
           <g ref={puckRef} className="st-puck" style={{ visibility: "hidden" }}>
-            <circle r="0.95" fill="#0a0a0a" stroke="#ffffff" strokeWidth="0.3" />
+            <ellipse ref={puckShadowRef} className="st-puck__shadow" cx="0.25" cy="0.35" rx={PUCK_R * 1.15} ry={PUCK_R * 0.8} style={{ opacity: 0 }} />
+            <g ref={puckBodyRef}>
+              <circle ref={haloRef} className="st-puck__halo" r={PUCK_R + 1} />
+              <circle r={PUCK_R} fill="#0a0a0a" stroke="#ffffff" strokeWidth="0.26" />
+            </g>
           </g>
         </svg>
 
+        {strip}
         {tracking ? (
           <span className="st-estpos" title="Player and puck positions are generated by the sim to illustrate the play. They never affect the result.">
             Estimated positions
@@ -1578,7 +1754,7 @@ function Rink({ apiRef, onIce, roster, colors, teams, period, shots, headPt, cel
         {buffering ? <span className="st-buffer" title="Waiting for the sim to send the next stretch of play">buffering</span> : null}
 
         {replay ? (
-          <div className="st-replaybug">
+          <div className="st-replaybug" data-avoid="">
             <span className="st-replaybug__reel" aria-hidden="true" />
             <b>Replay</b>
             <small>{replay.kind === "save" ? "the save" : "the goal"}</small>
@@ -1589,7 +1765,7 @@ function Rink({ apiRef, onIce, roster, colors, teams, period, shots, headPt, cel
         ) : null}
 
         {stop ? (
-          <div key={stop.key} className={`st-stop is-${stop.reason}`}>
+          <div key={stop.key} className={`st-stop is-${stop.reason}`} data-avoid="">
             <span className="st-stop__whistle" aria-hidden="true" />
             <b>{STOP_LABEL[stop.reason] || "Whistle"}</b>
           </div>
@@ -1600,25 +1776,25 @@ function Rink({ apiRef, onIce, roster, colors, teams, period, shots, headPt, cel
           </span>
         ) : null}
         {delayed ? (
-          <span className="st-delayed" title="Delayed penalty: play continues until the offending team touches the puck">
+          <span className="st-delayed" data-avoid="" title="Delayed penalty: play continues until the offending team touches the puck">
             <span className="st-delayed__arm" aria-hidden="true" />
             Delayed penalty · {teams?.[delayed.side]?.abbr || ""}
           </span>
         ) : null}
         {danger ? (
-          <span key={danger.key} className="st-danger" style={toPct(danger.x, danger.y)}>
+          <span key={danger.key} className="st-danger" data-avoid="" style={toPct(danger.x, danger.y)}>
             {danger.text}
           </span>
         ) : null}
 
         {dramaText && !replay ? (
-          <span key={dramaText.split(" ")[0]} className={`st-drama is-${String(drama || "").split("-")[0]}`}>
+          <span key={dramaText.split(" ")[0]} className={`st-drama is-${String(drama || "").split("-")[0]}`} data-avoid="">
             {dramaText}
           </span>
         ) : null}
 
         {alert ? (
-          <div key={alert.id} className={`st-alert is-${alert.severity || "low"}`}>
+          <div key={alert.id} className={`st-alert is-${alert.severity || "low"}`} data-avoid="">
             <p>{alert.text}</p>
             <div className="st-alert__row">
               {alert.action?.kind ? (
@@ -1632,7 +1808,7 @@ function Rink({ apiRef, onIce, roster, colors, teams, period, shots, headPt, cel
             </div>
           </div>
         ) : statPop ? (
-          <div key={statPop.key} className="st-statpop" style={colors[statPop.side]?.chip}>
+          <div key={statPop.key} className="st-statpop" data-avoid="" style={colors[statPop.side]?.chip}>
             <b>{statPop.name}</b>
             <span>{statPop.text}</span>
           </div>
@@ -1922,7 +2098,7 @@ function Plays({ events, teams, colors }) {
   );
 }
 
-function GamePanel({ stats, events, teams, colors, isFinal, simToEnd, onSimToEnd, onLeave, onCommit, working, languages, lang, onLang }) {
+function GamePanel({ stats, events, teams, colors, isFinal, simToEnd, onSimToEnd, onLeave, onCommit, working, languages, lang, onLang, compact, onCompact, names, onNames }) {
   return (
     <div className="st-gamepanel">
       <section>
@@ -1945,6 +2121,24 @@ function GamePanel({ stats, events, teams, colors, isFinal, simToEnd, onSimToEnd
             ))}
           </select>
         </label>
+        {onNames ? (
+          <Seg
+            label="Names on markers"
+            tip="Numbers only like a TV tracker; names for the puck carrier, last passer and goalies; or everyone (V)"
+            opts={[
+              ["off", "Off"],
+              ["key", "Key players"],
+              ["all", "All"],
+            ]}
+            value={names}
+            onPick={onNames}
+          />
+        ) : null}
+        {onCompact ? (
+          <label className="st-check" title="Smaller player markers so the play reads tighter (C)">
+            <input type="checkbox" checked={!!compact} onChange={onCompact} /> Compact markers
+          </label>
+        ) : null}
         <button type="button" className="st-btn is-ghost" onClick={onSimToEnd} disabled={isFinal || simToEnd} title="Skip to the final horn; no more coaching">
           {simToEnd ? "Simming…" : "Sim to end"}
         </button>
@@ -2006,7 +2200,8 @@ function Help({ colors, teams, onClose }) {
               <li>Benches sit outside the top boards, penalty boxes outside the bottom boards. Penalised players skate to the box.</li>
               <li>After a whistle a stamp says why (offside, icing, frozen puck…). At a faceoff the dot is ringed and an arrow shows who won it.</li>
               <li>After goals (and some big saves) an instant replay runs in slow motion. Press R or Esc to skip. Replays are skipped at 4x and 8x.</li>
-              <li>Hover a player for his position. Positions are estimated by the sim to show the play and never change the result.</li>
+              <li>Markers show jersey numbers. Names appear for the puck carrier, the last passer and receiver, goalies, and anyone you hover or click (change it with V).</li>
+              <li>The puck has a halo that pulses while it's loose, a streak on shots and a dotted line on passes. Positions are estimated by the sim to show the play and never change the result.</li>
             </ul>
           </section>
           <section>
@@ -2030,8 +2225,10 @@ function Help({ colors, teams, onClose }) {
             </p>
           </section>
           <section>
-            <h3 className="st-h">Alerts, momentum, crowd</h3>
-            <p>Alerts pop up on the rink when something needs a decision (a tired line, a goalie pull window). Use the button to act or dismiss it.</p>
+            <h3 className="st-h">Coaching notes, analytics</h3>
+            <p>When a decision is worth making (a line getting caved, their top line out against your fourth, a tired pair, a cold goalie) a card pops up top-right with the numbers behind it and buttons to act. Cards fold into the bell after a few seconds; the bell keeps the full log and can pause the game on critical calls.</p>
+            <p>Stats (S) opens the analytics drawer: line and player shot shares (CF%), expected goals, zone starts, ice time, goalies and matchups. Pin it to keep it beside the rink. The strip on the top boards shows who is on and how long the shift has run (amber after 45 s, red after 60 s).</p>
+            <h3 className="st-h">Momentum, crowd</h3>
             <p>The rope under the rink is momentum: the knot slides toward the team creating more chances lately.</p>
             <p>The stands bounce with the crowd. Big moments, rivalries and chants make them louder.</p>
             <h3 className="st-h">Sound and language</h3>
@@ -2059,12 +2256,710 @@ function Help({ colors, teams, onClose }) {
               <dd>This help</dd>
               <dt>R</dt>
               <dd>Skip replay</dd>
+              <dt>S</dt>
+              <dd>Analytics drawer</dd>
+              <dt>N</dt>
+              <dd>Coaching log</dd>
+              <dt>C</dt>
+              <dd>Compact markers</dd>
+              <dt>V</dt>
+              <dd>Names: key players / all / off</dd>
               <dt>Esc</dt>
               <dd>Close drawer, help or replay</dd>
             </dl>
           </section>
         </div>
       </div>
+    </div>
+  );
+}
+
+/* ==========================================================================
+   v4: on-ice strip, analytics drawer, coaching notifications
+   ========================================================================== */
+const OZ_KINDS = ["oz_draws", "oz_draw_line", "faceoff_line", "oz_line"];
+const PAUSE_CRIT_KEY = "nhl.live.pauseCritical";
+const COMPACT_KEY = "nhl.live.compactMarkers";
+const NAMES_KEY = "nhl.live.markerNames";
+const NOTIF_KIND_LABEL = {
+  fatigue: "Fatigue",
+  matchup: "Matchup",
+  line_struggling: "Line struggling",
+  line_hot: "Line hot",
+  goalie: "Goalie",
+  pp_unit: "Power play",
+  pk_unit: "Penalty kill",
+  timeout: "Timeout",
+  pull_goalie: "Pull goalie",
+  momentum: "Momentum",
+  injury: "Injury",
+  penalty_trouble: "Penalties",
+  opponent_change: "Opponent change",
+};
+/** 0..1 or 0..100 -> 0..100 */
+const pct100 = (v) => (has(v) ? (num(v) <= 1 ? num(v) * 100 : num(v)) : null);
+const pctTxt = (v) => (pct100(v) === null ? "–" : `${Math.round(pct100(v))}%`);
+const share = (a, b) => (num(a) + num(b) > 0 ? (100 * num(a)) / (num(a) + num(b)) : null);
+const fx = (v, d = 1) => (has(v) ? num(v).toFixed(d) : "–");
+const signed = (v, d = 0) => (has(v) ? `${num(v) > 0 ? "+" : ""}${num(v).toFixed(d)}` : "–");
+const isFDKey = (k) => /^[FD]\d$/.test(String(k || ""));
+function surname(roster, pid) {
+  const r = roster.get(String(pid)) || {};
+  return r.short || (r.name ? String(r.name).split(/\s+/).slice(-1)[0] : `#${pid}`);
+}
+/** A player object PlayerHeadshot can resolve (id + name + position + team + any headshot fields the sim sends). */
+function facePlayer(pid, extra, roster, teams) {
+  const r = roster.get(String(pid)) || {};
+  const m = { ...r, ...(extra || {}) };
+  const side = m.side || r.side;
+  return {
+    ...m,
+    id: pid ?? m.id,
+    player_id: pid ?? m.player_id,
+    name: m.name || r.name || "",
+    position: m.position || m.pos || r.pos || "",
+    number: has(m.number) ? m.number : r.number,
+    team_id: m.team_id || teams?.[side]?.id || teams?.[side]?.team_id || "",
+  };
+}
+/** Which line keys are on the ice now for a side, from the live on-ice ids. */
+function lineKeysOnIce(lines, ids) {
+  const set = new Set(ids.map(String));
+  let bestF = null;
+  let bestD = null;
+  let bestS = null;
+  for (const l of lines || []) {
+    const pids = (l.player_ids || []).map(String);
+    if (!pids.length) continue;
+    const n = pids.filter((p) => set.has(p)).length;
+    const k = String(l.key || "");
+    if (/^F/.test(k) && n >= 2 && (!bestF || n > bestF.n)) bestF = { k, n };
+    else if (/^D/.test(k) && n >= 1 && (!bestD || n > bestD.n)) bestD = { k, n };
+    else if (/^P[PK]/.test(k) && n >= Math.min(4, pids.length) && (!bestS || n > bestS.n)) bestS = { k, n };
+  }
+  if (bestS) return bestS.k;
+  return [bestF?.k, bestD?.k].filter(Boolean).join(" · ");
+}
+
+/** Numbers along the top boards (HFM style): who is on, the line keys, and the shift clock. */
+function OnIceStrip({ onIce, roster, colors, teams, analytics, shiftStart, gameSec }) {
+  const side = (s) => {
+    const ids = onIce.filter((p) => p.side === s).map((p) => p.id);
+    const sk = ids.filter((id) => upper(roster.get(id)?.pos) !== "G");
+    const order = (id) => ({ C: 0, LW: 1, RW: 2, F: 1, W: 1, D: 3, LD: 3, RD: 4, G: 9 }[upper(roster.get(id)?.pos)] ?? 5);
+    ids.sort((a, b) => order(a) - order(b));
+    let shift = 0;
+    sk.forEach((id) => {
+      const st = shiftStart.get(id);
+      if (has(st)) shift = Math.max(shift, gameSec - st);
+    });
+    const key = lineKeysOnIce(analytics?.lines?.[s], ids);
+    const lvl = shift > 60 ? "is-red" : shift > 45 ? "is-amber" : "";
+    return (
+      <div className={`st-onice__team is-${s}`}>
+        <TeamChip side={s} colors={colors} teams={teams} />
+        <span className="st-onice__nums">
+          {ids.map((id) => {
+            const r = roster.get(id) || {};
+            const g = upper(r.pos) === "G";
+            return (
+              <span key={id} className={`st-onice__n${g ? " is-g" : ""}`} style={colors[s].chip} title={`${r.name || surname(roster, id)}${r.pos ? ` · ${r.pos}` : ""}`}>
+                {has(r.number) ? r.number : g ? "G" : "?"}
+              </span>
+            );
+          })}
+        </span>
+        {key ? <span className="st-onice__key">{key}</span> : null}
+        {sk.length ? (
+          <span className={`st-onice__shift ${lvl}`} title="Longest current shift on the ice (estimated)">
+            {mmss(shift)}
+          </span>
+        ) : null}
+      </div>
+    );
+  };
+  if (!onIce.length) return null;
+  return (
+    <div className="st-onice" aria-label="On the ice now">
+      {side("away")}
+      {side("home")}
+    </div>
+  );
+}
+
+/* ---------- analytics drawer ---------- */
+function SortTh({ k, label, sort, setSort, est, title }) {
+  const on = sort.k === k;
+  return (
+    <th className={on ? "is-sorted" : ""} title={title}>
+      <button type="button" onClick={() => setSort((s) => ({ k, dir: s.k === k ? -s.dir : -1 }))}>
+        {label}
+        {est ? <Est /> : null}
+        {on ? <i>{sort.dir < 0 ? "▼" : "▲"}</i> : null}
+      </button>
+    </th>
+  );
+}
+function sortRows(rows, sort, get) {
+  const g = get || ((r, k) => r[k]);
+  return [...rows].sort((a, b) => {
+    const x = g(a, sort.k);
+    const y = g(b, sort.k);
+    if (typeof x === "string" || typeof y === "string") return sort.dir * String(x ?? "").localeCompare(String(y ?? ""), undefined, { numeric: true });
+    return sort.dir * (num(x, -1e9) - num(y, -1e9));
+  });
+}
+const PctBar = ({ v }) => {
+  const p = pct100(v);
+  if (p === null) return <span className="st-pbar is-none">–</span>;
+  return (
+    <span className={`st-pbar${p >= 55 ? " is-good" : p <= 45 ? " is-bad" : ""}`} title={`${p.toFixed(1)}%`}>
+      <i style={{ width: `${Math.max(4, Math.min(100, p))}%` }} />
+      <b>{Math.round(p)}</b>
+    </span>
+  );
+};
+
+function LinesTab({ an, side, setSide, userSide, roster, colors, teams, onIceIds, onCoach, live, ozKind }) {
+  const [sort, setSort] = useState({ k: "order", dir: 1 });
+  const lines = Array.isArray(an?.lines?.[side]) ? an.lines[side] : [];
+  const order = ["F1", "F2", "F3", "F4", "D1", "D2", "D3", "PP1", "PP2", "PK1", "PK2"];
+  const ice = new Set((onIceIds[side] || []).map(String));
+  const rows = lines.map((l) => {
+    const pids = (l.player_ids || []).map(String);
+    const n = pids.filter((p) => ice.has(p)).length;
+    return {
+      ...l,
+      order: order.indexOf(l.key) >= 0 ? order.indexOf(l.key) : 99,
+      cfp: has(l.cf_pct) ? pct100(l.cf_pct) : share(l.cf, l.ca),
+      xgp: has(l.xg_pct) ? pct100(l.xg_pct) : share(l.xgf, l.xga),
+      gd: num(l.gf) - num(l.ga),
+      ozp: share(l.oz_starts, l.dz_starts),
+      onNow: pids.length > 0 && n >= Math.min(2, pids.length),
+      names: pids.map((p) => surname(roster, p)).join(" · "),
+    };
+  });
+  const sorted = sort.k === "order" ? sortRows(rows, { k: "order", dir: 1 }) : sortRows(rows, sort);
+  const mine = side === userSide;
+  return (
+    <>
+      <div className="st-an__bar">
+        <div className="st-an__seg" role="radiogroup" aria-label="Team">
+          {["home", "away"].map((s) => (
+            <button key={s} type="button" role="radio" aria-checked={side === s} className={side === s ? "is-on" : ""} onClick={() => setSide(s)}>
+              {teams?.[s]?.abbr || s}
+              {s === userSide ? " (you)" : ""}
+            </button>
+          ))}
+        </div>
+        {mine ? (
+          <span className="st-an__acts">
+            <button type="button" className="st-btn is-ghost is-sm" disabled={!live} onClick={() => onCoach("shorten_bench", {})} title="Sit the 4th line and 3rd pair at even strength (F1–F3, D1–D2)">
+              Shorten bench to F1–F3
+            </button>
+            <button type="button" className="st-btn is-ghost is-sm" disabled={!live} onClick={() => onCoach("roll_lines", {})} title="Even ice time for all four lines">
+              Roll all four
+            </button>
+          </span>
+        ) : null}
+      </div>
+      {!rows.length ? (
+        <p className="st-empty">No line numbers yet — they build up as shifts are played.</p>
+      ) : (
+        <div className="st-an__scroll">
+          <table className="st-tbl">
+            <thead>
+              <tr>
+                <SortTh k="order" label="Line" sort={sort} setSort={setSort} />
+                <th className="is-left">Players</th>
+                <SortTh k="toi_sec" label="TOI" est sort={sort} setSort={setSort} />
+                <SortTh k="shifts" label="Sh" est sort={sort} setSort={setSort} title="Shifts" />
+                <SortTh k="cf" label="CF–CA" sort={sort} setSort={setSort} title="Shot attempts for / against with this line on" />
+                <SortTh k="cfp" label="CF%" sort={sort} setSort={setSort} />
+                <SortTh k="xgf" label="xGF–xGA" sort={sort} setSort={setSort} />
+                <SortTh k="xgp" label="xG%" sort={sort} setSort={setSort} />
+                <SortTh k="gd" label="GF–GA" sort={sort} setSort={setSort} />
+                <SortTh k="ozp" label="OZ/DZ" sort={sort} setSort={setSort} title="Offensive / defensive zone faceoff starts" />
+                <SortTh k="fatigue" label="Fat" est sort={sort} setSort={setSort} title="Average fatigue (estimated)" />
+                {mine ? <th /> : null}
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((l) => (
+                <tr key={l.key} className={l.onNow ? "is-ice" : ""}>
+                  <td>
+                    <span className="st-tbl__key" style={colors[side].chip}>
+                      {l.key}
+                    </span>
+                    {l.onNow ? <span className="st-tbl__on" title="On the ice now" /> : null}
+                  </td>
+                  <td className="is-left st-tbl__names">{l.names || "–"}</td>
+                  <td>{has(l.toi_sec) ? mmss(l.toi_sec) : "–"}</td>
+                  <td>{has(l.shifts) ? l.shifts : "–"}</td>
+                  <td>
+                    {num(l.cf)}–{num(l.ca)}
+                  </td>
+                  <td>
+                    <PctBar v={l.cfp} colors={colors} />
+                  </td>
+                  <td>
+                    {fx(l.xgf, 2)}–{fx(l.xga, 2)}
+                  </td>
+                  <td>
+                    <PctBar v={l.xgp} colors={colors} />
+                  </td>
+                  <td>
+                    {num(l.gf)}–{num(l.ga)}
+                  </td>
+                  <td>
+                    {num(l.oz_starts)}/{num(l.dz_starts)}
+                  </td>
+                  <td>
+                    <Fatigue value={l.fatigue} />
+                  </td>
+                  {mine ? (
+                    <td className="st-tbl__act">
+                      {isFDKey(l.key) ? (
+                        <button type="button" className="st-btn is-sm" disabled={!live} onClick={() => onCoach("next_line", { line: l.key })} title={`Send ${l.key} out for the next shift`}>
+                          Next shift
+                        </button>
+                      ) : null}
+                      {ozKind && /^F\d$/.test(l.key) ? (
+                        <button type="button" className="st-btn is-ghost is-sm" disabled={!live} onClick={() => onCoach(ozKind, { line: l.key })} title="Use this line for offensive-zone draws">
+                          OZ draws
+                        </button>
+                      ) : null}
+                    </td>
+                  ) : null}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </>
+  );
+}
+
+function PlayersTab({ an, side, setSide, userSide, roster, colors, teams, bench, onCoach, live }) {
+  const [sort, setSort] = useState({ k: "toi_sec", dir: -1 });
+  const [menu, setMenu] = useState(null);
+  const all = an?.players && typeof an.players === "object" ? an.players : {};
+  const benchBy = new Map((bench?.players || []).map((p) => [String(p.player_id), p]));
+  const rows = Object.entries(all)
+    .filter(([id, p]) => p && (p.side || roster.get(id)?.side) === side && upper(roster.get(id)?.pos) !== "G")
+    .map(([id, p]) => {
+      const r = roster.get(id) || {};
+      const fo = num(p.fo_w) + num(p.fo_l);
+      return {
+        ...p,
+        id,
+        name: r.short || r.name || `#${id}`,
+        number: r.number,
+        pos: r.pos,
+        cfp: has(p.cf_pct) ? pct100(p.cf_pct) : share(p.cf, p.ca),
+        xgd: has(p.xgf) || has(p.xga) ? num(p.xgf) - num(p.xga) : null,
+        fop: fo ? (100 * num(p.fo_w)) / fo : null,
+        pts: has(p.pts) ? p.pts : num(p.g) + num(p.a),
+      };
+    });
+  const sorted = sortRows(rows, sort);
+  const mine = side === userSide;
+  return (
+    <>
+      <div className="st-an__bar">
+        <div className="st-an__seg" role="radiogroup" aria-label="Team">
+          {["home", "away"].map((s) => (
+            <button key={s} type="button" role="radio" aria-checked={side === s} className={side === s ? "is-on" : ""} onClick={() => setSide(s)}>
+              {teams?.[s]?.abbr || s}
+              {s === userSide ? " (you)" : ""}
+            </button>
+          ))}
+        </div>
+        {mine ? <span className="st-note">Click one of your players to sit him or double-shift him.</span> : null}
+      </div>
+      {!rows.length ? (
+        <p className="st-empty">No player numbers yet.</p>
+      ) : (
+        <div className="st-an__scroll">
+          <table className="st-tbl is-players">
+            <thead>
+              <tr>
+                <SortTh k="name" label="Player" sort={sort} setSort={setSort} />
+                <SortTh k="toi_sec" label="TOI" est sort={sort} setSort={setSort} />
+                <SortTh k="shifts" label="Sh" est sort={sort} setSort={setSort} title="Shifts" />
+                <SortTh k="avg_shift_sec" label="Avg" est sort={sort} setSort={setSort} title="Average shift" />
+                <SortTh k="current_shift_sec" label="Now" est sort={sort} setSort={setSort} title="Current shift" />
+                <SortTh k="pts" label="G-A-P" sort={sort} setSort={setSort} />
+                <SortTh k="sog" label="SOG" sort={sort} setSort={setSort} />
+                <SortTh k="cfp" label="CF%" sort={sort} setSort={setSort} />
+                <SortTh k="xgd" label="xG±" sort={sort} setSort={setSort} />
+                <SortTh k="plus_minus" label="+/-" sort={sort} setSort={setSort} />
+                <SortTh k="hits" label="Hit" sort={sort} setSort={setSort} />
+                <SortTh k="blocks" label="Blk" sort={sort} setSort={setSort} />
+                <SortTh k="fop" label="FO%" sort={sort} setSort={setSort} />
+                <SortTh k="fatigue" label="Fat" est sort={sort} setSort={setSort} />
+                <SortTh k="rating_tonight" label="GS" sort={sort} setSort={setSort} title="Game score tonight, 0–10" />
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((p) => {
+                const b = benchBy.get(p.id) || {};
+                const open = menu === p.id;
+                const gs = has(p.rating_tonight) ? num(p.rating_tonight) : null;
+                return (
+                  <tr key={p.id} className={`${mine && live ? "is-click" : ""}${b.on_ice ? " is-ice" : ""}${open ? " is-open" : ""}`} onClick={() => mine && live && setMenu(open ? null : p.id)}>
+                    <td className="is-left st-tbl__player">
+                      <span className="st-tbl__num" style={colors[side].chip}>
+                        {has(p.number) ? p.number : "–"}
+                      </span>
+                      {p.name}
+                      {p.pos ? <small>{p.pos}</small> : null}
+                      {open ? (
+                        <span className="st-tbl__menu" onClick={(e) => e.stopPropagation()}>
+                          <button
+                            type="button"
+                            className="st-btn is-ghost is-sm"
+                            onClick={() => {
+                              onCoach("bench_player", { player_id: p.id });
+                              setMenu(null);
+                            }}
+                          >
+                            {b.benched ? "Back in lineup" : "Sit him"}
+                          </button>
+                          <button
+                            type="button"
+                            className="st-btn is-ghost is-sm"
+                            onClick={() => {
+                              onCoach("bench_player", { player_id: p.id, double_shift: !b.double_shift });
+                              setMenu(null);
+                            }}
+                          >
+                            {b.double_shift ? "End double-shift" : "Double-shift"}
+                          </button>
+                        </span>
+                      ) : null}
+                    </td>
+                    <td>{has(p.toi_sec) ? mmss(p.toi_sec) : "–"}</td>
+                    <td>{has(p.shifts) ? p.shifts : "–"}</td>
+                    <td>{has(p.avg_shift_sec) ? `${Math.round(num(p.avg_shift_sec))}s` : "–"}</td>
+                    <td className={num(p.current_shift_sec) > 60 ? "is-red" : num(p.current_shift_sec) > 45 ? "is-amber" : ""}>{num(p.current_shift_sec) > 0 ? `${Math.round(num(p.current_shift_sec))}s` : "–"}</td>
+                    <td>
+                      {num(p.g)}-{num(p.a)}-{num(p.pts)}
+                    </td>
+                    <td>{has(p.sog) ? p.sog : "–"}</td>
+                    <td>{p.cfp === null ? "–" : `${Math.round(p.cfp)}%`}</td>
+                    <td>{p.xgd === null ? "–" : signed(p.xgd, 2)}</td>
+                    <td>{has(p.plus_minus) ? signed(p.plus_minus) : "–"}</td>
+                    <td>{has(p.hits) ? p.hits : "–"}</td>
+                    <td>{has(p.blocks) ? p.blocks : "–"}</td>
+                    <td>{p.fop === null ? "–" : `${Math.round(p.fop)}%`}</td>
+                    <td>
+                      <Fatigue value={p.fatigue} />
+                    </td>
+                    <td>{gs === null ? "–" : <span className={`st-gs${gs >= 7 ? " is-hi" : gs < 4 ? " is-lo" : ""}`}>{gs.toFixed(1)}</span>}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </>
+  );
+}
+
+function TeamTab({ an, colors, teams }) {
+  const h = an?.teams?.home;
+  const a = an?.teams?.away;
+  if (!h || !a) return <p className="st-empty">Team numbers arrive with the next update from the sim.</p>;
+  const ratio = (s) => {
+    const m = /^(\d+)\s*\/\s*(\d+)$/.exec(String(s || ""));
+    return m ? { n: Number(m[1]), d: Number(m[2]) } : null;
+  };
+  const rows = [];
+  const add = (label, av, hv, aTxt, hTxt, title) => rows.push({ label, av: num(av), hv: num(hv), aTxt, hTxt, title });
+  const fo = (t) => (num(t.fo_w) + num(t.fo_l) ? (100 * num(t.fo_w)) / (num(t.fo_w) + num(t.fo_l)) : null);
+  const cfA = has(a.cf_pct) ? pct100(a.cf_pct) : share(a.cf, a.ca);
+  const cfH = has(h.cf_pct) ? pct100(h.cf_pct) : share(h.cf, h.ca);
+  if (cfA !== null || cfH !== null) add("CF%", cfA, cfH, pctTxt(cfA), pctTxt(cfH), `Shot attempts ${num(a.cf)}–${num(h.cf)}`);
+  const xA = has(a.xg_pct) ? pct100(a.xg_pct) : share(a.xgf, a.xga);
+  const xH = has(h.xg_pct) ? pct100(h.xg_pct) : share(h.xgf, h.xga);
+  if (xA !== null || xH !== null) add("xG%", xA, xH, `${pctTxt(xA)} · ${fx(a.xgf, 2)}`, `${fx(h.xgf, 2)} · ${pctTxt(xH)}`);
+  if (has(a.hdcf) || has(h.hdcf)) add("High-danger CF", a.hdcf, h.hdcf, num(a.hdcf), num(h.hdcf));
+  if (has(a.sf) || has(h.sf)) add("Shots on goal", a.sf, h.sf, num(a.sf), num(h.sf));
+  const ppA = ratio(a.pp);
+  const ppH = ratio(h.pp);
+  if (ppA || ppH) add("Power play", ppA ? ppA.n : 0, ppH ? ppH.n : 0, a.pp || "–", h.pp || "–");
+  const pkA = ratio(a.pk);
+  const pkH = ratio(h.pk);
+  if (pkA || pkH) add("Penalty kill", pkA && pkA.d ? pkA.n / pkA.d : 0, pkH && pkH.d ? pkH.n / pkH.d : 0, a.pk || "–", h.pk || "–");
+  const fA = fo(a);
+  const fH = fo(h);
+  if (fA !== null || fH !== null) add("Faceoffs", fA, fH, pctTxt(fA), pctTxt(fH), `${num(a.fo_w)}–${num(h.fo_w)} won`);
+  if (has(a.pdo) || has(h.pdo)) add("PDO", a.pdo, h.pdo, fx(a.pdo, 3), fx(h.pdo, 3), "Shooting % + save %, luck indicator (1.000 = average)");
+  if (has(a.hits) || has(h.hits)) add("Hits", a.hits, h.hits, num(a.hits), num(h.hits));
+  if (has(a.blocks) || has(h.blocks)) add("Blocks", a.blocks, h.blocks, num(a.blocks), num(h.blocks));
+  return (
+    <div className="st-mirror" style={{ "--st-home-bg": colors.home.kit, "--st-away-line": colors.away.trim }}>
+      <div className="st-mirror__head">
+        <TeamChip side="away" colors={colors} teams={teams} />
+        <span />
+        <TeamChip side="home" colors={colors} teams={teams} />
+      </div>
+      {rows.map((r) => {
+        const tot = Math.abs(r.av) + Math.abs(r.hv);
+        const aw = tot ? (100 * Math.abs(r.av)) / tot : 50;
+        return (
+          <div key={r.label} className="st-mirror__row" title={r.title}>
+            <b className={r.av > r.hv ? "is-lead" : ""}>{r.aTxt}</b>
+            <span className="st-mirror__mid">
+              <small>{r.label}</small>
+              <span className="st-mirror__bar">
+                <i className="is-away" style={{ width: `${aw}%` }} />
+                <i className="is-home" style={{ width: `${100 - aw}%` }} />
+              </span>
+            </span>
+            <b className={r.hv > r.av ? "is-lead" : ""}>{r.hTxt}</b>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function GoaliesTab({ an, roster, colors, teams }) {
+  const g = an?.goalies && typeof an.goalies === "object" ? Object.entries(an.goalies) : [];
+  if (!g.length) return <p className="st-empty">Goalie numbers arrive after the first shots.</p>;
+  return (
+    <div className="st-an__scroll">
+      <table className="st-tbl">
+        <thead>
+          <tr>
+            <th className="is-left">Goalie</th>
+            <th>SA</th>
+            <th>SV</th>
+            <th>GA</th>
+            <th>SV%</th>
+            <th title="Expected goals against">xGA</th>
+            <th title="Goals saved above expected">GSAx</th>
+            <th title="High-danger save %">HDSV%</th>
+          </tr>
+        </thead>
+        <tbody>
+          {g.map(([id, x]) => {
+            const s = x.side || roster.get(id)?.side || "home";
+            return (
+              <tr key={id}>
+                <td className="is-left st-tbl__player">
+                  <TeamChip side={s} colors={colors} teams={teams} />
+                  {roster.get(id)?.name || surname(roster, id)}
+                </td>
+                <td>{num(x.sa)}</td>
+                <td>{num(x.sv)}</td>
+                <td>{num(x.ga)}</td>
+                <td>{has(x.sv_pct) ? fmtPct(x.sv_pct) : "–"}</td>
+                <td>{fx(x.xga, 2)}</td>
+                <td className={num(x.gsax) > 0.5 ? "is-good" : num(x.gsax) < -0.5 ? "is-bad" : ""}>{has(x.gsax) ? signed(x.gsax, 2) : "–"}</td>
+                <td>{has(x.hd_sv_pct) ? fmtPct(x.hd_sv_pct) : "–"}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function MatchupsTab({ an, colors, teams, userSide }) {
+  const m = an?.matchups || {};
+  const now = m.on_ice_now || {};
+  const top = Array.isArray(m.top) ? m.top : [];
+  return (
+    <div className="st-match">
+      <div className="st-match__now">
+        <small>On the ice now</small>
+        <div>
+          <span className="st-tbl__key" style={colors.home.chip}>
+            {teams?.home?.abbr} {now.home_line || "–"}
+          </span>
+          <b>vs</b>
+          <span className="st-tbl__key" style={colors.away.chip}>
+            {teams?.away?.abbr} {now.away_line || "–"}
+          </span>
+        </div>
+      </div>
+      {top.length ? (
+        <table className="st-tbl">
+          <thead>
+            <tr>
+              <th className="is-left">{teams?.home?.abbr}</th>
+              <th className="is-left">{teams?.away?.abbr}</th>
+              <th>
+                TOI
+                <Est />
+              </th>
+              <th title={`Shot-attempt share for ${teams?.home?.abbr || "home"} in this matchup`}>CF% {teams?.home?.abbr}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {top.map((r, i) => (
+              <tr key={`${r.home_line}-${r.away_line}-${i}`} className={r.home_line === now.home_line && r.away_line === now.away_line ? "is-ice" : ""}>
+                <td className="is-left">{r.home_line}</td>
+                <td className="is-left">{r.away_line}</td>
+                <td>{has(r.toi_sec) ? mmss(r.toi_sec) : "–"}</td>
+                <td>
+                  <PctBar v={r.cf_pct_home} colors={colors} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <p className="st-empty">Matchups build up as lines face each other.</p>
+      )}
+      {userSide ? <p className="st-note">Tip: send a line out with "Next shift" on the Lines tab when you like a matchup.</p> : null}
+    </div>
+  );
+}
+
+const AN_TABS = [
+  ["lines", "Lines"],
+  ["players", "Players"],
+  ["team", "Team"],
+  ["goalies", "Goalies"],
+  ["matchups", "Matchups"],
+];
+function StatsPanel({ an, roster, colors, teams, userSide, bench, onIceIds, pinned, onPin, onClose, onCoach, live, ozKind }) {
+  const [tab, setTab] = useState("lines");
+  const [side, setSide] = useState(userSide || "home");
+  return (
+    <aside className={`st-an${pinned ? " is-pinned" : ""}`} aria-label="Game analytics">
+      <header className="st-an__head">
+        <h3>Analytics</h3>
+        <nav className="st-an__tabs">
+          {AN_TABS.map(([k, label]) => (
+            <button key={k} type="button" className={tab === k ? "is-on" : ""} onClick={() => setTab(k)}>
+              {label}
+            </button>
+          ))}
+        </nav>
+        <button type="button" className={`st-btn is-ghost is-sm${pinned ? " is-on" : ""}`} onClick={onPin} title={pinned ? "Unpin: float over the rink" : "Pin beside the rink"} aria-pressed={pinned}>
+          {pinned ? "Pinned" : "Pin"}
+        </button>
+        <button type="button" className="st-btn is-ghost is-sm" onClick={onClose} title="Close (S)">
+          Close
+        </button>
+      </header>
+      {an?.sample_note ? <p className="st-an__note">{an.sample_note}</p> : null}
+      {!an ? (
+        <p className="st-empty">Analytics arrive with the next update from the sim.</p>
+      ) : tab === "lines" ? (
+        <LinesTab an={an} side={side} setSide={setSide} userSide={userSide} roster={roster} colors={colors} teams={teams} onIceIds={onIceIds} onCoach={onCoach} live={live} ozKind={ozKind} />
+      ) : tab === "players" ? (
+        <PlayersTab an={an} side={side} setSide={setSide} userSide={userSide} roster={roster} colors={colors} teams={teams} bench={bench} onCoach={onCoach} live={live} />
+      ) : tab === "team" ? (
+        <TeamTab an={an} colors={colors} teams={teams} />
+      ) : tab === "goalies" ? (
+        <GoaliesTab an={an} roster={roster} colors={colors} teams={teams} />
+      ) : (
+        <MatchupsTab an={an} colors={colors} teams={teams} userSide={userSide} />
+      )}
+      <p className="st-an__foot">
+        Counts come from the game's events. TOI, shifts and fatigue are estimated from the on-ice track (<Est />).
+      </p>
+    </aside>
+  );
+}
+
+/* ---------- coaching notifications ---------- */
+function NotifCard({ n, onAct, onDismiss, live }) {
+  const acts = Array.isArray(n.actions) ? n.actions.slice(0, 3) : [];
+  return (
+    <div className={`st-ncard is-p${num(n.priority, 2)}`} role="alert">
+      <div className="st-ncard__top">
+        <span className="st-ncard__kind">{NOTIF_KIND_LABEL[n.kind] || n.kind || "Coach"}</span>
+        <button type="button" className="st-ncard__x" onClick={() => onDismiss(n)} aria-label="Dismiss" title="Dismiss">
+          ×
+        </button>
+      </div>
+      <b className="st-ncard__title">{n.title}</b>
+      {n.body ? <p>{n.body}</p> : null}
+      {acts.length ? (
+        <div className="st-ncard__acts">
+          {acts.map((a, i) => (
+            <button key={i} type="button" className={`st-btn is-sm${i ? " is-ghost" : ""}`} disabled={!live || !a?.order?.kind} onClick={() => onAct(n, a)}>
+              {a.label || KIND_LABEL[a?.order?.kind] || "Do it"}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function NotifLog({ list, statusOf, onAct, onDismiss, live, pauseCritical, setPauseCritical, onClose }) {
+  const [kind, setKind] = useState("all");
+  const kinds = [...new Set(list.map((n) => n.kind).filter(Boolean))];
+  const rows = list.filter((n) => kind === "all" || n.kind === kind);
+  const whenOf = (n) => {
+    if (!has(n.t)) return "";
+    const c = clockFromT(n.t);
+    return `${periodName(c.period)} ${mmss(c.left)}`;
+  };
+  return (
+    <div className="st-nlog" role="dialog" aria-label="Coaching notifications">
+      <header>
+        <b>Coaching log</b>
+        <button type="button" className="st-btn is-ghost is-sm" onClick={onClose}>
+          Close
+        </button>
+      </header>
+      <label className="st-check">
+        <input type="checkbox" checked={pauseCritical} onChange={() => setPauseCritical(!pauseCritical)} /> Pause the game on critical decisions
+      </label>
+      {kinds.length > 1 ? (
+        <div className="st-nlog__filters">
+          {["all", ...kinds].map((k) => (
+            <button key={k} type="button" className={kind === k ? "is-on" : ""} onClick={() => setKind(k)}>
+              {k === "all" ? "All" : NOTIF_KIND_LABEL[k] || k}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {!rows.length ? (
+        <p className="st-empty">No coaching notes yet.</p>
+      ) : (
+        <ol className="st-nlog__list">
+          {rows.map((n) => {
+            const st = statusOf(n);
+            const acts = Array.isArray(n.actions) ? n.actions.slice(0, 3) : [];
+            return (
+              <li key={n.id} className={`is-p${num(n.priority, 1)} is-${st}`}>
+                <div className="st-nlog__meta">
+                  <span>{whenOf(n)}</span>
+                  <span>{NOTIF_KIND_LABEL[n.kind] || n.kind}</span>
+                  <em className={`st-nstat is-${st}`}>{st}</em>
+                </div>
+                <b>{n.title}</b>
+                {n.body ? <p>{n.body}</p> : null}
+                {st === "new" && acts.length ? (
+                  <div className="st-ncard__acts">
+                    {acts.map((a, i) => (
+                      <button key={i} type="button" className={`st-btn is-sm${i ? " is-ghost" : ""}`} disabled={!live || !a?.order?.kind} onClick={() => onAct(n, a)}>
+                        {a.label || "Do it"}
+                      </button>
+                    ))}
+                    <button type="button" className="st-btn is-ghost is-sm" onClick={() => onDismiss(n)}>
+                      Dismiss
+                    </button>
+                  </div>
+                ) : null}
+              </li>
+            );
+          })}
+        </ol>
+      )}
     </div>
   );
 }
@@ -2083,7 +2978,8 @@ const TabIcon = ({ k }) => (
     {k === "lines" ? <path d="M3 5h14M3 10h14M3 15h14" /> : null}
     {k === "tactics" ? <path d="M4 4l4 4M8 4L4 8M12 13a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0-5 0M6 16c3 0 5-2 6-6l-2 1m2-1l1 2" /> : null}
     {k === "special" ? <path d="M3 7h6M6 4v6M11 13h6" /> : null}
-    {k === "game" ? <path d="M4 16V9M8 16V5M12 16v-5M16 16V7" /> : null}
+    {k === "game" ? <path d="M4 3h12v14H4zM7 7h6M7 10h6M7 13h4" /> : null}
+    {k === "stats" ? <path d="M3 16l4-5 3 3 7-9M3 3v14h14" /> : null}
   </svg>
 );
 const ordinal = (n) => {
@@ -2206,6 +3102,45 @@ export default function SimTracker({ sessionId: sessionIdProp, onExit }) {
   const [pullArmed, setPullArmed] = useState(false);
   const [ttsStatus, setTtsStatus] = useState(null);
   const [puckDropped, setPuckDropped] = useState(false);
+  const [statsOpen, setStatsOpen] = useState(false);
+  const [statsPinned, setStatsPinned] = useState(false);
+  const readFlag = (k) => {
+    try {
+      return window.localStorage.getItem(k) === "1";
+    } catch {
+      return false;
+    }
+  };
+  const writeFlag = (k, v) => {
+    try {
+      window.localStorage.setItem(k, v ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  };
+  const [compact, setCompactState] = useState(() => readFlag(COMPACT_KEY));
+  const [names, setNamesState] = useState(() => {
+    try {
+      const v = window.localStorage.getItem(NAMES_KEY);
+      return v === "off" || v === "all" ? v : "key";
+    } catch {
+      return "key";
+    }
+  });
+  const setNames = (v) => {
+    setNamesState(v);
+    try {
+      window.localStorage.setItem(NAMES_KEY, v);
+    } catch {
+      /* ignore */
+    }
+  };
+  const [pauseCritical, setPauseCriticalState] = useState(() => readFlag(PAUSE_CRIT_KEY));
+  const [nStatus, setNStatus] = useState({});
+  const [cards, setCards] = useState([]);
+  const [logOpen, setLogOpen] = useState(false);
+  const [logSeen, setLogSeen] = useState(() => new Set());
+  const seenNotif = useRef(new Set());
 
   const serverRef = useRef(null);
   const dispRef = useRef(null);
@@ -2267,6 +3202,16 @@ export default function SimTracker({ sessionId: sessionIdProp, onExit }) {
     lastPopGc: -1e9,
     shots: new Map(),
     posOut: new Map(),
+    shiftStart: new Map(),
+    liveSig: "",
+    carPrev: null,
+    carV: [0, 0],
+    prevC: null,
+    pass: null,
+    recent: new Map(),
+    recentSet: new Set(),
+    puffs: [],
+    spFrame: null,
   });
   speedRef.current = speed;
   heldRef.current = held;
@@ -2411,6 +3356,10 @@ export default function SimTracker({ sessionId: sessionIdProp, onExit }) {
         P.ready = true;
         const old = (Array.isArray(s.commentary) ? s.commentary : []).filter((c) => c && has(c.id));
         old.forEach((c) => seenLines.current.add(c.id));
+        // Notes that already exist when we attach go to the log only, already read.
+        const oldN = (Array.isArray(s.notifications) ? s.notifications : []).filter((n) => n && has(n.id)).map((n) => n.id);
+        oldN.forEach((id) => seenNotif.current.add(id));
+        setLogSeen(new Set(oldN));
         setLines(old.slice(-MAX_LINES).map((c) => ({ ...c, _at: 0 })));
         if (Number.isFinite(Number(s.seq))) sinceRef.current = Number(s.seq);
         if (s.tracking?.frames?.length) appendFrames(convertTracking(s.tracking.frames));
@@ -2632,7 +3581,7 @@ export default function SimTracker({ sessionId: sessionIdProp, onExit }) {
             number: has(e.shooter_number) ? e.shooter_number : info.number,
             assists: Array.isArray(e.assist_names) ? e.assist_names : [],
             season: Number.isFinite(seasonN) && seasonN > 0 ? `His ${ordinal(seasonN)} of the season` : "",
-            player: { id: e.shooter_id, player_id: e.shooter_id, name: e.shooter_name || info.name, position: info.pos, number: info.number },
+            player: facePlayer(e.shooter_id, { ...(e.meta?.scorer_headshot || {}), name: e.shooter_name || info.name, side: e.side }, rosterRef.current, serverRef.current?.teams),
           });
           flash("scorer", () => setScorer(null), 6500);
           setGoalPulse((n) => n + 1);
@@ -2680,11 +3629,30 @@ export default function SimTracker({ sessionId: sessionIdProp, onExit }) {
       if (!f._m) {
         const m = new Map();
         (Array.isArray(f.p) ? f.p : []).forEach((r) => m.set(String(r[0]), r));
+        // Penalised players sit in the box (drawn behind the -y glass).
+        (Array.isArray(f.bx) ? f.bx : []).forEach((r) => {
+          const id = String(r[0]);
+          if (!m.has(id)) m.set(id, [r[0], num(r[1]), num(r[2]) < -41 ? -47.6 : num(r[2])]);
+        });
         f._m = m;
       }
       return f._m;
     };
-    /** Sample the buffered track at presentation time t (spline for players, linear for the puck). */
+    /** Cubic Hermite with velocities estimated from the neighbouring frames (non-uniform time). */
+    const herm = (p0, p1, p2, p3, t0, t1, t2, t3, k, m1o, m2o) => {
+      const dt = t2 - t1 > 1e-6 ? t2 - t1 : 0.5;
+      const v12 = (p2 - p1) / dt;
+      const m1 = m1o !== undefined ? m1o : t2 - t0 > 1e-6 ? (p2 - p0) / (t2 - t0) : v12;
+      const m2 = m2o !== undefined ? m2o : t3 - t1 > 1e-6 ? (p3 - p1) / (t3 - t1) : v12;
+      const k2 = k * k;
+      const k3 = k2 * k;
+      return (2 * k3 - 3 * k2 + 1) * p1 + (k3 - 2 * k2 + k) * dt * m1 + (-2 * k3 + 3 * k2) * p2 + (k3 - k2) * dt * m2;
+    };
+    const cos2 = (ax, ay, bx, by) => {
+      const d = Math.hypot(ax, ay) * Math.hypot(bx, by);
+      return d > 1e-6 ? (ax * bx + ay * by) / d : 1;
+    };
+    /** Sample the buffered track at presentation time t. */
     const sample = (P, t) => {
       const fs = P.frames;
       const n = fs.length;
@@ -2710,6 +3678,10 @@ export default function SimTracker({ sessionId: sessionIdProp, onExit }) {
       const bm = b ? frameMap(b) : null;
       const a0m = frameMap(a0);
       const b1m = frameMap(b1);
+      const t0 = a0._p;
+      const t1 = a._p;
+      const t2 = b ? b._p : a._p + 0.5;
+      const t3 = b1 !== b && b1 ? b1._p : t2 + (t2 - t1);
       pos.clear();
       am.forEach((r, id) => {
         if (r[3]) P.sides.set(id, r[3]);
@@ -2730,12 +3702,10 @@ export default function SimTracker({ sessionId: sessionIdProp, onExit }) {
           } else {
             const p0 = a0m.get(id);
             const p3 = b1m.get(id);
-            const x0 = p0 && Math.abs(num(p0[1]) - ax) < 40 ? num(p0[1]) : ax;
-            const y0 = p0 && Math.abs(num(p0[2]) - ay) < 40 ? num(p0[2]) : ay;
-            const x3 = p3 && Math.abs(num(p3[1]) - bx) < 40 ? num(p3[1]) : bx;
-            const y3 = p3 && Math.abs(num(p3[2]) - by) < 40 ? num(p3[2]) : by;
-            out[0] = cr(x0, ax, bx, x3, k);
-            out[1] = cr(y0, ay, by, y3, k);
+            const ok0 = p0 && a0 !== a && Math.abs(num(p0[1]) - ax) < 30 && Math.abs(num(p0[2]) - ay) < 30;
+            const ok3 = p3 && b1 !== b && Math.abs(num(p3[1]) - bx) < 30 && Math.abs(num(p3[2]) - by) < 30;
+            out[0] = herm(ok0 ? num(p0[1]) : ax, ax, bx, ok3 ? num(p3[1]) : bx, ok0 ? t0 : t1, t1, t2, ok3 ? t3 : t2, k);
+            out[1] = herm(ok0 ? num(p0[2]) : ay, ay, by, ok3 ? num(p3[2]) : by, ok0 ? t0 : t1, t1, t2, ok3 ? t3 : t2, k);
           }
           pos.set(id, out);
         } else if (k < 0.5) {
@@ -2756,14 +3726,47 @@ export default function SimTracker({ sessionId: sessionIdProp, onExit }) {
           out[1] = num(q[2]);
           pos.set(id, out);
         });
+      // Puck: same Hermite, but kinks stay sharp (shot release, deflection, pass reception).
       let pk = null;
+      let pv = 0;
       if (Array.isArray(a.pk)) {
-        if (b && Array.isArray(b.pk) && Math.abs(num(b.pk[0]) - num(a.pk[0])) < 70 * reach) pk = [num(a.pk[0]) + (num(b.pk[0]) - num(a.pk[0])) * k, num(a.pk[1]) + (num(b.pk[1]) - num(a.pk[1])) * k];
-        else pk = [num(a.pk[0]), num(a.pk[1])];
+        const ax = num(a.pk[0]);
+        const ay = num(a.pk[1]);
+        if (b && Array.isArray(b.pk) && Math.abs(num(b.pk[0]) - ax) < 70 * reach && Math.abs(num(b.pk[1]) - ay) < 70 * reach) {
+          const bx = num(b.pk[0]);
+          const by = num(b.pk[1]);
+          const dt = t2 - t1 > 1e-6 ? t2 - t1 : 0.5;
+          const vx = (bx - ax) / dt;
+          const vy = (by - ay) / dt;
+          pv = Math.hypot(vx, vy);
+          let m1x;
+          let m1y;
+          let m2x;
+          let m2y;
+          const has0 = a0 !== a && Array.isArray(a0.pk);
+          const has3 = b1 && b1 !== b && Array.isArray(b1.pk);
+          const ux = has0 ? (ax - num(a0.pk[0])) / Math.max(1e-6, t1 - t0) : vx;
+          const uy = has0 ? (ay - num(a0.pk[1])) / Math.max(1e-6, t1 - t0) : vy;
+          const wx = has3 ? (num(b1.pk[0]) - bx) / Math.max(1e-6, t3 - t2) : vx;
+          const wy = has3 ? (num(b1.pk[1]) - by) / Math.max(1e-6, t3 - t2) : vy;
+          if (!has0 || (pv > 20 && (cos2(ux, uy, vx, vy) < 0.6 || pv > 2 * Math.hypot(ux, uy) + 15))) {
+            m1x = vx;
+            m1y = vy;
+          }
+          if (!has3 || (Math.hypot(wx, wy) > 20 && (cos2(vx, vy, wx, wy) < 0.6 || Math.hypot(wx, wy) > 2 * pv + 15))) {
+            m2x = vx;
+            m2y = vy;
+          }
+          pk = [
+            herm(has0 ? num(a0.pk[0]) : ax, ax, bx, has3 ? num(b1.pk[0]) : bx, has0 ? t0 : t1, t1, t2, has3 ? t3 : t2, k, m1x, m2x),
+            herm(has0 ? num(a0.pk[1]) : ay, ay, by, has3 ? num(b1.pk[1]) : by, has0 ? t0 : t1, t1, t2, has3 ? t3 : t2, k, m1y, m2y),
+          ];
+        } else pk = [ax, ay];
       }
       const near = k < 0.5 || !b ? a : b;
       const gc = b && b._g >= a._g ? a._g + (b._g - a._g) * k : a._g;
-      return { pos, pk, near, gc };
+      const pz = b ? num(a.pz) + (num(b.pz) - num(a.pz)) * k : num(a.pz);
+      return { pos, pk, near, gc, pv, pz, pp: a.pp || null };
     };
 
     const loop = (now) => {
@@ -2820,13 +3823,50 @@ export default function SimTracker({ sessionId: sessionIdProp, onExit }) {
 
         const smp = sample(P, viewT);
         if (smp) {
-          const { pk, near } = smp;
+          const { near } = smp;
+          let pk = smp.pk;
           const ph = near.ph || "play";
           if (!P.replay) P.gc = smp.gc;
+          const c0 = has(near.c) ? String(near.c) : null;
+          // Puck on the stick: just in front of a moving carrier.
+          const cp = c0 ? smp.pos.get(c0) : null;
+          if (cp) {
+            const pc = P.carPrev;
+            if (pc && pc.id === c0 && viewT > pc.t) {
+              const ivt = 1 / Math.max(1e-3, viewT - pc.t);
+              P.carV[0] += ((cp[0] - pc.x) * ivt - P.carV[0]) * 0.25;
+              P.carV[1] += ((cp[1] - pc.y) * ivt - P.carV[1]) * 0.25;
+            } else {
+              P.carV[0] = 0;
+              P.carV[1] = 0;
+            }
+            P.carPrev = { id: c0, x: cp[0], y: cp[1], t: viewT };
+            const sp = Math.hypot(P.carV[0], P.carV[1]);
+            if (pk && ph === "play" && Math.hypot(pk[0] - cp[0], pk[1] - cp[1]) < 5 && sp > 2) pk = [cp[0] + (P.carV[0] / sp) * 1.7, cp[1] + (P.carV[1] / sp) * 1.7];
+          } else P.carPrev = null;
           if (pk) P.pk = pk;
+          const shot = !c0 && SHOT_TYPES.has(String(smp.pp || ""));
+          // passes: dotted path from where the puck left the stick; names for passer + receiver for 2 s
+          if (c0 !== P.prevC) {
+            if (P.prevC && !c0 && pk && !shot) P.pass = { x: pk[0], y: pk[1], t0: now };
+            if (P.prevC) P.recent.set(P.prevC, now + 2000);
+            if (c0) P.recent.set(c0, now + 2000);
+            P.prevC = c0;
+          }
+          if (P.pass && now - P.pass.t0 > 600) P.pass = null;
+          // snow puffs on hard stops (frame sp)
+          if (near !== P.spFrame) {
+            P.spFrame = near;
+            if (Array.isArray(near.sp))
+              near.sp.forEach((id) => {
+                const q = smp.pos.get(String(id));
+                if (q) P.puffs.push({ x: q[0], y: q[1], t0: now });
+              });
+            while (P.puffs.length > PUFFS) P.puffs.shift();
+          }
           // trail
           if (ph !== P.ph && (ph === "faceoff" || ph === "goal")) P.trail = [];
-          if (pk && ph === "play" && now - P.trailAt > 40) {
+          if (pk && ph === "play" && now - P.trailAt > 30) {
             P.trail.push([pk[0], pk[1]]);
             P.trailAt = now;
             if (P.trail.length > TRAIL_LEN) P.trail.shift();
@@ -2844,10 +3884,46 @@ export default function SimTracker({ sessionId: sessionIdProp, onExit }) {
             setOnIce([...smp.pos.keys()].sort().map((id) => ({ id, side: rosterRef.current.get(id)?.side || P.sides.get(id) || "home" })));
           }
           const layout = now - P.lastLayout > LABEL_LAYOUT_MS;
-          if (layout) P.lastLayout = now;
-          rinkApi.current?.draw({ pos: smp.pos, pk, carrier: near.c, trail: P.trail, ph, layout });
+          if (layout) {
+            P.lastLayout = now;
+            P.recentSet.clear();
+            P.recent.forEach((exp, id) => {
+              if (exp > now) P.recentSet.add(id);
+              else P.recent.delete(id);
+            });
+          }
+          const puffs = P.puffs.length ? P.puffs.map((q) => ({ x: q.x, y: q.y, age: now - q.t0 })) : null;
+          if (puffs && puffs.every((q) => q.age > 700)) P.puffs = [];
+          rinkApi.current?.draw({
+            pos: smp.pos,
+            pk,
+            carrier: near.c,
+            trail: P.trail,
+            ph,
+            layout,
+            puckSpeed: smp.pv,
+            shot,
+            pz: smp.pz,
+            pass: P.pass ? { x: P.pass.x, y: P.pass.y, age: now - P.pass.t0 } : null,
+            puffs,
+            recent: P.recentSet,
+          });
 
           if (!P.replay) {
+            // shift clocks (game seconds since each player stepped on)
+            let lsig = "";
+            smp.pos.forEach((_, id) => {
+              lsig += `${id},`;
+            });
+            if (lsig !== P.liveSig) {
+              P.liveSig = lsig;
+              smp.pos.forEach((_, id) => {
+                if (!P.shiftStart.has(id)) P.shiftStart.set(id, P.gc);
+              });
+              [...P.shiftStart.keys()].forEach((id) => {
+                if (!smp.pos.has(id)) P.shiftStart.delete(id);
+              });
+            }
             const sfx = sfxRef.current;
             // SFX: passes on a carrier change within a team, boards when the puck reaches them.
             const c = has(near.c) ? String(near.c) : null;
@@ -3185,6 +4261,64 @@ export default function SimTracker({ sessionId: sessionIdProp, onExit }) {
     );
   }, [view, dismissed, headPt, gameSec]);
   const dismissAlert = (id) => setDismissed((prev) => new Set([...prev, id]));
+
+  /* ---------- coaching notifications (v4) ---------- */
+  const hasNotifFeed = Array.isArray(server?.notifications) || Array.isArray(view.notifications);
+  const notifList = useMemo(() => {
+    // Items with pt can be read from the (ahead) server snapshot and revealed at the head; others wait for the displayed snapshot.
+    const byId = new Map();
+    (Array.isArray(view.notifications) ? view.notifications : []).forEach((n) => n && has(n.id) && byId.set(n.id, n));
+    (Array.isArray(server?.notifications) ? server.notifications : []).forEach((n) => {
+      if (n && has(n.id) && has(n.pt)) byId.set(n.id, { ...(byId.get(n.id) || {}), ...n });
+    });
+    return [...byId.values()].filter((n) => !has(n.pt) || num(n.pt) <= headPt + 0.5).sort((a, b) => ptOf(b, num(b.t)) - ptOf(a, num(a.t)));
+  }, [view, server, headPt]);
+  const notifById = useMemo(() => new Map(notifList.map((n) => [n.id, n])), [notifList]);
+  const statusOf = useCallback(
+    (n) => {
+      if (nStatus[n.id]) return nStatus[n.id];
+      const st = n.status || "new";
+      if (st === "new" && has(n.expires_pt) && num(n.expires_pt) < headPt) return "expired";
+      return st;
+    },
+    [nStatus, headPt]
+  );
+  const unread = notifList.filter((n) => !logSeen.has(n.id)).length;
+  const ackNotif = useCallback(
+    (id, status) => {
+      setNStatus((p) => ({ ...p, [id]: status }));
+      setCards((prev) => prev.filter((x) => x !== id));
+      liveCoach(sessionId, { kind: "notification_ack", payload: { id, status } }).catch(() => {});
+    },
+    [sessionId]
+  );
+  const actNotif = (n, a) => {
+    if (a?.order?.kind) sendCoach(a.order.kind, a.order.payload || {});
+    ackNotif(n.id, "acted");
+  };
+  const dismissNotif = (n) => ackNotif(n.id, "dismissed");
+  const setPauseCritical = (v) => {
+    setPauseCriticalState(v);
+    writeFlag(PAUSE_CRIT_KEY, v);
+  };
+  const toggleCompact = () =>
+    setCompactState((v) => {
+      writeFlag(COMPACT_KEY, !v);
+      return !v;
+    });
+  const toggleLog = () =>
+    setLogOpen((o) => {
+      if (!o) setLogSeen(new Set(notifList.map((n) => n.id)));
+      return !o;
+    });
+  useEffect(() => {
+    if (logOpen) setLogSeen(new Set(notifList.map((n) => n.id)));
+  }, [logOpen, notifList]);
+  const toggleStats = () =>
+    setStatsOpen((o) => {
+      if (!o) setDrawer(null);
+      return !o;
+    });
   const alertAction = (a) => {
     sendCoach(a.action.kind, a.action.payload || {});
     dismissAlert(a.id);
@@ -3276,6 +4410,7 @@ export default function SimTracker({ sessionId: sessionIdProp, onExit }) {
     if (k === "Escape") {
       if (help) setHelp(false);
       else if (confirm) setConfirm(null);
+      else if (logOpen) setLogOpen(false);
       else if (soundMenu) setSoundMenu(false);
       else if (replay) skipReplay();
       else if (intro) endIntro();
@@ -3293,12 +4428,33 @@ export default function SimTracker({ sessionId: sessionIdProp, onExit }) {
     else if (k === "h" || k === "H" || k === "?") setHelp((h) => !h);
     else if (k === "m" || k === "M") toggleSound();
     else if (k === "r" || k === "R") skipReplay();
+    else if (k === "s" || k === "S") toggleStats();
+    else if (k === "n" || k === "N") toggleLog();
+    else if (k === "c" || k === "C") toggleCompact();
+    else if (k === "v" || k === "V") setNames(names === "key" ? "all" : names === "all" ? "off" : "key");
   };
   useEffect(() => {
     const h = (e) => keysRef.current(e);
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
   }, []);
+
+  // New priority 2-3 notes pop as cards; priority 1 only lands in the log. Cards fold into the bell quickly.
+  useEffect(() => {
+    const fresh = notifList.filter((n) => !seenNotif.current.has(n.id));
+    if (!fresh.length) return;
+    fresh.forEach((n) => seenNotif.current.add(n.id));
+    const pop = fresh.filter((n) => num(n.priority, 1) >= 2 && statusOf(n) === "new");
+    if (!pop.length) return;
+    const ids = pop.map((n) => n.id);
+    setCards((prev) => [...ids, ...prev.filter((id) => !ids.includes(id))].slice(0, 3));
+    const ms = 12000 / ({ 1: 1, 2: 1.5, 4: 2.5, 8: 3 }[speedRef.current] || 1);
+    pop.forEach((n) => flash(`n${n.id}`, () => setCards((prev) => prev.filter((id) => id !== n.id)), num(n.priority) >= 3 ? ms * 1.4 : ms));
+    if (pop.some((n) => num(n.priority) >= 3)) {
+      sfxRef.current("alert");
+      if (pauseCritical && !heldRef.current && !serverFinal) togglePause();
+    }
+  }, [notifList]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Final horn once the viewer reaches the end.
   const finalOnce = useRef(false);
@@ -3309,12 +4465,23 @@ export default function SimTracker({ sessionId: sessionIdProp, onExit }) {
     }
   }, [isFinal]);
 
-  const stars = useMemo(() => (isFinal || intermission ? deriveStars(events) : []), [isFinal, intermission, events]);
+  const stars = useMemo(() => {
+    const srv = isFinal && Array.isArray(server?.final?.stars) && server.final.stars.length ? server.final.stars : null;
+    if (srv)
+      return srv.slice(0, 3).map((x) => {
+        const pid = x.player_id ?? x.id;
+        const r = rosterRef.current.get(String(pid)) || {};
+        return { id: String(pid ?? x.name), side: x.side || r.side || "home", name: x.name || r.name || "", line: x.line || "", face: facePlayer(pid, x, rosterRef.current, teams), fromServer: true };
+      });
+    if (!(isFinal || intermission)) return [];
+    return deriveStars(events).map((x) => ({ ...x, face: facePlayer(x.id, { name: x.name, side: x.side, ...(x.goalie ? { position: "G" } : {}) }, rosterRef.current, teams) }));
+  }, [isFinal, intermission, events, server, teams]);
   const sog = { home: view.stats?.home?.sog, away: view.stats?.away?.sog };
-  const starFace = (s) => {
-    const info = rosterRef.current.get(String(s.id)) || {};
-    return { id: s.id, player_id: s.id, name: s.name, position: info.pos || (s.goalie ? "G" : ""), number: info.number };
-  };
+
+  const analytics = view.analytics || server?.analytics || null;
+  const onIceIds = useMemo(() => ({ home: onIce.filter((p) => p.side === "home").map((p) => p.id), away: onIce.filter((p) => p.side === "away").map((p) => p.id) }), [onIce]);
+  const allowedKinds = server?.coach?.allowed || server?.coach?.allowed_kinds || server?.flags?.coach_kinds || null;
+  const ozKind = Array.isArray(allowedKinds) ? OZ_KINDS.find((k) => allowedKinds.includes(k)) || null : null;
 
   /* ---------- overlays ---------- */
   let overlay = null;
@@ -3333,11 +4500,11 @@ export default function SimTracker({ sessionId: sessionIdProp, onExit }) {
           ))}
         </div>
         {stars.length ? (
-          <ol className="st-stars" title="Worked out from this game's events">
+          <ol className="st-stars" title={stars[0]?.fromServer ? "Three stars of the game" : "Worked out from this game's events"}>
             {stars.map((s, i) => (
               <li key={s.id} className={`st-star is-${i + 1}`} style={{ animationDelay: `${0.25 + i * 0.35}s` }}>
                 <span className="st-star__n">{"★".repeat(i + 1)}</span>
-                <PlayerHeadshot player={starFace(s)} size="md" className="st-star__face" teamColors={{ primary: colors[s.side]?.primary, secondary: colors[s.side]?.secondary }} showFlag={false} />
+                <PlayerHeadshot player={s.face} size="md" className="st-star__face" teamColors={{ primary: colors[s.side]?.primary, secondary: colors[s.side]?.secondary }} showFlag={false} />
                 <b>{s.name}</b>
                 <TeamChip side={s.side || "home"} colors={colors} teams={teams} />
                 <small>{s.line}</small>
@@ -3394,6 +4561,7 @@ export default function SimTracker({ sessionId: sessionIdProp, onExit }) {
             {stars.map((s, i) => (
               <li key={s.id} className="st-star">
                 <span className="st-star__n">{"★".repeat(i + 1)}</span>
+                <PlayerHeadshot player={s.face} size="sm" className="st-star__face is-mini" showFlag={false} />
                 <b>{s.name}</b>
                 <small>{s.line}</small>
               </li>
@@ -3492,6 +4660,10 @@ export default function SimTracker({ sessionId: sessionIdProp, onExit }) {
         languages={languages}
         lang={lang}
         onLang={pickLang}
+        compact={compact}
+        onCompact={toggleCompact}
+        names={names}
+        onNames={setNames}
       />
     ) : null;
 
@@ -3639,13 +4811,33 @@ export default function SimTracker({ sessionId: sessionIdProp, onExit }) {
               ) : null}
             </div>
           )}
+          <div className="st-bellwrap">
+            <button type="button" className={`st-bell${unread ? " has-unread" : ""}${logOpen ? " is-on" : ""}`} onClick={toggleLog} title="Coaching log (N)" aria-label={`Coaching log, ${unread} unread`}>
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <path d="M10 2.5c-3 0-5 2.3-5 5.2v3.6L3.4 14h13.2L15 11.3V7.7c0-2.9-2-5.2-5-5.2zM8 15.5a2 2 0 0 0 4 0" />
+              </svg>
+              {unread ? <em>{unread > 9 ? "9+" : unread}</em> : null}
+            </button>
+            {logOpen ? (
+              <NotifLog
+                list={notifList}
+                statusOf={statusOf}
+                onAct={actNotif}
+                onDismiss={dismissNotif}
+                live={live}
+                pauseCritical={pauseCritical}
+                setPauseCritical={setPauseCritical}
+                onClose={() => setLogOpen(false)}
+              />
+            ) : null}
+          </div>
           <button type="button" className="st-help-btn" onClick={() => setHelp(true)} title="How this screen works (H)" aria-label="Help">
             ?
           </button>
         </div>
       </header>
 
-      <main className={`st-stage${drama ? ` is-${drama.split("-")[0]}` : ""}`}>
+      <main className={`st-stage${drama ? ` is-${drama.split("-")[0]}` : ""}${statsOpen && statsPinned ? " has-an-pinned" : ""}`}>
         <Crowd crowd={view.crowd} colors={colors} drama={drama ? drama.split("-")[0] : null} goal={!!celebration} chant={replay ? null : chant} />
         <Rink
           apiRef={rinkApi}
@@ -3660,7 +4852,7 @@ export default function SimTracker({ sessionId: sessionIdProp, onExit }) {
           saveFlash={saveFlash}
           drama={drama}
           dramaText={banner || dramaText}
-          alert={live && !overlay && !replay ? alert : null}
+          alert={live && !overlay && !replay && !hasNotifFeed ? alert : null}
           onAlertAction={alertAction}
           onAlertDismiss={dismissAlert}
           tracking={hasTracking}
@@ -3675,10 +4867,40 @@ export default function SimTracker({ sessionId: sessionIdProp, onExit }) {
           replay={replay}
           onSkipReplay={skipReplay}
           boxed={boxed}
+          scale={compact ? 0.85 : 1}
+          names={names}
+          strip={<OnIceStrip onIce={onIce} roster={roster} colors={colors} teams={teams} analytics={analytics} shiftStart={pb.current.shiftStart} gameSec={gameSec} />}
         />
         <Caption line={captionLine} live={captionLive} />
         <Momentum momentum={view.momentum} colors={colors} teams={teams} />
         {scorer && !overlay ? <ScorerCard card={scorer} colors={colors} teams={teams} /> : null}
+        {cards.length && !overlay ? (
+          <div className="st-nstack" aria-live="polite">
+            {cards
+              .map((id) => notifById.get(id))
+              .filter((n) => n && statusOf(n) === "new")
+              .map((n) => (
+                <NotifCard key={n.id} n={n} onAct={actNotif} onDismiss={dismissNotif} live={live} />
+              ))}
+          </div>
+        ) : null}
+        {statsOpen ? (
+          <StatsPanel
+            an={analytics}
+            roster={roster}
+            colors={colors}
+            teams={teams}
+            userSide={userSide}
+            bench={view.bench || server.bench}
+            onIceIds={onIceIds}
+            pinned={statsPinned}
+            onPin={() => setStatsPinned((p) => !p)}
+            onClose={() => setStatsOpen(false)}
+            onCoach={sendCoach}
+            live={canCoach}
+            ozKind={ozKind}
+          />
+        ) : null}
         {overlay ? <div className="st-cover">{overlay}</div> : null}
         {drawer ? (
           <section className={`st-drawer is-${drawer}`} aria-label={DOCK_TABS.find((d) => d[0] === drawer)?.[1]}>
@@ -3693,12 +4915,19 @@ export default function SimTracker({ sessionId: sessionIdProp, onExit }) {
       <footer className="st-dock">
         <nav className="st-tabs" aria-label="Coaching">
           {DOCK_TABS.map(([k, label, tip]) => (
-            <button key={k} type="button" className={`st-tab${drawer === k ? " is-on" : ""}`} onClick={() => setDrawer((d) => (d === k ? null : k))} title={tip} aria-expanded={drawer === k}>
+            <button key={k} type="button" className={`st-tab${drawer === k ? " is-on" : ""}`} onClick={() => {
+                if (statsOpen && !statsPinned) setStatsOpen(false);
+                setDrawer((d) => (d === k ? null : k));
+              }} title={tip} aria-expanded={drawer === k}>
               <TabIcon k={k} />
               {label}
               {k === "special" && (mpState === "PP" || mpState === "SH") ? <em className="st-tab__dot" /> : null}
             </button>
           ))}
+          <button type="button" className={`st-tab${statsOpen ? " is-on" : ""}`} onClick={toggleStats} title="Line, player, team and goalie analytics (S)" aria-expanded={statsOpen}>
+            <TabIcon k="stats" />
+            Stats
+          </button>
         </nav>
         {toast ? (
           <div key={toast.key} className={`st-ordertoast is-${toast.status}`} aria-live="polite">

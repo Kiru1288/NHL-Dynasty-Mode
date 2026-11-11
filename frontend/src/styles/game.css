@@ -84310,7 +84310,7 @@ html:not(#_):not(#__) .pdx-modal .bxs-tile > span { align-self: end; font: 400 1
 html:not(#_):not(#__) .pdx-modal .bxs-tile strong { font: 900 16px/1.2 var(--ccx-ui) !important; white-space: normal !important; overflow: visible !important; text-overflow: clip !important; overflow-wrap: anywhere; color: #fff; }
 html:not(#_):not(#__) .stats-central-screen .sc-trend-summary-row :is(strong, b) { height: auto !important; max-height: none !important; overflow: visible !important; line-height: 1.15 !important; }
 
-/* ===== SIM TRACKER — live game screen (round 3: presentation clock, replays, neural booth) =====
+/* ===== SIM TRACKER — live game screen (round 5: ice redesign, true-scale markers, puck focus) =====
    One scale unit (--st-u) = 1px at 1920x1080. Calendar ccx tokens + cp-* keyframes.
    Colour roles: navy = environment, cream = information, team kit colours = identity only,
    gold = actions and highlights, green/amber/red = fatigue only, cyan = tracking only, grey = secondary. */
@@ -85014,6 +85014,223 @@ html:not(#_):not(#__) .st-call.is-hot { background: var(--ccx-orange); }
   html:not(#_):not(#__) .st-replaybug__reel, html:not(#_):not(#__) .st-delayed, html:not(#_):not(#__) .st-live i { animation: none; }
 }
 
+/* ---------- round 4: on-ice strip along the top boards ---------- */
+html:not(#_):not(#__) .st-onice { position: absolute; left: 0; right: 0; top: 0; height: 7.4%; display: flex; justify-content: space-between; align-items: center; padding: 0 3%; pointer-events: none; z-index: 2; }
+html:not(#_):not(#__) .st-onice__team { display: inline-flex; align-items: center; gap: 6px; max-width: 42%; pointer-events: auto; padding: 3px 6px; border-radius: 10px; background: rgba(7, 18, 51, .82); box-shadow: inset 0 0 0 2px rgba(255, 231, 196, .22); }
+html:not(#_):not(#__) .st-onice__team.is-home { flex-direction: row-reverse; }
+html:not(#_):not(#__) .st-onice__team .st-chip { font-size: calc(var(--st-u) * 13); padding: 2px 6px 1px; }
+html:not(#_):not(#__) .st-onice__nums { display: inline-flex; gap: 3px; }
+html:not(#_):not(#__) .st-onice__team.is-home .st-onice__nums { flex-direction: row-reverse; }
+html:not(#_):not(#__) .st-onice__n {
+  min-width: calc(var(--st-u) * 24); padding: 3px 3px 2px; border-radius: 5px; text-align: center; cursor: default;
+  font: 400 calc(var(--st-u) * 13)/1 var(--ccx-pixel); font-variant-numeric: tabular-nums; color: var(--st-fg); background: var(--st-bg); box-shadow: inset 0 0 0 1.5px var(--st-line);
+}
+html:not(#_):not(#__) .st-onice__n.is-g { opacity: .75; }
+html:not(#_):not(#__) .st-onice__key { font: 400 calc(var(--st-u) * 11)/1 var(--ccx-pixel); text-transform: uppercase; color: var(--ccx-cream); white-space: nowrap; }
+html:not(#_):not(#__) .st-onice__shift { min-width: 3.4em; padding: 3px 6px 2px; border-radius: 5px; text-align: center; font: 400 calc(var(--st-u) * 13)/1 var(--ccx-pixel); font-variant-numeric: tabular-nums; color: var(--ccx-ink); background: var(--ccx-cream); }
+html:not(#_):not(#__) .st-onice__shift.is-amber { background: var(--st-fat-amber); }
+html:not(#_):not(#__) .st-onice__shift.is-red { background: var(--st-fat-red); color: #fff; animation: cp-pulse .8s ease-in-out infinite; }
+
+/* ---------- round 4: analytics drawer (right side, rink stays visible) ---------- */
+html:not(#_):not(#__) .st-stage.has-an-pinned { padding-right: calc(min(45%, 780px) + 12px); }
+html:not(#_):not(#__) .st-an {
+  position: absolute; right: 0; top: 0; bottom: 0; z-index: 9; width: min(45%, 780px); min-width: min(100%, 460px);
+  display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-radius: 14px; overflow: hidden;
+  color: var(--ccx-cream); background: rgba(11, 24, 68, .94); border-top: 5px solid var(--ccx-cream); box-shadow: inset 0 0 0 3px var(--ccx-ink), -5px 5px 0 rgba(5, 12, 44, .55);
+  animation: st-slidein .25s ease-out;
+}
+html:not(#_):not(#__) .st-an.is-pinned { background: var(--ccx-cell); }
+html:not(#_):not(#__) .st-an__head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+html:not(#_):not(#__) .st-an__head h3 { margin: 0 6px 0 0; font: 400 calc(var(--st-u) * 22)/1 var(--ccx-display); letter-spacing: .03em; }
+html:not(#_):not(#__) .st-an__head .st-btn.is-on { color: var(--ccx-ink); background: var(--st-gold); box-shadow: inset 0 0 0 2px var(--ccx-ink); }
+html:not(#_):not(#__) .st-an__tabs { display: flex; gap: 4px; flex: 1; flex-wrap: wrap; }
+html:not(#_):not(#__) .st-an__tabs button, html:not(#_):not(#__) .st-an__seg button, html:not(#_):not(#__) .st-nlog__filters button {
+  border: 0; border-radius: 8px; cursor: pointer; padding: 6px 10px 5px;
+  font: 400 calc(var(--st-u) * 12)/1 var(--ccx-pixel); text-transform: uppercase; color: var(--ccx-cream); background: var(--ccx-deep); box-shadow: inset 0 0 0 2px rgba(255, 231, 196, .2);
+}
+html:not(#_):not(#__) .st-an__tabs button.is-on, html:not(#_):not(#__) .st-an__seg button.is-on, html:not(#_):not(#__) .st-nlog__filters button.is-on { color: var(--ccx-ink); background: var(--ccx-cream); box-shadow: inset 0 0 0 2px var(--ccx-ink); }
+html:not(#_):not(#__) .st-an__note { margin: 0; padding: 5px 9px; border-radius: 7px; font: 800 calc(var(--st-u) * 13)/1.3 var(--ccx-ui); color: var(--ccx-ink); background: var(--ccx-cream); align-self: flex-start; }
+html:not(#_):not(#__) .st-an__foot { margin: 0; font: 700 calc(var(--st-u) * 12)/1.3 var(--ccx-ui); color: var(--st-grey); }
+html:not(#_):not(#__) .st-an__bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+html:not(#_):not(#__) .st-an__seg { display: inline-flex; gap: 4px; }
+html:not(#_):not(#__) .st-an__acts { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+html:not(#_):not(#__) .st-an__scroll { flex: 1; min-height: 0; overflow: auto; }
+html:not(#_):not(#__) .st-tbl { width: 100%; border-collapse: separate; border-spacing: 0 4px; font: 800 calc(var(--st-u) * 14)/1.2 var(--ccx-ui); font-variant-numeric: tabular-nums; }
+html:not(#_):not(#__) .st-tbl th { position: sticky; top: 0; z-index: 1; padding: 0; background: var(--ccx-cell); text-align: center; }
+html:not(#_):not(#__) .st-tbl th button, html:not(#_):not(#__) .st-tbl th:not(:has(button)) {
+  border: 0; cursor: pointer; padding: 6px 5px; white-space: nowrap; background: transparent;
+  font: 400 calc(var(--st-u) * 11)/1 var(--ccx-pixel); text-transform: uppercase; color: var(--ccx-soft);
+}
+html:not(#_):not(#__) .st-tbl th.is-sorted button { color: var(--st-gold); }
+html:not(#_):not(#__) .st-tbl th i { font-style: normal; margin-left: 2px; }
+html:not(#_):not(#__) .st-tbl td { padding: 6px 5px; text-align: center; white-space: nowrap; background: var(--ccx-deep); }
+html:not(#_):not(#__) .st-tbl td:first-child { border-radius: 8px 0 0 8px; }
+html:not(#_):not(#__) .st-tbl td:last-child { border-radius: 0 8px 8px 0; }
+html:not(#_):not(#__) .st-tbl .is-left { text-align: left; }
+html:not(#_):not(#__) .st-tbl tr.is-ice td { background: var(--ccx-cell-2); }
+html:not(#_):not(#__) .st-tbl tr.is-ice td:first-child { box-shadow: inset 5px 0 0 var(--st-gold); }
+html:not(#_):not(#__) .st-tbl tr.is-click { cursor: pointer; }
+html:not(#_):not(#__) .st-tbl tr.is-click:hover td { background: var(--ccx-cell-2); }
+html:not(#_):not(#__) .st-tbl td.is-amber { color: var(--st-fat-amber); }
+html:not(#_):not(#__) .st-tbl td.is-red { color: var(--st-fat-red); }
+html:not(#_):not(#__) .st-tbl td.is-good { color: var(--st-gold); }
+html:not(#_):not(#__) .st-tbl td.is-bad { color: var(--st-grey); }
+html:not(#_):not(#__) .st-tbl__key { display: inline-block; min-width: 34px; padding: 3px 6px 2px; border-radius: 6px; font: 400 calc(var(--st-u) * 15)/1 var(--ccx-display); color: var(--st-fg); background: var(--st-bg); box-shadow: inset 0 0 0 2px var(--st-line); }
+html:not(#_):not(#__) .st-tbl__on { display: inline-block; width: 8px; height: 8px; margin-left: 5px; border-radius: 50%; background: var(--st-gold); box-shadow: 0 0 0 1.5px var(--ccx-ink); vertical-align: middle; animation: cp-blink 1.2s steps(1) infinite; }
+html:not(#_):not(#__) .st-tbl__names { max-width: 220px; overflow: hidden; text-overflow: ellipsis; font-weight: 900; }
+html:not(#_):not(#__) .st-tbl__act { display: flex; gap: 4px; justify-content: flex-end; }
+html:not(#_):not(#__) .st-tbl__player { position: relative; display: flex; align-items: center; gap: 7px; }
+html:not(#_):not(#__) .st-tbl__player small { font: 400 10px/1 var(--ccx-pixel); color: var(--st-grey); }
+html:not(#_):not(#__) .st-tbl__num { min-width: 26px; padding: 3px 3px 2px; border-radius: 5px; text-align: center; font: 400 calc(var(--st-u) * 12)/1 var(--ccx-pixel); color: var(--st-fg); background: var(--st-bg); box-shadow: inset 0 0 0 1.5px var(--st-line); }
+html:not(#_):not(#__) .st-tbl__menu { position: absolute; left: 36px; top: calc(100% + 2px); z-index: 3; display: flex; gap: 6px; padding: 6px; border-radius: 9px; background: var(--ccx-ink); box-shadow: inset 0 0 0 2px rgba(255, 231, 196, .35), 4px 4px 0 rgba(5, 12, 44, .7); }
+html:not(#_):not(#__) .st-tbl .st-fat { width: 44px; min-width: 36px; display: inline-block; vertical-align: middle; }
+html:not(#_):not(#__) .st-pbar { position: relative; display: inline-flex; align-items: center; width: 64px; height: 18px; border-radius: 5px; overflow: hidden; vertical-align: middle; background: rgba(255, 231, 196, .1); box-shadow: inset 0 0 0 1.5px rgba(255, 231, 196, .25); }
+html:not(#_):not(#__) .st-pbar i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--ccx-soft); opacity: .55; }
+html:not(#_):not(#__) .st-pbar.is-good i { background: var(--st-gold); opacity: .8; }
+html:not(#_):not(#__) .st-pbar.is-bad i { background: var(--st-grey); opacity: .5; }
+html:not(#_):not(#__) .st-pbar b { position: relative; width: 100%; text-align: center; font: 900 calc(var(--st-u) * 13)/1 var(--ccx-ui); color: var(--ccx-cream); text-shadow: 1px 1px 0 var(--ccx-ink); }
+html:not(#_):not(#__) .st-pbar.is-none { justify-content: center; background: none; box-shadow: none; }
+html:not(#_):not(#__) .st-gs { display: inline-block; min-width: 34px; padding: 3px 5px 2px; border-radius: 6px; font: 400 calc(var(--st-u) * 13)/1 var(--ccx-display); color: var(--ccx-ink); background: var(--ccx-cream); box-shadow: inset 0 0 0 1.5px var(--ccx-ink); }
+html:not(#_):not(#__) .st-gs.is-hi { background: var(--st-gold); }
+html:not(#_):not(#__) .st-gs.is-lo { color: var(--ccx-cream); background: #5b6688; }
+html:not(#_):not(#__) .st-mirror { display: grid; gap: 6px; overflow: auto; }
+html:not(#_):not(#__) .st-mirror__head, html:not(#_):not(#__) .st-mirror__row { display: grid; grid-template-columns: 96px 1fr 96px; align-items: center; justify-items: center; gap: 8px; }
+html:not(#_):not(#__) .st-mirror__row { padding: 6px 4px; border-radius: 8px; background: var(--ccx-deep); }
+html:not(#_):not(#__) .st-mirror__row b { font: 400 calc(var(--st-u) * 17)/1 var(--ccx-display); font-variant-numeric: tabular-nums; color: var(--ccx-cream); white-space: nowrap; }
+html:not(#_):not(#__) .st-mirror__row b.is-lead { color: var(--st-gold); }
+html:not(#_):not(#__) .st-mirror__mid { display: grid; gap: 4px; width: 100%; justify-items: center; }
+html:not(#_):not(#__) .st-mirror__mid small { font: 400 calc(var(--st-u) * 11)/1 var(--ccx-pixel); text-transform: uppercase; color: var(--ccx-soft); }
+html:not(#_):not(#__) .st-mirror__bar { display: flex; width: 100%; height: 12px; border-radius: 999px; overflow: hidden; box-shadow: 0 0 0 2px var(--ccx-ink); }
+html:not(#_):not(#__) .st-mirror__bar i.is-away { background: #fbfbf6; box-shadow: inset 0 0 0 2px var(--st-away-line); }
+html:not(#_):not(#__) .st-mirror__bar i.is-home { background: var(--st-home-bg); }
+html:not(#_):not(#__) .st-match { display: grid; gap: 10px; overflow: auto; }
+html:not(#_):not(#__) .st-match__now { display: grid; gap: 6px; justify-items: center; padding: 10px; border-radius: 10px; background: var(--ccx-deep); }
+html:not(#_):not(#__) .st-match__now small { font: 400 calc(var(--st-u) * 11)/1 var(--ccx-pixel); text-transform: uppercase; color: var(--ccx-soft); }
+html:not(#_):not(#__) .st-match__now div { display: flex; align-items: center; gap: 10px; }
+html:not(#_):not(#__) .st-match__now b { font: 400 calc(var(--st-u) * 16)/1 var(--ccx-display); }
+
+/* ---------- round 4: coaching notifications ---------- */
+html:not(#_):not(#__) .st-nstack { position: absolute; right: 10px; top: calc(var(--st-u) * 46 + 7%); z-index: 8; display: grid; gap: 8px; width: min(360px, 32%); }
+html:not(#_):not(#__) .st-stage.has-an-pinned .st-nstack { right: calc(min(45%, 780px) + 22px); }
+html:not(#_):not(#__) .st-ncard {
+  display: grid; gap: 6px; padding: 10px 12px; border-radius: 12px;
+  color: var(--ccx-ink); background: var(--ccx-paper); box-shadow: inset 0 0 0 3px var(--ccx-ink), 5px 5px 0 rgba(5, 12, 44, .7);
+  animation: st-slidein .3s cubic-bezier(.3, 1.4, .5, 1);
+}
+html:not(#_):not(#__) .st-ncard.is-p3 { box-shadow: inset 0 0 0 3px var(--ccx-ink), inset 8px 0 0 var(--st-gold), 5px 5px 0 rgba(5, 12, 44, .7); padding-left: 20px; }
+html:not(#_):not(#__) .st-ncard__top { display: flex; align-items: center; justify-content: space-between; }
+html:not(#_):not(#__) .st-ncard__kind { font: 400 calc(var(--st-u) * 11)/1 var(--ccx-pixel); text-transform: uppercase; color: #3b4668; }
+html:not(#_):not(#__) .st-ncard__x { width: 24px; height: 24px; border: 0; border-radius: 50%; cursor: pointer; font: 900 15px/1 var(--ccx-ui); color: var(--ccx-cream); background: var(--ccx-ink); }
+html:not(#_):not(#__) .st-ncard__title { font: 400 calc(var(--st-u) * 19)/1.1 var(--ccx-display); letter-spacing: .02em; }
+html:not(#_):not(#__) .st-ncard p { font: 800 calc(var(--st-u) * 14)/1.35 var(--ccx-ui); color: #26304f; }
+html:not(#_):not(#__) .st-ncard__acts { display: flex; flex-wrap: wrap; gap: 6px; }
+html:not(#_):not(#__) .st-ncard .st-btn.is-ghost, html:not(#_):not(#__) .st-nlog .st-btn.is-ghost { color: var(--ccx-ink); background: transparent; box-shadow: inset 0 0 0 2px var(--ccx-ink); }
+html:not(#_):not(#__) .st-bellwrap { position: relative; }
+html:not(#_):not(#__) .st-bell {
+  position: relative; width: calc(var(--st-u) * 40); height: calc(var(--st-u) * 40); min-width: 30px; min-height: 30px; border: 0; border-radius: 50%; cursor: pointer;
+  display: grid; place-items: center; color: var(--ccx-cream); background: var(--ccx-ink); box-shadow: inset 0 0 0 2.5px rgba(255, 231, 196, .45), 0 3px 0 rgba(5, 12, 44, .7);
+}
+html:not(#_):not(#__) .st-bell svg { width: 60%; height: 60%; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; stroke-linecap: round; }
+html:not(#_):not(#__) .st-bell.has-unread { color: var(--ccx-ink); background: var(--st-gold); box-shadow: inset 0 0 0 2.5px var(--ccx-ink), 0 3px 0 var(--ccx-ink); animation: cp-wobble .6s ease-in-out 2; }
+html:not(#_):not(#__) .st-bell.is-on { color: var(--ccx-ink); background: var(--ccx-cream); }
+html:not(#_):not(#__) .st-bell em { position: absolute; top: -5px; right: -6px; min-width: 18px; padding: 2px 4px 1px; border-radius: 9px; font: 400 10px/1.1 var(--ccx-pixel); font-style: normal; color: var(--ccx-cream); background: var(--ccx-ink); box-shadow: 0 0 0 2px var(--ccx-cream); }
+html:not(#_):not(#__) .st-nlog {
+  position: absolute; right: 0; top: calc(100% + 8px); z-index: 25; width: min(420px, 90vw); max-height: 70vh; overflow: auto;
+  display: grid; gap: 10px; align-content: start; padding: 14px; border-radius: 12px;
+  color: var(--ccx-ink); background: var(--ccx-paper); box-shadow: inset 0 0 0 3px var(--ccx-ink), 5px 5px 0 rgba(5, 12, 44, .7);
+  animation: cp-pop .18s ease-out;
+}
+html:not(#_):not(#__) .st-nlog header { display: flex; align-items: center; justify-content: space-between; }
+html:not(#_):not(#__) .st-nlog header b { font: 400 22px/1 var(--ccx-display); letter-spacing: .02em; }
+html:not(#_):not(#__) .st-nlog__filters { display: flex; flex-wrap: wrap; gap: 4px; }
+html:not(#_):not(#__) .st-nlog__filters button { color: var(--ccx-ink); background: transparent; box-shadow: inset 0 0 0 2px var(--ccx-ink); }
+html:not(#_):not(#__) .st-nlog__filters button.is-on { background: var(--st-gold); }
+html:not(#_):not(#__) .st-nlog__list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+html:not(#_):not(#__) .st-nlog__list li { display: grid; gap: 4px; padding: 8px 10px; border-radius: 9px; background: #f2e2c4; box-shadow: inset 0 0 0 2px rgba(7, 18, 51, .25); }
+html:not(#_):not(#__) .st-nlog__list li.is-p3 { box-shadow: inset 5px 0 0 var(--st-gold), inset 0 0 0 2px rgba(7, 18, 51, .25); }
+html:not(#_):not(#__) .st-nlog__list li.is-expired, html:not(#_):not(#__) .st-nlog__list li.is-dismissed { opacity: .6; }
+html:not(#_):not(#__) .st-nlog__list b { font: 900 15px/1.2 var(--ccx-ui); }
+html:not(#_):not(#__) .st-nlog__list p { font: 700 13px/1.35 var(--ccx-ui); color: #26304f; }
+html:not(#_):not(#__) .st-nlog__meta { display: flex; gap: 8px; align-items: center; font: 400 10px/1 var(--ccx-pixel); text-transform: uppercase; color: #3b4668; }
+html:not(#_):not(#__) .st-nstat { margin-left: auto; padding: 2px 6px 1px; border-radius: 4px; font-style: normal; color: var(--ccx-cream); background: var(--ccx-ink); }
+html:not(#_):not(#__) .st-nstat.is-acted { color: var(--ccx-ink); background: var(--st-gold); }
+html:not(#_):not(#__) .st-nstat.is-dismissed, html:not(#_):not(#__) .st-nstat.is-expired { background: #5b6688; }
+
+/* ---------- round 4: headshots (PlayerHeadshot sizes itself from --size) ---------- */
+html:not(#_):not(#__) .st-star__face.player-headshot { --size: calc(var(--st-u) * 76); width: var(--size); height: var(--size); min-width: 56px; min-height: 56px; }
+html:not(#_):not(#__) .st-star__face.player-headshot.is-mini { --size: 34px; min-width: 34px; min-height: 34px; }
+html:not(#_):not(#__) .st-scorer__face.player-headshot { --size: calc(var(--st-u) * 72); width: var(--size); height: var(--size); min-width: 54px; min-height: 54px; }
+html:not(#_):not(#__) .st-stars.is-mini .st-star { grid-template-columns: auto auto auto auto; align-items: center; }
+html:not(#_):not(#__) .st-gamepanel__side .st-check { color: var(--ccx-cream); }
+html:not(#_):not(#__) .st-gamepanel__side .st-check input { accent-color: var(--st-gold); }
+@media (max-width: 1100px) {
+  html:not(#_):not(#__) .st-an { width: 100%; }
+  html:not(#_):not(#__) .st-stage.has-an-pinned { padding-right: 0; }
+  html:not(#_):not(#__) .st-nstack { width: min(360px, 80%); }
+}
+
+/* ---------- round 5: ice redesign — true scale, calm white sheet, small markers, the puck is the star ---------- */
+html:not(#_):not(#__) .st-root { padding-left: max(16px, env(safe-area-inset-left)); padding-right: max(16px, env(safe-area-inset-right)); }
+html:not(#_):not(#__) .st-rink { width: min(100cqw, calc(100cqh * 220 / 104)); aspect-ratio: 220 / 104; }
+html:not(#_):not(#__) .st-rink-svg { filter: drop-shadow(4px 4px 0 rgba(5, 12, 44, .55)); }
+/* arena */
+html:not(#_):not(#__) .st-seats { fill: #36405f; stroke: var(--ccx-ink); stroke-width: .6; }
+html:not(#_):not(#__) .st-seats__row { fill: none; stroke: #4a5579; stroke-width: .9; stroke-dasharray: .9 .45; opacity: .8; }
+html:not(#_):not(#__) .st-area__floor { fill: #283150; stroke: #1a2140; stroke-width: .25; }
+html:not(#_):not(#__) .st-area.is-busy .st-area__floor { stroke: var(--st-gold); stroke-width: .5; }
+html:not(#_):not(#__) .st-area__txt { font: 400 1.5px/1 var(--ccx-pixel); letter-spacing: .08em; fill: #c9d3ea; }
+html:not(#_):not(#__) .st-boardface { fill: #fbfbf8; stroke: rgba(7, 18, 51, .35); stroke-width: .12; }
+html:not(#_):not(#__) .st-ad rect { fill: rgba(11, 24, 68, .06); stroke: rgba(11, 24, 68, .16); stroke-width: .08; }
+html:not(#_):not(#__) .st-ad text { font: 400 1.05px/1 var(--ccx-display); letter-spacing: .06em; fill: #66708c; }
+html:not(#_):not(#__) .st-ad.is-team rect { fill: var(--st-bg); opacity: .8; }
+html:not(#_):not(#__) .st-ad.is-team text { fill: var(--st-fg); }
+html:not(#_):not(#__) .st-glass { fill: none; stroke: #bfe4f4; stroke-width: .3; }
+/* the sheet */
+html:not(#_):not(#__) .st-ice { fill: #f7fbfe; }
+html:not(#_):not(#__) .st-crease { fill: #a8d8f5; fill-opacity: .75; stroke: #c8102e; }
+html:not(#_):not(#__) .st-rink-boards { fill: none; stroke: var(--ccx-ink); stroke-width: .9; }
+html:not(#_):not(#__) .st-emptynet { fill: var(--st-gold); opacity: .35; }
+/* markers: ~2.4 ft skaters, ~3 ft goalies, bold numbers */
+html:not(#_):not(#__) .st-tok { cursor: pointer; }
+html:not(#_):not(#__) .st-tok__num { font: 900 1.55px/1 var(--ccx-ui); letter-spacing: -.03em; pointer-events: none; }
+html:not(#_):not(#__) .st-tok__num.is-2 { font-size: 1.3px; letter-spacing: -.06em; }
+html:not(#_):not(#__) .st-tok.is-g .st-tok__num { font-size: 1.7px; }
+html:not(#_):not(#__) .st-tok.is-g .st-tok__num.is-2 { font-size: 1.45px; }
+html:not(#_):not(#__) .st-tok__carry { fill: none; stroke: var(--st-gold); stroke-width: .42; }
+html:not(#_):not(#__) .st-tok:hover .st-tok__carry { opacity: .55; stroke: var(--ccx-cream); }
+html:not(#_):not(#__) .st-tok.is-carrier .st-tok__carry { opacity: 1; stroke: var(--st-gold); }
+html:not(#_):not(#__) .st-tag { transition: none; }
+html:not(#_):not(#__) .st-tag rect { fill: rgba(7, 18, 51, .86); }
+html:not(#_):not(#__) .st-tag text { font: 900 1.5px/1 var(--ccx-ui); letter-spacing: .05em; fill: var(--ccx-cream); }
+html:not(#_):not(#__) .st-tok.is-carrier .st-tag rect { fill: var(--st-gold); stroke: var(--ccx-ink); stroke-width: .18; }
+/* puck */
+html:not(#_):not(#__) .st-puck { pointer-events: none; }
+html:not(#_):not(#__) .st-puck__halo { fill: none; stroke: var(--st-cyan); stroke-width: .3; opacity: .5; transform-box: fill-box; transform-origin: center; }
+html:not(#_):not(#__) .st-puck__halo.is-loose { stroke: var(--st-gold); stroke-width: .38; opacity: .9; animation: st-halo 1s ease-out infinite; }
+html:not(#_):not(#__) .st-puck__shadow { fill: #0a1a33; transition: opacity .15s; }
+html:not(#_):not(#__) .st-trail line { stroke: var(--st-cyan); stroke-linecap: round; }
+html:not(#_):not(#__) .st-trail line.is-shot { stroke: #fff6c2; stroke-width: 1.05; filter: drop-shadow(0 0 .0px #000); }
+html:not(#_):not(#__) .st-passline { stroke: #0b3d91; stroke-width: .28; stroke-dasharray: .45 .55; stroke-linecap: round; fill: none; }
+html:not(#_):not(#__) .st-puffs circle { fill: #ffffff; stroke: #cde2f2; stroke-width: .12; }
+/* shot markers: small and faint */
+html:not(#_):not(#__) .st-mk.is-save { fill: #fff; stroke-width: .22; }
+html:not(#_):not(#__) .st-mk.is-miss { fill: none; stroke-width: .2; stroke-dasharray: .35 .3; }
+html:not(#_):not(#__) .st-mk.is-block { fill: var(--ccx-soft); stroke-width: .2; }
+html:not(#_):not(#__) .st-mk.is-goal { fill: var(--st-gold); stroke: var(--ccx-ink); stroke-width: .18; }
+html:not(#_):not(#__) .st-fo circle { stroke-width: .3; stroke-dasharray: .8 .6; }
+html:not(#_):not(#__) .st-fo-arrow path { stroke-width: .8; }
+html:not(#_):not(#__) .st-fo-arrow path:first-child { stroke-width: 1.5; }
+html:not(#_):not(#__) .st-hitring { stroke-width: .35; }
+/* overlays step aside when they would sit on the puck */
+html:not(#_):not(#__) .st-rink [data-avoid], html:not(#_):not(#__) .st-nstack { transition: transform .25s ease; }
+html:not(#_):not(#__) .st-rink [data-avoid].is-dodge, html:not(#_):not(#__) .st-nstack.is-dodge { transform: translateY(var(--st-dodge, 0px)); }
+/* on-ice strip sits in the top band (seats + boxes) */
+html:not(#_):not(#__) .st-onice { height: 8.6%; padding: 0 4%; }
+@keyframes st-halo { 0% { transform: scale(.8); opacity: .95; } 100% { transform: scale(1.6); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  html:not(#_):not(#__) .st-puck__halo.is-loose { animation: none; }
+}
+
 html:not(#_):not(#__) .nhlcal-live-resume { background: var(--ccx-coral) !important; }
 
 /* ==========================================================================
@@ -85266,9 +85483,6 @@ html:not(#_):not(#__) .st-pace.is-real { background: var(--ccx-yellow, #ffe23a);
 
 /* SimTracker visual pass (screenshots 2026-11-10) */
 html:not(#_):not(#__) .st-rink-kick { fill: none; stroke: #f2c230; stroke-width: 0.9; opacity: .9; pointer-events: none; }
-html:not(#_):not(#__) .st-rink-logo { font-size: 5.2px; }
-html:not(#_):not(#__) .st-area__txt { font-size: 1.9px; letter-spacing: .08em; }
-html:not(#_):not(#__) .st-area rect { stroke-width: .3; }
 /* whistle stamp sits on the top boards, not over the play */
 html:not(#_):not(#__) .st-stop { top: 1.5%; rotate: -1.5deg; font-size: calc(var(--st-u) * 18); padding: 4px 12px 3px 6px; z-index: 3; }
 html:not(#_):not(#__) .st-stop.is-opening { background: var(--ccx-cream); }

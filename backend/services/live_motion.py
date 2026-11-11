@@ -121,12 +121,33 @@ def _h01(*parts: Any) -> float:
     return (zlib.crc32("|".join(str(x) for x in parts).encode()) % 100000) / 100000.0
 
 
+def bench_spot(side: str, pid: str) -> Tuple[float, float]:
+    """Each player's own spot along his bench (benches span ~22 ft each side of centre ice)."""
+    bx, by = BENCH_DOOR[side]
+    off = ((zlib.crc32(pid.encode()) % 1000) / 1000.0 - 0.5) * 20.0
+    return (bx + off, by + 0.5)
+
+
 def opp(s: Optional[str]) -> str:
     return "away" if s == "home" else "home"
 
 
+def rink_clamp(x: float, y: float, margin: float = 3.0) -> Tuple[float, float]:
+    """Inside the boards, rounded corners included (rink 200 x 85 ft, corner radius 28 ft)."""
+    X, Y, R = 100.0 - margin, 42.5 - margin, 28.0 - margin
+    x, y = max(-X, min(X, x)), max(-Y, min(Y, y))
+    cx, cy = 72.0, 14.5
+    if abs(x) > cx and abs(y) > cy:
+        dx, dy = abs(x) - cx, abs(y) - cy
+        d = math.hypot(dx, dy)
+        if d > R:
+            x = math.copysign(cx + dx / d * R, x)
+            y = math.copysign(cy + dy / d * R, y)
+    return x, y
+
+
 def clampxy(x: float, y: float) -> Tuple[float, float]:
-    return max(-MX, min(MX, x)), max(-MY, min(MY, y))
+    return rink_clamp(x, y, 2.5)
 
 
 def assign_roles(ids: List[str], pos_of) -> List[Tuple[str, str]]:
@@ -200,6 +221,10 @@ class MotionV2:
         self._extra: Dict[str, Optional[str]] = {"home": None, "away": None}
         self._last_change_ev: Dict[str, float] = {"home": -99.0, "away": -99.0}
         self.stats: Dict[str, float] = {"retargets": 0.0, "player_sec": 0.0}
+        self.live_mode = True          # round 9: forward play simulation between anchors
+        self.play: Any = None
+        self._resets = 0
+        self._play_stats = {"forced": 0, "out_region": 0, "resets": 0, "icings": 0, "live_segs": 0}
         self._hold: Dict[str, Tuple[Any, ...]] = {}
         self._marks: Dict[str, str] = {}
 
@@ -266,6 +291,8 @@ class MotionV2:
             if prev is not None and nxt is not None:
                 tp, tn = float(prev["t"]), float(nxt["t"])
                 sw = max(tp + 0.35 * (tn - tp), tn - 16.0)  # the shooting unit is out early enough to set up at broadcast pace
+                if self.live_mode:
+                    sw = min(sw, max(tp + 0.5, tn - 7.0))   # and early enough to skate into the play from the bench
                 if (prev.get("att") or {}).get("outcome") == "GOAL":
                     sw = min(sw, tp + 0.5)
                 for r in self._anchors:
@@ -419,7 +446,7 @@ class MotionV2:
 
     # ───────────────────────────── plan building
     def _faceoff(self, g: float, dot: Tuple[float, float], prefer: Optional[str], rng: random.Random, reason: str,
-                 set_d: float = 1.6, offender: Optional[str] = None) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+                 set_d: float = 1.6, offender: Optional[str] = None, force: Optional[str] = None) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         """Faceoff staging (dead, players set) + drop; winner from faceoff ratings (derived)."""
         segs: List[Dict[str, Any]] = [_dead(g, set_d, dot, dot, k="faceoff", ph="faceoff", fo=dot)]
         ch, ca = self._center("home", g + 0.01), self._center("away", g + 0.01)
@@ -429,6 +456,8 @@ class MotionV2:
             p_home += 0.08 if prefer == "home" else -0.08
         p_home = max(0.25, min(0.75, p_home))
         win = "home" if rng.random() < p_home else "away"
+        if force in SIDES:
+            win = force
         wpid, lpid = (ch, ca) if win == "home" else (ca, ch)
         du, dv = self.rel(win, g, *dot)
         back = self.ab(win, g, du - 18.0, dv * 0.6 + rng.uniform(-5, 5))
@@ -1213,6 +1242,8 @@ class MotionV2:
             state = {"g": 0.0, "puck": (0.0, 0.0), "side": None, "car": None}
         if ai >= len(self._anchors):
             return False
+        if self.flat and self.flat[-1]["k"] == "live" and not self.flat[-1].get("done"):
+            return False
         A = self._anchors[ai]
         B = self._next_anchor(ai)
         gA = float(A["t"])
@@ -1222,12 +1253,38 @@ class MotionV2:
             pass
         segs, st = self._aftermath(A, gB, B, rng, state)
         gend = float(st.get("g", gA))
+        live = None
         if B is not None and gB > gend + 0.05 and not any(s.get("term") for s in segs):
-            segs += self._buildup(gend, st, B, rng)
-        self._commit_plan(ai, A, B, segs)
+            if self.live_mode and B["type"] in ("attempt", "goal", "penalty", "period_end", "final"):
+                if segs and segs[-1]["k"] == "loose" and segs[-1].get("ptype") == "rim":
+                    px_ = float(segs[-1]["p1"][0])   # the rim carries on up the wall toward the point
+                    st = dict(st)
+                    st["pv"] = (-math.copysign(rng.uniform(26.0, 34.0), px_), 0.0)
+                live = {"k": "live", "g0": gend, "g1": gB, "B": B, "ph": "play", "state": dict(st), "side": st.get("side"),
+                        "car": None, "rcv": None, "fo": None, "why": None, "ev": [], "p0": st.get("puck") or (0.0, 0.0), "p1": st.get("puck") or (0.0, 0.0)}
+            else:
+                segs += self._buildup(gend, st, B, rng)
+        if self.live_mode and live is None and B is not None and B["type"] in ("attempt", "goal") and gB - gend < 1.0:
+            # a shot straight off the draw: it is taken from where the shooter lines up for the faceoff
+            a_ = B.get("att") or {}
+            S_, X_ = a_.get("shooter_id"), a_.get("side")
+            dot_ = st.get("puck")
+            if S_ and X_ in SIDES and dot_ is not None:
+                try:
+                    ids_ = list(self.onice.get(X_) or []) if S_ in (self.onice.get(X_) or []) else list(self.lineup_at(gB).get(X_) or [])
+                    fs_ = self._faceoff_spots(X_, gB, tuple(dot_), ids_)
+                    du_, dv_ = self.rel(X_, gB, float(dot_[0]), float(dot_[1]))
+                    loc_ = fs_.get(S_)
+                    if loc_ is None or math.hypot(loc_[0] - dot_[0], loc_[1] - dot_[1]) > 17.0:
+                        loc_ = self.ab(X_, gB, du_ - 2.4, dv_)      # off the draw, right at the dot
+                    B["shot_loc"] = {"x": round(loc_[0], 1), "y": round(loc_[1], 1), "est": True, "from_motion": True}
+                except Exception:
+                    pass
+        self._commit_plan(ai, A, B, segs, live=live)
         return True
 
-    def _commit_plan(self, ai: int, A: Optional[Dict[str, Any]], B: Optional[Dict[str, Any]], segs: List[Dict[str, Any]]) -> None:
+    def _commit_plan(self, ai: int, A: Optional[Dict[str, Any]], B: Optional[Dict[str, Any]], segs: List[Dict[str, Any]],
+                     live: Optional[Dict[str, Any]] = None) -> None:
         pt = self.flat[-1]["pt1"] if self.flat else 0.0
         g = self.flat[-1]["g1"] if self.flat else 0.0
         clean: List[Dict[str, Any]] = []
@@ -1244,13 +1301,21 @@ class MotionV2:
                     continue
             pt = s["pt1"]
             clean.append(s)
-        if B is not None and clean and B["type"] not in ("shootout_attempt",) and not clean[-1].get("term"):
+        if live is not None:
+            live["g0"] = clean[-1]["g1"] if clean else g
+            live["pt0"], live["pt1"] = pt, 1e18
+            if clean:
+                live["state"]["g"] = live["g0"]
+            clean.append(live)
+            self._play_stats["live_segs"] += 1
+        elif B is not None and clean and B["type"] not in ("shootout_attempt",) and not clean[-1].get("term"):
             gB = float(B["t"])
             if clean[-1]["g1"] < gB - 1e-6:  # pad to the anchor so every real event keeps its exact t
                 s = _seg("hold", clean[-1]["g1"], gB, clean[-1]["p1"], clean[-1]["p1"], side=clean[-1].get("side"), car=clean[-1].get("car") if clean[-1]["k"] in ("carry", "hold") else None)
                 s["pt0"], s["pt1"] = pt, pt + (gB - clean[-1]["g1"])
                 clean.append(s)
         end = {"g": clean[-1]["g1"] if clean else g, "puck": clean[-1]["p1"] if clean else (0.0, 0.0),
+               "_live": live is not None,
                "side": (clean[-1].get("side") if clean and clean[-1]["k"] in ("carry", "pass", "hold") else None),
                "car": ((clean[-1].get("rcv") or clean[-1].get("car")) if clean and clean[-1]["k"] in ("carry", "pass", "hold") else None)}
         self.plans.append({"ai": ai, "A": A.get("key") if A else None, "B": B.get("key") if B else None, "segs": clean, "end": end})
@@ -1266,12 +1331,28 @@ class MotionV2:
             self._rebuild_after_change()
         guard = 0
         while (not self.flat or self.flat[-1]["g1"] < gc + 1e-6 or (self.flat[-1]["k"] in DEAD_KINDS and self.flat[-1]["g0"] <= gc and not self.flat[-1].get("term"))) and guard < 400:
+            if self.flat and self.flat[-1]["k"] == "live" and not self.flat[-1].get("done"):
+                break
             if not self._build_next_plan():
                 break
             guard += 1
 
     def _rebuild_after_change(self) -> None:
         """Coach re-sim spliced a new future: keep everything already shown, rebuild from the head."""
+        if self.flat and self.flat[-1]["k"] == "live" and not self.flat[-1].get("done"):
+            sg = self.flat[-1]
+            gnow = self.play.gc if (self.play is not None and self.play.seg is sg) else sg["g0"]
+            nxt = next((r for r in self._anchors if float(r["t"]) > gnow + 1e-6), None)
+            sg["B"] = nxt
+            sg["g1"] = float(nxt["t"]) if nxt is not None else gnow + 99999.0
+            ai = -1
+            for i, r in enumerate(self._anchors):
+                if float(r["t"]) <= gnow + 1e-6:
+                    ai = i
+            if self.plans:
+                self.plans[-1]["ai"] = ai
+                self.plans[-1]["B"] = nxt.get("key") if nxt is not None else None
+            return
         head_pt = self.t_last if self.t_last is not None else 0.0
         keep_plans: List[Dict[str, Any]] = []
         for pl in self.plans:
@@ -1307,12 +1388,28 @@ class MotionV2:
         if B is not None and state["side"] is None:
             state["side"] = (B.get("att") or {}).get("side")
             state["car"] = self._role_pid(state["side"], g_head, "C") if state["side"] in SIDES else None
-        segs2 = self._buildup(g_head, state, B, rng) if B is not None else [_dead(g_head, 99999.0, state["puck"], state["puck"], term=True)]
         self.plans[-1]["end"] = state
         self.plans[-1]["ai"] = ai
-        self._commit_plan(ai, None, B, segs2)
+        if B is not None and self.live_mode and B["type"] in ("attempt", "goal", "penalty", "period_end", "final"):
+            live = {"k": "live", "g0": g_head, "g1": float(B["t"]), "B": B, "ph": "play", "state": dict(state), "side": state.get("side"),
+                    "car": None, "rcv": None, "fo": None, "why": None, "ev": [], "p0": state["puck"], "p1": state["puck"]}
+            self._commit_plan(ai, None, B, [], live=live)
+        else:
+            segs2 = self._buildup(g_head, state, B, rng) if B is not None else [_dead(g_head, 99999.0, state["puck"], state["puck"], term=True)]
+            self._commit_plan(ai, None, B, segs2)
 
     # ───────────────────────────── clocks
+    @staticmethod
+    def _live_pt(s: Dict[str, Any], gc: float) -> float:
+        hg, hp = s.get("hist_g") or [s["g0"]], s.get("hist_pt") or [s["pt0"]]
+        if gc >= hg[-1]:
+            return hp[-1] + (gc - hg[-1])        # beyond what has been played: extrapolate at 1x
+        j = bisect_right(hg, gc) - 1
+        j = max(0, min(j, len(hg) - 2))
+        g0_, g1_ = hg[j], hg[j + 1]
+        f = 0.0 if g1_ - g0_ <= 1e-9 else (gc - g0_) / (g1_ - g0_)
+        return hp[j] + (hp[j + 1] - hp[j]) * max(0.0, min(1.0, f))
+
     def pt_at(self, gc: float, inclusive: bool = False) -> float:
         self._ensure(gc)
         if not self.flat:
@@ -1320,6 +1417,8 @@ class MotionV2:
         i = bisect_right(self.flat_g, gc + 1e-9) - 1
         if i < 0:
             return float(gc)
+        if self.flat[i]["k"] == "live":
+            return self._live_pt(self.flat[i], gc)
         # walk back to the first segment starting at this gc (strict) or forward to the last dead one (inclusive)
         s = self.flat[i]
         if s["k"] not in DEAD_KINDS and s["g0"] <= gc < s["g1"]:
@@ -1364,6 +1463,8 @@ class MotionV2:
 
     def gc_for_pt(self, pt: float) -> float:
         """Game clock at presentation time pt (builds plans as needed)."""
+        if self.live_mode and self.t_last is not None and pt > self.t_last:
+            return self.gc_last + (pt - self.t_last)   # not played yet: 1x estimate
         guard = 0
         while (not self.flat or (self.flat[-1]["pt1"] < pt and not self.flat[-1].get("term"))) and guard < 400:
             if self._refresh_anchors() and self.plans:
@@ -1392,6 +1493,13 @@ class MotionV2:
         s = self._seg_for_pt(pt)
         if s is None:
             return self.gc_last
+        if s["k"] == "live":
+            hp, hg = s.get("hist_pt") or [s["pt0"]], s.get("hist_g") or [s["g0"]]
+            if pt >= hp[-1]:
+                return hg[-1] + (pt - hp[-1])
+            j = max(0, min(bisect_right(hp, pt) - 1, len(hp) - 2))
+            f = 0.0 if hp[j + 1] - hp[j] <= 1e-9 else (pt - hp[j]) / (hp[j + 1] - hp[j])
+            return hg[j] + (hg[j + 1] - hg[j]) * max(0.0, min(1.0, f))
         if s["k"] in DEAD_KINDS:
             return s["g0"]
         return s["g0"] + max(0.0, min(s["g1"] - s["g0"], pt - s["pt0"]))
@@ -1456,166 +1564,207 @@ class MotionV2:
         return lift * math.sin(math.pi * a)
 
     def _faceoff_spots(self, side: str, gc: float, dot: Tuple[float, float], ids: List[str], period: Optional[int] = None) -> Dict[str, Tuple[float, float]]:
-        d = self.dir(side, gc, period)
-        off = {"C": (-2.6, 0.0), "LW": (-4.0, 15.5), "RW": (-4.0, -15.5), "LD": (-24.0, 11.0), "RD": (-24.0, -11.0), "F": (-9.0, 7.0), "D": (-24.0, 0.0)}
-        out = {}
-        for pid, role in assign_roles(ids, self._book_pos):
-            ou, ov = off.get(role, (-10.0, 0.0))
-            out[pid] = clampxy(dot[0] + ou * d, dot[1] + ov * d)
+        """Real alignments: centres at the dot, wingers on the hash marks (outside the circle), defence at the
+        top of the circle in their own end, on the blue line when attacking, back at centre ice; others outside."""
+        du, dv = self.rel(side, gc, dot[0], dot[1], period)
+        sg = 1.0 if dv >= 0 else -1.0
+        own_end, att_end = du < -40.0, du > 40.0
+        roles = assign_roles(ids, self._book_pos)
+        out_uv: Dict[str, Tuple[float, float]] = {}
+        wings = [p for p, r in roles if r in ("LW", "RW", "F")]
+        ds = [p for p, r in roles if r in ("LD", "RD", "D")]
+        cs = [p for p, r in roles if r == "C"]
+        if cs:
+            out_uv[cs[0]] = (du - 2.4, dv)
+        wing_pts = [(du - 3.2, dv + 15.8), (du - 3.2, dv - 15.8)]
+        for p, pt_ in zip(sorted(wings, key=lambda q: 0 if self.roles.get(q) == "LW" else 1), wing_pts):
+            out_uv[p] = pt_
+        if own_end:
+            d_pts = [(du - 13.0, dv - sg * 9.0), (du - 11.0, dv + sg * 11.5)]   # low, between the dot and the net
+        elif att_end:
+            d_pts = [(BLUE + 4.0, dv * 0.5 + 12.0 * sg), (BLUE + 4.0, dv * 0.5 - 12.0 * sg)]  # on the points
+        else:
+            d_pts = [(du - 26.0, dv + 12.0), (du - 26.0, dv - 12.0)]
+        for p, pt_ in zip(ds, d_pts):
+            out_uv[p] = pt_
+        extra = [p for p in ids if p not in out_uv]
+        for i, p in enumerate(extra):
+            out_uv[p] = (du - 18.0, dv + (8.0 if i % 2 == 0 else -8.0) * (1 + i // 2))
+        return {p: clampxy(*self.ab(side, gc, u, v, period)) for p, (u, v) in out_uv.items()}
+
+    # ───────────────────────────── formation systems (puck-anchored, role-based, real structures)
+    def _assign(self, side: str, gc: float, pids: List[str], spots: List[Tuple[float, float]]) -> Dict[str, Tuple[float, float]]:
+        """Greedy nearest assignment of players to formation spots (keeps continuity, no crossing swaps)."""
+        out: Dict[str, Tuple[float, float]] = {}
+        free = list(pids)
+        for (u, v) in spots:
+            if not free:
+                break
+            ax, ay = self.ab(side, gc, u, v)
+            best = min(free, key=lambda q: math.hypot((self.pos.get(q) or [ax, ay])[0] - ax, (self.pos.get(q) or [ax, ay])[1] - ay))
+            out[best] = (u, v)
+            free.remove(best)
         return out
 
     def _spots(self, side: str, gc: float, seg: Dict[str, Any], puck: Tuple[float, float], ids: List[str], n_opp: int, opp_ids: List[str]) -> Dict[str, Tuple[float, float]]:
+        """Every skater's target from the puck, possession, zone, manpower and role:
+        O-zone 2-1-2 cycle, D-zone (D on the carrier / net-front, C low, wingers on the points, collapse to the slot),
+        neutral-zone lanes with a trailer vs 1-2-2 forecheck or trap, breakout (wingers on the wall at the hash marks,
+        C swinging low, D to D), PP 1-3-1 / umbrella, PK box / triangle, 4v4, 3v3, 6v5."""
         roles = assign_roles(ids, self._book_pos)
         self.roles.update({p: r for p, r in roles})
-        rmap = {r: p for p, r in roles}
+        D_ids = [p for p, r in roles if r in ("LD", "RD", "D")]
+        F_ids = [p for p, r in roles if r not in ("LD", "RD", "D")]
         pu, pv = self.rel(side, gc, *puck)
         s = 1.0 if pv >= 0 else -1.0
         n = len(ids)
-        poss = seg.get("side") if seg["k"] in ("carry", "pass", "shot", "hold") else None
+        k = seg["k"]
+        poss = seg.get("side") if k in ("carry", "pass", "shot", "hold") else None
+        if poss is None and k == "loose" and seg.get("side") in SIDES:
+            poss = seg["side"]                     # dump / chip: the dumping team chases in
+        if poss is None:                           # loose puck: whoever's attacking zone it is in plays it as attack
+            poss = side if pu > BLUE else (opp(side) if pu < -BLUE else None)
+        car = seg.get("car") if k in ("carry", "hold") else (seg.get("rcv") if k == "pass" else None)
+        tac = (getattr(self.loop, "tactics", None) or {}) if side == self.loop.lg.user_side else {}
         spot: Dict[str, Tuple[float, float]] = {}
 
-        def put(opts: Tuple[str, ...], u: float, v: float) -> None:
-            for r in opts:
-                p = rmap.get(r)
-                if p and p not in spot:
-                    spot[p] = (u, v)
-                    return
+        def lim_onside(u: float) -> float:
+            return min(u, BLUE - 2.0) if pu < BLUE else u
 
-        Wst, Wwk = ("LW", "RW") if s > 0 else ("RW", "LW")
-        Dst, Dwk = ("LD", "RD") if s > 0 else ("RD", "LD")
+        def toward(u: float, v: float, tu: float, tv: float, d: float) -> Tuple[float, float]:
+            du, dv = tu - u, tv - v
+            m = math.hypot(du, dv) or 1.0
+            return (u + du / m * d, v + dv / m * d)
+
         if poss == side:
-            if pu >= BLUE + 0.5 or seg.get("delayed") == side:
-                if n > n_opp and n >= 5:
-                    put((Dst, "LD", "D"), 40.0, 0.0)
-                    put((Wst, "LW", "F"), 62.0, 28.0 * s)
-                    put((Dwk, "RD", "D"), 62.0, -28.0 * s)
-                    put(("C",), 68.0, 0.0)
-                    put((Wwk, "RW", "F"), 82.0, 4.0)
-                    put(("F", "D"), 76.0, -13.0 * s)
-                elif n >= 5:
-                    # tight 5v5 zone structure: D on the points, the forwards work within ~25 ft of the puck
-                    put((Dst, "D"), 29.5, 26.0 * s)
-                    put((Dwk, "D"), 30.0, -10.0 * s)
-                    car_ = seg.get("car") if seg["k"] in ("carry", "hold") else seg.get("rcv")
-                    fw = [p_ for p_, r_ in roles if r_ in ("C", "LW", "RW", "F") and p_ != car_ and p_ not in spot]
-                    support = [((pu + (70.0 - pu) * 0.45), (pv + (0.0 - pv) * 0.45)),  # between the puck and the slot
-                               (83.0, -5.0 * s),                                        # net front
-                               (max(BLUE + 8.0, pu - 14.0), pv - 10.0 * s)]             # high support / outlet
-                    for (su, sv) in support:
-                        if not fw:
-                            break
-                        du, dv = su - pu, sv - pv
-                        dd = math.hypot(du, dv)
-                        if dd > 25.0:
-                            su, sv = pu + du / dd * 25.0, pv + dv / dd * 25.0
-                        me = self.pos
-                        best = min(fw, key=lambda q: math.hypot(*(lambda a: (a[0] - self.ab(side, gc, su, sv)[0], a[1] - self.ab(side, gc, su, sv)[1]))(me.get(q) or [0.0, 0.0])))
-                        spot[best] = (su, sv)
-                        fw.remove(best)
-                elif n == 4:
-                    if n > n_opp:
-                        put((Dst, "D"), 40.0, 0.0)
-                        put((Wst, "C", "F"), 62.0, 28.0 * s)
-                        put(("C", Wwk, "F"), 62.0, -28.0 * s)
-                        put((Dwk, Wwk, "D", "F"), 81.0, 4.0)
+            if pu >= BLUE or seg.get("delayed") == side:
+                if n > n_opp and n >= 4:
+                    # power play (or delayed penalty / extra attacker): 1-3-1 or umbrella
+                    if tac.get("pp_style") == "passive" or (tac.get("pp_style") is None and (zlib.crc32(side.encode()) % 2 == 0)):
+                        pts = [(33.0, 0.2 * pv), (60.0, 28.0 * s), (60.0, -28.0 * s), (67.0, 0.15 * pv), (84.0, -3.0 * s), (74.0, 14.0 * s)]
                     else:
-                        put(("C",), 66.0, 0.0)
-                        put((Wst, Wwk, "F"), 58.0, 30.0 * s)
-                        put((Dst, "D"), 38.0, 20.0 * s)
-                        put((Dwk, "D"), 38.0, -20.0 * s)
+                        pts = [(32.0, 16.0 * s), (32.0, -14.0 * s), (60.0, 28.0 * s), (83.0, -3.0 * s), (66.0, -24.0 * s), (72.0, 6.0 * s)]
+                    rest = [p for p in ids if p != car]
+                    d_pts, f_pts = pts[:2] if len(D_ids) >= 2 else pts[:1], pts[2:] if len(D_ids) >= 2 else pts[1:]
+                    spot.update(self._assign(side, gc, [p for p in D_ids if p != car], d_pts))
+                    spot.update(self._assign(side, gc, [p for p in rest if p not in spot], f_pts + d_pts))
                 else:
-                    put(("C",), 64.0, 14.0 * s)
-                    put((Wst, Wwk, "F"), 72.0, -16.0 * s)
-                    put((Dst, Dwk, "D"), 38.0, 0.0)
+                    # 2-1-2 cycle: F1 on the puck, F2 low support, F3 high slot, D on the points shading to the puck
+                    d_pts = [(30.0, max(-28.0, min(28.0, 0.55 * pv + 14.0 * s))), (31.0, max(-26.0, min(26.0, 0.35 * pv - 12.0 * s)))]
+                    if n <= 3:   # 3v3: one D high, two forwards
+                        d_pts = d_pts[:1]
+                    spot.update(self._assign(side, gc, [p for p in D_ids if p != car], d_pts))
+                    fw = [p for p in F_ids if p != car and p not in spot]
+                    if car is not None and car in D_ids:   # D has it at the point: screen, half wall, weak side
+                        f_pts = [(83.0, -4.0 * s), (62.0, 30.0 * s), (70.0, -24.0 * s)]
+                    else:
+                        low = toward(pu, pv, 85.0, -6.0 * s, 12.0) if pu < 80.0 else (pu - 13.0, pv * 0.45)
+                        f_pts = [low, (66.0, 0.25 * pv), (78.0, -16.0 * s)]
+                    spot.update(self._assign(side, gc, fw, f_pts))
+                    for p in [q for q in ids if q not in spot and q != car]:
+                        spot[p] = (70.0, -20.0 * s)
+            elif pu > -BLUE:
+                # neutral zone with the puck: width lanes, a trailer, D trailing the play (nobody offside)
+                lanes = [(lim_onside(pu + 10.0), 26.0), (lim_onside(pu + 10.0), -26.0), (pu - 12.0, 0.3 * pv)]
+                spot.update(self._assign(side, gc, [p for p in F_ids if p != car], lanes))
+                spot.update(self._assign(side, gc, [p for p in D_ids if p != car], [(max(-86.0, pu - 28.0), 16.0), (max(-86.0, pu - 30.0), -16.0)]))
             else:
-                lim = BLUE - 2.0  # offside: nobody ahead of the puck into the zone
-                put(("C",), min(pu + 9.0, lim), 0.2 * pv)
-                put((Wst,), min(pu + 20.0, lim), 28.0 * s)
-                put((Wwk,), min(pu + 16.0, lim), -26.0 * s)
-                put((Dst, "D"), max(-86.0, min(pu - 18.0, 20.0)), 16.0 * s)
-                put((Dwk, "D"), max(-86.0, min(pu - 20.0, 18.0)), -16.0 * s)
-                put(("F",), min(pu + 12.0, lim), -10.0 * s)
+                # breakout: wingers on the walls at the hash marks, C swinging low, D to D
+                f_pts = [(-66.0, 37.0 * s), (-60.0, -36.0 * s), (-78.0, -12.0 * s)]
+                spot.update(self._assign(side, gc, [p for p in F_ids if p != car], f_pts))
+                spot.update(self._assign(side, gc, [p for p in D_ids if p != car], [(-84.0, -16.0 * s), (-70.0, 18.0 * s)]))
             if seg.get("rush"):
                 for pid in list(spot):
-                    if pid != seg.get("car"):
-                        u, v = spot[pid]
-                        spot[pid] = (min(u, pu - 6.0), v)  # support trails the breakaway
+                    u, v = spot[pid]
+                    spot[pid] = (min(u, pu - 6.0), v)  # support trails the breakaway
         else:
-            fwd = [p for p, r in roles if r in ("C", "LW", "RW", "F")]
-            f1 = None
-            if fwd and poss is not None:
-                f1 = min(fwd, key=lambda p: math.hypot((self.pos.get(p) or [0, 0])[0] - puck[0], (self.pos.get(p) or [0, 0])[1] - puck[1]))
-            if pu <= -22.0:
+            # defending
+            if pu <= -BLUE:
                 if n < n_opp:
                     sh = 0.25 * pv
                     if n >= 4:
-                        put(("C", "LW", "F"), -58.0, 11.0 + sh)
-                        put(("LW", "RW", "C", "F"), -58.0, -11.0 + sh)
-                        put(("LD", "D"), -79.0, 9.5 + 0.2 * pv)
-                        put(("RD", "D"), -79.0, -9.5 + 0.2 * pv)
+                        pts_f, pts_d = [(-58.0, 11.0 + sh), (-58.0, -11.0 + sh)], [(-79.0, 9.5 + 0.2 * pv), (-79.0, -9.5 + 0.2 * pv)]
                     else:
-                        put(("C", "LW", "F"), -60.0, sh)
-                        put(("LD", "D"), -79.0, 9.0)
-                        put(("RD", "D"), -79.0, -9.0)
+                        pts_f, pts_d = [(-60.0, sh)], [(-79.0, 9.0), (-79.0, -9.0)]
+                    spot.update(self._assign(side, gc, D_ids, pts_d))
+                    spot.update(self._assign(side, gc, [p for p in ids if p not in spot], pts_f + pts_d))
                 else:
-                    # defending in our end: each man takes a check, 4-8 ft goal-side of him
-                    put(("C",), -72.0, 0.3 * pv)
-                    put((Wst,), -40.0, 22.0 * s)
-                    put((Wwk,), -42.0, -20.0 * s)
-                    put((Dst, "D"), -79.0, 12.0 * s)
-                    put((Dwk, "D"), -80.0, -7.0 * s)
-                    put(("F",), -60.0, -8.0 * s)
-                    att = [q for q in opp_ids if q in self.pos and q != seg.get("car") and self.loop.book.pos(q) != "G"]
-                    order_ = [p_ for p_, r_ in roles if r_ in ("LD", "RD", "D")] + [p_ for p_, r_ in roles if r_ in ("LW", "RW", "C", "F")]
-                    taken: set = set()
-                    for p_ in order_:
-                        if p_ not in spot or not att:
-                            continue
-                        su, sv = spot[p_]
-                        cands = [q for q in att if q not in taken]
-                        if not cands:
-                            break
-                        q = min(cands, key=lambda q_: math.hypot(self.rel(side, gc, *self.pos[q_][:2])[0] - su, self.rel(side, gc, *self.pos[q_][:2])[1] - sv))
+                    # strong-side D on the carrier, weak-side D net-front, C low support, wingers on the points
+                    on_puck = toward(pu, pv, -89.0, 0.0, 5.0)
+                    d_pts = [on_puck, (-82.0, -5.0 * s)]
+                    spot.update(self._assign(side, gc, D_ids, d_pts))
+                    att = [q for q in opp_ids if q in self.pos and self.loop.book.pos(q) != "G" and q != seg.get("car")]
+                    pointmen = sorted(att, key=lambda q: -self.rel(side, gc, *self.pos[q][:2])[0])[:2]  # highest attackers
+                    w_pts = []
+                    for q in pointmen:
                         qu, qv = self.rel(side, gc, *self.pos[q][:2])
-                        if math.hypot(qu - su, qv - sv) > 35.0:
-                            continue
-                        nu, nv = -NET_X - qu, -qv
-                        nd = math.hypot(nu, nv) or 1.0
-                        gap = 6.0
-                        spot[p_] = (qu + nu / nd * gap, qv + nv / nd * gap)
-                        self._marks[p_] = q
-                        taken.add(q)
+                        w_pts.append(toward(qu, qv, -89.0, 0.0, 7.0))
+                    while len(w_pts) < 2:
+                        w_pts.append((-42.0, (20.0 if len(w_pts) == 0 else -20.0)))
+                    c_pt = (-74.0, 8.0 * s)
+                    fw = [p for p in F_ids if p not in spot]
+                    cpid = next((p for p, r in roles if r == "C" and p in fw), fw[0] if fw else None)
+                    if cpid:
+                        spot[cpid] = c_pt
+                    spot.update(self._assign(side, gc, [p for p in fw if p != cpid], w_pts))
+                    for i_, q in enumerate(pointmen):
+                        for p_, (u_, v_) in spot.items():
+                            if abs(u_ - w_pts[i_][0]) < 0.01 and abs(v_ - w_pts[i_][1]) < 0.01:
+                                self._marks[p_] = q
+                    for pid, (u, v) in list(spot.items()):   # the unit collapses toward the slot
+                        if pid not in self._marks and (u, v) != on_puck:
+                            spot[pid] = (u + (-72.0 - u) * 0.2, v * 0.8)
+            elif pu < BLUE:
+                aggressive = tac.get("forecheck") == "aggressive"
+                if aggressive:   # 1-2-2 forecheck high
+                    f_pts = [(pu - 5.0, pv), (pu - 16.0, 20.0 * s), (pu - 30.0, -12.0 * s)]
+                    d_pts = [(max(-80.0, pu - 45.0), 15.0), (max(-80.0, pu - 45.0), -15.0)]
+                else:            # neutral-zone trap
+                    f_pts = [(pu - 8.0, pv * 0.8), (min(pu - 22.0, 5.0), 20.0), (min(pu - 22.0, 5.0), -20.0)]
+                    d_pts = [(min(pu - 42.0, -28.0), 14.0), (min(pu - 42.0, -28.0), -14.0)]
+                spot.update(self._assign(side, gc, F_ids, f_pts))
+                spot.update(self._assign(side, gc, D_ids, d_pts))
             else:
-                put(("C",), max(-84.0, pu - 12.0), 0.3 * pv)
-                put(("LW",), max(-84.0, pu - 14.0), 18.0)
-                put(("RW",), max(-84.0, pu - 14.0), -18.0)
-                put(("LD", "D"), max(-84.0, min(pu - 30.0, 40.0)), 14.0)
-                put(("RD", "D"), max(-84.0, min(pu - 30.0, 40.0)), -14.0)
-                put(("F",), max(-84.0, pu - 20.0), 0.0)
+                # forecheck in their end: F1 on the puck, F2 cuts off the strong wall, F3 high, D hold the line
+                pinch = 36.0 if abs(pv) > 30.0 and tac.get("defense") != "passive" else 30.0
+                f_pts = [(pu - 5.0, pv), (max(pu - 15.0, 42.0), 30.0 * s), (55.0, 0.2 * pv)]
+                spot.update(self._assign(side, gc, F_ids, f_pts))
+                spot.update(self._assign(side, gc, D_ids, [(pinch, 26.0 * s), (30.0, -12.0 * s)]))
             if seg.get("rush") and poss == opp(side):
                 for pid in list(spot):
                     spot[pid] = (min(spot[pid][0], pu - 9.0), spot[pid][1] * 0.6)  # defenders trail the breakaway
-                f1 = None
-            if f1 is not None:
-                spot[f1] = (pu - 5.0, pv)  # pressure on the puck, a stick-length gap
-                self._marks.pop(f1, None)
-            opp_xy = [self.pos[q] for q in opp_ids if q in self.pos]
-            for pid, (u, v) in list(spot.items()):
-                if pid == f1 or not opp_xy or pid in self._marks:
-                    continue
-                ax, ay = self.ab(side, gc, u, v)
-                near = min(opp_xy, key=lambda q: math.hypot(q[0] - ax, q[1] - ay))
-                qu, qv = self.rel(side, gc, near[0], near[1])
-                if math.hypot(qu - u, qv - v) < 20.0:
-                    spot[pid] = (0.65 * u + 0.35 * (qu - 5.0), 0.65 * v + 0.35 * qv)
         for pid in ids:
             if pid not in spot:
-                spot[pid] = (min(pu - 10.0, BLUE - 2.0) if poss == side and pu < BLUE else pu - 10.0, 0.0)
-        return {pid: self.ab(side, gc, u, v) for pid, (u, v) in spot.items()}
+                spot[pid] = (lim_onside(pu - 10.0) if poss == side else pu - 10.0, -10.0 * s)
+        out: Dict[str, Tuple[float, float]] = {}
+        for pid, (u, v) in spot.items():
+            if abs(u - pu) > 35.0:   # the unit flows with the puck: far spots are drawn toward it
+                u = pu + math.copysign(35.0 + (abs(u - pu) - 35.0) * 0.6, u - pu)
+            du, dv = u - pu, v - pv
+            dd = math.hypot(du, dv)
+            if dd > 85.0:   # the unit moves as one: nobody's spot is farther than ~85 ft from the puck
+                u, v = pu + du / dd * 85.0, pv + dv / dd * 85.0
+            x, y = self.ab(side, gc, u, v)
+            out[pid] = rink_clamp(x, y, 3.0)
+        return out
 
     # ───────────────────────────── stepping
     def _desired(self, gc: float, seg: Dict[str, Any]) -> Dict[str, List[str]]:
         want = {s: list(v) for s, v in self.lineup_at(gc).items()}
+        pl = self.play if (self.live_mode and seg.get("live")) else None
+        if pl is not None:
+            # nobody changes with the puck on his stick (or a pass on its way to him): the change waits a moment
+            # while the play gets rid of it (the play sim moves the puck at once)
+            busy = pl.owner if pl.mode == "carry" else ((pl.pass_ or {}).get("rcv") if pl.mode == "pass" else None)
+            for side in SIDES:
+                if busy and busy in self.onice[side] and busy not in want[side]:
+                    cw = self.__dict__.setdefault("_chg_wait", {})
+                    t0 = cw.get((side, busy))
+                    if t0 is None or gc - t0 > 8.0:
+                        t0 = cw[(side, busy)] = gc
+                    if gc - t0 < 3.0:
+                        want[side] = list(self.onice[side])
+                        pl.changing = busy
         for side in SIDES:
             if self.onice[side] and any(a_ <= gc <= b_ for a_, b_ in self._freeze.get(side, [])):
                 want[side] = [p for p in self.onice[side] if p in want[side] or True][:len(want[side]) or 5]
@@ -1666,8 +1815,12 @@ class MotionV2:
                 for p in enter:
                     self.leaving.pop(p, None)
                     if p not in self.pos:
-                        bx, by = (BOX_DOOR[side] if p in self.boxed_recent else BENCH_DOOR[side])
-                        self.pos[p] = [bx + (zlib.crc32(p.encode()) % 5 - 2) * 1.2, by, 0.0, 0.0]
+                        bx, by = BOX_DOOR[side] if p in self.boxed_recent else bench_spot(side, p)
+                        self.pos[p] = [bx, by, 0.0, 0.0]
+                        if dead:  # full change at a stoppage trickles in over a few seconds
+                            self.__dict__.setdefault("_enter_hold", {})[p] = self._pt_now + 0.6 * enter.index(p)
+                        elif self.live_mode and len(enter) >= 2:   # on the fly: one over the boards as another comes off
+                            self.__dict__.setdefault("_enter_hold", {})[p] = self._pt_now + 0.8 * enter.index(p)
                 self.onice[side] = list(want[side])
             self._sync_goalie(side, self._goalie_wanted(side, gc, seg))
 
@@ -1723,8 +1876,14 @@ class MotionV2:
                 self.onice[s].remove(pid)
         self.leaving.pop(pid, None)
 
-    def _step(self, pt: float, gc: float, dt: float, seg: Dict[str, Any]) -> Tuple[float, float]:
-        puck = self._puck(seg, pt)
+    def _clamp(self, x: float, y: float) -> Tuple[float, float]:
+        return clampxy(x, y)
+
+    def _hint(self, h: Dict[str, Any]) -> None:
+        self._hints.append(h)
+
+    def _step(self, pt: float, gc: float, dt: float, seg: Dict[str, Any], puck_override: Optional[Tuple[float, float]] = None) -> Tuple[float, float]:
+        puck = puck_override if puck_override is not None else self._puck(seg, pt)
         dead = seg["k"] in DEAD_KINDS
         self._pt_now = pt
         self._sync(gc, seg, dead)
@@ -1755,10 +1914,15 @@ class MotionV2:
                 for i, pid in enumerate(ids):
                     if side == seg.get("scorer_side"):
                         ang = i * 1.3
-                        targets[pid] = clampxy(sx - 3.0 * math.cos(ang) * self.dir(side, gc), sy + 3.0 * math.sin(ang))
-                    else:
-                        bx, by = BENCH_DOOR[side]
-                        targets[pid] = clampxy(bx * 0.5, 20.0)
+                        near_ = sorted(ids, key=lambda q: math.hypot((self.pos.get(q) or [sx, sy])[0] - sx, (self.pos.get(q) or [sx, sy])[1] - sy))
+                        if pid == scorer or near_.index(pid) < 3 or not self.live_mode:
+                            targets[pid] = clampxy(sx - 3.0 * math.cos(ang) * self.dir(side, gc), sy + 3.0 * math.sin(ang))
+                        else:   # the last man arrives later and taps gloves from the edge of the group
+                            targets[pid] = clampxy(sx - 19.0 * self.dir(side, gc), sy * 0.6 + (5.0 if i % 2 else -5.0))
+                    else:  # the other team drifts back toward its own blue line, each on his own path
+                        st0 = self.pos.get(pid) or [0.0, 0.0]
+                        u0, v0 = self.rel(side, gc, st0[0], st0[1])
+                        targets[pid] = clampxy(*self.ab(side, gc, max(-40.0, min(u0, -10.0) - 8.0), v0 * 0.7 + (i - 2) * 3.0))
                     spec[pid] = ("goal", side, 10.0, A_NORM)
             elif dead and seg.get("scrum"):
                 X = seg["scrum"]
@@ -1773,7 +1937,7 @@ class MotionV2:
                         targets[pid] = (st[0], st[1])
                         spec[pid] = ("stop", None, 6.0, A_NORM)
             else:
-                sp_ = self._spots(side, gc, seg, puck, ids, len(self.onice[opp(side)]), self.onice[opp(side)])
+                sp_ = self._spots(side, gc, seg, seg.get("fpuck") or puck, ids, len(self.onice[opp(side)]), self.onice[opp(side)])
                 targets.update(sp_)
                 rush = bool(seg.get("rush"))
                 for p_, (tx_, ty_) in sp_.items():
@@ -1781,7 +1945,12 @@ class MotionV2:
                         spec[p_] = ("mark", self._marks[p_], 16.0, A_NORM)
                     else:
                         far = math.hypot(tx_ - puck[0], ty_ - puck[1]) > 45.0
-                        spec[p_] = ("spot", None, V_RUSH if rush else (V_DRIFT if far else V_CRUISE), A_NORM)
+                        if seg.get("live"):   # live play: a skater well off his spot hurries to it (the unit moves as one)
+                            st_ = self.pos.get(p_)
+                            off_ = math.hypot(tx_ - st_[0], ty_ - st_[1]) if st_ is not None else 0.0
+                            spec[p_] = ("spot", None, V_RUSH if (rush or off_ > 22.0) else V_CRUISE, A_HARD if off_ > 22.0 else A_NORM)
+                        else:
+                            spec[p_] = ("spot", None, V_RUSH if rush else (V_DRIFT if far else V_CRUISE), A_NORM)
         if not dead and seg.get("side") in SIDES:  # the next receiver / carrier gets open early (passes go to a player, not to ice)
             X = seg["side"]
             pu_, _pv = self.rel(X, gc, *puck)
@@ -1811,9 +1980,12 @@ class MotionV2:
             spec[pre[0]] = ("pre", tuple(pre[1]), V_SPRINT if dpre > 30.0 else V_RUSH, A_HARD)
         if not dead and seg["k"] in ("carry", "hold") and seg.get("car") in targets:
             lead = 0.2 if seg["k"] == "carry" else 0.0
-            targets[seg["car"]] = self._puck(seg, pt + lead, deke=False)
+            targets[seg["car"]] = seg["ctarget"] if seg.get("live") and seg.get("ctarget") else self._puck(seg, pt + lead, deke=False)
             dcar = math.hypot(targets[seg["car"]][0] - self.pos[seg["car"]][0], targets[seg["car"]][1] - self.pos[seg["car"]][1]) if seg["car"] in self.pos else 0.0
-            spec[seg["car"]] = ("car", id(seg), V_SPRINT if (dcar > 12.0 or seg.get("rush")) else 17.0, A_HARD)
+            if seg.get("live"):
+                spec[seg["car"]] = ("car", seg.get("car"), 20.0 if (seg.get("rush") or seg.get("car_fast")) else 15.0, A_HARD)
+            else:
+                spec[seg["car"]] = ("car", id(seg), V_SPRINT if (dcar > 12.0 or seg.get("rush")) else 17.0, A_HARD)
         if seg["k"] == "pass" and seg.get("rcv") in targets:
             targets[seg["rcv"]] = seg["p1"]
             spec[seg["rcv"]] = ("rcv", id(seg), V_RUSH, A_HARD)
@@ -1823,28 +1995,38 @@ class MotionV2:
             targets[seg["offside_pid"]] = self.ab(X, gc, 30.0, v * 0.5)
             spec[seg["offside_pid"]] = ("offside", id(seg), V_RUSH, A_HARD)
         if seg["k"] == "loose" and not dead:
+            # nobody lets the puck travel alone: the nearest skater of each team goes for it at once (to where it
+            # is going on dumps / rims / clears), the dumping team sends a second man
+            longball = bool(seg.get("ice") or seg.get("dump") or seg.get("ptype") in ("rim", "chip"))
+            aim = seg["p1"] if longball else puck
             for side in SIDES:
-                best, bd = None, 1e9
-                for pid in self.onice[side]:
-                    q = self.pos.get(pid)
-                    if q is not None:
-                        d = math.hypot(q[0] - puck[0], q[1] - puck[1])
-                        if d < bd:
-                            best, bd = pid, d
-                if best:
-                    targets[best] = puck
-                    spec[best] = ("chase", id(seg), V_SPRINT if seg.get("ice") or seg.get("dump") else V_RUSH, A_HARD)
+                ranked = sorted((math.hypot(q[0] - aim[0], q[1] - aim[1]), pid) for pid in self.onice[side]
+                                for q in [self.pos.get(pid)] if q is not None)
+                n_ch = 2 if (longball and seg.get("side") == side) else 1
+                for _d, pid in ranked[:n_ch]:
+                    targets[pid] = aim
+                    spec[pid] = ("chase", id(seg), V_SPRINT if (longball or seg.get("live")) else V_RUSH, A_HARD)
         if seg.get("carry_by") and seg["carry_by"] in self.pos:
             targets[seg["carry_by"]] = puck
             spec[seg["carry_by"]] = ("so", id(seg), V_RUSH, A_HARD)
         # leaving players head for the door (bench or box)
         for pid, info in list(self.leaving.items()):
-            targets[pid] = BENCH_DOOR[info["side"]]
+            targets[pid] = bench_spot(info["side"], pid)
             spec[pid] = ("door", info["side"], V_CRUISE, A_NORM)
+        for pid, until in list(self.__dict__.get("_enter_hold", {}).items()):
+            if pt >= until or pid not in self.pos:
+                self._enter_hold.pop(pid, None)
+            elif pid in targets:
+                targets[pid] = (self.pos[pid][0], self.pos[pid][1])   # waits at the boards for his turn
+                spec[pid] = ("wait", None, 2.0, A_NORM)
         for pid, b in self.boxed.items():
             if b.get("walk"):
                 targets[pid] = BOX_DOOR[b["side"]]
                 spec[pid] = ("box", b["side"], V_CRUISE, A_NORM)
+        for pid, xy in (seg.get("force") or {}).items():
+            if pid in targets:
+                targets[pid] = xy
+                spec[pid] = ("force", None, V_RUSH, A_HARD)
         targets = self._hold_targets(targets, spec, seg, pt, dt, dead)
         before = {pid: (st[0], st[1]) for pid, st in self.pos.items()}
         onside: Dict[str, bool] = {}
@@ -1876,7 +2058,7 @@ class MotionV2:
                     vmax = min(vmax, 5.0)                  # pivot: slow through the turn, then re-accelerate
             self._steer(st, tx, ty, dt, min(vmax, V_SPRINT), amax, tr["turn"])
         self._goalies(gc, puck, dt, seg)
-        if not dead and seg["k"] in ("carry", "hold") and seg.get("car") in self.pos:
+        if not dead and not seg.get("live") and seg["k"] in ("carry", "hold") and seg.get("car") in self.pos:
             st = self.pos[seg["car"]]
             X = seg.get("side") or "home"
             pb_ = self._puck(seg, pt, deke=False)
@@ -1896,7 +2078,8 @@ class MotionV2:
                 st[0], st[1] = seg["p0"]
         fixed = [self.pos[g] for g in self.goalie_on.values() if g and g in self.pos]
         allp = [p for side in SIDES for p in self.onice[side]] + list(self.leaving)
-        self._separate(gc, [p for p in dict.fromkeys(allp) if p in self.pos and p not in self.boxed], fixed)
+        self._separate(gc, [p for p in dict.fromkeys(allp) if p in self.pos and p not in self.boxed], fixed,
+                       team_gap=(0.0 if dead and fo is not None else 6.0), puck=puck)
         lim = (V_SPRINT + 0.5) * dt  # hard speed cap whatever moved them this step
         gset = {g for g in self.goalie_on.values() if g}
         for pid, st in self.pos.items():
@@ -1916,14 +2099,24 @@ class MotionV2:
                     st[0] = (BLUE - 0.2) * dX
                     if st[2] * dX > 0:
                         st[2] = 0.0
+                elif was_on and st is not None and pid == seg.get("car") and pid != seg.get("offside_pid"):
+                    lim_u = max(BLUE - 0.2, puck[0] * dX + 0.8)   # the carrier crosses with the puck, not ahead of it
+                    if seg.get("hold_line"):
+                        lim_u = BLUE - 2.5                         # a teammate is still in the zone: he waits for the tag-up
+                    if st[0] * dX > lim_u:
+                        st[0] = lim_u * dX
+                        if st[2] * dX > 0:
+                            st[2] = 0.0
         on_now = set(self.onice["home"]) | set(self.onice["away"]) | {g for g in self.goalie_on.values() if g}
         for pid in list(self.leaving):
             if pid in on_now:  # back on the ice before reaching the bench
                 self.leaving.pop(pid, None)
                 continue
             st = self.pos.get(pid)
-            door = BENCH_DOOR[self.leaving[pid]["side"]]
-            if st is None or math.hypot(st[0] - door[0], st[1] - door[1]) < 2.5 or pt - self.leaving[pid]["since"] > 12.0:
+            door = bench_spot(self.leaving[pid]["side"], pid)
+            bd = BENCH_DOOR[self.leaving[pid]["side"]]
+            over = self.live_mode and abs(st[1]) > 35.0 and st[1] * bd[1] > 0 and abs(st[0] - bd[0]) < 13.0 if st is not None else False  # hops over the boards
+            if st is None or over or math.hypot(st[0] - door[0], st[1] - door[1]) < 3.0 or pt - self.leaving[pid]["since"] > 12.0:
                 self.leaving.pop(pid, None)
                 self.pos.pop(pid, None)
         for side in SIDES:  # safety: anyone on the ice has a body
@@ -2003,7 +2196,8 @@ class MotionV2:
             st[2], st[3] = st[2] / sp * V_SPRINT, st[3] / sp * V_SPRINT
         st[0], st[1] = clampxy(st[0] + st[2] * dt, st[1] + st[3] * dt)
 
-    def _separate(self, gc: float, ids: List[str], fixed: Optional[List[List[float]]] = None, min_sep: float = MIN_SEP) -> None:
+    def _separate(self, gc: float, ids: List[str], fixed: Optional[List[List[float]]] = None, min_sep: float = MIN_SEP,
+                  team_gap: float = 0.0, puck: Optional[Tuple[float, float]] = None) -> None:
         """Min 3 ft between bodies; skaters stay out of both creases (goalies hold the crease)."""
         pts = [(pid, self.pos[pid]) for pid in ids if pid in self.pos]
         for _ in range(6):
@@ -2014,10 +2208,17 @@ class MotionV2:
                     b = pts[j][1]
                     dx, dy = b[0] - a[0], b[1] - a[1]
                     d = math.hypot(dx, dy)
-                    if d < min_sep:
+                    need = min_sep
+                    if team_gap > min_sep and self.loop.book.side.get(pts[i][0]) == self.loop.book.side.get(pts[j][0]):
+                        battling = puck is not None and math.hypot(a[0] - puck[0], a[1] - puck[1]) < 10.0 and math.hypot(b[0] - puck[0], b[1] - puck[1]) < 10.0
+                        if not battling:
+                            need = team_gap  # teammates keep their spacing (no clumps, no single file)
+                    if d < need:
                         if d < 1e-6:
                             dx, dy, d = 1.0, 0.0, 1.0
-                        push = (min_sep - d) / 2.0 + 0.01
+                        push = (need - d) / 2.0 + 0.01
+                        if need > min_sep:
+                            push = min(push, 0.6)  # spacing is a soft push, not a shove
                         nx, ny = dx / d, dy / d
                         ax0, ay0 = a[0], a[1]
                         a[0], a[1] = clampxy(a[0] - nx * push, a[1] - ny * push)
@@ -2077,30 +2278,175 @@ class MotionV2:
             st[2] = st[3] = 0.0
 
     # ───────────────────────────── public
+    # ───────────────────────────── live play (forward simulation + director + time warp)
+    def _live_substep(self, sg: Dict[str, Any], pp: float) -> None:
+        try:
+            from services.live_play import PlaySim  # type: ignore
+        except ImportError:  # local tests
+            from live_play import PlaySim  # type: ignore
+        if self.play is None or self.play.seg is not sg:
+            self.play = PlaySim(self, sg, sg.get("state") or {}, sg["pt0"])
+            sg["hist_pt"], sg["hist_g"] = [sg["pt0"]], [sg["g0"]]
+            sg["_last_pp"] = sg["pt0"]
+        dt = pp - sg.get("_last_pp", sg["pt0"])
+        if dt <= 1e-6:
+            return
+        sg["_last_pp"] = pp
+        self._cur_seg = sg
+        if sg.get("B") is None:   # nothing left (end of the timeline): idle play
+            self.play.gc += dt
+        else:
+            self.play.substep(pp, dt)
+        sg["hist_pt"].append(pp)
+        sg["hist_g"].append(self.play.gc)
+        if self.play.reset_req:
+            self._live_reset(sg, pp, self.play.reset_req)
+        elif self.play.done:
+            self._live_finish(sg, pp)
+
+    def _close_live(self, sg: Dict[str, Any], pp: float) -> None:
+        sg["done"] = True
+        sg["g1"] = self.play.gc
+        sg["pt1"] = pp
+
+    def _live_finish(self, sg: Dict[str, Any], pp: float) -> None:
+        pl = self.play
+        self._close_live(sg, pp)
+        B = sg["B"]
+        end = {"g": pl.gc, "puck": (pl.puck[0], pl.puck[1]), "side": pl.side if pl.mode == "carry" else None,
+               "car": pl.owner if pl.mode == "carry" else None}
+        if pl.release is not None and B is not None:
+            X = pl._X() or "home"
+            S = pl._shooter()
+            loc = pl.release["loc"]
+            B["shot_loc"] = {"x": round(loc[0], 1), "y": round(loc[1], 1), "est": True, "from_motion": True}
+            rng = self._rng("shot", B.get("key"))
+            shot, defl = self._choose_shot(B, X, loc, rng, 99.0)
+            last_pass = next((m for m in reversed(pl.moves) if m["kind"] == "pass" and m.get("rcv") == S), None)
+            recv = next((m for m in reversed(pl.moves) if m["kind"] == "recv" and m.get("pid") == S), None)
+            fresh = recv is not None and pp - recv["pt"] < 0.8
+            lu = self.rel(X, pl.gc, loc[0], loc[1])[0]
+            if fresh and shot in ("snap", "wrist") and lu > 55.0 and rng.random() < 0.6:
+                shot = "one_timer"
+            if shot in ("one_timer", "tip") and not fresh:
+                shot = "snap" if shot == "one_timer" else "wrist"
+            if shot == "tip" and last_pass is not None and self.rel(X, pl.gc, *last_pass["from"])[0] > 45.0:
+                shot = "wrist"
+            self._shot[B["key"]] = {"shot_type": shot, "deflected": bool(defl)}
+            hist_ = [h for h in pl.s_hist if pp - h[0] >= 2.5] or pl.s_hist[:1]
+            bu_p0 = (hist_[-1][1], hist_[-1][2]) if hist_ else loc
+            mv = last_pass if (last_pass is not None and pp - last_pass["pt"] < 4.0) else None
+            start = next((m for m in reversed(pl.moves) if pp - m["pt"] <= 4.0), None)
+            self._bu[B["key"]] = {"shooter": S, "kind": "pass" if mv else "carry", "passer": mv["pid"] if mv else None,
+                                  "from_xy": mv["from"] if mv else None, "rush": bool(pl.rush), "ptype": mv.get("ptype") if mv else None,
+                                  "shot_type": shot, "seg": {"p1": loc, "p0": bu_p0}, "start_seg": {"pt0": (start or {"pt": pp})["pt"]},
+                                  "pt": (start or {"pt": pp})["pt"], "forced": bool(pl.release.get("forced"))}
+            end = {"g": pl.gc, "puck": loc, "side": X, "car": S}
+        if self.plans:
+            self.plans[-1]["end"] = end
+        self.play = None
+        self._build_next_plan()
+
+    def _append_segs(self, segs: List[Dict[str, Any]]) -> None:
+        pt = self.flat[-1]["pt1"] if self.flat else 0.0
+        g = self.flat[-1]["g1"] if self.flat else 0.0
+        for s_ in segs:
+            if s_["k"] in DEAD_KINDS:
+                s_["g0"] = s_["g1"] = g
+                s_["pt0"], s_["pt1"] = pt, pt + s_["d"]
+            else:
+                s_["g0"], s_["g1"] = g, g + max(0.0, s_["g1"] - s_["g0"])
+                s_["pt0"], s_["pt1"] = pt, pt + (s_["g1"] - s_["g0"])
+            pt, g = s_["pt1"], s_["g1"]
+            if self.plans:
+                self.plans[-1]["segs"].append(s_)
+            self.flat.append(s_)
+            self.flat_g.append(s_["g0"])
+
+    def _live_reset(self, sg: Dict[str, Any], pp: float, reason: str) -> None:
+        """A natural stoppage inside a live interval (icing, or the defending team puts the puck out of play);
+        the game clock stops, there is a faceoff, and the same anchor is played toward again."""
+        pl = self.play
+        self._close_live(sg, pp)
+        B = sg["B"]
+        X = pl._X()
+        g = pl.gc
+        rng = self._rng("reset", B.get("key") if B else None, round(g, 1))
+        puck = (pl.puck[0], pl.puck[1])
+        if reason == "icing":
+            Y = (pl.loose_info or {}).get("side") or pl.side or "home"
+            self._play_stats["icings"] += 1
+            sgn = 1.0 if self.rel(Y, g, *puck)[1] >= 0 else -1.0
+            dot = self.ab(Y, g, -ZONE_DOT_U, DOT_V * sgn)
+            wh = _dead(g, rng.uniform(8.0, 10.5), puck, dot, why=("icing", {"side": Y}), fo=dot, reason="icing")
+            wh["ev"].append({"type": "stoppage", "meta": {"reason": "icing", "side": Y}})
+            fos, st = self._faceoff(g, dot, X, rng, "icing", offender=Y, force=X if (X and pl.urgency() > 0.3) else None)
+        else:
+            Xs = X or "home"
+            D = opp(Xs)
+            self._resets += 1
+            self._play_stats["resets"] += 1
+            sgn = 1.0 if self.rel(Xs, g, *puck)[1] >= 0 else -1.0
+            dot = self.ab(Xs, g, ZONE_DOT_U, DOT_V * sgn)
+            wh = _dead(g, rng.uniform(7.0, 9.0), puck, dot, why=("out", {}), fo=dot, reason="out")
+            wh["ev"].append({"type": "stoppage", "meta": {"reason": "out", "side": D}})
+            fos, st = self._faceoff(g, dot, Xs, rng, "out", offender=Xs, force=Xs)
+        self._append_segs([wh] + fos)
+        self.play = None
+        st = dict(st)
+        live = {"k": "live", "g0": self.flat[-1]["g1"], "g1": float(B["t"]) if B else g + 99999.0, "B": B, "ph": "play", "state": st,
+                "side": st.get("side"), "car": None, "rcv": None, "fo": None, "why": None, "ev": [], "p0": st.get("puck"), "p1": st.get("puck")}
+        live["pt0"], live["pt1"] = self.flat[-1]["pt1"], 1e18
+        if self.plans:
+            self.plans[-1]["segs"].append(live)
+        self.flat.append(live)
+        self.flat_g.append(live["g0"])
+
+    def realized_gc(self) -> float:
+        return float(self.gc_last)
+
     def frame_at(self, pt: float) -> Optional[Dict[str, Any]]:
         seg = self._seg_for_pt(pt)
         if seg is None:
             return None
-        gc = seg["g0"] if seg["k"] in DEAD_KINDS else seg["g0"] + max(0.0, min(seg["g1"] - seg["g0"], pt - seg["pt0"]))
         for sub in (0.25, 0.5):
             pp = pt - 0.5 + sub
             sg = self._seg_for_pt(pp) or seg
+            if sg["k"] == "live" and not sg.get("done"):
+                self._live_substep(sg, pp)
+                continue
             gg = sg["g0"] if sg["k"] in DEAD_KINDS else sg["g0"] + max(0.0, min(sg["g1"] - sg["g0"], pp - sg["pt0"]))
+            if sg["k"] == "live":
+                gg = self.gc_at(pp)
             self._cur_seg = sg
             self._emit_seg_events(sg)
             self._step(pp, gg, 0.25, sg)
-        self._seg_for_pt(pt)
+        seg = self._seg_for_pt(pt) or seg
         self._cur_seg = seg
-        puck = self._puck(seg, pt)
+        live_now = seg["k"] == "live"
+        if live_now:
+            gc = self.gc_at(pt)
+            pl = self.play if (self.play is not None and self.play.seg is seg) else None
+            puck = tuple(pl.puck) if pl is not None else tuple(seg.get("p1") or (0.0, 0.0))
+        else:
+            gc = seg["g0"] if seg["k"] in DEAD_KINDS else seg["g0"] + max(0.0, min(seg["g1"] - seg["g0"], pt - seg["pt0"]))
+            puck = self._puck(seg, pt)
         if seg.get("why") is not None and seg["k"] in DEAD_KINDS:
             self.last_whistle = seg["why"]
         c = seg.get("car") if seg["k"] in ("carry", "hold") or seg.get("carry_by") else None
         if seg.get("carry_by"):
             c = seg["carry_by"]
         side = seg.get("side")
+        if live_now:
+            pl = self.play if (self.play is not None and self.play.seg is seg) else None
+            c = pl.owner if (pl is not None and pl.mode == "carry") else None
+            side = pl.side if pl is not None else None
+            seg_k = "carry" if c else ("pass" if pl is not None and pl.mode == "pass" else "loose")
+        else:
+            seg_k = seg["k"]
         if c is not None and c not in self.pos:
             c = None
-        pos_side = side if seg["k"] in ("carry", "pass", "shot", "hold") and side in SIDES else (self.loop.book.side.get(c) if c else None)
+        pos_side = side if seg_k in ("carry", "pass", "shot", "hold") and side in SIDES else (self.loop.book.side.get(c) if c else None)
         players, lv, sp = [], [], []
         gset = {g for g in self.goalie_on.values() if g}
         spd_prev = self.__dict__.setdefault("_spd_prev", {})
@@ -2121,10 +2467,11 @@ class MotionV2:
             wy = amp * math.sin(6.2832 * 0.29 * tr["wf"] * pt + tr["w2"])
             return [pid, round(st[0] + wx, 1), round(st[1] + wy, 1)]
 
+        held = self.__dict__.get("_enter_hold", {})
         for s in SIDES:
             for pid in list(self.onice[s]) + ([self.goalie_on[s]] if self.goalie_on.get(s) else []):
                 st = self.pos.get(pid)
-                if st is not None:
+                if st is not None and not (self.live_mode and held.get(pid, -1.0) > pt):   # still on the bench, waiting his turn
                     players.append(drawn(pid, st))
         for pid in self.leaving:
             st = self.pos.get(pid)
@@ -2161,6 +2508,10 @@ class MotionV2:
         if seg.get("delayed"):
             f["dp"] = opp(seg["delayed"])
         self.last_frame = f
+        try:
+            self._presence(gc)
+        except Exception:
+            logger.debug("presence accounting failed", exc_info=True)
         self.gc_last = gc
         return f
 
@@ -2188,6 +2539,18 @@ class MotionV2:
                     self.fo_tally[w][0] += 1
                     self.fo_tally["home"][1] += 1
                     self.fo_tally["away"][1] += 1
+                try:   # zone starts per line (the unit on the ice for the draw)
+                    P = self._pres()
+                    dot = ev["meta"].get("dot") or [0.0, 0.0]
+                    for sd in SIDES:
+                        du = self.rel(sd, seg["g0"] + 0.01, dot[0], dot[1])[0]
+                        zone = "oz" if du > 40.0 else ("dz" if du < -40.0 else None)
+                        if zone:
+                            ev["meta"].setdefault("zone_for", {})[sd] = zone
+                            for key in [k_ for k_ in (P["cur"][sd].get("F"), P["cur"][sd].get("D")) if k_]:
+                                P["starts"].setdefault(f"{sd}:{key}", {"oz": 0, "dz": 0})[zone] += 1
+                except Exception:
+                    logger.debug("zone start accounting failed", exc_info=True)
             self._events.append(ev)
         if seg["k"] in ("carry", "pass") and seg.get("side") in SIDES:
             self._hints.append({"pt": round(seg["pt0"], 2), "t": seg["g0"], "kind": seg["k"], "side": seg["side"], "pid": seg.get("car"),
@@ -2196,6 +2559,72 @@ class MotionV2:
         elif seg.get("dump") and seg.get("side") in SIDES:
             self._hints.append({"pt": round(seg["pt0"], 2), "t": seg["g0"], "kind": "dump", "side": seg["side"], "pid": None, "from": seg["p0"], "to": seg["p1"],
                                 "rush": False, "entry": False, "dump": True, "ptype": seg.get("ptype")})
+
+    # ───────────────────────────── on-ice presence (TOI / shifts / lines / matchups from the motion track)
+    def _pres(self) -> Dict[str, Any]:
+        P = self.__dict__.get("pres")
+        if P is None:
+            P = {"gc": None, "p": {}, "line": {}, "match": {}, "cur": {"home": {}, "away": {}}, "starts": {},
+                 "units": {"home": {"PP": [], "PK": []}, "away": {"PP": [], "PK": []}}}
+            self.pres = P
+        return P
+
+    def _presence(self, gc: float) -> None:
+        P = self._pres()
+        prev = P["gc"]
+        dg = gc - prev if prev is not None and 0.0 < gc - prev <= 2.0 else 0.0
+        P["gc"] = gc
+        mp = self._manpower(gc)
+        for side in SIDES:
+            on = list(self.onice[side])
+            g = self.goalie_on.get(side)
+            allon = set(on) | ({g} if g else set())
+            for pid in allon:
+                r = P["p"].setdefault(pid, {"side": side, "toi": 0.0, "shifts": 0, "on": False, "since": gc, "last_off": None})
+                if not r["on"]:
+                    r["on"], r["since"] = True, gc
+                    r["shifts"] += 1
+                r["toi"] += dg
+            for pid, r in P["p"].items():
+                if r["side"] == side and r["on"] and pid not in allon:
+                    r["on"], r["last_off"] = False, gc
+            lines = self.loop.lines.get(side) or {}
+            onset = set(on)
+            fk = next((f"F{j + 1}" for j, ln in enumerate(lines.get("F") or []) if ln and sum(1 for q in ln if q in onset) >= 2), None)
+            dk = next((f"D{j + 1}" for j, pr in enumerate(lines.get("D") or []) if pr and sum(1 for q in pr if q in onset) >= 2), None)
+            uk = None
+            kind = "PK" if mp.get("short") == side else ("PP" if mp.get("short") == opp(side) else None)
+            if kind and onset:
+                reg = P["units"][side][kind]
+                idx = next((i for i, u in enumerate(reg) if len(u & onset) >= 3), None)
+                if idx is None:
+                    if len(reg) < 2:
+                        reg.append(frozenset(onset))
+                        idx = len(reg) - 1
+                    else:
+                        idx = max(range(len(reg)), key=lambda i: len(reg[i] & onset))
+                uk = f"{kind}{idx + 1}"
+            cur = {"F": fk, "D": dk, "U": uk}
+            old = P["cur"][side]
+            for slot, key in cur.items():
+                if not key:
+                    continue
+                L = P["line"].setdefault(f"{side}:{key}", {"toi": 0.0, "shifts": 0, "since": gc, "last_shift": 0.0, "ids": []})
+                if old.get(slot) != key:
+                    L["shifts"] += 1
+                    L["since"] = gc
+                L["toi"] += dg
+                L["last_shift"] = gc - L["since"]
+                ids_ = [q for q in onset if (slot != "F" or self._book_pos(q) != "D") and (slot != "D" or self._book_pos(q) == "D")] if slot != "U" else sorted(onset)
+                if ids_:
+                    L["ids"] = ids_
+            P["cur"][side] = cur
+        hk, ak = P["cur"]["home"].get("F") or P["cur"]["home"].get("U"), P["cur"]["away"].get("F") or P["cur"]["away"].get("U")
+        if hk and ak and dg:
+            P["match"][(hk, ak)] = P["match"].get((hk, ak), 0.0) + dg
+
+    def presence(self) -> Dict[str, Any]:
+        return self._pres()
 
     def drain_events(self) -> List[Dict[str, Any]]:
         out, self._events = self._events, []
@@ -2212,6 +2641,18 @@ class MotionV2:
         self._ensure(gc_end)
         pt = 0.0 if self.t_last is None else self.t_last + 0.5
         frames: List[Dict[str, Any]] = []
+        if skip and self.live_mode:
+            # sim-to-end: the rest of the game is not animated; hand back the last picture at the final clock
+            f = dict(self.last_frame) if self.last_frame else None
+            frames = []
+            if f is not None:
+                pt = (self.t_last or 0.0) + 0.5
+                f.update(t=round(pt, 2), pt=round(pt, 2), gc=round(float(gc_end), 2), ph="stoppage")
+                frames.append(f)
+                self.t_last = pt
+            return {"from_t": frames[0]["pt"] if frames else 0.0, "to_t": frames[-1]["pt"] if frames else 0.0, "from_pt": frames[0]["pt"] if frames else 0.0,
+                    "to_pt": frames[-1]["pt"] if frames else 0.0, "step": 0.5, "frames": frames, "authority": "model_estimated", "skipped": True,
+                    "clock": "frames carry pt (presentation, contiguous) and gc (game clock, frozen in stoppages)"}
         if skip:
             end_pt = self.pt_at(gc_end, inclusive=True)
             if end_pt - pt > 30.0:
@@ -2222,12 +2663,22 @@ class MotionV2:
                 self._emitted_ev |= {id(s) for s in self.flat if s["pt0"] < pt}
         guard = 0
         int_per = self.loop._int_period if self.loop.intermission else None
+        if int_per is None and self.live_mode and hasattr(self.loop, "_pending_intermission_t"):
+            pend = self.loop._pending_intermission_t()
+            if pend is not None and pend <= gc_end + 1e-9:
+                int_per = self.loop.clock_at(max(0.0, pend - 1e-6))[0]
         while guard < 4000:
             seg = self._seg_for_pt(pt)
             if seg is None:
                 break
-            gc = seg["g0"] if seg["k"] in DEAD_KINDS else seg["g0"] + max(0.0, min(seg["g1"] - seg["g0"], pt - seg["pt0"]))
-            if seg["k"] not in DEAD_KINDS and gc > gc_end + 1e-9:
+            if seg["k"] == "live" and not seg.get("done"):
+                gnow = self.play.gc if (self.play is not None and self.play.seg is seg) else seg["g0"]
+                if gnow + 0.375 > gc_end + 1e-9 and float(seg["g1"]) > gc_end + 1e-9:
+                    break     # stepping could run the clock past what may be shown (unless the anchor itself is reachable)
+                gc = gnow
+            else:
+                gc = seg["g0"] if seg["k"] in DEAD_KINDS else seg["g0"] + max(0.0, min(seg["g1"] - seg["g0"], pt - seg["pt0"]))
+            if seg["k"] not in DEAD_KINDS and seg["k"] != "live" and gc > gc_end + 1e-9:
                 break
             if seg["k"] in DEAD_KINDS and seg["g0"] > gc_end + 1e-9:
                 break

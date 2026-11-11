@@ -1001,6 +1001,29 @@ def _ppos(p: Any) -> str:
     return raw or "?"
 
 
+def _headshot_fields(p: Any, pid: str, name: str, pos: str) -> Dict[str, Any]:
+    """Identity + portrait fields read by the frontend headshot resolver (no mutation of the player object)."""
+    out: Dict[str, Any] = {"id": pid, "player_id": pid, "name": name, "position": pos}
+    try:
+        from app.sim_engine.generation.player_headshots import headshot_fields_from_player
+
+        f = headshot_fields_from_player(p)
+        out.update({k: v for k, v in f.items() if v not in (None, "", 0)})
+    except Exception:
+        logger.debug("headshot fields unavailable", exc_info=True)
+    ident = getattr(p, "identity", None)
+    for key, attr in (("age", "age"), ("nationality", "birth_country"), ("shoots", "shoots")):
+        v = getattr(ident, attr, None) if ident is not None else getattr(p, key, None)
+        if hasattr(v, "value"):
+            v = v.value
+        if v not in (None, ""):
+            out[key] = v
+    tid = getattr(p, "team_id", None) or getattr(p, "current_team_id", None)
+    if tid:
+        out["team_id"] = str(tid)
+    return out
+
+
 class _PlayerBook:
     """pid -> PlayerChip (+ side) for every player the engine put on the ice."""
 
@@ -1019,7 +1042,8 @@ class _PlayerBook:
             return ""
         if pid not in self.chips:
             name = _pname(p)
-            self.chips[pid] = {"player_id": pid, "name": name, "short": _short_name(name), "number": _pnum(p), "pos": _ppos(p)}
+            self.chips[pid] = {"player_id": pid, "name": name, "short": _short_name(name), "number": _pnum(p), "pos": _ppos(p),
+                               "hs": _headshot_fields(p, pid, name, _ppos(p))}
         if side:
             self.side.setdefault(pid, side)
         return pid
@@ -2485,6 +2509,13 @@ class CommentaryWriter:
             k = "bu_pass"
         else:
             k = "bu_carry"
+            p0 = seg.get("p0")
+            if p0 is not None and info.get("from_motion", True):
+                y0 = abs(float(p0[1]))
+                if abs(y) < 12.0 and y0 - abs(y) > 8.0:
+                    k = "bu_cut"       # he really did cut in from the wide lane
+                elif abs(y) > 17.0 and y0 > 15.0:
+                    k = "bu_wide"      # he stayed wide on that side
         self._bu_done.add(key)
         tb = self._gc(bpt, float(ev["t"]) - (ept - bpt))
         return self.say(min(tb, float(ev["t"])), int(ev["seq"]), [(k, {"player": sh, "passer": ps, "lane": lane}, {})], 2, "build",
@@ -4058,6 +4089,9 @@ class CoachController:
             if loop.intermission:
                 return False, "Can't call a timeout during intermission."
         elif kind == "next_line":
+            ref = str(payload.get("line") or "").strip().upper()
+            if ref.startswith(("PP", "PK")):
+                return False, "Power-play and penalty-kill units are picked by the coach AI; use pp_style / pk_style tactics."
             F, D = _parse_line_ref(payload)
             if F is None and D is None:
                 return False, "Pick a line (F1-F4) or pair (D1-D3)."
@@ -4100,6 +4134,11 @@ class CoachController:
         kind = str((body or {}).get("kind") or "").strip()
         payload = dict((body or {}).get("payload") or {})
         t = float(loop.game_sec_elapsed)
+        if kind == "notification_ack":  # bookkeeping only: no engine re-simulation
+            res = loop.analytics.ack(str(payload.get("id") or ""), str(payload.get("status") or "dismissed")) if loop.analytics is not None else None
+            return {"id": str(uuid.uuid4()), "kind": kind, "payload": payload, "issued_t": round(t, 2), "effective_from_t": round(t, 2),
+                    "status": "applied" if res else "rejected", "reason": "" if res else "Unknown notification.",
+                    "effect": "notification marked " + str((res or {}).get("status") or ""), "notification": res}
         order = {
             "id": str(uuid.uuid4()), "kind": kind, "payload": payload, "issued_t": round(t, 2),
             "effective_from_t": round(t, 2), "status": "queued", "reason": "", "effect": "",
@@ -4312,6 +4351,13 @@ class LiveEventLoop:
         self.crowd = CrowdModel(self)
         self.alerts = AlertEngine(self)
         self.commentary = CommentaryWriter(self)
+        try:
+            from services.live_analytics import LiveAnalytics
+            self.analytics: Any = LiveAnalytics(self)
+        except Exception:
+            logger.warning("live analytics unavailable", exc_info=True)
+            self.analytics = None
+        self._an_t = 0.0
         self.tracking = TrackingModel(self)
         self.shifts = ShiftModel(self)
         self.motion = _make_motion(self)
@@ -4887,20 +4933,50 @@ class LiveEventLoop:
         if self.phase == "pregame":
             self.phase = "live"
         target = min(float(until_t), self.game_sec_elapsed + float(cap_sec))
-        n = self._emit_due_events()
-        self._motion_step()
-        while not self.finished and not self.intermission and self.game_sec_elapsed < target:
-            self.game_sec_elapsed = min(target, self.game_sec_elapsed + 4.0)
-            n += self._emit_due_events()
+        live = self._motion_on and bool(getattr(self.motion, "live_mode", False))
+        if not live:
+            n = self._emit_due_events()
             self._motion_step()
+            while not self.finished and not self.intermission and self.game_sec_elapsed < target:
+                self.game_sec_elapsed = min(target, self.game_sec_elapsed + 4.0)
+                n += self._emit_due_events()
+                self._motion_step()
+                self._tick(self.game_sec_elapsed)
+            self._refresh_status()
+            return n
+        # forward play: the motion runs first (its warped game clock decides when each real event is reached),
+        # then the events up to the clock the motion has actually played are emitted
+        n = self._emit_due_events()
+        guard = 0
+        while not self.finished and not self.intermission and self.game_sec_elapsed < target - 1e-6 and guard < 80:
+            guard += 1
+            goal = min(target, self.game_sec_elapsed + 4.0)
+            cap = self._pending_intermission_t()
+            if cap is not None and cap <= goal:
+                goal = cap
+            before = self.motion.realized_gc()
+            self._motion_step(goal)
+            reached = self.motion.realized_gc()
+            self.game_sec_elapsed = max(self.game_sec_elapsed, min(goal, reached))
+            n += self._emit_due_events()
             self._tick(self.game_sec_elapsed)
+            if reached <= before + 1e-9 and self.game_sec_elapsed < goal - 1e-6:
+                break   # motion can't advance (e.g. waiting at an intermission)
         self._refresh_status()
         return n
 
-    def _motion_step(self) -> None:
+    def _pending_intermission_t(self) -> Optional[float]:
+        if self._skip_intermission:
+            return None
+        for raw in self._timeline[self._timeline_idx:]:
+            if raw.get("type") == "period_end" and raw.get("intermission_after"):
+                return float(raw["t"])
+        return None
+
+    def _motion_step(self, gc_end: Optional[float] = None) -> None:
         if self._motion_on:
             try:
-                self._motion_buf.extend(self.motion.generate_to(self.game_sec_elapsed)["frames"])
+                self._motion_buf.extend(self.motion.generate_to(self.game_sec_elapsed if gc_end is None else gc_end)["frames"])
             except Exception:
                 logger.warning("motion generation failed", exc_info=True)
             self._drain_motion()
@@ -5033,7 +5109,18 @@ class LiveEventLoop:
             self._skip_intermission = False
             self._motion_on = True
 
+    def headshot_fields(self, pid: Optional[str]) -> Dict[str, Any]:
+        """Fields the frontend PlayerHeadshot / resolvePlayerHeadshot helper reads (generated portrait + NHL photo)."""
+        c = self.book.chips.get(str(pid or "")) or {}
+        return dict(c.get("hs") or {})
+
     def _tick(self, t: float) -> None:
+        if self.analytics is not None:
+            try:
+                self.analytics.tick(t, max(0.0, t - self._an_t))
+            except Exception:
+                logger.debug("analytics tick failed", exc_info=True)
+            self._an_t = t
         try:
             self.shifts.advance(t)
             self.momentum.recompute(t)
@@ -5181,6 +5268,7 @@ class LiveEventLoop:
                     sid_ = a.get("shooter_id")
                     row = (getattr(self.session, "player_season_stats", None) or {}).get(sid_) or {}
                     ev["meta"]["season_goals"] = int(row.get("g", 0) or 0) + int((self.state.p.get(sid_) or {}).get("g", 0) or 0) + 1
+                    ev["meta"]["scorer_headshot"] = {"player_id": sid_, "name": book.name(sid_), "position": book.pos(sid_), **self.headshot_fields(sid_)}
                 except Exception:
                     ev["meta"]["season_goals"] = None
             else:
@@ -5356,6 +5444,8 @@ class LiveEventLoop:
 
     def _push_event(self, ev: Dict[str, Any]) -> None:
         lg = self.lg
+        if self.analytics is not None:
+            self.analytics.on_event(ev)
         lg.event_ring.append(ev)
         if len(lg.event_ring) > LIVE_EVENT_BUFFER:
             lg.event_ring = lg.event_ring[-LIVE_EVENT_BUFFER:]
@@ -5699,6 +5789,19 @@ def _bench_block(loop: "LiveEventLoop", now: float) -> Dict[str, Any]:
     }
 
 
+def _final_block(loop: "LiveEventLoop") -> Optional[Dict[str, Any]]:
+    if not loop.finished:
+        return None
+    out = dict(loop.final_info() or {})
+    if loop.analytics is not None:
+        try:
+            out["stars"] = loop.analytics.stars()
+        except Exception:
+            logger.warning("three stars failed", exc_info=True)
+            out["stars"] = []
+    return out
+
+
 def _roster(loop: "LiveEventLoop") -> Dict[str, Any]:
     key = (len(loop.book.chips), id(loop._cap), int(loop.lg.score_home) + int(loop.lg.score_away))
     if loop._roster_cache[0] == key:
@@ -5713,7 +5816,7 @@ def _roster(loop: "LiveEventLoop") -> Dict[str, Any]:
             g = int(row.get("g", 0) or 0) + int(live.get("g", 0) or 0)
             a = int(row.get("a", 0) or 0) + int(live.get("a", 0) or 0)
             out[pid] = {"short": chip["short"], "name": chip["name"], "number": chip["number"], "pos": chip["pos"], "side": side,
-                        "season_goals": g, "season_points": g + a}
+                        "season_goals": g, "season_points": g + a, **loop.headshot_fields(pid)}
     loop._roster_cache = (key, out)
     return out
 
@@ -5776,6 +5879,13 @@ def snapshot_from_live(lg: LiveGame, session: Any, *, lite: bool = False) -> Dic
     if loop._snap_cache[0] == ck and loop._snap_cache[1] is not None:
         return loop._snap_cache[1]
     teams = loop.team_cards()
+    an = None
+    if loop.analytics is not None:
+        try:
+            an = loop.analytics.build()
+            loop.analytics.notify(an, loop.pt_now())
+        except Exception:
+            logger.warning("analytics build failed", exc_info=True)
     tts = ({"up": _live_tts_up(), "engine": "neural" if _live_tts_up() else None, "languages": []} if _live_tts_mod() is not None
            else (_tts_probe() if LIVE_TTS_ENABLED else {"up": False, "engine": None, "languages": []}))
     rv = loop.rivalry or {}
@@ -5814,6 +5924,8 @@ def snapshot_from_live(lg: LiveGame, session: Any, *, lite: bool = False) -> Dic
         "roster": _roster(loop),
         "situation": _situation(loop, now, lang),
         "alerts": loop.alerts.active(now),
+        "analytics": an,
+        "notifications": list(loop.analytics.notes) if loop.analytics is not None else [],
         "commentary": list(loop.commentary.lines[-30:]),
         "coach": {
             "timeout_used": bool(loop.timeout_used),
@@ -5826,6 +5938,7 @@ def snapshot_from_live(lg: LiveGame, session: Any, *, lite: bool = False) -> Dic
             "applied": loop.coach.applied()[-20:],
             "last_result": loop.coach.last_result,
             "cpu": {"timeout_used": bool(loop.cpu_timeout_used), "goalie_pulled": bool(loop.goalie_pulled.get(_opp(lg.user_side)))},
+            "allowed_kinds": list(CoachController.ALLOWED) + ["notification_ack"],
         },
         "speed": int(lg.speed),
         "flags": {
@@ -5835,7 +5948,7 @@ def snapshot_from_live(lg: LiveGame, session: Any, *, lite: bool = False) -> Dic
             "tracking": bool(LIVE_TRACKING_ENABLED),
             "commentator": COMMENTATOR_PERSONA,
         },
-        "final": loop.final_info() if loop.finished else None,
+        "final": _final_block(loop),
         "product": {
             "shootout_model": SHOOTOUT_MODEL,
             "penalty_labels": PENALTY_LABEL_MODE,
