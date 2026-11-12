@@ -14647,9 +14647,13 @@ class SimEngine:
         return "balanced"
 
     def _gm_on_ice_unit(
-        self, units: Dict[str, Any], strength: str, rng: random.Random
+        self, units: Dict[str, Any], strength: str, rng: random.Random, t: Optional[float] = None
     ) -> Tuple[List[Any], List[Any]]:
         st = str(strength or "EV").upper()
+        if t is not None:
+            rot = self._gm_rotation_unit(units, st, rng, float(t))
+            if rot is not None:
+                return rot, []
         if st == "PP":
             pp_share = units.get("pp1_share") or (0.78 + 0.06 * min(1.0, sum(self._gm_primary_assist_weight(p) for p in units.get("pp1", [])[:3]) / 3.0))
             pp = units["pp1"] if rng.random() < pp_share else units["pp2"]
@@ -14682,6 +14686,63 @@ class SimEngine:
         for pl in pair:
             setattr(pl, "_gm_shift_pair_idx", pi)
         return line + pair, []
+
+    def _gm_rotation_unit(self, units: Dict[str, Any], st: str, rng: random.Random, t: float) -> Optional[List[Any]]:
+        """Who is on the ice at game second ``t``, from a bench that rolls its lines on the clock.
+
+        Forward lines go L1-L2-L3-L4 on ~45 s shifts (better lines a little longer; the fourth line is skipped
+        more when the deployment leans on the top lines), defence pairs roll on their own ~50 s clock, PP1 takes
+        the first ~70 s of a power play and PP2 the rest, PK units trade ~40 s shifts. Returns None when the
+        units lack the groups needed (the caller then falls back to the share draw)."""
+        lines = [list(x) for x in (units.get("lines") or []) if x]
+        pairs = [list(x) for x in (units.get("pairs") or []) if x]
+        rot = units.get("_rot")
+        if not isinstance(rot, dict) or t + 1e-6 < float(rot.get("t", -1.0)) - 30.0:
+            rot = {"li": -1, "l_until": -1.0, "pi": -1, "p_until": -1.0, "sp": None, "sp_since": -1.0, "sp_u": None, "sp_until": -1.0, "t": t}
+            units["_rot"] = rot
+        rot["t"] = t
+        if st == "PP" or st in ("SH", "PK"):
+            key = "pp" if st == "PP" else "pk"
+            u1, u2 = units.get(f"{key}1"), units.get(f"{key}2")
+            if not u1:
+                return None
+            if rot.get("sp") != key or t - float(rot.get("sp_last", -99.0)) > 20.0:
+                rot["sp"], rot["sp_since"] = key, t                    # a new power play / penalty kill begins
+                rot["sp_u"] = 1
+                rot["sp_until"] = t + (rng.uniform(60.0, 80.0) if key == "pp" else rng.uniform(35.0, 45.0))
+            elif t >= float(rot["sp_until"]) and u2:
+                rot["sp_u"] = 2 if int(rot.get("sp_u") or 1) == 1 else 1
+                rot["sp_until"] = t + (120.0 if key == "pp" else rng.uniform(35.0, 45.0))
+            rot["sp_last"] = t
+            return list(u1 if int(rot.get("sp_u") or 1) == 1 or not u2 else u2)
+        if not lines or not pairs:
+            return None
+        rot["sp"] = None
+        style = str(units.get("deployment_style") or "balanced")
+        lw = list(self._EV_LINE_SHARES.get(style, self._EV_LINE_SHARES["balanced"]))[: len(lines)]
+        pw = list(self._EV_PAIR_SHARES.get(style, self._EV_PAIR_SHARES["balanced"]))[: len(pairs)]
+        avg_l = (sum(lw) / len(lw)) if lw else 1.0
+        avg_p = (sum(pw) / len(pw)) if pw else 1.0
+        if t >= float(rot["l_until"]) or int(rot["li"]) >= len(lines):
+            nxt = (int(rot["li"]) + 1) % len(lines) if int(rot["li"]) >= 0 else 0
+            # the last line is skipped as often as its share is below the others
+            # ice time follows the coach's shares: shift length up to +/-30 %, the rest by skipping the last line
+            if len(lines) >= 4 and nxt == len(lines) - 1 and lw and rng.random() < max(0.0, 1.0 - (lw[-1] / avg_l) / 0.75):
+                nxt = 0
+            share = (lw[nxt] / avg_l) if nxt < len(lw) and avg_l > 0 else 1.0
+            rot["li"], rot["l_until"] = nxt, t + rng.uniform(34.0, 43.0) * max(0.75, min(1.3, share))
+        if t >= float(rot["p_until"]) or int(rot["pi"]) >= len(pairs):
+            nxt = (int(rot["pi"]) + 1) % len(pairs) if int(rot["pi"]) >= 0 else 0
+            if len(pairs) >= 3 and nxt == len(pairs) - 1 and pw and rng.random() < max(0.0, 1.0 - (pw[-1] / avg_p) / 0.8):
+                nxt = 0
+            share = (pw[nxt] / avg_p) if nxt < len(pw) and avg_p > 0 else 1.0
+            rot["pi"], rot["p_until"] = nxt, t + rng.uniform(38.0, 47.0) * max(0.8, min(1.3, share))
+        li, pi = int(rot["li"]), int(rot["pi"])
+        for pl in lines[li]:
+            setattr(pl, "_gm_shift_line_idx", li)
+        for pl in pairs[pi]:
+            setattr(pl, "_gm_shift_pair_idx", pi)
+        return lines[li] + pairs[pi]
 
     def _gm_goalie_role_weight(self, g: Any) -> float:
         role = str(
@@ -15581,8 +15642,9 @@ class SimEngine:
                     def_gl = home_gl
                     tid, oid = aid, hid
 
-                atk_unit, _ = self._gm_on_ice_unit(atk_units, strength, rng)
-                def_unit, _ = self._gm_on_ice_unit(def_units, "PK" if strength == "PP" else ("PP" if strength == "SH" else "EV"), rng)
+                _t_rot = float(game_sec_elapsed) if chronological else None   # the bench rolls lines on the game clock
+                atk_unit, _ = self._gm_on_ice_unit(atk_units, strength, rng, t=_t_rot)
+                def_unit, _ = self._gm_on_ice_unit(def_units, "PK" if strength == "PP" else ("PP" if strength == "SH" else "EV"), rng, t=_t_rot)
                 if not atk_unit:
                     atk_unit = atk_sk[:5] if atk_sk else atk_sk
                 if not def_unit:

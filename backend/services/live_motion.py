@@ -2224,7 +2224,8 @@ class MotionV2:
                 mst = self.pos.get(mate)
                 lv_ = self.leaving.get(mate)
                 bd_ = BENCH_DOOR[lv_["side"]] if lv_ is not None else None
-                at_boards = bd_ is not None and mst is not None and abs(mst[1]) > 31.0 and mst[1] * bd_[1] > 0 and abs(mst[0] - bd_[0]) < 16.0
+                # he goes over the boards as his partner coasts in (a quick change, not a wait at the door)
+                at_boards = bd_ is not None and mst is not None and abs(mst[1]) > 26.0 and mst[1] * bd_[1] > 0 and abs(mst[0] - bd_[0]) < 22.0
                 if mate not in self.leaving or mst is None or at_boards or (lv_ is not None and
                         math.hypot(mst[0] - bench_spot(lv_["side"], mate)[0], mst[1] - bench_spot(lv_["side"], mate)[1]) < 9.0):
                     pairs_.pop(pid, None)
@@ -2239,6 +2240,7 @@ class MotionV2:
             if (pt >= until and mate is None) or pid not in self.pos:
                 self._enter_hold.pop(pid, None)
                 pairs_.pop(pid, None)
+                self.__dict__.setdefault("_fresh_legs", {})[pid] = pt + 2.5   # jumps into the play at full speed
             elif pid in targets:
                 targets[pid] = (self.pos[pid][0], self.pos[pid][1])   # waits at the boards for his turn
                 spec[pid] = ("wait", None, 2.0, A_NORM)
@@ -2266,6 +2268,8 @@ class MotionV2:
             if st is None:
                 continue
             kind, _key, vmax, amax = spec.get(pid, ("spot", None, V_CRUISE, A_NORM))
+            if self.__dict__.get("_fresh_legs", {}).get(pid, -1.0) > pt and kind in ("spot", "mark", "press"):
+                vmax, amax = max(vmax, V_RUSH), max(amax, A_HARD)
             tr = self._traits(pid)
             vmax, amax = vmax * tr["v"], amax * tr["a"]
             dist = math.hypot(tx - st[0], ty - st[1])

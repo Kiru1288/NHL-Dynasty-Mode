@@ -220,7 +220,7 @@ class PlaySim:
         if B is None:
             return False
         R = float(B["t"]) - self.gc
-        return R <= self._eta() * 1.5 + 4.5
+        return R <= self._eta() * 1.8 + 6.0   # start a little earlier: fewer last-instant snaps of the puck to the shooter
 
     def ready(self) -> bool:
         X, S = self._X(), self._shooter()
@@ -491,7 +491,7 @@ class PlaySim:
                 self.mode, self.owner = "loose", None
                 return
         if pu < -BLUE and pressure < 8.0 and held > 0.5 and self.rng.random() < 0.45:
-            if pressure < 5.0 and self.rng.random() < 0.14 and not self._short(T):
+            if pressure < 5.0 and self.rng.random() < 0.07 and not self._short(T):
                 self._do_dump(pt, clear=True)   # hemmed in: fires it the length of the ice (icing if nobody touches it)
             else:
                 self._do_dump(pt, chip=True)    # off the glass and out
