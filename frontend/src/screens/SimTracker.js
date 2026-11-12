@@ -1221,8 +1221,8 @@ const RED = "#c8102e";
 const BLUE = "#0b3d91";
 const ICE_LINE = 2 / 12; // 2-inch lines (goal lines, circles, hashes, creases)
 // Marker sizes in feet (true-ish scale): skaters 2.4 ft, goalies 3 ft.
-const SK_R = 1.2;
-const G_R = 1.5;
+const SK_R = 0.85; // smaller bodies leave room to see skating lines and gaps
+const G_R = 1.1;
 const PUCK_R = 1.05; // drawn at about 2 ft so it reads (a real puck is 3 in)
 const SHOT_TYPES = new Set(["slap", "one_timer", "onetimer", "snap", "wrist", "backhand", "tip", "wraparound", "deke"]);
 const PUFFS = 6;

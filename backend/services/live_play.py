@@ -125,7 +125,12 @@ class PlaySim:
         return self.mt.loop.book.side.get(pid) if pid else None
 
     def _skaters(self, side: str) -> List[str]:
-        return [p for p in self.mt.onice.get(side) or [] if p in self.mt.pos]
+        # a man still waiting at the bench for his turn is not on the ice yet: he can't touch the puck or check
+        hold = self.mt.__dict__.get("_enter_hold") or {}
+        pair = self.mt.__dict__.get("_enter_pair") or {}
+        now = getattr(self.mt, "_pt_now", 0.0)
+        return [p for p in self.mt.onice.get(side) or [] if p in self.mt.pos
+                and not (p in hold and (hold[p] > now or p in pair) and p != self.owner)]
 
     def _nearest_opp_dist(self, side: str, x: float, y: float) -> float:
         best = 99.0
@@ -383,16 +388,19 @@ class PlaySim:
                        "to": (tx, ty), "rush": self.rush, "entry": False, "dump": False, "ptype": ptype})
         self.mode, self.owner = "pass", None
 
-    def _do_dump(self, pt: float, clear: bool = False) -> None:
+    def _do_dump(self, pt: float, clear: bool = False, chip: bool = False) -> None:
         T = self.side
         sgn = 1.0 if self.rng.random() < 0.5 else -1.0
-        tu, tv = (96.0, sgn * 20.0) if clear else (90.0, sgn * 30.0)
+        if chip:   # a zone clear up the near wall that dies in the neutral zone (never an icing)
+            pv0 = self.rel(T, *self.puck)[1]
+            sgn = 1.0 if pv0 >= 0.0 else -1.0
+        tu, tv = (8.0, sgn * 39.0) if chip else ((96.0, sgn * 20.0) if clear else (90.0, sgn * 30.0))
         tx, ty = self.mt._clamp(*self.ab(T, tu, tv))
         d = math.hypot(tx - self.puck[0], ty - self.puck[1])
-        v = 62.0 if clear else DUMP_V
+        v = 44.0 if chip else (62.0 if clear else DUMP_V)
         self.pv = [(tx - self.puck[0]) / d * v, (ty - self.puck[1]) / d * v] if d > 1e-6 else [0.0, 0.0]
         pu = self.rel(T, *self.puck)[0]
-        self.loose_info = {"side": T, "dump": True, "from_u": pu, "icing_ok": pu < 0.0 and not self._short(T), "dest": (tx, ty), "pt0": pt}
+        self.loose_info = {"side": T, "dump": True, "from_u": pu, "icing_ok": pu < 0.0 and not self._short(T) and not chip, "dest": (tx, ty), "pt0": pt}
         self.moves.append({"kind": "dump", "pid": self.owner, "pt": pt, "gc": self.gc})
         self.mt._hint({"pt": round(pt, 2), "t": self.gc, "kind": "dump", "side": T, "pid": None, "from": (self.puck[0], self.puck[1]), "to": (tx, ty),
                        "rush": False, "entry": False, "dump": True, "ptype": "rim" if not clear else "dump"})
@@ -408,6 +416,23 @@ class PlaySim:
                 return True
         return False
 
+    def _delayed_offside(self) -> set:
+        """Teams under a delayed offside (NHL rule 83.3): the puck went fully out of their attacking zone with a
+        teammate still inside and has come back in. It lifts once every one of them is back at the blue line, or
+        the other team takes the puck."""
+        dl = self.__dict__.setdefault("_dl_off", {})
+        out = set()
+        for T in SIDES:
+            pu = self.rel(T, *self.puck)[0]
+            inside = [q for q in self._skaters(T) if self.rel(T, self.mt.pos[q][0], self.mt.pos[q][1])[0] > BLUE + 0.5]
+            if pu < BLUE - 1.0:                    # puck completely out
+                dl[T] = bool(inside)
+            elif not inside:                       # everyone tagged up
+                dl[T] = False
+            if dl.get(T) and pu >= BLUE:
+                out.add(T)
+        return out
+
     def _short(self, side: str) -> bool:
         return self.mt._manpower(self.gc).get("short") == side
 
@@ -422,6 +447,8 @@ class PlaySim:
         held = pt - self.held_since
         urg = self.urgency()
         cands = self._pass_candidates()
+        if self.changing != self.owner and self._open_look(pt, T, X, S, pressure, held):
+            return
         if self.changing == self.owner:
             self.changing = None
             if cands:
@@ -463,11 +490,80 @@ class PlaySim:
                 self.last_touch = self.owner
                 self.mode, self.owner = "loose", None
                 return
+        if pu < -BLUE and pressure < 8.0 and held > 0.5 and self.rng.random() < 0.45:
+            if pressure < 5.0 and self.rng.random() < 0.14 and not self._short(T):
+                self._do_dump(pt, clear=True)   # hemmed in: fires it the length of the ice (icing if nobody touches it)
+            else:
+                self._do_dump(pt, chip=True)    # off the glass and out
+            return
         if cands and (pressure < 6.0 or held > self.rng.uniform(1.8, 3.2)) and cands[0][0] > 5.0:
             self._do_pass(cands[0][1], pt)
             return
         if -BLUE < pu < BLUE and pressure < 7.0 and self.rng.random() < 0.3 and not self._teammate_offside(T):
             self._do_dump(pt)
+
+    def _open_look(self, pt: float, T: str, X: Optional[str], S: Optional[str], pressure: float, held: float) -> bool:
+        """A carrier left alone in the slot shoots instead of passing it away.
+
+        The engine decides which shots count, so a look the engine did not schedule is shown as an attempt that
+        misses the net or is blocked: nothing reaches the goalie and the box score is unchanged. The engine's own
+        shooter, close to his scheduled shot, is left to the director."""
+        if self.owner == S and T == X:
+            return False
+        st = self.mt.pos.get(self.owner)
+        if st is None:
+            return False
+        u, v = self.rel(T, st[0], st[1])
+        if not (60.0 < u < 86.0 and abs(v) < 24.0):
+            return False
+        # not while the real chance for this team is about to happen (the puck must come back in time for it)
+        R = float(self.B["t"]) - self.gc if self.B is not None else 99.0
+        if T == X and (R < 7.0 or self._final_approach()):
+            return False
+        last = self.__dict__.setdefault("_look_gc", {}).get(T, -99.0)
+        if self.gc - last < 14.0:
+            return False
+        tr = self._tr(self.owner)
+        oiq, hands = float(tr.get("oiq", 0.5)), float(tr.get("hands", 0.5))
+        dist_net = math.hypot(89.0 - u, v)
+        open_ = pressure > 8.5
+        if not open_ or held < 0.35:
+            return False
+        p = 0.22 + 0.3 * oiq + (0.18 if dist_net < 25.0 else 0.0) + (0.12 if pressure > 14.0 else 0.0)
+        if self.rng.random() > p:
+            # he holds it and walks in rather than giving it up while he's open
+            self.held_since = min(self.held_since, pt - 0.2)
+            self.next_decide = pt + self.rng.uniform(0.35, 0.6)
+            return True
+        self._look_gc[T] = self.gc
+        # aim just outside a post; a defender in the lane gets a piece of it
+        side_ = 1.0 if self.rng.random() < 0.5 else -1.0
+        miss = self.rng.uniform(3.6, 7.0) - 2.0 * hands
+        aim_u, aim_v = 89.0 + self.rng.uniform(0.5, 3.0), side_ * (3.0 + max(0.8, miss))
+        ax, ay = self.ab(T, aim_u, aim_v)
+        blocker = None
+        for q in self._skaters(_opp(T)):
+            qx, qy = self.mt.pos[q][0], self.mt.pos[q][1]
+            if self._seg_dist(st[0], st[1], ax, ay, qx, qy) < 2.4 and math.hypot(qx - st[0], qy - st[1]) > 2.0:
+                blocker = q
+                break
+        if blocker is not None:
+            bx, by = self.mt.pos[blocker][0], self.mt.pos[blocker][1]
+            d = math.hypot(bx - self.puck[0], by - self.puck[1]) or 1.0
+            self.pv = [(bx - self.puck[0]) / d * 45.0, (by - self.puck[1]) / d * 45.0]
+            self.loose_info = {"side": T, "src": "blocked", "look": True}
+        else:
+            d = math.hypot(ax - self.puck[0], ay - self.puck[1]) or 1.0
+            sp = 78.0 + 20.0 * hands
+            self.pv = [(ax - self.puck[0]) / d * sp, (ay - self.puck[1]) / d * sp]
+            self.loose_info = {"side": T, "src": "wide", "look": True}
+        self.moves.append({"kind": "look", "pid": self.owner, "pt": pt, "gc": self.gc, "blocked": blocker})
+        self.mt._hint({"pt": round(pt, 2), "t": self.gc, "kind": "look", "side": T, "pid": self.owner, "from": (self.puck[0], self.puck[1]),
+                       "to": (ax, ay) if blocker is None else (self.mt.pos[blocker][0], self.mt.pos[blocker][1]),
+                       "rush": False, "entry": False, "dump": False, "ptype": "shot", "blocked": blocker})
+        self.last_touch = self.owner
+        self.mode, self.owner = "loose", None
+        return True
 
     # ── one substep
     def virtual_seg(self) -> Dict[str, Any]:
@@ -672,7 +768,10 @@ class PlaySim:
                 cx, cy = self.mt._clamp(gx + ux * 8.2, uy * 8.2)
                 self.pv = [ux * 8.0, uy * 8.0]
         self.puck = [cx, cy]
-        f = 0.82 ** (dt / 0.25)
+        # a puck moving fast glides (ice barely slows it: clears and rims reach the far end); slow pucks in a
+        # scramble among skates and sticks die quickly
+        sp_now = math.hypot(*self.pv)
+        f = (0.965 if sp_now > 30.0 else (0.9 if sp_now > 14.0 else 0.82)) ** (dt / 0.25)
         self.pv = [self.pv[0] * f, self.pv[1] * f]
         li = self.loose_info
         if li.get("icing_ok") and li.get("side"):
@@ -683,7 +782,10 @@ class PlaySim:
                 return
         speed = math.hypot(*self.pv)
         best, bd = None, 2.6
+        frozen = self._delayed_offside()
         for side in SIDES:
+            if side in frozen:
+                continue   # delayed offside: the attacking team can't touch it inside the zone until everyone tags up
             for q in self._skaters(side):
                 st = mt.pos[q]
                 d = math.hypot(st[0] - self.puck[0], st[1] - self.puck[1])
@@ -708,7 +810,11 @@ class PlaySim:
             return base * 0.6
         if thief_side == X:
             return min(0.95, base * (0.6 + 5.0 * urg))
-        return 0.0 if (R < 22.0 or self._final_approach()) else base * 0.4
+        # The defending side can win the puck whenever the next chance is far enough off for the attack to earn it
+        # back. It used to be shut out for the 22 s before every chance, which is most of the game: checks never landed.
+        if R < 9.0 or self._final_approach():
+            return 0.0
+        return base * (0.7 + min(1.1, (R - 9.0) / 16.0))
 
     def _poke_checks(self, pt: float, dt: float) -> None:
         mt = self.mt
@@ -737,6 +843,9 @@ class PlaySim:
         prev_side = self.side
         self.owner, self.mode, self.pass_ = pid, "carry", None
         self.side = self._team(pid)
+        dl = self.__dict__.get("_dl_off")
+        if dl:
+            dl[_opp(self.side)] = False   # the defending team has the puck: the delayed offside is over
         self.pv = [0.0, 0.0]
         self.held_since = pt
         self.next_decide = pt + self.rng.uniform(0.6, 1.2)
@@ -785,6 +894,10 @@ class PlaySim:
                 loc = (gx + ux * 7.6, uy * 7.6)
         reg = region_of((self.B.get("att") or {}).get("chance"))
         u, v = self.rel(X, loc[0], loc[1]) if X else (0.0, 0.0)
+        if X and u < BLUE + 2.0 and not (self.B.get("att") or {}).get("empty_net"):
+            # a shot on goal from outside the zone only happens at an empty net: the shooter has stepped inside the line
+            u = BLUE + 2.0 + self.rng.uniform(0.0, 3.0)
+            loc = self.ab(X, u, v)
         if X and not in_region(u, v, reg, slack=3.0):
             self.stats["out_region"] += 1
             mt._play_stats["out_region"] += 1

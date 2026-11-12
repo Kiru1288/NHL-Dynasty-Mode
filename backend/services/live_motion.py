@@ -274,14 +274,16 @@ class MotionV2:
 
     # ───────────────────────────── lineups
     def lineup_at(self, gc: float) -> Dict[str, List[str]]:
-        k = round(gc * 2) / 2.0
+        # exact key: a half-second bucket served the old unit through a whole stoppage that began inside it
+        k = round(gc, 3)
         hit = self._lineup_cache.get(k)
         if hit is not None:
             return hit
         prev = nxt = None
-        for r in self._atts:
+        i_prev = -1
+        for i_r, r in enumerate(self._atts):
             if float(r["t"]) <= gc + 1e-9:
-                prev = r
+                prev, i_prev = r, i_r
             else:
                 nxt = r
                 break
@@ -297,7 +299,8 @@ class MotionV2:
                     sw = min(sw, tp + 0.5)
                 for r in self._anchors:
                     if tp < float(r["t"]) < tn and r["type"] in ("penalty", "period_start"):
-                        sw = min(sw, float(r["t"]) + 0.1)
+                        # change during the whistle (the clock is stopped at the call), not on the ice after the draw
+                        sw = min(sw, float(r["t"]) - 0.01)
                         break
                 if gc >= sw:
                     use = nxt
@@ -307,6 +310,44 @@ class MotionV2:
                 out[s] = list(a.get("atk_ids") or [])
                 out[opp(s)] = list(a.get("def_ids") or [])
         lines = self.loop.lines
+        # Long stretch with no attempt: the engine only tells us who was out at each attempt, so without this one
+        # unit would play the whole gap (5-6 minute shifts). Rotate the other lines through the middle of the gap;
+        # the units at both attempts are still exactly the engine's.
+        if prev is not None and nxt is not None and self.live_mode:
+            tp, tn = float(prev["t"]), float(nxt["t"])
+            # only while a penalty is actually being served (special-teams units come from the engine); the
+            # even-strength stretch either side of it rotates like any other
+            pen_gap = self.loop._cap is not None and any(pen["start"] - 2.0 <= gc < pen["start"] + pen["dur"] + 2.0 for pen in self.loop._cap.penalties)
+            for side in SIDES:
+                if pen_gap or gc >= 3600.0 or tn - tp < 45.0 or not (tp + 8.0 <= gc <= tn - 20.0):   # at least a 15 s shift for the fresh unit
+                    break
+                # how long has this unit been out? walk back through earlier attempts that list the same players
+                unit = set(out[side])
+                t0 = tp
+                for r_ in reversed(self._atts[:i_prev]):
+                    a2 = r_.get("att") or {}
+                    ids2 = set((a2.get("atk_ids") if a2.get("side") == side else a2.get("def_ids")) or [])
+                    if len(unit & ids2) >= 3 and tp - float(r_["t"]) < 200.0:
+                        t0 = float(r_["t"])
+                    else:
+                        break
+                long_gap = tn - tp > 75.0 and gc >= tp + 42.0
+                tired = (gc - t0) > 55.0
+                if not (long_gap or tired):
+                    continue
+                k_ = int((gc - (tp + 8.0)) // 42.0)          # a fresh unit every ~42 s off the change
+                if True:
+                    ln = lines[side]
+                    Fl = [list(g) for g in (ln.get("F") or []) if g]
+                    Dl = [list(g) for g in (ln.get("D") or []) if g]
+                    if len(Fl) < 2 or len(Dl) < 2 or len(out[side]) != 5:
+                        continue
+                    cur_ = set(out[side])
+                    fi = next((i for i, g in enumerate(Fl) if cur_ & set(g)), 0)
+                    di = next((i for i, g in enumerate(Dl) if cur_ & set(g)), 0)
+                    nF = Fl[(fi + 1 + k_) % min(len(Fl), 4)]
+                    nD = Dl[(di + 1 + k_) % min(len(Dl), 3)]
+                    out[side] = (nF + nD)[:5]
         for side in SIDES:
             if not out[side]:
                 ln = lines[side]
@@ -1787,30 +1828,59 @@ class MotionV2:
                 else:
                     # strong-side D on the carrier, weak-side D net-front, C low support, wingers on the points
                     # system: aggressive pressures the puck and the points, passive packs the slot and gives up the outside
-                    gap_c, gap_w, sag = (3.5, 4.0, 0.08) if t_def == "aggressive" else ((7.0, 13.0, 0.42) if t_def == "passive" else (5.0, 7.0, 0.2))
-                    on_puck = toward(pu, pv, -89.0, 0.0, gap_c)
-                    d_pts = [on_puck, (-82.0, -5.0 * s)]
-                    spot.update(self._assign(side, gc, D_ids, d_pts))
-                    att = [q for q in opp_ids if q in self.pos and self.loop.book.pos(q) != "G" and q != seg.get("car")]
-                    pointmen = sorted(att, key=lambda q: -self.rel(side, gc, *self.pos[q][:2])[0])[:2]  # highest attackers
+                    gap_c, gap_w, sag = (3.0, 4.0, 0.08) if t_def == "aggressive" else ((5.5, 13.0, 0.42) if t_def == "passive" else (3.8, 7.0, 0.2))
+                    car_ = seg.get("car")
+                    # the checker plays the body he expects, not the one he saw: lead the carrier by his own speed
+                    cst = self.pos.get(car_) if car_ else None
+                    lu, lv = pu, pv
+                    if cst is not None and len(cst) >= 4:
+                        ax_, ay_ = cst[0] + cst[2] * 0.35, cst[1] + cst[3] * 0.35
+                        lu, lv = self.rel(side, gc, ax_, ay_)
+                    on_puck = toward(lu, lv, -89.0, 0.0, gap_c)
+                    low = pu < -50.0            # puck below the tops of the circles: a defenceman takes it
+                    att = [q for q in opp_ids if q in self.pos and self.loop.book.pos(q) != "G" and q != car_]
+                    rel_att = {q: self.rel(side, gc, *self.pos[q][:2]) for q in att}
+                    # attackers standing in the slot get a body on them, goal side and tight
+                    slot_att = sorted([q for q in att if rel_att[q][0] < -60.0 and abs(rel_att[q][1]) < 20.0],
+                                      key=lambda q: math.hypot(rel_att[q][0] + 89.0, rel_att[q][1]))
+                    def _front(q: str) -> Tuple[float, float]:
+                        return toward(rel_att[q][0], rel_att[q][1], -89.0, 0.0, 2.8)
+                    fixed: set = set()
+                    d_net = _front(slot_att[0]) if slot_att else (-82.0, -5.0 * s)
+                    d_pts = [on_puck if low else (-79.0, 7.0 * s), d_net]
+                    got = self._assign(side, gc, D_ids, d_pts)
+                    spot.update(got)
+                    for p_, uv_ in got.items():
+                        if slot_att and uv_ == d_net:
+                            self._marks[p_] = slot_att[0]
+                            fixed.add(p_)
+                    pointmen = sorted([q for q in att if q not in slot_att[:2]], key=lambda q: -rel_att[q][0])[:2]  # highest attackers
                     w_pts = []
                     for q in pointmen:
-                        qu, qv = self.rel(side, gc, *self.pos[q][:2])
-                        w_pts.append(toward(qu, qv, -89.0, 0.0, gap_w))
+                        qu, qv = rel_att[q]
+                        weak = (qv * s) < 0.0
+                        # puck low: the weak-side winger sags to the slot instead of standing beside his point man
+                        w_pts.append(toward(qu, qv, -89.0, 0.0, max(gap_w, 15.0) if (low and weak) else gap_w))
                     while len(w_pts) < 2:
                         w_pts.append((-42.0, (20.0 if len(w_pts) == 0 else -20.0)))
-                    c_pt = (-74.0, 8.0 * s)
+                    if not low:
+                        # puck up high: the nearest winger goes out to the carrier, the defencemen hold the front of the net
+                        w_pts[0 if (not pointmen or (rel_att[pointmen[0]][1] * s) >= 0.0) else min(1, len(w_pts) - 1)] = on_puck
+                    c_pt = _front(slot_att[1]) if len(slot_att) > 1 else ((-76.0, 0.45 * pv) if low else (-72.0, 4.0 * s))
                     fw = [p for p in F_ids if p not in spot]
                     cpid = next((p for p, r in roles if r == "C" and p in fw), fw[0] if fw else None)
                     if cpid:
                         spot[cpid] = c_pt
+                        if len(slot_att) > 1:
+                            self._marks[cpid] = slot_att[1]
+                            fixed.add(cpid)
                     spot.update(self._assign(side, gc, [p for p in fw if p != cpid], w_pts))
                     for i_, q in enumerate(pointmen):
                         for p_, (u_, v_) in spot.items():
-                            if abs(u_ - w_pts[i_][0]) < 0.01 and abs(v_ - w_pts[i_][1]) < 0.01:
+                            if abs(u_ - w_pts[i_][0]) < 0.01 and abs(v_ - w_pts[i_][1]) < 0.01 and (u_, v_) != on_puck:
                                 self._marks[p_] = q
                     for pid, (u, v) in list(spot.items()):   # the unit collapses toward the slot
-                        if pid not in self._marks and (u, v) != on_puck:
+                        if pid not in self._marks and pid not in fixed and (u, v) != on_puck:
                             spot[pid] = (u + (-72.0 - u) * sag, v * (1.0 - sag))
             elif pu < BLUE:
                 aggressive = t_fc == "aggressive"
@@ -1937,8 +2007,12 @@ class MotionV2:
                         self.pos[p] = [bx, by, 0.0, 0.0]
                         if dead:  # full change at a stoppage trickles in over a few seconds
                             self.__dict__.setdefault("_enter_hold", {})[p] = self._pt_now + 0.6 * enter.index(p)
-                        elif self.live_mode and len(enter) >= 2:   # on the fly: one over the boards as another comes off
-                            self.__dict__.setdefault("_enter_hold", {})[p] = self._pt_now + 0.8 * enter.index(p)
+                        elif self.live_mode:
+                            # on the fly: he steps on only when the man he replaces is at the bench door (NHL: within 5 ft)
+                            self.__dict__.setdefault("_enter_hold", {})[p] = self._pt_now + 0.4 * enter.index(p)
+                            i_ = enter.index(p)
+                            if i_ < len(leave):
+                                self.__dict__.setdefault("_enter_pair", {})[p] = leave[i_]
                 self.onice[side] = list(want[side])
             self._sync_goalie(side, self._goalie_wanted(side, gc, seg))
 
@@ -1973,7 +2047,9 @@ class MotionV2:
             t = float(r["t"])
             if a0 < t < a1:
                 a = r.get("att") or {}
-                if pid in (a.get("atk_ids") or []) or pid in (a.get("def_ids") or []):
+                # only a player who actually acts in the play (shoots, assists, blocks) keeps him out of the box;
+                # a bare on-ice listing from the engine is not enough to show a penalized man playing
+                if pid in (a.get("shooter_id"), a.get("blocker_id")) or pid in (a.get("assist_ids") or []):
                     return True
         return False
 
@@ -2058,8 +2134,16 @@ class MotionV2:
                 sp_ = self._spots(side, gc, seg, seg.get("fpuck") or puck, ids, len(self.onice[opp(side)]), self.onice[opp(side)])
                 targets.update(sp_)
                 rush = bool(seg.get("rush"))
+                # the checker whose job is the puck closes at speed; cruising at him never got there
+                presser = None
+                if seg.get("side") in SIDES and side != seg.get("side") and sp_:
+                    pp_, dd_ = min(((q_, math.hypot(t_[0] - puck[0], t_[1] - puck[1])) for q_, t_ in sp_.items()), key=lambda z: z[1])
+                    if dd_ < 9.0:
+                        presser = pp_
                 for p_, (tx_, ty_) in sp_.items():
-                    if p_ in self._marks:
+                    if p_ == presser:
+                        spec[p_] = ("press", seg.get("car"), V_RUSH, A_HARD)
+                    elif p_ in self._marks:
                         spec[p_] = ("mark", self._marks[p_], 16.0, A_NORM)
                     else:
                         far = math.hypot(tx_ - puck[0], ty_ - puck[1]) > 45.0
@@ -2130,10 +2214,31 @@ class MotionV2:
         # leaving players head for the door (bench or box)
         for pid, info in list(self.leaving.items()):
             targets[pid] = bench_spot(info["side"], pid)
-            spec[pid] = ("door", info["side"], V_CRUISE, A_NORM)
+            st_l = self.pos.get(pid)
+            far_l = st_l is not None and math.hypot(st_l[0] - targets[pid][0], st_l[1] - targets[pid][1]) > 25.0
+            spec[pid] = ("door", info["side"], V_RUSH if (far_l and self.live_mode) else V_CRUISE, A_HARD if far_l else A_NORM)   # hurry off: his team plays short until he's there
+        pairs_ = self.__dict__.setdefault("_enter_pair", {})
         for pid, until in list(self.__dict__.get("_enter_hold", {}).items()):
-            if pt >= until or pid not in self.pos:
+            mate = pairs_.get(pid)
+            if mate is not None:
+                mst = self.pos.get(mate)
+                lv_ = self.leaving.get(mate)
+                bd_ = BENCH_DOOR[lv_["side"]] if lv_ is not None else None
+                at_boards = bd_ is not None and mst is not None and abs(mst[1]) > 31.0 and mst[1] * bd_[1] > 0 and abs(mst[0] - bd_[0]) < 16.0
+                if mate not in self.leaving or mst is None or at_boards or (lv_ is not None and
+                        math.hypot(mst[0] - bench_spot(lv_["side"], mate)[0], mst[1] - bench_spot(lv_["side"], mate)[1]) < 9.0):
+                    pairs_.pop(pid, None)
+                    mate = None
+            pl_ = self.play
+            busy_ = {seg.get("car"), seg.get("rcv")}
+            if pl_ is not None:
+                busy_ |= {pl_.owner, (pl_.pass_ or {}).get("rcv")}
+            if pid in busy_:
+                mate = None
+                until = pt   # the play needs him now: no one with the puck waits on the bench
+            if (pt >= until and mate is None) or pid not in self.pos:
                 self._enter_hold.pop(pid, None)
+                pairs_.pop(pid, None)
             elif pid in targets:
                 targets[pid] = (self.pos[pid][0], self.pos[pid][1])   # waits at the boards for his turn
                 spec[pid] = ("wait", None, 2.0, A_NORM)
@@ -2165,7 +2270,14 @@ class MotionV2:
             vmax, amax = vmax * tr["v"], amax * tr["a"]
             dist = math.hypot(tx - st[0], ty - st[1])
             spd = math.hypot(st[2], st[3])
-            if kind in ("spot", "mark") and dist < 12.0:   # glide and coast into a support spot
+            if kind == "spot" and dist < 6.0 and seg.get("live") and not dead:
+                # nobody parks on his spot: he keeps a slow loop around it (open ice, a stick on the ice, a look over
+                # the shoulder), on his own rhythm, so off-puck play is always curving and never frozen
+                rad = 3.0 + 2.5 * tr["samp"] / 0.08
+                w_ = 0.55 + 0.35 * (tr["sph"] % 1.0)
+                tx, ty = clampxy(tx + rad * math.cos(w_ * pt + tr["sph"]), ty + rad * 0.8 * math.sin(w_ * pt * 1.3 + tr["sph"]))
+                dist = math.hypot(tx - st[0], ty - st[1])
+            if (kind == "spot" and dist < 12.0) or (kind == "mark" and dist < 4.0):   # glide into a support spot; a marker stays tight to his man
                 vmax, amax = min(vmax, 10.0), amax * 0.55
             if spd > 8.0:                                  # stride rhythm: speed swells and eases with each push
                 vmax *= 1.0 + tr["samp"] * math.sin(6.2832 * pt / tr["stride"] + tr["sph"])
@@ -2197,7 +2309,7 @@ class MotionV2:
         fixed = [self.pos[g] for g in self.goalie_on.values() if g and g in self.pos]
         allp = [p for side in SIDES for p in self.onice[side]] + list(self.leaving)
         self._separate(gc, [p for p in dict.fromkeys(allp) if p in self.pos and p not in self.boxed], fixed,
-                       team_gap=(0.0 if dead and fo is not None else 6.0), puck=puck)
+                       team_gap=(0.0 if dead and fo is not None else 6.0), puck=puck, min_sep=3.4)   # opponents contest body to body; teammates keep their spacing
         lim = (V_SPRINT + 0.5) * dt  # hard speed cap whatever moved them this step
         gset = {g for g in self.goalie_on.values() if g}
         for pid, st in self.pos.items():
@@ -2234,7 +2346,7 @@ class MotionV2:
             door = bench_spot(self.leaving[pid]["side"], pid)
             bd = BENCH_DOOR[self.leaving[pid]["side"]]
             over = self.live_mode and abs(st[1]) > 35.0 and st[1] * bd[1] > 0 and abs(st[0] - bd[0]) < 13.0 if st is not None else False  # hops over the boards
-            if st is None or over or math.hypot(st[0] - door[0], st[1] - door[1]) < 3.0 or pt - self.leaving[pid]["since"] > 12.0:
+            if st is None or over or math.hypot(st[0] - door[0], st[1] - door[1]) < 3.0 or pt - self.leaving[pid]["since"] > 20.0:
                 self.leaving.pop(pid, None)
                 self.pos.pop(pid, None)
         for side in SIDES:  # safety: anyone on the ice has a body
@@ -2370,11 +2482,15 @@ class MotionV2:
             if not g:
                 continue
             st = self.pos.get(g)
-            od = self.dir(side, gc, seg.get("per") if seg.get("warmup") else None)
+            # the opening draw of a period sits at exactly the old period's end time: use the segment's own period
+            od = self.dir(side, gc, seg.get("per") if (seg.get("warmup") or seg.get("k") == "faceoff") and seg.get("per") else None)
             nx = -NET_X * od
             if st is None:
                 st = [nx, 0.0, 0.0, 0.0]
                 self.pos[g] = st
+            if g not in ret and math.hypot(st[0] - nx, st[1]) > 12.0 and not seg.get("to_bench") and seg.get("ph") != "intermission":
+                ret.add(g)   # out of position (period start, after a change): straight back to the crease first
+                self._goalie_returning = ret
             if g in ret:
                 if math.hypot(st[0] - nx, st[1]) < 5.0:
                     ret.discard(g)
@@ -2589,7 +2705,8 @@ class MotionV2:
         for s in SIDES:
             for pid in list(self.onice[s]) + ([self.goalie_on[s]] if self.goalie_on.get(s) else []):
                 st = self.pos.get(pid)
-                if st is not None and not (self.live_mode and held.get(pid, -1.0) > pt):   # still on the bench, waiting his turn
+                waiting = self.live_mode and (held.get(pid, -1.0) > pt or (pid in held and pid in self.__dict__.get("_enter_pair", {})))
+                if st is not None and not waiting:   # still on the bench, waiting his turn (or for the man he replaces)
                     players.append(drawn(pid, st))
         for pid in self.leaving:
             st = self.pos.get(pid)
@@ -2797,6 +2914,11 @@ class MotionV2:
             else:
                 gc = seg["g0"] if seg["k"] in DEAD_KINDS else seg["g0"] + max(0.0, min(seg["g1"] - seg["g0"], pt - seg["pt0"]))
             if seg["k"] not in DEAD_KINDS and seg["k"] != "live" and gc > gc_end + 1e-9:
+                # A play that straddles the horn (a shot in the last half-second, its loose puck running past 20:00)
+                # must not hold the clock short of it forever: the horn is reached and the period ends.
+                if seg["g0"] <= gc_end + 1e-9 and self.gc_last < gc_end - 1e-9 and any(
+                        r.get("type") in ("period_end", "final") and abs(float(r["t"]) - gc_end) < 1e-6 for r in self._anchors):
+                    self.gc_last = float(gc_end)
                 break
             if seg["k"] in DEAD_KINDS and seg["g0"] > gc_end + 1e-9:
                 break

@@ -1420,6 +1420,37 @@ class _EnginePass:
         rec[side] = (F, D, st)
 
     # ── wrappers (installed as instance attributes on the sim for the pass only)
+    def _no_boxed(self, side: str, units: Any, unit: List[Any], cur: Dict[str, Any]) -> List[Any]:
+        """A player serving a penalty is in the box: the engine picks offenders apart from its lines, so its unit
+        can still name him. Swap him for a teammate of the same position who is not on the ice."""
+        if cur.get("seg") != "reg":
+            return unit
+        t = float(cur.get("local_t") or 0.0)
+        iv = list(self.ctx.get(f"{side}_pen") or [])
+        recs = list(self.ctx.get(f"{side}_pen_recs") or [])
+        boxed = {_pid(recs[j][0]) for j, (st_, du_) in enumerate(iv) if j < len(recs) and float(st_) <= t < float(st_) + float(du_)}
+        boxed.discard(None)
+        if not boxed or not any(_pid(q) in boxed for q in unit):
+            return unit
+        fwd = [q for ln in (units.get("lines") or []) for q in ln]
+        dmen = [q for pr in (units.get("pairs") or []) for q in pr]
+        dset = {_pid(q) for q in dmen}
+        on = {_pid(q) for q in unit}
+        out: List[Any] = []
+        for q in unit:
+            if _pid(q) not in boxed:
+                out.append(q)
+                continue
+            same = dmen if _pid(q) in dset else fwd     # a defenceman for a defenceman, a forward for a forward
+            alt = next((r for r in same if _pid(r) not in on and _pid(r) not in boxed), None)
+            alt = alt or next((r for r in fwd + dmen if _pid(r) not in on and _pid(r) not in boxed), None)
+            if alt is None:
+                out.append(q)
+            else:
+                out.append(alt)
+                on.add(_pid(alt))
+        return out
+
     def w_gm_on_ice_unit(self, units: Any, strength: Any, rng: Any, *a: Any, **kw: Any) -> Any:
         res = self.origs["_gm_on_ice_unit"](units, strength, rng, *a, **kw)
         fr = _segment_frame()
@@ -1440,6 +1471,7 @@ class _EnginePass:
             if st == "EV":
                 new = self._deploy(side, units, new, i)
             new = self._bench(side, units, new, i)
+            new = self._no_boxed(side, units, new, cur)
             self._note_line(side, units, new, i, st)
             if st == "EV":
                 for e in self._active("shuffle", side, i)[-1:]:
@@ -2767,7 +2799,9 @@ class CommentaryWriter:
             tx, ty = h.get("to") or (0.0, 0.0)
             u = fx * (mt.dir(side, gc) if hasattr(mt, "dir") else 1.0)
             player = book.short(h.get("pid")) if h.get("pid") else ""
-            if h["kind"] == "dump":
+            if h["kind"] == "look" and player:
+                k, p = ("nar_look_block" if h.get("blocked") else "nar_look_wide"), {"player": player}
+            elif h["kind"] == "dump":
                 k, p = ("nar_rim" if h.get("ptype") == "rim" else "nar_dump"), {"team": self._team(side)}
             elif h["kind"] == "pass" and h.get("rcv") and player:
                 ru = tx * (mt.dir(side, gc) if hasattr(mt, "dir") else 1.0)
@@ -5671,6 +5705,16 @@ class LiveEventLoop:
             ev["strength"] = self._attempt_strength(a)
             if raw.get("shot_loc"):
                 ev["shot_loc"] = dict(raw["shot_loc"])
+                # The words follow the picture: a "slot" or "in tight" chance the motion released from the outside
+                # is called from where it was taken (the engine's chance value and xG are untouched).
+                try:
+                    lx, ly = float(ev["shot_loc"]["x"]), float(ev["shot_loc"]["y"])
+                    dn = min(math.hypot(lx - 89.0, ly), math.hypot(lx + 89.0, ly))
+                    if ev.get("chance") in ("slot", "high_danger", "rebound") and not ev.get("empty_net") and dn > 42.0:
+                        ev.setdefault("meta", {})["chance_called_from"] = ev["chance"]
+                        ev["chance"] = "point" if dn > 55.0 else "perimeter"
+                except (KeyError, TypeError, ValueError):
+                    pass
             if typ == "goal":
                 ev["assist_ids"] = list(a.get("assist_ids") or [])
                 ev["assist_names"] = [book.name(x) for x in ev["assist_ids"]]
