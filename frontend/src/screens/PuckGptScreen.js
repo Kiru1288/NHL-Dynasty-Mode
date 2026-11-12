@@ -102,8 +102,44 @@ function Turn({ turn, onAsk, onOpenPlayer }) {
       {!res && !turn.error ? <p className="puckgpt-thinking"><Pucky size="sm" talking bobbing />{turn.first ? "Indexing this save…" : "Reading the save…"}</p> : null}
       {res ? (
         <div className="puckgpt-reply">
-          <ReadAs interp={res.interpretation} />
-          {res.answer ? <h2 className="puckgpt-answer">{res.answer}</h2> : null}
+          {/^(chat|judge|multi|fact)/.test(String(res.interpretation?.intent || "")) ? null : <ReadAs interp={res.interpretation} />}
+          {res.say ? <p className="puckgpt-say">{res.say}</p> : res.answer ? <h2 className="puckgpt-answer">{res.answer}</h2> : null}
+          {Array.isArray(res.sections)
+            ? res.sections.map((sec, si) => (
+                <section key={si} className="puckgpt-section">
+                  <h3 className="puckgpt-section__q">{sec.q}</h3>
+                  {sec.say ? <p className="puckgpt-say">{sec.say}</p> : null}
+                  {Array.isArray(sec.analysis) && sec.analysis.length ? (
+                    <ul className="puckgpt-analysis">
+                      {sec.analysis.map((line, i) => (
+                        <li key={i}>{line}</li>
+                      ))}
+                    </ul>
+                  ) : null}
+                  {Array.isArray(sec.clarify) && sec.clarify.length ? (
+                    <div className="puckgpt-chips puckgpt-chips--clarify">
+                      {sec.clarify.map((c) => (
+                        <button key={c.query} type="button" className="puckgpt-chip" onClick={() => onAsk(c.query)}>
+                          {c.label}
+                          <small>{c.query}</small>
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                  {Array.isArray(sec.cards) && sec.cards.length ? (
+                    <div className="puckgpt-cards">
+                      {sec.cards.map((c) => (
+                        <button key={c.id} type="button" className="puckgpt-card" onClick={() => onOpenPlayer(c.id, c.label)}>
+                          <b>{c.label}</b>
+                          <span>{c.sub}</span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                  <ResultTable table={sec.table} onOpenPlayer={onOpenPlayer} />
+                </section>
+              ))
+            : null}
           {Array.isArray(res.analysis) && res.analysis.length ? (
             <ul className="puckgpt-analysis">
               {res.analysis.map((line, i) => (

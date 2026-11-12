@@ -1533,6 +1533,381 @@
      ]
     }
    ]
+  },
+  {
+   "name": "Front-office specifics",
+   "prime": [],
+   "cases": [
+    {
+     "q": "who's my oldest player",
+     "expect": [
+      "fact:oldest"
+     ]
+    },
+    {
+     "q": "who is the youngest guy on my team",
+     "expect": [
+      "fact:youngest"
+     ]
+    },
+    {
+     "q": "whos the oldest guy in the league",
+     "expect": [
+      "fact:oldest"
+     ]
+    },
+    {
+     "q": "who's the oldest player on the oilers",
+     "expect": [
+      "fact:oldest"
+     ]
+    },
+    {
+     "q": "who makes the most money on my team",
+     "expect": [
+      "fact:highest_paid"
+     ]
+    },
+    {
+     "q": "who's my captain",
+     "expect": [
+      "fact:captain"
+     ]
+    },
+    {
+     "q": "who is boston's captain",
+     "expect": [
+      "fact:captain"
+     ]
+    },
+    {
+     "q": "who's injured right now",
+     "expect": [
+      "fact:injured"
+     ]
+    },
+    {
+     "q": "is anyone on the shelf",
+     "expect": [
+      "fact:injured"
+     ]
+    },
+    {
+     "q": "who's hurt on the bruins",
+     "expect": [
+      "fact:injured"
+     ]
+    },
+    {
+     "q": "which of my contracts expire this summer",
+     "expect": [
+      "fact:expiring"
+     ]
+    },
+    {
+     "q": "who needs a new contract",
+     "expect": [
+      "fact:expiring"
+     ]
+    },
+    {
+     "q": "who are my rfas",
+     "expect": [
+      "fact:rfa"
+     ]
+    },
+    {
+     "q": "do i have any no move clauses",
+     "expect": [
+      "fact:clauses"
+     ]
+    },
+    {
+     "q": "who has the most cap space in the league",
+     "expect": [
+      "fact:cap_league"
+     ]
+    },
+    {
+     "q": "which team has the least cap room",
+     "expect": [
+      "fact:cap_league"
+     ]
+    },
+    {
+     "q": "find me a cheap backup goalie",
+     "expect": [
+      "fact:cheap_goalie"
+     ]
+    },
+    {
+     "q": "give me a top 5 of my forwards",
+     "expect": [
+      "fact:top_n"
+     ]
+    },
+    {
+     "q": "rank my defensemen",
+     "expect": [
+      "fact:top_n"
+     ]
+    },
+    {
+     "q": "top 3 goalies on my team",
+     "expect": [
+      "fact:top_n"
+     ]
+    },
+    {
+     "q": "who is on my first line",
+     "expect": [
+      "fact:lines"
+     ]
+    },
+    {
+     "q": "who's on my second pair",
+     "expect": [
+      "fact:lines"
+     ]
+    },
+    {
+     "q": "what are my lines",
+     "expect": [
+      "fact:lines"
+     ]
+    },
+    {
+     "q": "who's my best player under 23",
+     "expect": [
+      "fact:best_by_age"
+     ]
+    },
+    {
+     "q": "my best defenseman over 30",
+     "expect": [
+      "fact:best_by_age"
+     ]
+    },
+    {
+     "q": "best ufa defenseman",
+     "expect": [
+      "teamq:sign",
+      "find_players"
+     ]
+    },
+    {
+     "q": "give me a trade idea",
+     "expect": [
+      "trade_target"
+     ]
+    },
+    {
+     "q": "whats a good trade for a goalie",
+     "expect": [
+      "trade_target"
+     ]
+    },
+    {
+     "q": "who should i go after at center",
+     "expect": [
+      "trade_target"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Calendar and outlook",
+   "prime": [],
+   "cases": [
+    {
+     "q": "when do we play next",
+     "expect": [
+      "fact:next_game"
+     ]
+    },
+    {
+     "q": "who do we face tonight",
+     "expect": [
+      "fact:next_game"
+     ]
+    },
+    {
+     "q": "what's the date",
+     "expect": [
+      "fact:today"
+     ]
+    },
+    {
+     "q": "what season is it",
+     "expect": [
+      "fact:today"
+     ]
+    },
+    {
+     "q": "where are we in the season",
+     "expect": [
+      "fact:today"
+     ]
+    },
+    {
+     "q": "how many games are left",
+     "expect": [
+      "fact:games_left"
+     ]
+    },
+    {
+     "q": "who's going to win the cup",
+     "expect": [
+      "fact:cup_pick"
+     ]
+    },
+    {
+     "q": "whos the favorite to win it all",
+     "expect": [
+      "fact:cup_pick"
+     ]
+    },
+    {
+     "q": "are we contenders",
+     "expect": [
+      "judge:contender"
+     ]
+    },
+    {
+     "q": "is my goalie good enough to win a cup",
+     "expect": [
+      "judge:contender"
+     ]
+    },
+    {
+     "q": "what do we need",
+     "expect": [
+      "judge:needs"
+     ]
+    },
+    {
+     "q": "what do you think of my team",
+     "expect": [
+      "judge:team"
+     ]
+    },
+    {
+     "q": "who should i get rid of",
+     "expect": [
+      "judge:sell"
+     ]
+    },
+    {
+     "q": "what should i do next",
+     "expect": [
+      "fact:checklist"
+     ]
+    },
+    {
+     "q": "help me fix my team",
+     "expect": [
+      "fact:checklist"
+     ]
+    },
+    {
+     "q": "what's my to do list",
+     "expect": [
+      "fact:checklist"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Chatter and follow-ups",
+   "prime": [
+    "who is my best defenseman"
+   ],
+   "cases": [
+    {
+     "q": "should we re-sign him",
+     "expect": [
+      "fact:extend"
+     ]
+    },
+    {
+     "q": "is he overpaid",
+     "expect": [
+      "player_contract"
+     ]
+    },
+    {
+     "q": "what do you think of him",
+     "expect": [
+      "player_card"
+     ]
+    },
+    {
+     "q": "is he any good",
+     "expect": [
+      "player_card"
+     ]
+    },
+    {
+     "q": "why?",
+     "expect": [
+      "chat:why"
+     ]
+    },
+    {
+     "q": "are you sure",
+     "expect": [
+      "chat:confirm"
+     ]
+    },
+    {
+     "q": "tell me more",
+     "expect": [
+      "chat:why"
+     ]
+    },
+    {
+     "q": "thanks",
+     "expect": [
+      "chat:thanks"
+     ]
+    },
+    {
+     "q": "hey",
+     "expect": [
+      "chat:greet"
+     ]
+    },
+    {
+     "q": "who are you",
+     "expect": [
+      "chat:about"
+     ]
+    },
+    {
+     "q": "tell me a joke",
+     "expect": [
+      "chat:joke"
+     ]
+    },
+    {
+     "q": "im bored",
+     "expect": [
+      "chat:bored"
+     ]
+    },
+    {
+     "q": "who should i sign and who should i trade away",
+     "expect": [
+      "multi:teamq:sign+judge:sell"
+     ]
+    },
+    {
+     "q": "compare my top two centers and tell me who is better",
+     "expect": [
+      "compare"
+     ]
+    }
+   ]
   }
  ]
 }

@@ -17,6 +17,8 @@ import TeamLogoBadge from "../../components/ui/TeamLogoBadge";
 const ROUND_NAMES = { 1: "Round 1", 2: "Round 2", 3: "Conference Final", 4: "Stanley Cup Final" };
 const ROUND_SHORT = { 1: "R1", 2: "R2", 3: "CF", 4: "Final" };
 const SERIES_PER_CONF = { 1: 4, 2: 2, 3: 1 };
+const ROUND_STEP = { 1: "Round 1", 2: "Round 2", 3: "Conf. Finals", 4: "Cup Final" };
+const ROUND_TAGLINE = { 1: "The opening battle", 2: "The contenders", 3: "The final four", 4: "For the Stanley Cup" };
 const MAX_FF_DAYS = 150; // hard cap on sequential advance_day calls
 const FF_PAINT_MS = 60; // let React paint the bracket between days
 const STALL_LIMIT = 3; // consecutive responses with no day change → stop
@@ -25,7 +27,8 @@ const STALL_LIMIT = 3; // consecutive responses with no day change → stop
 const SIM_SPEEDS = {
   slow: { label: "Slow", daysPerCall: 1, pauseMs: 1100, popupMs: 0 },
   medium: { label: "Medium", daysPerCall: 1, pauseMs: 380, popupMs: 0 },
-  fast: { label: "Fast", daysPerCall: 30, pauseMs: 0, popupMs: 2600 },
+  // Fast still plays one night per request (every series, one game at a time); it only shortens the pause.
+  fast: { label: "Fast", daysPerCall: 1, pauseMs: 140, popupMs: 2600 },
 };
 const SPEED_KEY = "po_sim_speed";
 const MAX_POPUPS = 5;
@@ -309,7 +312,7 @@ function feederText(feeder, teamFor) {
 
 /** Which feeder fills which empty row — keeps a half-set series honest. */
 function pendingRowLabels(series, feeders, teamFor) {
-  if (!feeders) return ["TBD", "TBD"];
+  if (!feeders) return ["To be decided", "To be decided"];
   const [f0, f1] = feeders;
   const contains = (f, id) =>
     Boolean(f && id) && (String(f.team_high_id) === id || String(f.team_low_id) === id);
@@ -321,7 +324,11 @@ function pendingRowLabels(series, feeders, teamFor) {
   else if (hi && contains(f1, hi)) fLow = f0;
   if (lo && contains(f0, lo)) fHigh = f1;
   else if (lo && contains(f1, lo)) fHigh = f0;
-  return [`W ${feederText(fHigh, teamFor)}`, `W ${feederText(fLow, teamFor)}`];
+  const lab = (f) => {
+    const t = feederText(f, teamFor);
+    return t === "TBD" ? "To be decided" : `Winner ${t.replace("/", " / ")}`;
+  };
+  return [lab(fHigh), lab(fLow)];
 }
 
 function isBlockedResponse(res) {
@@ -363,6 +370,36 @@ function SideNavButton({ active, icon, label, onClick }) {
       <span className="nhlcal-side-label">{label}</span>
     </button>
   );
+}
+
+const TWO_WORD_NICKS = ["Maple Leafs", "Red Wings", "Blue Jackets", "Golden Knights"];
+/** "Vancouver Canucks" -> { city: "Vancouver", nick: "Canucks" } */
+function splitTeamName(team) {
+  const full = String(team?.name || team?.abbrev || "").trim();
+  if (!full) return { city: "", nick: "" };
+  const two = TWO_WORD_NICKS.find((n) => full.endsWith(n));
+  if (two) return { city: full.slice(0, full.length - two.length).trim(), nick: two };
+  const parts = full.split(" ");
+  if (parts.length < 2) return { city: "", nick: full };
+  return { city: parts.slice(0, -1).join(" "), nick: parts[parts.length - 1] };
+}
+
+function teamAccent(team) {
+  const c = firstDefined(team?.primary_color, team?.color_primary, team?.colors?.primary, team?.color, team?.team_color);
+  return typeof c === "string" && /^#|^rgb/.test(c) ? c : null;
+}
+
+/** What is at stake in the next game of a live series. */
+function seriesStakes(series, high, low) {
+  const wh = Number(series?.wins_high || 0);
+  const wl = Number(series?.wins_low || 0);
+  if (wh === 3 && wl === 3) return { kind: "g7", text: "Game 7 · winner takes all" };
+  if (wh === 3 || wl === 3) {
+    const lead = wh === 3 ? high : low;
+    const trail = wh === 3 ? low : high;
+    return { kind: "elim", text: `${trail?.abbrev || "Trailing club"} faces elimination`, lead, trail };
+  }
+  return null;
 }
 
 function TrophyGlyph({ size = 34 }) {
@@ -477,8 +514,10 @@ function TeamMark({ team, size = 22, dimmed }) {
 
 function TeamRow({ team, seed, wins, showWins, placeholder, isWinner, isLoser, isLeader }) {
   const empty = !team;
+  const accent = teamAccent(team);
   return (
     <div
+      style={accent ? { "--po-team": accent } : undefined}
       className={cx(
         "po-row",
         empty && "is-empty",
@@ -490,8 +529,13 @@ function TeamRow({ team, seed, wins, showWins, placeholder, isWinner, isLoser, i
       <span className="po-seed">{empty ? "" : seed ?? ""}</span>
       <TeamMark team={team} size={22} dimmed={isLoser} />
       <span className="po-row-name">
-        <strong>{empty ? placeholder : team.abbrev}</strong>
-        {!empty && team.record ? <small>{team.record}</small> : null}
+        <strong title={empty ? undefined : team.name}>{empty ? placeholder : splitTeamName(team).nick || team.abbrev}</strong>
+        {!empty ? (
+          <small>
+            {team.abbrev}
+            {team.record ? ` · ${team.record}` : ""}
+          </small>
+        ) : null}
       </span>
       {showWins ? <WinPips wins={wins} dim={isLoser} /> : <span />}
       <em className="po-row-wins">{showWins ? wins : ""}</em>
@@ -512,9 +556,12 @@ function SeriesCard({ series, high, low, state, feeders, teamFor, selected, just
   const showWins = state === "live" || state === "complete";
   const [phHigh, phLow] = state === "pending" ? pendingRowLabels(series, feeders, teamFor) : ["TBD", "TBD"];
 
+  const stakes = state === "live" ? seriesStakes(series, high, low) : null;
+  const swept = state === "complete" && Math.min(wh, wl) === 0;
   let meta;
-  if (state === "pending") meta = "Awaiting";
-  else if (state === "complete") meta = "Final";
+  if (state === "pending") meta = `${roundName(series.round_index)} · not set`;
+  else if (state === "complete") meta = swept ? "Sweep" : `Final · ${Math.max(wh, wl)}–${Math.min(wh, wl)}`;
+  else if (stakes?.kind === "g7") meta = tonight ? "Game 7 · Tonight" : "Game 7";
   else if (tonight) meta = `G${next} · Tonight`;
   else if (state === "live") meta = day !== null ? `G${next} · Day ${day + 1}` : `Game ${next}`;
   else meta = day !== null ? `G1 · Day ${day + 1}` : "Game 1";
@@ -534,7 +581,10 @@ function SeriesCard({ series, high, low, state, feeders, teamFor, selected, just
         selected && "is-selected",
         series.is_user_series && "is-user",
         tonight && "is-tonight",
-        justSet && "is-just-set"
+        justSet && "is-just-set",
+        stakes && `is-${stakes.kind}`,
+        swept && "is-sweep",
+        `is-round-${series.round_index}`
       )}
       disabled={state === "pending"}
       aria-pressed={selected}
@@ -570,6 +620,7 @@ function SeriesCard({ series, high, low, state, feeders, teamFor, selected, just
         isLeader={state === "live" && wl > wh}
       />
       <GameStrip series={series} />
+      {stakes ? <div className={cx("po-card-stakes", `is-${stakes.kind}`)}>{stakes.text}</div> : null}
       {footer ? <div className="po-card-foot">{footer}</div> : null}
     </button>
   );
@@ -706,15 +757,61 @@ function HypePanel({ series, high, low, playoffDay }) {
   );
 }
 
-function SeriesDesk({ series, high, low, state, canAct, busy, playoffDay, onClear, onAction }) {
+function SeriesDesk({ series, high, low, state, canAct, busy, playoffDay, onClear, onAction, overview }) {
   if (!series) {
+    const o = overview || {};
     return (
-      <aside className="po-desk">
-        <p className="po-eyebrow">Series Desk</p>
-        <h3 className="po-desk-title">No series selected</h3>
-        <p className="po-desk-muted">
-          Select any matchup in the bracket to see the series score, the seven-game slate, and sim controls.
-        </p>
+      <aside className="po-desk po-desk--overview">
+        <p className="po-eyebrow">Playoff Central</p>
+        <h3 className="po-desk-title">{o.title || "The road to the Cup"}</h3>
+        <div className="po-ov-stats">
+          <div className="po-ov-stat">
+            <b>{o.alive ?? 16}</b>
+            <span>teams alive</span>
+          </div>
+          <div className="po-ov-stat">
+            <b>{o.active ?? 0}</b>
+            <span>series live</span>
+          </div>
+          <div className="po-ov-stat">
+            <b>{o.out ?? 0}</b>
+            <span>eliminated</span>
+          </div>
+        </div>
+        {o.tonight?.length ? (
+          <div className="po-ov-block">
+            <p className="po-eyebrow">Tonight</p>
+            {o.tonight.map((t) => (
+              <button key={t.id} type="button" className="po-ov-line" onClick={() => o.onPick?.(t.id)}>
+                <span>{t.label}</span>
+                <em>{t.note}</em>
+              </button>
+            ))}
+          </div>
+        ) : null}
+        {o.watch?.length ? (
+          <div className="po-ov-block">
+            <p className="po-eyebrow">On the brink</p>
+            {o.watch.map((t) => (
+              <button key={t.id} type="button" className="po-ov-line is-hot" onClick={() => o.onPick?.(t.id)}>
+                <span>{t.label}</span>
+                <em>{t.note}</em>
+              </button>
+            ))}
+          </div>
+        ) : null}
+        {o.done?.length ? (
+          <div className="po-ov-block">
+            <p className="po-eyebrow">Decided</p>
+            {o.done.map((t) => (
+              <button key={t.id} type="button" className="po-ov-line is-done" onClick={() => o.onPick?.(t.id)}>
+                <span>{t.label}</span>
+                <em>{t.note}</em>
+              </button>
+            ))}
+          </div>
+        ) : null}
+        <p className="po-desk-muted">Pick any matchup in the bracket for its scouting report, game log and sim controls.</p>
       </aside>
     );
   }
@@ -1366,8 +1463,8 @@ export default function PlayoffStartMenu({
   const renderSideColumns = (conf) => {
     const side = bracket[conf];
     const cols = [
-      { round: 1, title: `${conf} R1` },
-      { round: 2, title: `${conf} R2` },
+      { round: 1, title: "Round 1" },
+      { round: 2, title: "Round 2" },
       { round: 3, title: `${conf} Final` },
     ];
     const ordered = conf === "East" ? [...cols].reverse() : cols;
@@ -1407,8 +1504,19 @@ export default function PlayoffStartMenu({
       <div className="po-col-body">
         <div className="po-slot has-in">
           <div className="po-cup-wrap">
-            <div className={cx("po-cup-crest", champion && "is-won")}>
-              <CupCenterpiece size={champion ? 64 : 52} lit={Boolean(champion)} />
+            <div className={cx("po-cup-crest", champion && "is-won", currentRound === 4 && "is-final")}>
+              <span className="po-cup-rays" aria-hidden="true" />
+              <CupCenterpiece size={champion ? 132 : currentRound === 4 ? 120 : 104} lit={Boolean(champion) || currentRound === 4} />
+            </div>
+            <p className="po-cup-kicker">{champion ? "Champions" : ROUND_TAGLINE[currentRound || 1]}</p>
+            <div className="po-cup-count">
+              <b>{overview.alive}</b>
+              <span>{overview.alive === 1 ? "champion" : "teams left"}</span>
+            </div>
+            <div className="po-cup-path" aria-label="Rounds remaining">
+              {[1, 2, 3, 4].map((r) => (
+                <i key={r} className={cx(stepState(r) === "done" && "is-done", stepState(r) === "current" && "is-now")} />
+              ))}
             </div>
             {renderCard(bracket.cup, getFeeders(4))}
             {champion ? <div className="po-cup-champ">{champion.name}</div> : null}
@@ -1424,6 +1532,65 @@ export default function PlayoffStartMenu({
     return "upcoming";
   };
 
+  const overview = (() => {
+    const lab = (x) => `${teamFor(x.team_high_id)?.abbrev || "TBD"} – ${teamFor(x.team_low_id)?.abbrev || "TBD"}`;
+    const rows = seriesList.filter((x) => x.team_high_id && x.team_low_id);
+    const liveRows = rows.filter((x) => seriesState(x, isLive) === "live");
+    const doneRows = rows.filter((x) => seriesState(x, isLive) === "complete");
+    const out = new Set(doneRows.map((x) => (seriesWinnerId(x) === String(x.team_high_id) ? String(x.team_low_id) : String(x.team_high_id))));
+    const r1Teams = new Set();
+    seriesList.forEach((x) => {
+      if (Number(x.round_index) === 1) {
+        if (x.team_high_id) r1Teams.add(String(x.team_high_id));
+        if (x.team_low_id) r1Teams.add(String(x.team_low_id));
+      }
+    });
+    const total = r1Teams.size || 16;
+    const tonight = liveRows
+      .filter((x) => numOrNull(x.scheduled_day) === playoffDay)
+      .map((x) => ({ id: x.series_id, label: lab(x), note: `Game ${nextGameNumber(x)} · ${x.wins_high}–${x.wins_low}` }));
+    const watch = liveRows
+      .filter((x) => Number(x.wins_high) === 3 || Number(x.wins_low) === 3)
+      .map((x) => ({
+        id: x.series_id,
+        label: lab(x),
+        note: Number(x.wins_high) === 3 && Number(x.wins_low) === 3 ? "Game 7" : `${x.wins_high}–${x.wins_low} · elimination game`,
+      }));
+    const done = doneRows
+      .filter((x) => Number(x.round_index) === currentRound || cupComplete)
+      .slice(-6)
+      .map((x) => ({ id: x.series_id, label: lab(x), note: seriesLabel(x, teamFor(x.team_high_id), teamFor(x.team_low_id)) }));
+    return {
+      title: cupComplete ? "Cup decided" : isLive ? `${roundName(currentRound)} · ${ROUND_TAGLINE[currentRound] || ""}` : "The road to the Cup",
+      alive: cupComplete ? 1 : Math.max(1, total - out.size),
+      active: liveRows.length,
+      out: out.size,
+      tonight,
+      watch,
+      done,
+      onPick: setSelectedId,
+    };
+  })();
+
+  // The Final gets its own stage above the bracket.
+  const finalStage = (() => {
+    const cup = bracket.cup;
+    if (!cup || !cup.team_high_id || !cup.team_low_id) return null;
+    const hi = teamFor(cup.team_high_id);
+    const lo = teamFor(cup.team_low_id);
+    const wh = Number(cup.wins_high || 0);
+    const wl = Number(cup.wins_low || 0);
+    const st = seriesState(cup, isLive);
+    const n = nextGameNumber(cup);
+    let line;
+    if (champion) line = `${champion.name} win the Stanley Cup in ${wh + wl}`;
+    else if (wh === 3 && wl === 3) line = "Game 7. One game for the Stanley Cup.";
+    else if (wh === 3 || wl === 3) line = `${(wh === 3 ? hi : lo)?.name || "Leaders"} are one win from the Stanley Cup`;
+    else if (wh + wl === 0) line = "Two teams. One trophy. Best of seven.";
+    else line = `Game ${n} is next`;
+    return { cup, hi, lo, wh, wl, st, n, line, clinch: !champion && (wh === 3 || wl === 3), g7: !champion && wh === 3 && wl === 3 };
+  })();
+
   // Desk falls back to the user's own series so "your series" is always on screen.
   const deskSeries =
     selected ||
@@ -1434,7 +1601,11 @@ export default function PlayoffStartMenu({
     : "";
 
   return (
-    <div className="nhlcal-root po-hub-root register-ops" data-register="ops">
+    <div
+      className={cx("nhlcal-root po-hub-root register-ops", finalStage && "is-final-round", champion && "is-crowned")}
+      data-register="ops"
+      data-round={currentRound || 1}
+    >
       {null}
 
       {popups.length ? (
@@ -1484,7 +1655,7 @@ export default function PlayoffStartMenu({
                   <span className="po-step-mark" aria-hidden="true">
                     {st === "done" ? "✓" : r}
                   </span>
-                  {ROUND_SHORT[r]}
+                  {ROUND_STEP[r]}
                 </li>
               );
             })}
@@ -1530,6 +1701,79 @@ export default function PlayoffStartMenu({
             <strong className="po-banner-title">{cupComplete ? "Stanley Cup Champions" : roundName(currentRound || 1)}</strong>
             <span className="po-banner-rule" aria-hidden="true" />
           </div>
+          {finalStage ? (
+            <div
+              className={cx("po-final", finalStage.clinch && "is-clinch", finalStage.g7 && "is-g7", champion && "is-won")}
+              role="button"
+              tabIndex={0}
+              onClick={() => setSelectedId(finalStage.cup.series_id)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") setSelectedId(finalStage.cup.series_id);
+              }}
+            >
+              <span className="po-final-beam is-l" aria-hidden="true" />
+              <span className="po-final-beam is-r" aria-hidden="true" />
+              {champion ? (
+                <span className="po-final-confetti" aria-hidden="true">
+                  {Array.from({ length: 18 }).map((_, i) => (
+                    <i key={i} style={{ left: `${(i * 5.5 + 3) % 100}%`, animationDelay: `${(i % 6) * 0.35}s` }} />
+                  ))}
+                </span>
+              ) : null}
+              <p className="po-final-kicker">{champion ? "Stanley Cup Champions" : "Stanley Cup Final"}</p>
+              <div className="po-final-row">
+                {[
+                  [finalStage.hi, finalStage.wh, finalStage.wl],
+                  [finalStage.lo, finalStage.wl, finalStage.wh],
+                ].map(([t, w, ow], i) => (
+                  <React.Fragment key={t?.team_id || i}>
+                    {i === 1 ? (
+                      <div className="po-final-score">
+                        <b>{finalStage.wh}</b>
+                        <span className="po-final-cup">
+                          <CupCenterpiece size={76} lit />
+                        </span>
+                        <b>{finalStage.wl}</b>
+                      </div>
+                    ) : null}
+                    <div
+                      className={cx(
+                        "po-final-team",
+                        champion && champion.team_id === t?.team_id && "is-champ",
+                        champion && champion.team_id !== t?.team_id && "is-out",
+                        !champion && w === 3 && "is-close",
+                        !champion && ow === 3 && w < 3 && "is-brink"
+                      )}
+                    >
+                      <TeamMark team={t} size={84} />
+                      <strong>{splitTeamName(t).nick || t?.abbrev}</strong>
+                      <small>
+                        {splitTeamName(t).city}
+                        {t?.record ? ` · ${t.record}` : ""}
+                      </small>
+                    </div>
+                  </React.Fragment>
+                ))}
+              </div>
+              <p className="po-final-line">{finalStage.line}</p>
+              <div className="po-final-pips" aria-hidden="true">
+                {[1, 2, 3, 4, 5, 6, 7].map((g) => {
+                  const row = (finalStage.cup.game_log || []).find((x) => Number(x.game) === g);
+                  const w = row
+                    ? String(row.winner_id || (Number(row.home_score) > Number(row.away_score) ? row.home_id : row.away_id))
+                    : "";
+                  return (
+                    <i
+                      key={g}
+                      className={cx(row && "is-played", w && w === String(finalStage.cup.team_high_id) && "is-hi", w && w === String(finalStage.cup.team_low_id) && "is-lo", !row && g === finalStage.n && !champion && "is-next")}
+                    >
+                      G{g}
+                    </i>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
           <div className="po-bracket-panel">
             {bracket.structured ? (
               <div className="po-bracket">
@@ -1569,6 +1813,7 @@ export default function PlayoffStartMenu({
             playoffDay={playoffDay}
             onClear={() => setSelectedId(null)}
             onAction={runAction}
+            overview={overview}
           />
         </section>
 
@@ -1606,10 +1851,10 @@ export default function PlayoffStartMenu({
                 type="button"
                 className={cx("po-btn", userGameTonight ? "po-btn--secondary" : "po-btn--primary")}
                 disabled={busy || userGameTonight}
-                title={userGameTonight ? "Your game is tonight — play or sim it first" : "Play tonight's slate, then advance one day"}
-                onClick={() => runAction("advance_day", {}, "Simming tonight's slate…")}
+                title={userGameTonight ? "Your game is tonight — play or sim it first" : "Every live series plays its next game, all on the same night"}
+                onClick={() => runAction("advance_day", { skip_off_days: true }, "Playing the next game in every series…")}
               >
-                Sim Day
+                Sim Next Game
               </button>
               <button
                 type="button"

@@ -89,6 +89,11 @@ class PlaySim:
         self.release: Optional[Dict[str, Any]] = None
         self.reset_req: Optional[str] = None
         self.rush = False
+        # The engine rolled a rush chance: when the shooting team wins the puck outside the zone the play
+        # goes straight up ice as an odd-man rush (set in virtual_seg once the final approach starts).
+        self.odd = "RUSH" in str(((seg.get("B") or {}).get("att") or {}).get("chance_raw") or "").upper()
+        self._odd_on = False
+        self.ozpat: Dict[str, Tuple[int, float, float, float]] = {}
         self.lane = {}
         self.stats = {"forced": 0, "out_region": 0}
         self.changing: Optional[str] = None
@@ -136,6 +141,49 @@ class PlaySim:
         return math.hypot(ax + t * dx - px, ay + t * dy - py)
 
     # ── director
+    def _tr(self, pid: Optional[str]) -> Dict[str, float]:
+        try:
+            return self.mt._traits(pid) if pid else {}
+        except Exception:
+            return {}
+
+    @staticmethod
+    def _danger(reg: Tuple[float, float, float, float]) -> bool:
+        """Slot / net-front regions: the places a player shouldn't hold the puck without shooting."""
+        return reg[0] >= 58.0 and reg[3] <= 22.0
+
+    _OZ_PATTERNS = (
+        ((82.0, 30.0), (62.0, 33.0), (74.0, 18.0)),                       # work the wall low to high
+        ((84.0, 27.0), (94.0, 7.0), (94.0, -7.0), (82.0, -27.0)),         # behind the net, out the far side
+        ((62.0, 32.0), (46.0, 12.0), (47.0, -14.0), (66.0, -31.0)),       # up the wall and across the top
+        ((80.0, 29.0), (66.0, 20.0), (58.0, 31.0)),                       # curl off the half wall and back
+    )
+
+    def _oz_point(self, own: str, lane: float) -> Tuple[float, float]:
+        """Where the carrier takes the puck in the zone: a pattern picked per carrier, on his own tempo."""
+        cur = self.ozpat.get(own)
+        tr = self._tr(own)
+        if cur is None or self.gc - cur[1] >= cur[2] * len(self._OZ_PATTERNS[cur[0]]):
+            hands, oiq = float(tr.get("hands", 0.5)), float(tr.get("oiq", 0.5))
+            w = [1.0, 0.5 + 0.8 * hands, 0.5 + 0.8 * oiq, 0.7]
+            if cur is not None:
+                w[cur[0]] *= 0.25                                         # rarely the same look twice in a row
+            r, acc, pick = self.rng.random() * sum(w), 0.0, 0
+            for i, wt in enumerate(w):
+                acc += wt
+                if r <= acc:
+                    pick = i
+                    break
+            sgn = math.copysign(1.0, lane)
+            if cur is not None and self._OZ_PATTERNS[cur[0]][-1][1] < 0:
+                sgn = -sgn                                                # he finished on the far side: start from there
+                self.lane[own] = -lane
+            cur = (pick, self.gc, self.rng.uniform(2.6, 4.6) * (1.15 - 0.3 * float(tr.get("speed", 0.5))), sgn)
+            self.ozpat[own] = cur
+        pts = self._OZ_PATTERNS[cur[0]]
+        u, v = pts[min(len(pts) - 1, int((self.gc - cur[1]) / cur[2]))]
+        return u, v * cur[3]
+
     def _eta(self) -> float:
         """Estimated presentation seconds until the shooter can release from the chance region."""
         X, S = self._X(), self._shooter()
@@ -234,6 +282,10 @@ class PlaySim:
             score = openness + 0.25 * back - 0.08 * max(0.0, d - 45.0) - (14.0 if lane_block < 4.0 else 0.0)
             if back < -5.0:
                 score -= 15.0 if fa else 5.0      # the attack goes forward when the director wants the chance
+            if pu >= BLUE and lane_block >= 6.0:
+                score += min(6.0, 0.14 * abs(qv - pv))          # an open cross-ice look is worth taking
+            score += 6.0 * (float(self._tr(q).get("oiq", 0.5)) - 0.5)   # the puck finds the better players
+            score += 4.0 * (float(self._tr(self.owner).get("hands", 0.5)) - 0.5) if lane_block < 8.0 else 0.0  # skilled passers thread it
             if T == X and q == S:
                 B = self.B
                 reg = region_of((B.get("att") or {}).get("chance"))
@@ -264,6 +316,14 @@ class PlaySim:
         if T == X and own == S and self._final_approach():
             reg = region_of((self.B.get("att") or {}).get("chance"))
             R = float(self.B["t"]) - self.gc
+            tu0, tv0 = project(cu, cv, reg)
+            d_reg = math.hypot(tu0 - cu, tv0 - cv)
+            if self._danger(reg) and not self._odd_on and cu > BLUE + 4.0 and R > d_reg / 15.0 + (1.3 if in_region(cu, cv, reg) else 0.9):
+                # too early to shoot: he works the half wall just outside the scoring area and attacks it on time,
+                # instead of standing in the slot with the puck
+                side_ = math.copysign(1.0, cv if abs(cv) > 3.0 else lane)
+                ang = (self.gc * 0.7) % 6.283
+                return self.ab(T, max(56.0, min(76.0, tu0 - 3.0)) + 3.0 * math.cos(ang), side_ * (27.0 + 3.0 * math.sin(ang)))
             if in_region(cu, cv, reg) and R > 0.4:
                 # early: protect inside the region (small arcs), keep the puck away from the checker
                 ang = (self.gc * 0.9) % 6.283
@@ -284,10 +344,8 @@ class PlaySim:
             if self._teammate_offside(T):
                 return self.ab(T, min(cu + 10.0, BLUE - 3.0), lane)   # wait for the tag-up
             return self.ab(T, min(cu + 26.0, BLUE + 12.0), lane)
-        # in the zone: work the wall low-to-high (protect, cycle); never back out over the line
-        phase = int((self.gc - self.seg["g0"]) / 4.0) % 3
-        pts = [(82.0, math.copysign(30.0, lane)), (62.0, math.copysign(33.0, lane)), (74.0, math.copysign(18.0, lane))]
-        return self.ab(T, *pts[phase])
+        # in the zone: wall cycle, behind the net, across the top or a curl, on the carrier's own tempo
+        return self.ab(T, *self._oz_point(own, lane))
 
     def _do_pass(self, rcv: str, pt: float, ptype: Optional[str] = None) -> None:
         st = self.mt.pos[rcv]
@@ -372,7 +430,8 @@ class PlaySim:
                 self._do_dump(pt)
             return
         if T == X:
-            if self.owner == S and self._final_approach():
+            R0 = float(self.B["t"]) - self.gc if self.B is not None else 0.0
+            if self.owner == S and self._final_approach() and (R0 <= 4.0 or self._odd_on):
                 return  # the shooter keeps it: he walks into the region / protects until the director releases
             if cands and cands[0][1] == S and self._final_approach() and (cands[0][0] > 6.0 or urg > 0.4):
                 self._do_pass(S, pt)
@@ -434,7 +493,23 @@ class PlaySim:
             st = self.mt.pos[S]
             su, sv = self.rel(X, st[0], st[1])
             tu, tv = project(su, sv, reg)
-            vs["pre"] = (S, self.ab(X, tu, tv), X)
+            R_ = float(self.B["t"]) - self.gc
+            # He times his cut: into a scoring area only when the shot is close, not parked there waiting.
+            if not self._danger(reg) or R_ <= math.hypot(tu - su, tv - sv) / 17.0 + 2.2:
+                vs["pre"] = (S, self.ab(X, tu, tv), X)
+        if X is not None and self.side == X and self.B is not None and self.B.get("type") in ("attempt", "goal") \
+                and float(self.B["t"]) - self.gc < 2.6 and self.rel(X, *self.puck)[0] >= BLUE:
+            vs["pre_shot"] = True     # last moments before the shot: a forward screens, another takes the rebound lane
+        if self.odd and X is not None and self.side == X and self.mode in ("carry", "pass") and self._final_approach():
+            pu_, pv_ = self.rel(X, *self.puck)
+            if not self._odd_on and pu_ < BLUE + 4.0:
+                self._odd_on = True
+            if self._odd_on and pu_ < 72.0:
+                vs["rush"], vs["odd"], vs["car_fast"] = True, S, True
+                if S and S in self.mt.pos and self.owner != S and pu_ < 60.0:
+                    vs.pop("pre", None)   # he drives the far lane beside the carrier until the pass
+        elif self.side != X:
+            self._odd_on = False
         B = self.B
         if B is not None and (B.get("att") or {}).get("outcome") == "BLOCKED" and self.owner == S and S:
             blk = (B.get("att") or {}).get("blocker_id")
@@ -647,6 +722,8 @@ class PlaySim:
             sq = mt.pos[q]
             if math.hypot(sq[0] - st[0], sq[1] - st[1]) < reach:   # bodies keep >= 4 ft, sticks reach ~5 ft
                 p = self._steal_p(_opp(T), 0.06) * (dt / 0.25)
+                # a smart checker against poor hands wins the puck far more often than the reverse
+                p *= max(0.4, 1.0 + 0.9 * (float(self._tr(q).get("diq", 0.5)) - float(self._tr(self.owner).get("hands", 0.5))))
                 if self.rng.random() < p:
                     ang = self.rng.uniform(0, 6.283)
                     self.pv = [math.cos(ang) * 10.0, math.sin(ang) * 10.0]

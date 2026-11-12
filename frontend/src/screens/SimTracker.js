@@ -37,6 +37,8 @@ const FETCH_GAP_MS = 150;
 const LABEL_LAYOUT_MS = 100; // label collision pass at ~10 Hz (F1)
 const CLIP_WAIT_MS = 1500; // neural clip must be ready this soon after reveal, else browser voice
 const REPLAY_RATE = 0.5;
+// Spoken commentary uses the browser's speech voices (or neural clips when the local voice worker is running).
+const BROWSER_VOICE = true;
 const STOP_PHASES = new Set(["stoppage", "offside", "icing", "penalty", "goal", "intermission"]);
 const STOP_LABEL = {
   offside: "Offside",
@@ -167,6 +169,8 @@ const KIND_LABEL = {
   pull_goalie: "Pull goalie",
   timeout: "Timeout",
   tactics: "Tactics",
+  open_lines: "Open lines",
+  blender: "Shuffle lines",
 };
 
 /* ---------- helpers ---------- */
@@ -587,6 +591,12 @@ function useBooth({ enabled, volume, lang, lines, clipsRef }) {
         busyRef.current = false;
         playNextRef.current();
       }, 120);
+      return;
+    }
+    if (!BROWSER_VOICE) {
+      // Captions only: hold each line just long enough to read, so the call keeps up with the play.
+      const hold = line.kind === "story" ? 1100 + String(line.text || "").length * 34 : 650 + String(line.text || "").length * 24;
+      killRef.current = setTimeout(done, Math.min(line.kind === "story" ? 4200 : 2400, hold));
       return;
     }
     setLastPath("browser");
@@ -1213,7 +1223,7 @@ const ICE_LINE = 2 / 12; // 2-inch lines (goal lines, circles, hashes, creases)
 // Marker sizes in feet (true-ish scale): skaters 2.4 ft, goalies 3 ft.
 const SK_R = 1.2;
 const G_R = 1.5;
-const PUCK_R = 0.8; // drawn at 1.6 ft so it reads (a real puck is 3 in)
+const PUCK_R = 1.05; // drawn at about 2 ft so it reads (a real puck is 3 in)
 const SHOT_TYPES = new Set(["slap", "one_timer", "onetimer", "snap", "wrist", "backhand", "tip", "wraparound", "deke"]);
 const PUFFS = 6;
 const AD_TEXT = ["NHL DYNASTY", "", "ZAMBONI FUEL", "PUCKSTOP", "NHL DYNASTY", "", "ICEBOX COLA", "BENCH BOSS"];
@@ -1347,6 +1357,23 @@ function Rink({ apiRef, onIce, roster, colors, teams, period, shots, headPt, cel
   const markRef = useRef(new Map());
   const scaleRef = useRef(scale);
   scaleRef.current = scale;
+  // Angled "broadcast" view of the rink (on by default; remembered per browser).
+  const [tilt, setTilt] = useState(() => {
+    try {
+      return window.localStorage.getItem("st.view.tilt") !== "0";
+    } catch {
+      return true;
+    }
+  });
+  const toggleTilt = () =>
+    setTilt((v) => {
+      try {
+        window.localStorage.setItem("st.view.tilt", v ? "0" : "1");
+      } catch {
+        /* ignore */
+      }
+      return !v;
+    });
   const namesRef = useRef(names);
   namesRef.current = names;
   const hoverRef = useRef(null);
@@ -1657,7 +1684,7 @@ function Rink({ apiRef, onIce, roster, colors, teams, period, shots, headPt, cel
 
   return (
     <div className="st-rinkcell">
-      <div ref={rinkRef} className={`st-rink${replay ? " is-replay" : ""}`}>
+      <div ref={rinkRef} className={`st-rink${replay ? " is-replay" : ""}${tilt ? " is-3d" : ""}`}>
         <svg ref={svgRef} viewBox={`${VB.x} ${VB.y} ${VB.w} ${VB.h}`} preserveAspectRatio="xMidYMid meet" className="st-rink-svg" role="img" aria-label="Rink" data-ph="play">
           <defs>
             <clipPath id="st-rink-clip">
@@ -1751,6 +1778,39 @@ function Rink({ apiRef, onIce, roster, colors, teams, period, shots, headPt, cel
             No tracking data
           </span>
         )}
+        <div className="st-deadbar" aria-hidden="true">
+          <span className="st-deadbar__whistle" />
+          <b>Whistle</b>
+          <small>{stop && STOP_LABEL[stop.reason] ? STOP_LABEL[stop.reason] : "play is dead"}</small>
+        </div>
+        {replay ? (
+          <div className="st-replayframe" aria-hidden="true">
+            <i>Replay</i>
+            <i>Slow motion</i>
+            <i>Replay</i>
+            <i>Not live</i>
+          </div>
+        ) : null}
+        <div className="st-legend" data-avoid="" aria-label="Who is who on the rink">
+          <span>
+            <i className="is-dot" style={{ background: colors?.home?.kit, borderColor: colors?.home?.trim }} />
+            {teams?.home?.abbr || "Home"}
+          </span>
+          <span>
+            <i className="is-sq" style={{ background: colors?.away?.kit, borderColor: colors?.away?.trim }} />
+            {teams?.away?.abbr || "Away"}
+          </span>
+          <span>
+            <i className="is-g">G</i>goalie
+          </span>
+          <span>
+            <i className="is-puck" />
+            puck
+          </span>
+        </div>
+        <button type="button" className={`st-tiltbtn${tilt ? " is-on" : ""}`} data-avoid="" onClick={toggleTilt} title={tilt ? "Switch to the flat top-down rink" : "Switch to the angled 3D rink"}>
+          {tilt ? "3D" : "2D"}
+        </button>
         {buffering ? <span className="st-buffer" title="Waiting for the sim to send the next stretch of play">buffering</span> : null}
 
         {replay ? (
@@ -1916,6 +1976,12 @@ function LinesPanel({ bench, colors, onCoach, live }) {
       <div className="st-lines__quick">
         <button type="button" className="st-btn is-ghost" disabled={!live} onClick={() => onCoach("roll_lines", {})} title="Share ice time evenly across all four lines">
           Roll lines
+        </button>
+        <button type="button" className="st-btn is-ghost" disabled={!live} onClick={() => onCoach("blender", { on: true })} title="Shuffle the wingers across your top three lines (centres stay). Press again for a new mix.">
+          Blender
+        </button>
+        <button type="button" className="st-btn is-ghost" disabled={!live} onClick={() => onCoach("blender", { on: false })} title="Go back to the lines you started the game with">
+          Undo blender
         </button>
         <button type="button" className="st-btn is-ghost" disabled={!live} onClick={() => onCoach("shorten_bench", {})} title="Lean on your top two lines and pairs; they tire faster">
           Shorten bench
@@ -2232,7 +2298,7 @@ function Help({ colors, teams, onClose }) {
             <p>The rope under the rink is momentum: the knot slides toward the team creating more chances lately.</p>
             <p>The stands bounce with the crowd. Big moments, rivalries and chants make them louder.</p>
             <h3 className="st-h">Sound and language</h3>
-            <p>Click Sound on once (browsers need a click before they talk). With the local voice worker running (backend/start_tts.ps1, free and offline) the booth uses natural neural voices; otherwise it falls back to your browser's voices.</p>
+            <p>Click Sound on once (browsers need a click before they talk). The booth reads the play in your browser's voices.</p>
             <p>
               Missing a voice? On Windows: Settings → Time &amp; language → Speech → Manage voices → Add voices, pick the language, then restart the browser. Edge also offers natural online voices.
             </p>
@@ -2875,6 +2941,16 @@ function StatsPanel({ an, roster, colors, teams, userSide, bench, onIceIds, pinn
 /* ---------- coaching notifications ---------- */
 function NotifCard({ n, onAct, onDismiss, live }) {
   const acts = Array.isArray(n.actions) ? n.actions.slice(0, 3) : [];
+  // Routine advice clears itself so it never sits over the rink; critical calls (priority 3) wait for the coach.
+  const dismissRef = useRef(onDismiss);
+  dismissRef.current = onDismiss;
+  const nid = n.id;
+  const prio = num(n.priority, 2);
+  useEffect(() => {
+    if (prio >= 3) return undefined;
+    const id = setTimeout(() => dismissRef.current({ id: nid }), 9000);
+    return () => clearTimeout(id);
+  }, [nid, prio]);
   return (
     <div className={`st-ncard is-p${num(n.priority, 2)}`} role="alert">
       <div className="st-ncard__top">
@@ -3435,6 +3511,11 @@ export default function SimTracker({ sessionId: sessionIdProp, onExit }) {
         if (!P.hasMotion && lite?.tracking?.frames?.length) appendFrames(convertTracking(lite.tracking.frames));
         P.bufferedTo = Math.max(P.bufferedTo, P.hasMotion ? P.bufferedTo : liteT);
       }
+      // The horn (period end / final) can be timed a few seconds after the last movement frame.
+      // Stretch the buffer to cover every queued event so playback reaches it instead of stalling at 0:00.
+      if (P.pendEvents.length && (lite?.status === "intermission" || lite?.clock?.intermission || lite?.status === "final" || lite?.final)) {
+        P.bufferedTo = Math.max(P.bufferedTo, P.pendEvents[P.pendEvents.length - 1]._p + 0.3);
+      }
       if (lite) {
         mergeServer(lite);
         queueSnapshot(lite, P.bufferedTo);
@@ -3525,8 +3606,11 @@ export default function SimTracker({ sessionId: sessionIdProp, onExit }) {
           }
           const ch = e.chance;
           if (e.shot_loc && (ch === "high_danger" || ch === "breakaway" || ch === "rebound" || e.rebound)) {
-            const label = ch === "breakaway" ? "Breakaway" : ch === "rebound" || e.rebound ? "Rebound" : "High-danger chance";
-            setDanger({ x: num(e.shot_loc.x), y: num(e.shot_loc.y), text: has(e.xg) && num(e.xg) > 0 ? `${label} · xG ${num(e.xg).toFixed(2)}` : label, key: e.seq });
+            const xgv = has(e.xg) ? num(e.xg) : 0;
+            // "High-danger" only when the number backs it up; a low value next to a big label reads as a bug.
+            const label = ch === "breakaway" ? "Breakaway" : ch === "rebound" || e.rebound ? "Rebound" : xgv >= 0.15 || !xgv ? "High-danger chance" : "Scoring chance";
+            const pct = xgv >= 0.1 ? ` · ${Math.round(xgv * 100)}% goal chance` : "";
+            setDanger({ x: num(e.shot_loc.x), y: num(e.shot_loc.y), text: `${label}${pct}`, key: e.seq });
             flash("danger", () => setDanger(null), 1700);
           }
           if (out === "SAVED" && num(e.importance) >= 3) {
@@ -3988,6 +4072,10 @@ export default function SimTracker({ sessionId: sessionIdProp, onExit }) {
           setHeadPt(P.head);
         }
 
+        // Safety net: nothing more will be fetched (intermission, final) but events are still queued past the buffer.
+        if (!canFetchRef.current && !heldRef.current && P.pendEvents.length && P.head >= P.bufferedTo - 0.25) {
+          P.bufferedTo = Math.max(P.bufferedTo, P.pendEvents[P.pendEvents.length - 1]._p + 0.3);
+        }
         const needMore = P.bufferedTo - P.head < bufferMin(speedRef.current);
         if (needMore && canFetchRef.current && !P.fetching && now - P.lastFetch > FETCH_GAP_MS && now > P.backoffUntil) fetchRef.current();
         const isBuf = !heldRef.current && !introRef.current && !P.replay && canFetchRef.current && room < 1 && P.vel < target * 0.5;
@@ -4170,7 +4258,7 @@ export default function SimTracker({ sessionId: sessionIdProp, onExit }) {
     ? "No speech engine · captions"
     : booth.status === "novoice"
     ? `No ${langLabel} voice · captions`
-    : "Browser voices (robotic)";
+    : "Commentary on";
 
   // Caption: what the booth is saying; the last line stays (dimmed) so the strip never jumps.
   const [, forceTick] = useState(0);
@@ -4320,7 +4408,8 @@ export default function SimTracker({ sessionId: sessionIdProp, onExit }) {
       return !o;
     });
   const alertAction = (a) => {
-    sendCoach(a.action.kind, a.action.payload || {});
+    if (a.action.kind === "open_lines") setDrawer("lines"); // a suggestion to rework the lines opens the Lines tab
+    else sendCoach(a.action.kind, a.action.payload || {});
     dismissAlert(a.id);
   };
 
@@ -4729,12 +4818,11 @@ export default function SimTracker({ sessionId: sessionIdProp, onExit }) {
                 type="button"
                 className={`st-voice${neural ? " is-neural" : " is-browser"}${booth.speaking ? " is-speaking" : ""}${prefs.voice ? "" : " is-muted"}`}
                 onClick={() => setSoundMenu((v) => !v)}
-                title={neural ? "Natural neural voices from the local voice worker" : "Run backend/start_tts.ps1 for natural voices"}
+                title={neural ? "Natural neural voices from the local voice worker" : "Sound and commentary settings"}
               >
                 <i />
                 <span>
                   {voiceLabel}
-                  {!neural && prefs.voice ? <small>run backend/start_tts.ps1 for natural voices</small> : null}
                 </span>
               </button>
               {soundMenu ? (
@@ -4760,12 +4848,9 @@ export default function SimTracker({ sessionId: sessionIdProp, onExit }) {
                     </select>
                   </label>
                   <p className="st-pop__note">
-                    {neural
-                      ? `Neural voices (${engineName}) are on. If a clip is late, that line falls back to the browser voice below.`
-                      : "Natural voices are off. Run backend/start_tts.ps1 (free, offline) and they switch on by themselves. Until then the browser voice below reads the lines."}
-                    {booth.lastPath ? ` Last line: ${booth.lastPath === "neural" ? "neural" : "browser"} voice.` : ""}
+                    {neural ? `Neural voices (${engineName}) are on. If a clip is late, that line falls back to the browser voice below.` : "The browser voice below reads the commentary."}
                   </p>
-                  {booth.choices && booth.choices.length ? (
+                  {BROWSER_VOICE && booth.choices && booth.choices.length ? (
                     <>
                       <label className="st-field">
                         <span>Browser play-by-play voice</span>

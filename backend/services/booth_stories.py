@@ -1027,7 +1027,7 @@ BRIDGES: Dict[str, Dict[str, List[str]]] = {
     "en": {"colour": ["You know what this reminds me of?", "While we've got a second,", "Can I tell you something?", "Not to change the subject, but", "Totally unrelated, but"],
            "crowd": ["Speaking of the crowd,", "Listen to this place."],
            "history": ["Quick history lesson while they reset.", "While they line up, a little history.", "Here's something for the history buffs.", "Bit of background for you."],
-           "sim": ["Since things have settled down,", "Quick stat while we've got a lull.", "While it's quiet out there,", "Let me get this in."]},
+           "sim": ["Something worth noting,", "Here's a number for you.", "One thing I've been watching,", "Let me get this in."]},
     "fr": {"colour": ["Vous savez à quoi ça me fait penser?", "En parlant de la foule,", "Pendant qu'on a une seconde,"],
            "history": ["Petite leçon d'histoire pendant l'arrêt.", "Un peu d'histoire pendant qu'ils se replacent."],
            "sim": ["Pendant que c'est calme,", "Une petite statistique en passant."]},

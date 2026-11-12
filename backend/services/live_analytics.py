@@ -49,10 +49,10 @@ _N: Dict[str, Dict[str, Tuple[str, str]]] = {
     "en": {
         "pull_goalie": ("Pull the goalie?", "Down {diff} with {left} left in the third, and you're at full strength."),
         "timeout": ("Use your timeout?", "{opp} has {run} of the last {n} attempts and you trail by {diff} with {left} to play."),
-        "fatigue": ("{name}'s line is gassed", "{name} has been out for {shift} (fatigue {fat}%), change before they get hemmed in."),
-        "matchup": ("Bad matchup on the ice", "Their {oline} ({ocf}% CF tonight) is out against your {line}, get a top unit on."),
-        "line_struggling": ("{line} getting caved", "{line}: {cf} CF / {ca} CA in {toi} together, shelter them or shorten the bench?"),
-        "line_hot": ("{line} is rolling", "{line}: {cf} CF / {ca} CA and {xgf} xGF in {toi}, give them more ice."),
+        "fatigue": ("{name}'s line is tired", "{name} has been on the ice for {shift} and is {fat}% tired. Tired skaters lose races and give up chances, so change lines."),
+        "matchup": ("Bad matchup on the ice", "Their {oline} (taking {ocf}% of the shot attempts tonight) is out against your {line}. Get your top line on."),
+        "line_struggling": ("{line} is being outshot", "{line}: {cf} shot attempts for, {ca} against in {toi} together. Give them easier shifts or play your top lines more."),
+        "line_hot": ("{line} is rolling", "{line}: {cf} shot attempts for, {ca} against and {xgf} expected goals in {toi}. Give them more ice time."),
         "goalie": ("{goalie} is struggling", "{goalie}: {svp} on {sa} shots, {gsax} goals saved above expected."),
         "goalie_opp": ("Their goalie looks shaky", "{goalie} is {svp} on {sa} shots tonight, keep shooting."),
         "pp_unit": ("Power play misfiring", "Power play {ppg}/{ppo} with {pps} shots in {pptoi}, try a more aggressive setup?"),
@@ -118,19 +118,19 @@ _N: Dict[str, Dict[str, Tuple[str, str]]] = {
     },
 }
 _ACT: Dict[str, Dict[str, str]] = {
-    "en": {"pull": "Pull the goalie", "timeout": "Call timeout", "next": "Send out {line}", "shorten": "Shorten the bench",
+    "en": {"pull": "Pull the goalie", "timeout": "Call timeout", "next": "Send out line {line}", "shorten": "Shorten the bench",
            "roll": "Roll four lines", "pp_aggr": "Aggressive power play", "pk_pass": "Passive penalty kill", "shoot": "Shoot more",
            "calm": "Passive forecheck", "defend": "Play it safe"},
-    "fr": {"pull": "Retirer le gardien", "timeout": "Temps d'arrêt", "next": "Envoyer {line}", "shorten": "Raccourcir le banc",
+    "fr": {"pull": "Retirer le gardien", "timeout": "Temps d'arrêt", "next": "Envoyer le trio {line}", "shorten": "Raccourcir le banc",
            "roll": "Quatre trios", "pp_aggr": "Avantage agressif", "pk_pass": "Infériorité prudente", "shoot": "Lancer davantage",
            "calm": "Échec avant prudent", "defend": "Jouer prudemment"},
-    "es": {"pull": "Sacar al portero", "timeout": "Tiempo muerto", "next": "Sacar {line}", "shorten": "Acortar el banquillo",
+    "es": {"pull": "Sacar al portero", "timeout": "Tiempo muerto", "next": "Sacar la línea {line}", "shorten": "Acortar el banquillo",
            "roll": "Rotar cuatro líneas", "pp_aggr": "Power play agresivo", "pk_pass": "Inferioridad prudente", "shoot": "Tirar más",
            "calm": "Forecheck pasivo", "defend": "Jugar seguro"},
-    "de": {"pull": "Torhüter raus", "timeout": "Auszeit", "next": "{line} aufs Eis", "shorten": "Bank verkürzen",
+    "de": {"pull": "Torhüter raus", "timeout": "Auszeit", "next": "Reihe {line} aufs Eis", "shorten": "Bank verkürzen",
            "roll": "Vier Reihen rotieren", "pp_aggr": "Aggressives Überzahlspiel", "pk_pass": "Vorsichtige Unterzahl", "shoot": "Mehr schießen",
            "calm": "Passiver Forecheck", "defend": "Sicher spielen"},
-    "sv": {"pull": "Plocka målvakten", "timeout": "Ta timeout", "next": "Skicka ut {line}", "shorten": "Korta bänken",
+    "sv": {"pull": "Plocka målvakten", "timeout": "Ta timeout", "next": "Skicka ut kedja {line}", "shorten": "Korta bänken",
            "roll": "Rulla fyra kedjor", "pp_aggr": "Aggressivt powerplay", "pk_pass": "Försiktigt boxplay", "shoot": "Skjut mer",
            "calm": "Passiv forechecking", "defend": "Spela säkert"},
 }
@@ -436,7 +436,13 @@ class LiveAnalytics:
     def _txt(self, kind: str, **kw: Any) -> Tuple[str, str]:
         lang = self.loop.lg.lang
         t, b = (_N.get(lang) or _N["en"]).get(kind) or _N["en"][kind]
-        return t.format(**kw), b.format(**kw)
+        if lang not in _N or lang == "en":
+            for k_ in ("line", "oline"):   # "F4" / "D3" are codes: say "line 4" / "pair 3"
+                v_ = kw.get(k_)
+                if isinstance(v_, str) and v_[:1] in ("F", "D") and v_[1:].isdigit():
+                    kw[k_] = ("line " if v_[0] == "F" else "pair ") + v_[1:]
+        t, b = t.format(**kw), b.format(**kw)
+        return t[:1].upper() + t[1:], b[:1].upper() + b[1:]
 
     def _act(self, key: str, kind: str, payload: Dict[str, Any], **kw: Any) -> Optional[Dict[str, Any]]:
         """Only offer orders the coach controller accepts right now."""
@@ -447,6 +453,8 @@ class LiveAnalytics:
             ok = False
         if not ok:
             return None
+        if key == "next" and isinstance(kw.get("line"), str) and kw["line"][:1] in ("F", "D") and kw["line"][1:].isdigit():
+            kw["line"] = kw["line"][1:]   # "F4" is a code; the button says "line 4"
         lab = ((_ACT.get(self.loop.lg.lang) or _ACT["en"]).get(key) or _ACT["en"][key]).format(**kw)
         return {"label": lab, "order": {"kind": kind, "payload": dict(payload)}}
 
@@ -482,7 +490,7 @@ class LiveAnalytics:
         their_line = cur.get(f"{opp}_line")
         on_mine = [p for p in loop.state.on_ice.get(user) or [] if p in players]
         tired = sorted(on_mine, key=lambda p: -players[p]["current_shift_sec"])
-        if tired and (players[tired[0]]["current_shift_sec"] >= 70.0 or players[tired[0]]["fatigue"] >= 0.85):
+        if tired and (players[tired[0]]["current_shift_sec"] >= 55.0 or players[tired[0]]["fatigue"] >= 0.8):
             p0 = tired[0]
             nxt = None
             if my_line and my_line.startswith("F"):
@@ -545,7 +553,7 @@ class LiveAnalytics:
             self._nid += 1
             self.notes.append({"id": f"n{self._nid}", "pt": round(pt, 2), "t": round(gc, 2), "kind": kind, "priority": prio,
                                "title": title, "body": body, "actions": [a for a in acts if a][:3],
-                               "expires_pt": round(pt + (60.0 if prio >= 3 else 120.0), 2), "status": "new"})
+                               "expires_pt": round(pt + (60.0 if prio >= 3 else 45.0), 2), "status": "new"})
             break
         self.notes = self.notes[-40:]
         self._expire(pt)

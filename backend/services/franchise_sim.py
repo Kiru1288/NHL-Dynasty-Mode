@@ -15025,7 +15025,11 @@ def _sync_prospect_stats_to_calendar(session: FranchiseSession, *, force: bool =
                 invalidate_session_payload_caches(session, reason="prospect_stats")
                 _bump_prospect_revision(session)
         try:
-            _apply_earned_minor_league_growth(session)
+            # Catch-up pass over every minor-league and junior player. It re-reads each season line and
+            # refreshes each identity, which was the biggest single cost of a day advance; the cards only
+            # need it every few days (each run still steps a card up to 8 points, so nothing is lost).
+            if cur_cursor % 4 == 0 or last_cursor is None or abs(cur_cursor - (last_cursor or 0)) > 1:
+                _apply_earned_minor_league_growth(session)
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
         return int(n)

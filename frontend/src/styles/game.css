@@ -32563,6 +32563,9 @@ h1:not([class*="replay"] *){font-family:var(--dd-font-display)!important;font-we
 .puckgpt-readas.is-low b { color: var(--cs-coral, #ff6b5c); }
 .puckgpt-answer { margin: 0; font-size: 20px; font-weight: 800; line-height: 1.3; }
 .puckgpt-analysis { margin: 0; padding-left: 18px; color: #d6e2f4; font-size: 14px; line-height: 1.5; }
+.puckgpt-say { margin: 0; font-size: 17px; font-weight: 600; line-height: 1.5; }
+.puckgpt-section { display: flex; flex-direction: column; gap: 8px; padding-top: 10px; border-top: 1px dashed rgba(248, 213, 138, 0.3); }
+.puckgpt-section__q { margin: 0; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: #f8d58a; }
 .puckgpt-chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .puckgpt-chip { padding: 6px 10px; font-size: 13px; display: inline-flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; }
 .puckgpt-chip small { font-family: inherit; font-size: 11px; opacity: 0.7; letter-spacing: 0; }
@@ -85506,3 +85509,319 @@ html:not(#_):not(#__) .st-crowd__bars { height: 9px; }
 html:not(#_):not(#__) .st-mom__knot { width: calc(var(--st-u) * 16); height: calc(var(--st-u) * 16); min-width: 12px; min-height: 12px; }
 /* league news toasts wait while a live game is on screen */
 body:has(.st-root) .nhl-breaking-global { display: none !important; }
+
+/* ── Live sim: dead play, replay and the angled rink ─────────────────────────────────────────── */
+/* Play is dead (whistle to puck drop): the ice greys out and a banner says so, until the faceoff is won. */
+html:not(#_):not(#__) .st-deadbar { display: none; position: absolute; left: 50%; top: 9%; translate: -50% 0; z-index: 4; align-items: center; gap: calc(var(--st-u) * 8); padding: calc(var(--st-u) * 6) calc(var(--st-u) * 16); background: #d8262c; color: #fff; border: 3px solid var(--ccx-ink); box-shadow: 4px 4px 0 var(--ccx-ink); rotate: -1deg; pointer-events: none; }
+html:not(#_):not(#__) .st-deadbar b { font: 400 calc(var(--st-u) * 26)/1 var(--ccx-display); letter-spacing: .05em; text-transform: uppercase; }
+html:not(#_):not(#__) .st-deadbar small { font: 400 calc(var(--st-u) * 12)/1 var(--ccx-pixel); text-transform: uppercase; opacity: .92; }
+html:not(#_):not(#__) .st-deadbar__whistle { width: calc(var(--st-u) * 16); height: calc(var(--st-u) * 16); border-radius: 50%; background: #fff; box-shadow: 0 0 0 3px var(--ccx-ink); animation: st-deadblink .7s steps(2) infinite; }
+html:not(#_):not(#__) .st-rink-svg[data-ph="stoppage"] ~ .st-deadbar,
+html:not(#_):not(#__) .st-rink-svg[data-ph="offside"] ~ .st-deadbar,
+html:not(#_):not(#__) .st-rink-svg[data-ph="icing"] ~ .st-deadbar,
+html:not(#_):not(#__) .st-rink-svg[data-ph="penalty"] ~ .st-deadbar,
+html:not(#_):not(#__) .st-rink-svg[data-ph="faceoff"] ~ .st-deadbar { display: flex; }
+html:not(#_):not(#__) .st-rink-svg[data-ph="stoppage"],
+html:not(#_):not(#__) .st-rink-svg[data-ph="offside"],
+html:not(#_):not(#__) .st-rink-svg[data-ph="icing"],
+html:not(#_):not(#__) .st-rink-svg[data-ph="penalty"],
+html:not(#_):not(#__) .st-rink-svg[data-ph="faceoff"] { filter: drop-shadow(4px 4px 0 rgba(5, 12, 44, .55)) grayscale(.7) brightness(.86); transition: filter .25s; }
+html:not(#_):not(#__) .st-rink.is-replay .st-deadbar { display: none; }
+html:not(#_):not(#__) .st-stop { display: none; } /* the banner above replaces the small stamp */
+@keyframes st-deadblink { 50% { opacity: .25; } }
+
+/* Replay: gold film frame, corner stamps and a stronger tint, so it can't be mistaken for live play. */
+html:not(#_):not(#__) .st-replayframe { position: absolute; inset: 0; z-index: 3; pointer-events: none; border: calc(var(--st-u) * 7) solid var(--st-gold, #f2c230); border-radius: calc(var(--st-u) * 10); box-shadow: inset 0 0 0 3px var(--ccx-ink), inset 0 0 calc(var(--st-u) * 90) rgba(40, 22, 0, .45); animation: st-replaypulse 1.1s ease-in-out infinite; }
+html:not(#_):not(#__) .st-replayframe i { position: absolute; font: 400 calc(var(--st-u) * 20)/1 var(--ccx-display); font-style: normal; letter-spacing: .08em; text-transform: uppercase; color: var(--ccx-ink); background: var(--st-gold, #f2c230); padding: calc(var(--st-u) * 4) calc(var(--st-u) * 10); border: 2px solid var(--ccx-ink); }
+html:not(#_):not(#__) .st-replayframe i:nth-child(1) { left: 1.5%; top: 3%; }
+html:not(#_):not(#__) .st-replayframe i:nth-child(2) { right: 1.5%; top: 3%; }
+html:not(#_):not(#__) .st-replayframe i:nth-child(3) { right: 1.5%; bottom: 3%; }
+html:not(#_):not(#__) .st-replayframe i:nth-child(4) { left: 1.5%; bottom: 3%; background: var(--ccx-ink); color: var(--st-gold, #f2c230); }
+html:not(#_):not(#__) .st-rink.is-replay .st-rink-svg { filter: drop-shadow(4px 4px 0 rgba(5, 12, 44, .55)) sepia(.55) saturate(.8) contrast(1.05); }
+@keyframes st-replaypulse { 50% { border-color: #fff3c4; } }
+
+/* Angled rink: a light broadcast tilt with raised boards and shadows under the players. */
+html:not(#_):not(#__) .st-rinkcell { perspective: 1500px; perspective-origin: 50% 20%; }
+html:not(#_):not(#__) .st-rink.is-3d { transform: rotateX(27deg) scale(1.04, 1.12); transform-origin: 50% 72%; transform-style: preserve-3d; transition: transform .45s ease; }
+html:not(#_):not(#__) .st-rink:not(.is-3d) { transition: transform .45s ease; }
+html:not(#_):not(#__) .st-rink.is-3d .st-rink-svg { filter: drop-shadow(0 calc(var(--st-u) * 9) 0 #0b1a4f) drop-shadow(0 calc(var(--st-u) * 20) calc(var(--st-u) * 12) rgba(3, 8, 30, .6)); }
+html:not(#_):not(#__) .st-rink.is-3d .st-tok { filter: drop-shadow(0 1.4px 0.5px rgba(8, 18, 60, .55)); }
+html:not(#_):not(#__) .st-rink.is-3d .st-puck { filter: drop-shadow(0 0.9px 0.3px rgba(8, 18, 60, .6)); }
+html:not(#_):not(#__) .st-tiltbtn { position: absolute; right: 1.2%; bottom: 2.5%; z-index: 5; font: 400 calc(var(--st-u) * 13)/1 var(--ccx-pixel); padding: calc(var(--st-u) * 4) calc(var(--st-u) * 8); background: var(--ccx-cream, #f5ecd2); color: var(--ccx-ink); border: 2px solid var(--ccx-ink); box-shadow: 2px 2px 0 var(--ccx-ink); cursor: pointer; }
+html:not(#_):not(#__) .st-tiltbtn.is-on { background: var(--st-gold, #f2c230); }
+@media (prefers-reduced-motion: reduce) { html:not(#_):not(#__) .st-replayframe, html:not(#_):not(#__) .st-deadbar__whistle { animation: none; } }
+
+/* On-rink legend: which shape is which team, the goalie mark and the puck. */
+html:not(#_):not(#__) .st-legend { position: absolute; left: 1.2%; bottom: 2.5%; z-index: 5; display: flex; gap: calc(var(--st-u) * 10); align-items: center; padding: calc(var(--st-u) * 4) calc(var(--st-u) * 9); font: 700 calc(var(--st-u) * 12)/1 var(--ccx-ui); color: var(--ccx-ink); background: var(--ccx-cream, #f5ecd2); border: 2px solid var(--ccx-ink); border-radius: calc(var(--st-u) * 6); box-shadow: 2px 2px 0 var(--ccx-ink); opacity: .92; pointer-events: none; }
+html:not(#_):not(#__) .st-legend span { display: inline-flex; align-items: center; gap: calc(var(--st-u) * 4); white-space: nowrap; }
+html:not(#_):not(#__) .st-legend i { display: inline-grid; place-items: center; width: calc(var(--st-u) * 12); height: calc(var(--st-u) * 12); border: 2px solid var(--ccx-ink); font: 700 calc(var(--st-u) * 9)/1 var(--ccx-ui); font-style: normal; box-sizing: border-box; }
+html:not(#_):not(#__) .st-legend i.is-dot { border-radius: 50%; }
+html:not(#_):not(#__) .st-legend i.is-sq { border-radius: 3px; }
+html:not(#_):not(#__) .st-legend i.is-g { border-radius: 3px; background: #fff; width: calc(var(--st-u) * 14); height: calc(var(--st-u) * 14); }
+html:not(#_):not(#__) .st-legend i.is-puck { width: calc(var(--st-u) * 8); height: calc(var(--st-u) * 8); border-radius: 50%; background: #0a0a0a; border: 2px solid #fff; outline: 1px solid #0a0a0a; }
+/* The period/intermission card always sits above the angled rink. */
+html:not(#_):not(#__) .st-rinkcell { isolation: isolate; }
+html:not(#_):not(#__) .st-cover { z-index: 40; }
+
+/* ===== Playoffs: postseason identity in the game's pixel / Double Dash look ===== */
+html:not(#_):not(#__) .po-hub-root .po-title { font-family: var(--ccx-display); letter-spacing: .02em; text-shadow: 3px 3px 0 var(--ccx-ink); }
+html:not(#_):not(#__) .po-hub-root .po-eyebrow, html:not(#_):not(#__) .po-hub-root .po-col-head, html:not(#_):not(#__) .po-hub-root .po-card-meta, html:not(#_):not(#__) .po-hub-root .po-step { font-family: var(--ccx-pixel); letter-spacing: .04em; }
+html:not(#_):not(#__) .po-hub-root .po-col-head { color: var(--ccx-sky); font-size: 12px; text-transform: uppercase !important; }
+html:not(#_):not(#__) .po-hub-root .po-col-head.is-current { color: var(--ccx-yellow); }
+html:not(#_):not(#__) .po-hub-root .po-step { font-size: 12px; text-transform: uppercase !important; }
+html:not(#_):not(#__) .po-hub-root .po-conf { font-family: var(--ccx-display); font-size: 20px; letter-spacing: .03em; color: var(--ccx-cream); text-shadow: 2px 2px 0 var(--ccx-ink); }
+/* matchup cards: chunky outlined tiles, team colour stripe, big series score */
+html:not(#_):not(#__) .po-hub-root .po-card { border: 3px solid var(--ccx-ink); border-radius: 10px; background: linear-gradient(180deg, #14286b, var(--ccx-cell)); box-shadow: var(--ccx-drop-sm); transition: transform .12s, box-shadow .12s; }
+html:not(#_):not(#__) .po-hub-root .po-card:not(:disabled):hover { transform: translate(-1px, -2px); box-shadow: 5px 6px 0 var(--ccx-ink); }
+html:not(#_):not(#__) .po-hub-root .po-card.is-selected { border-color: var(--ccx-yellow); box-shadow: 0 0 0 2px var(--ccx-ink), 4px 5px 0 var(--ccx-ink); }
+html:not(#_):not(#__) .po-hub-root .po-card.is-pending { background: repeating-linear-gradient(135deg, rgba(159,216,255,.05) 0 8px, transparent 8px 16px), var(--ccx-deep); border-style: dashed; border-color: var(--ccx-muted); box-shadow: none; }
+html:not(#_):not(#__) .po-hub-root .po-card.is-user { border-color: var(--ccx-lime); }
+html:not(#_):not(#__) .po-hub-root .po-card.is-tonight .po-card-meta { color: var(--ccx-yellow); }
+html:not(#_):not(#__) .po-hub-root .po-row { border-left: 5px solid var(--po-team, transparent); padding-left: 5px; border-radius: 3px; }
+html:not(#_):not(#__) .po-hub-root .po-row-name strong { font: 800 16px/1.05 var(--ccx-ui); letter-spacing: .01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
+html:not(#_):not(#__) .po-hub-root .po-row.is-empty .po-row-name strong { font: 700 12px/1.2 var(--ccx-ui); color: var(--ccx-soft); white-space: normal; }
+html:not(#_):not(#__) .po-hub-root .po-row-name small { font: 400 10px/1.3 var(--ccx-pixel); color: var(--ccx-soft); letter-spacing: .03em; }
+html:not(#_):not(#__) .po-hub-root .po-row-wins { font: 400 24px/1 var(--ccx-display); font-style: normal; color: var(--ccx-cream); min-width: 18px; text-align: right; text-shadow: 2px 2px 0 var(--ccx-ink); }
+html:not(#_):not(#__) .po-hub-root .po-row.is-lead .po-row-wins, html:not(#_):not(#__) .po-hub-root .po-row.is-winner .po-row-wins { color: var(--ccx-yellow); }
+html:not(#_):not(#__) .po-hub-root .po-row.is-out { opacity: .45; filter: grayscale(.8); }
+html:not(#_):not(#__) .po-hub-root .po-row.is-out .po-row-name strong { text-decoration: line-through; text-decoration-thickness: 2px; }
+html:not(#_):not(#__) .po-hub-root .po-card-stakes { margin-top: 5px; padding: 3px 6px; font: 400 10px/1.2 var(--ccx-pixel); text-transform: uppercase !important; letter-spacing: .05em; border: 2px solid var(--ccx-ink); border-radius: 4px; background: var(--ccx-coral); color: var(--ccx-ink); text-align: center; }
+html:not(#_):not(#__) .po-hub-root .po-card-stakes.is-g7 { background: var(--ccx-yellow); animation: po-blink 1s steps(2) infinite; }
+html:not(#_):not(#__) .po-hub-root .po-card.is-elim { border-color: var(--ccx-coral); }
+html:not(#_):not(#__) .po-hub-root .po-card.is-g7 { border-color: var(--ccx-yellow); box-shadow: 0 0 0 2px var(--ccx-ink), 0 0 18px rgba(255,226,58,.45); }
+html:not(#_):not(#__) .po-hub-root .po-card.is-sweep .po-card-meta { color: var(--ccx-coral); }
+html:not(#_):not(#__) .po-hub-root .po-card.is-round-3 { border-width: 4px; }
+html:not(#_):not(#__) .po-hub-root .po-card.is-round-4 { border-width: 4px; border-color: var(--ccx-yellow); background: linear-gradient(180deg, #2a2466, #0b1844); }
+@keyframes po-blink { 50% { opacity: .55; } }
+/* the Cup is the destination: centrepiece with rays, teams-left counter and a four-step path */
+html:not(#_):not(#__) .po-hub-root .po-cup-wrap { display: grid; justify-items: center; gap: 6px; }
+html:not(#_):not(#__) .po-hub-root .po-cup-crest { position: relative; display: grid; place-items: center; padding: 10px 18px 0; }
+html:not(#_):not(#__) .po-hub-root .po-cup-rays { position: absolute; inset: -30% -60%; background: repeating-conic-gradient(from 0deg at 50% 60%, rgba(255,226,58,.14) 0 9deg, transparent 9deg 18deg); border-radius: 50%; mask: radial-gradient(circle at 50% 60%, #000 20%, transparent 68%); -webkit-mask: radial-gradient(circle at 50% 60%, #000 20%, transparent 68%); animation: po-spin 40s linear infinite; pointer-events: none; }
+html:not(#_):not(#__) .po-hub-root .po-cup-crest.is-final .po-cup-rays, html:not(#_):not(#__) .po-hub-root .po-cup-crest.is-won .po-cup-rays { background: repeating-conic-gradient(from 0deg at 50% 60%, rgba(255,226,58,.34) 0 9deg, transparent 9deg 18deg); animation-duration: 16s; }
+html:not(#_):not(#__) .po-hub-root .po-cup-svg { position: relative; filter: drop-shadow(4px 5px 0 var(--ccx-ink)); image-rendering: pixelated; }
+html:not(#_):not(#__) .po-hub-root .po-cup-kicker { margin: 0; font: 400 11px/1.2 var(--ccx-pixel); text-transform: uppercase !important; letter-spacing: .08em; color: var(--ccx-yellow); text-align: center; }
+html:not(#_):not(#__) .po-hub-root .po-cup-count { display: grid; justify-items: center; line-height: 1; }
+html:not(#_):not(#__) .po-hub-root .po-cup-count b { font: 400 44px/1 var(--ccx-display); color: var(--ccx-cream); text-shadow: 3px 3px 0 var(--ccx-ink); }
+html:not(#_):not(#__) .po-hub-root .po-cup-count span { font: 400 10px/1.4 var(--ccx-pixel); text-transform: uppercase !important; letter-spacing: .08em; color: var(--ccx-soft); }
+html:not(#_):not(#__) .po-hub-root .po-cup-path { display: flex; gap: 5px; margin-bottom: 6px; }
+html:not(#_):not(#__) .po-hub-root .po-cup-path i { width: 22px; height: 8px; border: 2px solid var(--ccx-ink); background: var(--ccx-muted); }
+html:not(#_):not(#__) .po-hub-root .po-cup-path i.is-done { background: var(--ccx-lime); }
+html:not(#_):not(#__) .po-hub-root .po-cup-path i.is-now { background: var(--ccx-yellow); animation: po-blink 1s steps(2) infinite; }
+html:not(#_):not(#__) .po-hub-root .po-cup-champ { font: 400 22px/1.1 var(--ccx-display); color: var(--ccx-yellow); text-shadow: 3px 3px 0 var(--ccx-ink); text-align: center; }
+@keyframes po-spin { to { transform: rotate(360deg); } }
+/* Playoff Central (desk with nothing selected) */
+html:not(#_):not(#__) .po-hub-root .po-ov-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 12px 0; }
+html:not(#_):not(#__) .po-hub-root .po-ov-stat { display: grid; justify-items: center; padding: 8px 4px; border: 3px solid var(--ccx-ink); border-radius: 8px; background: var(--ccx-cell); box-shadow: var(--ccx-drop-sm); }
+html:not(#_):not(#__) .po-hub-root .po-ov-stat b { font: 400 30px/1 var(--ccx-display); color: var(--ccx-yellow); text-shadow: 2px 2px 0 var(--ccx-ink); }
+html:not(#_):not(#__) .po-hub-root .po-ov-stat span { font: 400 9px/1.4 var(--ccx-pixel); text-transform: uppercase !important; letter-spacing: .06em; color: var(--ccx-soft); text-align: center; }
+html:not(#_):not(#__) .po-hub-root .po-ov-block { margin: 12px 0; display: grid; gap: 5px; }
+html:not(#_):not(#__) .po-hub-root .po-ov-line { display: flex; justify-content: space-between; align-items: center; gap: 8px; width: 100%; padding: 6px 9px; border: 2px solid var(--ccx-ink); border-radius: 6px; background: var(--ccx-cell); color: var(--ccx-cream); font: 800 14px/1.2 var(--ccx-ui); cursor: pointer; text-align: left; }
+html:not(#_):not(#__) .po-hub-root .po-ov-line:hover { background: #14286b; }
+html:not(#_):not(#__) .po-hub-root .po-ov-line em { font: 400 10px/1.2 var(--ccx-pixel); font-style: normal; color: var(--ccx-soft); text-align: right; }
+html:not(#_):not(#__) .po-hub-root .po-ov-line.is-hot { border-color: var(--ccx-coral); }
+html:not(#_):not(#__) .po-hub-root .po-ov-line.is-hot em { color: var(--ccx-coral); }
+html:not(#_):not(#__) .po-hub-root .po-ov-line.is-done { opacity: .8; }
+/* Stanley Cup Final stage */
+html:not(#_):not(#__) .po-hub-root .po-final { position: relative; overflow: hidden; margin: 0 0 12px; padding: 14px 18px 12px; display: grid; justify-items: center; gap: 6px; cursor: pointer; border: 4px solid var(--ccx-yellow); border-radius: 14px; box-shadow: 0 0 0 3px var(--ccx-ink), 6px 7px 0 var(--ccx-ink); background: radial-gradient(ellipse 60% 120% at 50% 0%, rgba(255,226,58,.22), transparent 70%), linear-gradient(180deg, #1b1657, var(--ccx-deep)); }
+html:not(#_):not(#__) .po-hub-root .po-final-beam { position: absolute; top: -40%; width: 26%; height: 220%; background: linear-gradient(180deg, rgba(255,255,255,.20), transparent 75%); pointer-events: none; transform-origin: 50% 0; }
+html:not(#_):not(#__) .po-hub-root .po-final-beam.is-l { left: 12%; transform: rotate(16deg); animation: po-sweep-l 5s ease-in-out infinite alternate; }
+html:not(#_):not(#__) .po-hub-root .po-final-beam.is-r { right: 12%; transform: rotate(-16deg); animation: po-sweep-r 5s ease-in-out infinite alternate; }
+@keyframes po-sweep-l { to { transform: rotate(30deg); } }
+@keyframes po-sweep-r { to { transform: rotate(-30deg); } }
+html:not(#_):not(#__) .po-hub-root .po-final-kicker { position: relative; margin: 0; font: 400 30px/1 var(--ccx-display); letter-spacing: .04em; color: var(--ccx-yellow); text-shadow: 3px 3px 0 var(--ccx-ink); text-transform: uppercase !important; }
+html:not(#_):not(#__) .po-hub-root .po-final-row { position: relative; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 26px; width: min(100%, 900px); }
+html:not(#_):not(#__) .po-hub-root .po-final-team { display: grid; justify-items: center; gap: 2px; }
+html:not(#_):not(#__) .po-hub-root .po-final-team strong { font: 400 30px/1 var(--ccx-display); color: var(--ccx-cream); text-shadow: 3px 3px 0 var(--ccx-ink); text-align: center; }
+html:not(#_):not(#__) .po-hub-root .po-final-team small { font: 400 11px/1.3 var(--ccx-pixel); color: var(--ccx-soft); text-transform: uppercase !important; letter-spacing: .05em; text-align: center; }
+html:not(#_):not(#__) .po-hub-root .po-final-team.is-close strong { color: var(--ccx-yellow); }
+html:not(#_):not(#__) .po-hub-root .po-final-team.is-brink { animation: po-shake .5s steps(2) infinite; }
+html:not(#_):not(#__) .po-hub-root .po-final-team.is-brink small { color: var(--ccx-coral); }
+html:not(#_):not(#__) .po-hub-root .po-final-team.is-out { opacity: .4; filter: grayscale(1); }
+html:not(#_):not(#__) .po-hub-root .po-final-team.is-champ strong { color: var(--ccx-yellow); font-size: 40px; }
+html:not(#_):not(#__) .po-hub-root .po-final-team.is-champ .po-mark { animation: po-bounce .7s steps(3) infinite alternate; }
+html:not(#_):not(#__) .po-hub-root .po-final-score { display: flex; align-items: center; gap: 14px; }
+html:not(#_):not(#__) .po-hub-root .po-final-score b { font: 400 76px/1 var(--ccx-display); color: #fff; text-shadow: 5px 5px 0 var(--ccx-ink); min-width: 52px; text-align: center; }
+html:not(#_):not(#__) .po-hub-root .po-final-line { position: relative; margin: 0; font: 800 16px/1.3 var(--ccx-ui); color: var(--ccx-cream); text-align: center; }
+html:not(#_):not(#__) .po-hub-root .po-final.is-clinch .po-final-line { color: var(--ccx-yellow); }
+html:not(#_):not(#__) .po-hub-root .po-final.is-g7 { border-color: var(--ccx-coral); animation: po-pulse 1s steps(2) infinite; }
+html:not(#_):not(#__) .po-hub-root .po-final.is-g7 .po-final-line { font: 400 18px/1.2 var(--ccx-pixel); color: var(--ccx-coral); text-transform: uppercase !important; }
+html:not(#_):not(#__) .po-hub-root .po-final-pips { display: flex; gap: 5px; }
+html:not(#_):not(#__) .po-hub-root .po-final-pips i { display: grid; place-items: center; width: 34px; height: 20px; border: 2px solid var(--ccx-ink); background: var(--ccx-muted); color: var(--ccx-deep); font: 400 9px/1 var(--ccx-pixel); font-style: normal; }
+html:not(#_):not(#__) .po-hub-root .po-final-pips i.is-hi { background: var(--ccx-sky); }
+html:not(#_):not(#__) .po-hub-root .po-final-pips i.is-lo { background: var(--ccx-orange); }
+html:not(#_):not(#__) .po-hub-root .po-final-pips i.is-next { background: var(--ccx-yellow); animation: po-blink 1s steps(2) infinite; }
+html:not(#_):not(#__) .po-hub-root .po-final-confetti { position: absolute; inset: 0; pointer-events: none; }
+html:not(#_):not(#__) .po-hub-root .po-final-confetti i { position: absolute; top: -12px; width: 8px; height: 8px; background: var(--ccx-yellow); animation: po-fall 2.6s linear infinite; }
+html:not(#_):not(#__) .po-hub-root .po-final-confetti i:nth-child(3n) { background: var(--ccx-coral); }
+html:not(#_):not(#__) .po-hub-root .po-final-confetti i:nth-child(3n+1) { background: var(--ccx-sky); }
+@keyframes po-fall { to { transform: translateY(320px) rotate(360deg); opacity: .2; } }
+@keyframes po-shake { 50% { transform: translateX(2px); } }
+@keyframes po-bounce { to { transform: translateY(-6px); } }
+@keyframes po-pulse { 50% { box-shadow: 0 0 0 3px var(--ccx-ink), 6px 7px 0 var(--ccx-ink), 0 0 30px rgba(255,107,92,.6); } }
+/* once the Final is on, earlier rounds step back */
+html:not(#_):not(#__) .po-hub-root.is-final-round .po-col:not(.is-cup) .po-card { opacity: .6; filter: saturate(.6); }
+html:not(#_):not(#__) .po-hub-root.is-final-round .po-col:not(.is-cup) .po-card:hover { opacity: 1; filter: none; }
+@media (prefers-reduced-motion: reduce) { html:not(#_):not(#__) .po-hub-root .po-cup-rays, html:not(#_):not(#__) .po-hub-root .po-final-beam, html:not(#_):not(#__) .po-hub-root .po-final-confetti i, html:not(#_):not(#__) .po-hub-root .po-final.is-g7, html:not(#_):not(#__) .po-hub-root .po-final-team.is-brink, html:not(#_):not(#__) .po-hub-root .po-card-stakes.is-g7 { animation: none; } }
+
+/* ===== Awards Night: open editorial layout. Gold is kept for winners, the Cup and the selected item. ===== */
+html:not(#_):not(#__) .an-broadcast .an-gate, html:not(#_):not(#__) .an-broadcast .an-recap { border: 0; background: none; box-shadow: none; padding: 4px 6px 18px; display: grid; gap: 14px; align-content: start; overflow: auto; }
+html:not(#_):not(#__) .an-broadcast .an-gate-head { margin: 6px 0 0; padding-bottom: 5px; border-bottom: 3px solid var(--ccx-ink); font: 400 12px/1.2 var(--ccx-pixel); letter-spacing: .08em; text-transform: uppercase; color: var(--ccx-sky); }
+html:not(#_):not(#__) .an-broadcast .an-gate-kicker { font: 400 11px/1.2 var(--ccx-pixel); letter-spacing: .08em; text-transform: uppercase; color: var(--ccx-lime); }
+html:not(#_):not(#__) .an-broadcast .an-gate-decided { display: flex; flex-wrap: wrap; gap: 22px; align-items: center; }
+html:not(#_):not(#__) .an-broadcast .an-decided { display: flex; align-items: center; gap: 10px; }
+html:not(#_):not(#__) .an-broadcast .an-decided small { display: block; font: 400 10px/1.3 var(--ccx-pixel); letter-spacing: .08em; text-transform: uppercase; color: var(--ccx-soft); }
+html:not(#_):not(#__) .an-broadcast .an-decided strong { font: 800 18px/1.1 var(--ccx-ui); color: var(--ccx-cream); }
+html:not(#_):not(#__) .an-broadcast .an-decided.is-cup strong { font: 400 30px/1 var(--ccx-display); color: var(--ccx-yellow); text-shadow: 3px 3px 0 var(--ccx-ink); }
+html:not(#_):not(#__) .an-broadcast .an-decided.is-cup small { color: var(--ccx-yellow); }
+html:not(#_):not(#__) .an-broadcast .an-gate-mine { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 10px; border-left: 6px solid var(--ccx-lime); background: rgba(155, 229, 100, .08); }
+html:not(#_):not(#__) .an-broadcast .an-mine-chip { display: grid; padding: 4px 10px; border: 2px solid var(--ccx-ink); border-radius: 6px; background: var(--ccx-cell); color: var(--ccx-cream); cursor: pointer; text-align: left; box-shadow: var(--ccx-drop-sm); }
+html:not(#_):not(#__) .an-broadcast .an-mine-chip b { font: 800 14px/1.2 var(--ccx-ui); }
+html:not(#_):not(#__) .an-broadcast .an-mine-chip i { font: 400 9px/1.3 var(--ccx-pixel); font-style: normal; text-transform: uppercase; color: var(--ccx-lime); }
+html:not(#_):not(#__) .an-broadcast .an-gate-majors { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px 26px; }
+html:not(#_):not(#__) .an-broadcast .an-major { display: grid; gap: 4px; padding: 6px 0 10px; border: 0; border-bottom: 2px dashed rgba(159, 216, 255, .25); background: none; color: inherit; text-align: left; cursor: pointer; }
+html:not(#_):not(#__) .an-broadcast .an-major:hover .an-major-name { color: var(--ccx-yellow); }
+html:not(#_):not(#__) .an-broadcast .an-major-name { font: 400 24px/1 var(--ccx-display); letter-spacing: .02em; color: var(--ccx-cream); text-shadow: 2px 2px 0 var(--ccx-ink); }
+html:not(#_):not(#__) .an-broadcast .an-major-line { font: 700 12px/1.3 var(--ccx-ui); color: var(--ccx-soft); }
+html:not(#_):not(#__) .an-broadcast .an-major-faces { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 4px; }
+html:not(#_):not(#__) .an-broadcast .an-major-face { display: grid; justify-items: center; gap: 1px; min-width: 0; }
+html:not(#_):not(#__) .an-broadcast .an-major-face b { font: 800 14px/1.15 var(--ccx-ui); color: var(--ccx-cream); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+html:not(#_):not(#__) .an-broadcast .an-major-face i { font: 400 9px/1.3 var(--ccx-pixel); font-style: normal; color: var(--ccx-soft); text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+html:not(#_):not(#__) .an-broadcast .an-major-seal { justify-self: start; margin-top: 2px; padding: 2px 7px; font: 400 9px/1.4 var(--ccx-pixel); letter-spacing: .08em; text-transform: uppercase; color: var(--ccx-ink); background: var(--ccx-soft); border: 2px solid var(--ccx-ink); }
+html:not(#_):not(#__) .an-broadcast .an-gate-rest { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 0 26px; }
+html:not(#_):not(#__) .an-broadcast .an-rest-row { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 7px 0; border: 0; border-bottom: 1px solid rgba(159, 216, 255, .16); background: none; color: inherit; cursor: pointer; text-align: left; }
+html:not(#_):not(#__) .an-broadcast .an-rest-row b { font: 800 15px/1.2 var(--ccx-ui); color: var(--ccx-cream); }
+html:not(#_):not(#__) .an-broadcast .an-rest-row i { font: 400 10px/1.3 var(--ccx-pixel); font-style: normal; color: var(--ccx-soft); text-align: right; }
+html:not(#_):not(#__) .an-broadcast .an-rest-row:hover b { color: var(--ccx-yellow); }
+/* summary: one winner in the spotlight, the rest as a typographic list */
+html:not(#_):not(#__) .an-broadcast .an-spot { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 22px; align-items: center; padding: 6px 0 14px; border-bottom: 4px solid var(--ccx-yellow); animation: an-spot-in .35s steps(4); }
+@keyframes an-spot-in { from { opacity: 0; transform: translateY(8px); } }
+html:not(#_):not(#__) .an-broadcast .an-spot-main { display: grid; gap: 4px; min-width: 0; }
+html:not(#_):not(#__) .an-broadcast .an-spot-award { font: 400 13px/1.2 var(--ccx-pixel); letter-spacing: .1em; text-transform: uppercase; color: var(--ccx-yellow); }
+html:not(#_):not(#__) .an-broadcast .an-spot-line { font: 700 13px/1.3 var(--ccx-ui); color: var(--ccx-soft); }
+html:not(#_):not(#__) .an-broadcast .an-spot-name { font: 400 52px/0.95 var(--ccx-display); letter-spacing: .01em; color: #fff; text-shadow: 4px 4px 0 var(--ccx-ink); }
+html:not(#_):not(#__) .an-broadcast .an-spot-team { display: inline-flex; align-items: center; gap: 6px; font: 800 16px/1.2 var(--ccx-ui); color: var(--ccx-cream); }
+html:not(#_):not(#__) .an-broadcast .an-spot-stats { display: flex; flex-wrap: wrap; gap: 6px 26px; margin-top: 6px; }
+html:not(#_):not(#__) .an-broadcast .an-spot-stats div { display: grid; }
+html:not(#_):not(#__) .an-broadcast .an-spot-stats b { font: 400 34px/1 var(--ccx-display); color: var(--ccx-yellow); text-shadow: 3px 3px 0 var(--ccx-ink); }
+html:not(#_):not(#__) .an-broadcast .an-spot-stats i { font: 400 10px/1.4 var(--ccx-pixel); font-style: normal; letter-spacing: .06em; text-transform: uppercase; color: var(--ccx-soft); }
+html:not(#_):not(#__) .an-broadcast .an-spot-why { margin: 6px 0 0; max-width: 70ch; font: 600 14px/1.45 var(--ccx-ui); color: var(--ccx-cream); }
+html:not(#_):not(#__) .an-broadcast .an-spot-runners { margin: 2px 0 0; font: 600 13px/1.4 var(--ccx-ui); color: var(--ccx-soft); }
+html:not(#_):not(#__) .an-broadcast .an-spot-runners i { font: 400 10px/1 var(--ccx-pixel); font-style: normal; text-transform: uppercase; letter-spacing: .06em; color: var(--ccx-sky); margin-right: 6px; }
+html:not(#_):not(#__) .an-broadcast .an-spot-lineup { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 18px; margin-top: 8px; }
+html:not(#_):not(#__) .an-broadcast .an-spot-lineup span { display: grid; }
+html:not(#_):not(#__) .an-broadcast .an-spot-lineup i { font: 400 10px/1.3 var(--ccx-pixel); font-style: normal; color: var(--ccx-sky); }
+html:not(#_):not(#__) .an-broadcast .an-spot-lineup b { font: 800 15px/1.2 var(--ccx-ui); color: var(--ccx-cream); }
+html:not(#_):not(#__) .an-broadcast .an-spot-lineup em { font: 600 11px/1.2 var(--ccx-ui); font-style: normal; color: var(--ccx-soft); }
+html:not(#_):not(#__) .an-broadcast .an-honour-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 0 24px; }
+html:not(#_):not(#__) .an-broadcast .an-honour { display: flex; align-items: center; gap: 9px; padding: 7px 4px; border: 0; border-bottom: 1px solid rgba(159, 216, 255, .16); border-left: 5px solid transparent; background: none; color: inherit; cursor: pointer; text-align: left; }
+html:not(#_):not(#__) .an-broadcast .an-honour span { display: grid; min-width: 0; }
+html:not(#_):not(#__) .an-broadcast .an-honour i { font: 400 9px/1.4 var(--ccx-pixel); font-style: normal; letter-spacing: .06em; text-transform: uppercase; color: var(--ccx-soft); }
+html:not(#_):not(#__) .an-broadcast .an-honour b { font: 800 15px/1.2 var(--ccx-ui); color: var(--ccx-cream); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+html:not(#_):not(#__) .an-broadcast .an-honour-grid.is-major .an-honour b { font-size: 18px; }
+html:not(#_):not(#__) .an-broadcast .an-honour:hover b { color: var(--ccx-yellow); }
+html:not(#_):not(#__) .an-broadcast .an-honour.is-on { border-left-color: var(--ccx-yellow); background: rgba(255, 226, 58, .08); }
+html:not(#_):not(#__) .an-broadcast .an-honour.is-on b { color: var(--ccx-yellow); }
+/* the Cup is a championship, not row 19 */
+html:not(#_):not(#__) .an-broadcast .an-champ { position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; gap: 18px; margin-top: 6px; padding: 16px; border: 4px solid var(--ccx-yellow); border-radius: 12px; box-shadow: 0 0 0 3px var(--ccx-ink), 5px 6px 0 var(--ccx-ink); background: radial-gradient(ellipse 60% 140% at 50% 0%, rgba(255, 226, 58, .22), transparent 70%), var(--ccx-deep); }
+html:not(#_):not(#__) .an-broadcast .an-champ-rays { position: absolute; inset: -80% -20%; background: repeating-conic-gradient(from 0deg at 50% 50%, rgba(255, 226, 58, .10) 0 8deg, transparent 8deg 16deg); animation: po-spin 50s linear infinite; pointer-events: none; }
+html:not(#_):not(#__) .an-broadcast .an-champ > * { position: relative; }
+html:not(#_):not(#__) .an-broadcast .an-champ small { display: block; font: 400 13px/1.3 var(--ccx-pixel); letter-spacing: .1em; text-transform: uppercase; color: var(--ccx-yellow); }
+html:not(#_):not(#__) .an-broadcast .an-champ strong { font: 400 44px/1 var(--ccx-display); color: #fff; text-shadow: 4px 4px 0 var(--ccx-ink); }
+/* sidebar: weight by prestige; gold outline only for the Cup and the selected row */
+html:not(#_):not(#__) .an-broadcast .an-log-row { border-color: transparent; }
+html:not(#_):not(#__) .an-broadcast .an-log-row.is-major .an-log-body strong { font-size: 1.08em; color: var(--ccx-cream); }
+html:not(#_):not(#__) .an-broadcast .an-log-row.is-cup { border-color: var(--ccx-yellow); background: linear-gradient(180deg, rgba(255, 226, 58, .16), transparent); }
+html:not(#_):not(#__) .an-broadcast .an-log-row.is-cup .an-log-body strong { font-family: var(--ccx-display); font-weight: 400; letter-spacing: .03em; color: var(--ccx-yellow); }
+html:not(#_):not(#__) .an-broadcast .an-log-body strong { white-space: normal; overflow: visible; text-overflow: clip; }
+@media (prefers-reduced-motion: reduce) { html:not(#_):not(#__) .an-broadcast .an-spot, html:not(#_):not(#__) .an-broadcast .an-champ-rays { animation: none; } }
+
+/* ===== Awards Night pass 2: two type roles only, no dead space, no tilt, new Fan Pulse ===== */
+/* Type: Nunito for everything, Luckiest Guy for titles, names and big numbers. No pixel font, no third heading font. */
+html:not(#_):not(#__) .an-broadcast, html:not(#_):not(#__) .an-broadcast * { font-family: var(--ccx-ui) !important; }
+html:not(#_):not(#__) .an-broadcast :is(.an-stagehead-title, .an-stagehead-num, .an-section-title, .an-ceremony-title, .an-topbar h1, .an-topbar h2, .an-name, .an-result-title, .an-finalist__label, .an-spot-name, .an-major-name, .an-cta-btn, .an-ghost-btn),
+html:not(#_):not(#__) .an-broadcast .an-spot-stats b, html:not(#_):not(#__) .an-broadcast .an-champ strong, html:not(#_):not(#__) .an-broadcast .an-decided.is-cup strong { font-family: var(--ccx-display) !important; font-weight: 400 !important; }
+html:not(#_):not(#__) .an-broadcast :is(.an-gate-head, .an-gate-kicker, .an-spot-award, .an-decided small, .an-champ small, .an-major-seal, .an-honour i, .an-rest-row i, .an-mine-chip i, .an-major-face i, .an-spot-stats i, .an-spot-runners i, .an-spot-lineup i) { font-weight: 800 !important; font-size: 12px; letter-spacing: .05em; }
+html:not(#_):not(#__) .an-broadcast .an-name { -webkit-text-stroke: 0; color: #fff; text-shadow: 3px 3px 0 var(--ccx-ink); letter-spacing: .01em; }
+/* No tilt on the centre card and no red strip under the stage: both read as rendering faults. */
+html.cartoon-ui:not(#_):not(#__) .an-root .an-card { transform: none !important; }
+html.cartoon-ui:not(#_):not(#__) .an-root .an-stage::after { display: none !important; }
+/* Photos sit in their own frame; the stretched gold oval is gone. */
+html:not(#_):not(#__) .an-broadcast .an-headshot, html:not(#_):not(#__) .an-root.an-broadcast.an-dd .an-headshot { width: fit-content; align-self: flex-start; border: 0 !important; box-shadow: none !important; border-radius: 0 !important; background: none !important; }
+/* Panels are as tall as their content instead of stretching to the bottom of the screen. */
+html:not(#_):not(#__) .an-broadcast .an-stage-body { align-items: flex-start; overflow: auto; }
+html:not(#_):not(#__) .an-broadcast .an-card { flex: 0 1 auto; max-height: 100%; overflow: auto; }
+html:not(#_):not(#__) .an-broadcast .an-finalists { flex: 0 1 auto; align-items: start; }
+html:not(#_):not(#__) .an-broadcast .an-finalist { padding: 14px 16px 16px; gap: 8px; }
+html:not(#_):not(#__) .an-broadcast .an-card-grid { grid-template-rows: auto; flex: 0 1 auto; align-items: start; overflow: visible; }
+html:not(#_):not(#__) .an-broadcast .an-z-result { justify-content: flex-start; }
+html:not(#_):not(#__) .an-broadcast .an-z-result > * { margin-top: 0 !important; }
+html:not(#_):not(#__) .an-broadcast .an-votes, html:not(#_):not(#__) .an-broadcast .an-order { margin-top: 6px !important; }
+html:not(#_):not(#__) .an-broadcast .an-stat-table { width: 100%; max-width: 520px; }
+html:not(#_):not(#__) .an-broadcast .an-stat-table td { font-size: 15px; padding: 3px 0; }
+html:not(#_):not(#__) .an-broadcast .an-stat-table td.an-num { font-weight: 900; color: #fff; }
+/* On large screens the stage, the award list and the feed scale up so the content fills the space it has. */
+@media (min-width: 1800px) { html:not(#_):not(#__) .an-broadcast .an-stage-body > * { zoom: 1.3; } html:not(#_):not(#__) .an-broadcast .an-pulse-list { zoom: 1.12; } }
+@media (min-width: 2200px) { html:not(#_):not(#__) .an-broadcast .an-stage-body > * { zoom: 1.6; } html:not(#_):not(#__) .an-broadcast .an-pulse-list { zoom: 1.25; } html:not(#_):not(#__) .an-broadcast .an-log-scroll { zoom: 1.15; } }
+/* Fan Pulse: four kinds of item that look different because they are different. */
+html:not(#_):not(#__) .an-broadcast .an-pulse-list { display: grid; gap: 10px; align-content: start; overflow: auto; padding: 2px 4px 10px 2px; }
+html:not(#_):not(#__) .an-broadcast .an-pulse { display: grid; gap: 4px; animation: an-pulse-in .3s ease-out backwards; }
+@keyframes an-pulse-in { from { opacity: 0; transform: translateY(6px); } }
+html:not(#_):not(#__) .an-broadcast .an-pulse p { margin: 0; font-size: 14px; line-height: 1.4; font-weight: 600; color: var(--ccx-cream); }
+html:not(#_):not(#__) .an-broadcast .an-pulse-head { display: flex; align-items: center; gap: 7px; }
+html:not(#_):not(#__) .an-broadcast .an-pulse-head b { font-size: 13px; font-weight: 900; color: #fff; }
+html:not(#_):not(#__) .an-broadcast .an-pulse-head em { font-style: normal; font-size: 10px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; padding: 2px 7px; border: 2px solid var(--ccx-ink); color: var(--ccx-ink); background: var(--ccx-sky); }
+html:not(#_):not(#__) .an-broadcast .an-pulse-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--ccx-soft); }
+html:not(#_):not(#__) .an-broadcast .an-pulse-foot { font-size: 11px; font-weight: 800; color: var(--ccx-soft); }
+html:not(#_):not(#__) .an-broadcast .an-pulse.is-fan, html:not(#_):not(#__) .an-broadcast .an-pulse.is-debate { padding: 9px 11px; border: 3px solid var(--ccx-ink); border-radius: 10px 10px 10px 2px; background: var(--ccx-cell); box-shadow: var(--ccx-drop-sm); }
+html:not(#_):not(#__) .an-broadcast .an-pulse.is-debate { border-radius: 10px 10px 2px 10px; background: #1a1f5c; }
+html:not(#_):not(#__) .an-broadcast .an-pulse.is-debate .an-pulse-head em { margin-left: auto; background: var(--ccx-coral); }
+html:not(#_):not(#__) .an-broadcast .an-pulse.is-news { padding: 8px 11px; border-left: 6px solid var(--ccx-yellow); background: rgba(255, 226, 58, .10); }
+html:not(#_):not(#__) .an-broadcast .an-pulse.is-news .an-pulse-head em { background: var(--ccx-yellow); }
+html:not(#_):not(#__) .an-broadcast .an-pulse.is-news p { font-size: 15px; font-weight: 900; color: #fff; }
+html:not(#_):not(#__) .an-broadcast .an-pulse.is-stat { padding: 6px 0 8px; border-bottom: 2px dashed rgba(159, 216, 255, .28); }
+html:not(#_):not(#__) .an-broadcast .an-pulse.is-stat p { color: var(--ccx-sky); }
+@media (prefers-reduced-motion: reduce) { html:not(#_):not(#__) .an-broadcast .an-pulse { animation: none; } }
+
+/* ===== Awards Night pass 3: the pre-show and the summary fill the stage top to bottom ===== */
+html:not(#_):not(#__) .an-broadcast .an-stage-body:has(.an-recap), html:not(#_):not(#__) .an-broadcast .an-stage-body:has(.an-gate) { align-items: stretch; }
+html:not(#_):not(#__) .an-broadcast .an-recap, html:not(#_):not(#__) .an-broadcast .an-gate { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 100%; max-height: none; gap: 16px; }
+/* summary: spotlight | voting, then the honours, then the champion block takes whatever height is left */
+html:not(#_):not(#__) .an-broadcast .an-spot { grid-template-columns: auto minmax(0, 1fr) minmax(260px, 34%); align-items: start; gap: 26px; }
+html:not(#_):not(#__) .an-broadcast .an-spot.is-roster { grid-template-columns: minmax(0, 1fr); }
+html:not(#_):not(#__) .an-broadcast .an-spot-face { align-self: center; }
+html:not(#_):not(#__) .an-broadcast .an-spot-name { font-size: 64px; }
+html:not(#_):not(#__) .an-broadcast .an-spot-stats b { font-size: 42px; }
+html:not(#_):not(#__) .an-broadcast .an-spot-votes { padding-left: 20px; border-left: 3px solid var(--ccx-ink); min-width: 0; }
+html:not(#_):not(#__) .an-broadcast .an-spot-lineup { gap: 14px 26px; margin-top: 12px; }
+html:not(#_):not(#__) .an-broadcast .an-spot-lineup b { font-size: 22px; }
+html:not(#_):not(#__) .an-broadcast .an-spot-lineup em { font-size: 13px; }
+html:not(#_):not(#__) .an-broadcast .an-honour { padding: 10px 6px; }
+html:not(#_):not(#__) .an-broadcast .an-honour b { font-size: 17px; }
+html:not(#_):not(#__) .an-broadcast .an-honour-grid.is-major .an-honour b { font-size: 22px; }
+html:not(#_):not(#__) .an-broadcast .an-champ { flex: 1 1 auto; min-height: 170px; margin-top: auto; gap: 30px; }
+html:not(#_):not(#__) .an-broadcast .an-champ .an-logo { transform: scale(1.7); margin: 0 26px; }
+html:not(#_):not(#__) .an-broadcast .an-champ strong { font-size: 76px; }
+html:not(#_):not(#__) .an-broadcast .an-champ small { font-size: 16px !important; }
+/* pre-show: the major awards share the leftover height evenly, with larger faces */
+html:not(#_):not(#__) .an-broadcast .an-gate-majors { flex: 1 1 auto; grid-auto-rows: 1fr; align-items: stretch; gap: 18px 34px; }
+html:not(#_):not(#__) .an-broadcast .an-major { align-content: center; padding: 12px 0 16px; }
+html:not(#_):not(#__) .an-broadcast .an-major-name { font-size: 30px; }
+html:not(#_):not(#__) .an-broadcast .an-major-faces { gap: 14px; margin-top: 10px; }
+html:not(#_):not(#__) .an-broadcast .an-major-face b { font-size: 17px; }
+html:not(#_):not(#__) .an-broadcast .an-major-face .an-headshot { align-self: center; transform: scale(1.25); margin: 8px 0 12px; }
+html:not(#_):not(#__) .an-broadcast .an-rest-row { padding: 10px 0; }
+html:not(#_):not(#__) .an-broadcast .an-rest-row b { font-size: 17px; }
+html:not(#_):not(#__) .an-broadcast .an-decided.is-cup strong { font-size: 40px; }
+/* finalists and the case: cards stay full height, content is centred and larger rather than pinned to the top */
+html:not(#_):not(#__) .an-broadcast .an-stage-body:has(.an-finalists), html:not(#_):not(#__) .an-broadcast .an-stage-body:has(.an-card-grid) { align-items: stretch; }
+html:not(#_):not(#__) .an-broadcast .an-card:has(.an-finalists), html:not(#_):not(#__) .an-broadcast .an-card:has(.an-card-grid) { flex: 1 1 auto; }
+html:not(#_):not(#__) .an-broadcast .an-finalists { flex: 1 1 auto; align-items: stretch; }
+html:not(#_):not(#__) .an-broadcast .an-finalist { justify-content: center; align-items: center; text-align: center; gap: 12px; }
+html:not(#_):not(#__) .an-broadcast .an-finalist .an-headshot { align-self: center; transform: scale(1.6); margin: 34px 0 30px; }
+html:not(#_):not(#__) .an-broadcast .an-finalist .an-name { font-size: 34px; }
+html:not(#_):not(#__) .an-broadcast .an-finalist .an-stat-table { margin: 6px auto 0; }
+html:not(#_):not(#__) .an-broadcast .an-finalist .an-stat-table td { font-size: 18px; padding: 5px 0; }
+html:not(#_):not(#__) .an-broadcast .an-card-grid { flex: 1 1 auto; grid-template-rows: minmax(0, 1fr); align-items: stretch; }
+html:not(#_):not(#__) .an-broadcast .an-z-identity { justify-content: center; align-items: center; text-align: center; }
+html:not(#_):not(#__) .an-broadcast .an-z-identity .an-headshot { align-self: center; transform: scale(1.5); margin: 30px 0 26px; }
+html:not(#_):not(#__) .an-broadcast .an-z-result { justify-content: center; }

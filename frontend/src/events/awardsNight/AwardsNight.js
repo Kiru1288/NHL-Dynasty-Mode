@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import PlayerHeadshot from "../../components/PlayerHeadshot";
 import { pickHeadshotIdentityFields } from "../../utils/playerHeadshots";
-import FanReactionFeed from "../../components/franchise/social/FanReactionFeed";
 // Theme + fonts: paste the same style imports EntryDraft.jsx has at its top here
 // (the files that define --ops-*, --font-broadcast-display, --font-ops-ui, --font-mono-data).
 import {
@@ -438,12 +437,14 @@ function CeremonyLog({ groups, slidesCount, activeIndex, revealedIds, onSelect }
               const clickable = !offRail && Number.isInteger(index);
               const revealed = Boolean(offRail) || revealedIds.has(slide.id);
               const selected = clickable && index === activeIndex;
-              const sub = revealed ? slide.winnerLabel : selected ? "On stage" : "Sealed";
+              const sub = revealed ? (isRosterSlide(slide) ? "Lineup named" : slide.winnerLabel) : selected ? "On stage" : "Sealed";
               const classes = [
                 "an-log-row",
                 selected ? "is-selected" : "",
                 revealed ? "is-revealed" : "",
                 selected && revealed ? "is-live" : "",
+                isCupSlide(slide) ? "is-cup" : "",
+                isMajorSlide(slide) ? "is-major" : "",
               ]
                 .filter(Boolean)
                 .join(" ");
@@ -457,7 +458,7 @@ function CeremonyLog({ groups, slidesCount, activeIndex, revealedIds, onSelect }
                 >
                   <span className="an-log-num">{clickable ? pad2(index + 1) : ""}</span>
                   <span className="an-log-logo">
-                    {revealed ? <TeamLogo src={winnerLogo(slide)} size="sm" /> : null}
+                    {revealed && !isRosterSlide(slide) ? <TeamLogo src={winnerLogo(slide)} size="sm" /> : null}
                   </span>
                   <span className="an-log-body">
                     <strong>{slide.awardLabel}</strong>
@@ -473,26 +474,239 @@ function CeremonyLog({ groups, slidesCount, activeIndex, revealedIds, onSelect }
   );
 }
 
-function FanPulse({ mode, tweets, emptyText, feedKey }) {
+function hashOf(text) {
+  let h = 2166136261;
+  const str = String(text || "");
+  for (let i = 0; i < str.length; i += 1) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+function joinNames(list) {
+  const names = list.filter(Boolean);
+  if (names.length <= 1) return names[0] || "";
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+/** "Dallas Stars" -> "Stars fan" */
+function fanOf(teamName) {
+  const full = String(teamName || "").trim();
+  if (!full) return "Hockey fan";
+  const two = ["Maple Leafs", "Red Wings", "Blue Jackets", "Golden Knights"].find((n) => full.endsWith(n));
+  return `${two || full.split(" ").slice(-1)[0]} fan`;
+}
+
+function winnersOf(slide) {
+  return String(slide?.winnerLabel || "")
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
+/**
+ * Fan Pulse items for one moment of the night. Every line is written from the actual result
+ * (winner, club, numbers, finalists), so nothing reads as a filled-in blank and nothing repeats.
+ * stage: "gate" | "pre" | "post" | "summary". Nothing in "gate" or "pre" names a winner.
+ */
+function buildPulse({ stage, slide, slides, ev }) {
+  const out = [];
+  const push = (kind, text, extra = {}) => {
+    if (!text) return;
+    out.push({ kind, text, likes: 40 + (hashOf(text) % 2400), ...extra });
+  };
+  const pickOne = (seed, options) => options[hashOf(seed) % options.length];
+
+  if (stage === "gate") {
+    const cup = slides.find(isCupSlide);
+    push("news", `Awards Night is here. ${slides.length} honours will be handed out tonight.`);
+    if (cup?.winnerLabel) push("news", `The ${cup.winnerLabel} arrive as Stanley Cup champions.`, { logo: winnerLogo(cup) });
+    MAJOR_KEYS.forEach((key) => {
+      const sl = slides.find((x) => x.awardKey === key);
+      if (!sl) return;
+      const cards = slideFinalists(sl);
+      if (cards.length < 2) return;
+      const fav = cards[hashOf(`${key}-fav`) % cards.length];
+      push(
+        "fan",
+        pickOne(key, [
+          `${sl.awardLabel} finalists are ${joinNames(cards.map((c) => c.label))}. I'd give it to ${lastName(fav.label)}.`,
+          `If ${lastName(fav.label)} doesn't win the ${sl.awardLabel} tonight I'm going to be annoyed.`,
+          `${joinNames(cards.map((c) => lastName(c.label)))} for the ${sl.awardLabel}. Any of the three would be a fair winner.`,
+        ]),
+        { who: fanOf(cardTeam(fav)), logo: cardLogo(fav) }
+      );
+    });
+    return out;
+  }
+
+  if (stage === "summary") {
+    const cup = slides.find(isCupSlide);
+    const hart = slides.find((x) => x.awardKey === "hart");
+    if (cup?.winnerLabel) push("news", `The ${cup.winnerLabel} are Stanley Cup champions.`, { logo: winnerLogo(cup) });
+    if (hart?.winnerLabel) push("news", `${hart.winnerLabel} is the league's most valuable player.`, { logo: winnerLogo(hart) });
+    const byPlayer = new Map();
+    const byTeam = new Map();
+    slides.forEach((sl) => {
+      if (isCupSlide(sl) || isRosterSlide(sl)) return;
+      if (!isTeamSlide(sl)) {
+        winnersOf(sl).forEach((name) => byPlayer.set(name, [...(byPlayer.get(name) || []), sl]));
+      }
+      const team = isTeamSlide(sl) ? sl.winnerLabel : sl.winnerTeamName;
+      if (team) byTeam.set(team, [...(byTeam.get(team) || []), sl]);
+    });
+    [...byPlayer.entries()]
+      .filter(([, list]) => list.length >= 2)
+      .sort((a, b) => b[1].length - a[1].length)
+      .slice(0, 2)
+      .forEach(([name, list]) => {
+        push("stat", `${name} leaves with ${list.length} trophies: ${joinNames(list.map((x) => x.awardLabel))}.`, {
+          logo: winnerLogo(list[0]),
+        });
+        push("fan", `${list.length} trophies in one night. ${lastName(name)} just had the season of his life.`, {
+          who: fanOf(list[0].winnerTeamName),
+          logo: winnerLogo(list[0]),
+        });
+      });
+    const topTeam = [...byTeam.entries()].sort((a, b) => b[1].length - a[1].length)[0];
+    if (topTeam && topTeam[1].length >= 3) {
+      push("stat", `${topTeam[0]} collected ${topTeam[1].length} honours tonight, more than any other club.`, { logo: winnerLogo(topTeam[1][0]) });
+    }
+    const calder = slides.find((x) => x.awardKey === "calder");
+    if (calder?.winnerLabel) {
+      push("fan", `${lastName(calder.winnerLabel)} winning rookie of the year means we get to watch him for the next fifteen.`, {
+        who: fanOf(calder.winnerTeamName),
+        logo: winnerLogo(calder),
+      });
+    }
+    const vez = slides.find((x) => x.awardKey === "vezina");
+    if (vez?.winnerLabel) {
+      push("fan", `Best goalie in the league and it wasn't close. ${lastName(vez.winnerLabel)} stole us a dozen games.`, {
+        who: fanOf(vez.winnerTeamName),
+        logo: winnerLogo(vez),
+      });
+    }
+    push("news", "That wraps the season. Retirements, the draft and free agency are next.");
+    return out;
+  }
+
+  if (!slide) return out;
+  const award = slide.awardLabel;
+  const team = isTeamSlide(slide);
+  const roster = isRosterSlide(slide);
+  const cards = roster ? [] : slideFinalists(slide);
+
+  if (stage === "pre") {
+    push("news", `Up now: the ${award}.${slide.stageLine ? ` ${slide.stageLine}` : ""}`);
+    if (roster) {
+      push("fan", `Lineup time. Six names, and somebody's favourite always gets left off the ${award}.`, { who: "Hockey fan" });
+      return out;
+    }
+    if (cards.length < 2) {
+      push("stat", `The ${award} is settled by the numbers. There is no ballot for this one.`);
+      return out;
+    }
+    cards.forEach((card) => {
+      const row = finalistStatRows(card, ev)[0];
+      const num = row ? ` ${row.value} ${row.label} speaks for itself.` : "";
+      push(
+        "fan",
+        pickOne(`${award}-${card.label}`, [
+          `${card.label} should win the ${award}.${num}`,
+          `Put me down for ${lastName(card.label)}.${num}`,
+          `It has to be ${lastName(card.label)} tonight.${num}`,
+        ]),
+        { who: fanOf(cardTeam(card)), logo: cardLogo(card) }
+      );
+    });
+    push("debate", `${lastName(cards[0].label)} or ${lastName(cards[1].label)}? This ${award} vote could go either way.`);
+    return out;
+  }
+
+  // stage === "post": the result is known
+  const names = winnersOf(slide);
+  const logo = winnerLogo(slide);
+  const why = cleanLines(safeArray(ev?.why).length ? ev.why : slide?.whyTheyWon);
+  const stats = roster ? [] : winnerStatRows(slide, ev).slice(0, 3);
+  if (roster) {
+    push("news", `The ${award} is set.`, { logo });
+    push("fan", `That's a strong ${award}. Hard to argue with any of the six.`, { who: "Hockey fan" });
+    push("debate", `Every year one deserving name misses the ${award}. Who was it this time?`);
+    return out;
+  }
+  if (team) {
+    push("news", `The ${slide.winnerLabel} take the ${award}.`, { logo });
+    if (why[0]) push("stat", why[0], { logo });
+    push("fan", `${award} is ours. Now do it again next year.`, { who: fanOf(slide.winnerLabel), logo });
+    return out;
+  }
+  push("news", names.length > 1 ? `${joinNames(names)} share the ${award}.` : `${slide.winnerLabel} wins the ${award}.`, { logo });
+  if (why[0]) push("stat", why[0], { logo });
+  else if (stats.length) push("stat", `${slide.winnerLabel}: ${stats.map((r) => `${r.value} ${r.label}`).join(", ")}.`, { logo });
+  const last = lastName(names[0] || slide.winnerLabel);
+  push(
+    "fan",
+    pickOne(`${award}-win`, [
+      `${last} earned every bit of that ${award}. We watched it all season.`,
+      `Nobody in this building is surprised. ${last} was the best at it all year.`,
+      `Get ${last}'s name on that trophy. Fully deserved.`,
+    ]),
+    { who: fanOf(slide.winnerTeamName), logo }
+  );
+  const runner = [...cards]
+    .filter((card) => !isWinnerCard(card, slide))
+    .sort((a, b) => (toNum(a?.rank) ?? 99) - (toNum(b?.rank) ?? 99))[0];
+  if (runner) {
+    push(
+      "debate",
+      pickOne(`${award}-runner`, [
+        `${runner.label} had a real case for the ${award}, but it's hard to argue with ${last}'s year.`,
+        `Tough one for ${lastName(runner.label)}. Most seasons that wins the ${award}.`,
+        `I had ${lastName(runner.label)} on my ballot. No complaints about ${last} though.`,
+      ]),
+      { who: fanOf(cardTeam(runner)), logo: cardLogo(runner) }
+    );
+  }
+  return out;
+}
+
+const PULSE_TAG = { news: "News", stat: "By the numbers", debate: "Debate" };
+
+function FanPulse({ mode, items, emptyText, feedKey }) {
   return (
     <aside className="an-board" aria-label="Fan Pulse">
       <div className="an-section-head">
         <div>
           <h3 className="an-section-title">Fan Pulse</h3>
-          <p className="an-section-meta">{mode === "reactions" ? "Reactions" : "Pre-show"}</p>
+          <p className="an-section-meta">{mode === "reactions" ? "Reactions" : "Before the envelope"}</p>
         </div>
       </div>
-      <div className="an-pulse-lane">
-        {tweets.length ? (
-          <FanReactionFeed
-            key={feedKey}
-            className="an-pulse-feed"
-            reactions={tweets}
-            placement="inline"
-            maxTweets={8}
-            visibleCount={8}
-            enabled
-          />
+      <div className="an-pulse-lane an-pulse-list" key={feedKey}>
+        {items.length ? (
+          items.map((item, i) => (
+            <article key={`${item.kind}-${i}`} className={`an-pulse is-${item.kind}`} style={{ animationDelay: `${i * 90}ms` }}>
+              {item.kind === "fan" || item.kind === "debate" ? (
+                <>
+                  <header className="an-pulse-head">
+                    {item.logo ? <TeamLogo src={item.logo} size="sm" /> : <span className="an-pulse-dot" aria-hidden="true" />}
+                    <b>{item.who || "Around the league"}</b>
+                    {item.kind === "debate" ? <em>{PULSE_TAG.debate}</em> : null}
+                  </header>
+                  <p>{item.text}</p>
+                  <footer className="an-pulse-foot">{item.likes.toLocaleString()} likes</footer>
+                </>
+              ) : (
+                <>
+                  <header className="an-pulse-head">
+                    <em>{PULSE_TAG[item.kind]}</em>
+                    {item.logo ? <TeamLogo src={item.logo} size="sm" /> : null}
+                  </header>
+                  <p>{item.text}</p>
+                </>
+              )}
+            </article>
+          ))
         ) : (
           <p className="an-muted">{emptyText}</p>
         )}
@@ -503,32 +717,92 @@ function FanPulse({ mode, tweets, emptyText, feedKey }) {
 
 /* ─────────────── stage bodies ─────────────── */
 
-function GateBody({ slides }) {
+const MAJOR_KEYS = ["hart", "norris", "vezina", "calder", "selke", "conn_smythe"];
+const isMajorSlide = (slide) => MAJOR_KEYS.includes(String(slide?.awardKey || ""));
+// Decided on the ice or in the standings: nobody votes on these, so they are shown as results, not sealed envelopes.
+const isDecidedSlide = (slide) => isCupSlide(slide) || /president|conference/i.test(String(slide?.awardKey || ""));
+
+function GateBody({ slides, playerIndex, userTeamName, onPick }) {
+  const indexOf = (slide) => slides.findIndex((x) => x.id === slide.id);
+  const majors = MAJOR_KEYS.map((k) => slides.find((x) => x.awardKey === k)).filter(Boolean);
+  const decided = slides.filter(isDecidedSlide);
+  const rest = slides.filter((x) => !isMajorSlide(x) && !isDecidedSlide(x));
+  const mine = [];
+  if (userTeamName) {
+    slides.forEach((slide) => {
+      if (isRosterSlide(slide) || isTeamSlide(slide)) return;
+      slideFinalists(slide).forEach((card) => {
+        if (cardTeam(card) && cardTeam(card) === userTeamName) mine.push({ slide, card });
+      });
+    });
+  }
   return (
-    <div className="an-card">
-      <div
-        className="an-table"
-        style={{ "--an-cols": "32px minmax(0, 1.6fr) minmax(0, 1fr) minmax(0, 0.7fr)" }}
-      >
-        <div className="an-table-head">
-          <span>#</span>
-          <span>Award</span>
-          <span>Category</span>
-          <span>Finalists</span>
-        </div>
-        <div className="an-table-body">
-          {slides.map((slide, i) => {
-            const count = isRosterSlide(slide) ? 0 : slideFinalists(slide).length;
-            return (
-              <div key={slide.id} className="an-table-row">
-                <span className="an-cell-muted">{pad2(i + 1)}</span>
-                <span className="an-cell-name">{slide.awardLabel}</span>
-                <span>{categoryLabel(slide)}</span>
-                <span className="an-num">{count || ""}</span>
+    <div className="an-card an-gate">
+      {decided.length ? (
+        <div className="an-gate-decided">
+          {decided.map((slide) => (
+            <div key={slide.id} className={`an-decided${isCupSlide(slide) ? " is-cup" : ""}`}>
+              <TeamLogo src={winnerLogo(slide)} size={isCupSlide(slide) ? "hero" : "md"} />
+              <div>
+                <small>{isCupSlide(slide) ? "Stanley Cup champions" : slide.awardLabel}</small>
+                <strong>{slide.winnerLabel}</strong>
               </div>
-            );
-          })}
+            </div>
+          ))}
         </div>
+      ) : null}
+
+      {mine.length ? (
+        <div className="an-gate-mine">
+          <span className="an-gate-kicker">Your club tonight</span>
+          {mine.map(({ slide, card }) => (
+            <button key={`${slide.id}-${card.label}`} type="button" className="an-mine-chip" onClick={() => onPick?.(indexOf(slide))}>
+              <b>{card.label}</b>
+              <i>{slide.awardLabel} finalist</i>
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      {majors.length ? <h4 className="an-gate-head">The major awards</h4> : null}
+      <div className="an-gate-majors">
+        {majors.map((slide) => {
+          const team = isTeamSlide(slide);
+          const finalists = slideFinalists(slide);
+          return (
+            <button key={slide.id} type="button" className="an-major" onClick={() => onPick?.(indexOf(slide))}>
+              <span className="an-major-name">{slide.awardLabel}</span>
+              {slide.stageLine ? <span className="an-major-line">{slide.stageLine}</span> : null}
+              <span className="an-major-faces">
+                {finalists.map((card) => (
+                  <span key={card.label} className="an-major-face">
+                    {team ? (
+                      <TeamLogo src={cardLogo(card)} size="md" />
+                    ) : (
+                      <Headshot player={resolvePlayer(card?.player, playerIndex, card?.label)} size="sm" />
+                    )}
+                    <b>{lastName(card.label)}</b>
+                    <i>{cardTeam(card)}</i>
+                  </span>
+                ))}
+              </span>
+              <span className="an-major-seal">{finalists.length > 1 ? `${finalists.length} finalists · sealed` : "Sealed"}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {rest.length ? <h4 className="an-gate-head">Also tonight</h4> : null}
+      <div className="an-gate-rest">
+        {rest.map((slide) => {
+          const names = isRosterSlide(slide) ? [] : slideFinalists(slide).map((c) => lastName(c.label));
+          return (
+            <button key={slide.id} type="button" className="an-rest-row" onClick={() => onPick?.(indexOf(slide))}>
+              <b>{slide.awardLabel}</b>
+              <i>{isRosterSlide(slide) ? "Six-man lineup" : names.length > 1 ? names.join(" · ") : names.length === 1 ? "Decided by the numbers" : categoryLabel(slide)}</i>
+            </button>
+          );
+        })}
       </div>
     </div>
   );
@@ -729,11 +1003,13 @@ function VoteTable({ table, format, playerIndex, team }) {
   const rows = safeArray(table).filter((r) => r && r.name);
   if (!rows.length) return null;
   const ballot = rows.some((r) => toNum(r?.points) !== null);
+  // A "1st" column of zeros and a ballot formula with no ballots read as broken: show them only when votes exist.
+  const hasFirst = rows.some((r) => (toNum(r?.first_place_votes) ?? 0) > 0);
   const curve = safeArray(format?.points).map((p) => formatPoints(Number(p))).join("-");
   return (
     <div className="an-order an-votes">
-      <h4>{ballot ? "Voting results" : "Final order"}</h4>
-      {ballot && format ? (
+      <h4>{ballot ? (hasFirst ? "Voting results" : "How the race finished") : "Final order"}</h4>
+      {ballot && hasFirst && format ? (
         <p className="an-votes__fmt">
           {[format.voters ? `${format.voters} ballots` : "", format.body || "", curve ? `${curve} points` : ""]
             .filter(Boolean)
@@ -743,8 +1019,8 @@ function VoteTable({ table, format, playerIndex, team }) {
       <div className="an-votes__row an-votes__head">
         <span>#</span>
         <span>Player</span>
-        <span>{ballot ? "1st" : ""}</span>
-        <span>{ballot ? "Pts" : "Total"}</span>
+        <span>{ballot && hasFirst ? "1st" : ""}</span>
+        <span>{ballot ? (hasFirst ? "Pts" : "Score") : "Total"}</span>
       </div>
       {rows.map((r, i) => {
         const who = team ? null : resolvePlayer({ ...r, player_id: r.player_id ?? r.entity_id }, playerIndex, r.name);
@@ -759,7 +1035,7 @@ function VoteTable({ table, format, playerIndex, team }) {
                 {sub ? <small>{sub}</small> : null}
               </span>
             </span>
-            <em className="an-num">{ballot ? toNum(r.first_place_votes) ?? 0 : ""}</em>
+            <em className="an-num">{ballot && hasFirst ? toNum(r.first_place_votes) ?? 0 : ""}</em>
             <em className="an-num">
               {ballot ? formatPoints(toNum(r.points) ?? 0) : formatStat(r.value) || ""}
             </em>
@@ -929,33 +1205,119 @@ function CitationBody({ slide, ev, finalists, playerIndex, rule = "" }) {
   );
 }
 
-function SummaryBody({ slides }) {
+function SummaryBody({ slides, playerIndex }) {
+  const cup = slides.find(isCupSlide) || null;
+  const honours = slides.filter((x) => !isCupSlide(x));
+  const firstPick = honours.find((x) => x.awardKey === "hart") || honours.find((x) => !isTeamSlide(x) && !isRosterSlide(x)) || honours[0] || null;
+  const [pickId, setPickId] = useState(firstPick?.id || null);
+  const pick = honours.find((x) => x.id === pickId) || firstPick;
+  const ev = slideEvidence(pick);
+  const team = isTeamSlide(pick);
+  const roster = isRosterSlide(pick);
+  const finalists = pick && !roster ? slideFinalists(pick) : [];
+  const winnerCard = finalists.find((card) => isWinnerCard(card, pick)) || null;
+  const player = pick && !team && !roster ? resolvePlayer(pick?.winnerPlayer || winnerCard?.player, playerIndex, pick?.winnerLabel) : null;
+  const stats = pick && !roster ? winnerStatRows(pick, ev).slice(0, 5) : [];
+  const why = pick ? cleanLines(safeArray(ev?.why).length ? ev.why : pick?.whyTheyWon).slice(0, 2) : [];
+  const runnersUp = [...finalists]
+    .filter((card) => !isWinnerCard(card, pick))
+    .sort((a, b) => (toNum(a?.rank) ?? 99) - (toNum(b?.rank) ?? 99));
+  const slots = roster ? rosterSlotsFor(pick, ev) : [];
+  const voteRows = safeArray(ev?.voting_table).filter((r) => r && r.name).slice(0, 5);
+  const groups = [
+    ["Major awards", honours.filter(isMajorSlide)],
+    ["More honours", honours.filter((x) => !isMajorSlide(x) && !isRosterSlide(x))],
+    ["League selections", honours.filter(isRosterSlide)],
+  ].filter(([, list]) => list.length);
+
   return (
-    <div className="an-card">
-      <div
-        className="an-table"
-        style={{ "--an-cols": "32px minmax(0, 1.4fr) minmax(0, 1.2fr) minmax(0, 1.2fr)" }}
-      >
-        <div className="an-table-head">
-          <span>#</span>
-          <span>Award</span>
-          <span>Winner</span>
-          <span>Team</span>
-        </div>
-        <div className="an-table-body">
-          {slides.map((slide, i) => (
-            <div key={slide.id} className={`an-table-row${isCupSlide(slide) ? " is-best" : ""}`}>
-              <span className="an-cell-muted">{pad2(i + 1)}</span>
-              <span className="an-cell-name">{slide.awardLabel}</span>
-              <span>{slide.winnerLabel}</span>
-              <span className="an-cell-team">
-                <TeamLogo src={winnerLogo(slide)} size="sm" />
-                <span>{isTeamSlide(slide) ? "" : slide.winnerTeamName || ""}</span>
-              </span>
+    <div className="an-card an-recap">
+      {pick ? (
+        <section className={`an-spot${roster ? " is-roster" : ""}`} key={pick.id}>
+          {roster ? null : (
+            <div className="an-spot-face">
+              {team ? <TeamLogo src={winnerLogo(pick)} size="hero" /> : <Headshot player={player} size="lg" />}
             </div>
-          ))}
-        </div>
-      </div>
+          )}
+          <div className="an-spot-main">
+            <small className="an-spot-award">{roster ? "League selection" : pick.awardLabel}</small>
+            {pick.stageLine ? <span className="an-spot-line">{pick.stageLine}</span> : null}
+            <strong className="an-spot-name">{roster ? pick.awardLabel : pick.winnerLabel}</strong>
+            {!team && !roster && pick.winnerTeamName ? (
+              <span className="an-spot-team">
+                <TeamLogo src={winnerLogo(pick)} size="sm" />
+                {pick.winnerTeamName}
+              </span>
+            ) : null}
+            {stats.length ? (
+              <div className="an-spot-stats">
+                {stats.map((row) => (
+                  <div key={row.key}>
+                    <b>{row.value}</b>
+                    <i>{row.label}</i>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {why.length ? <p className="an-spot-why">{why.join(" ")}</p> : null}
+            {runnersUp.length ? (
+              <p className="an-spot-runners">
+                <i>Also in the running</i> {runnersUp.map((c) => `${c.label}${cardTeam(c) ? ` (${cardTeam(c)})` : ""}`).join(" · ")}
+              </p>
+            ) : null}
+            {slots.length ? (
+              <div className="an-spot-lineup">
+                {slots.map((slot, i) => (
+                  <span key={`${slot?.slot || i}-${slot?.label || i}`}>
+                    <i>{slot?.slot || ""}</i>
+                    <b>{slot?.label || ""}</b>
+                    {slot?.teamName ? <em>{slot.teamName}</em> : null}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+          </div>
+          {!roster && voteRows.length > 1 ? (
+            <div className="an-spot-votes">
+              <VoteTable table={voteRows} format={ev?.ballot_format} playerIndex={playerIndex} team={team} />
+            </div>
+          ) : null}
+        </section>
+      ) : null}
+
+      {groups.map(([label, list]) => (
+        <section key={label} className="an-honours">
+          <h4 className="an-gate-head">{label}</h4>
+          <div className={`an-honour-grid${label === "Major awards" ? " is-major" : ""}`}>
+            {list.map((slide) => (
+              <button
+                key={slide.id}
+                type="button"
+                className={`an-honour${pick && slide.id === pick.id ? " is-on" : ""}`}
+                aria-pressed={Boolean(pick && slide.id === pick.id)}
+                onClick={() => setPickId(slide.id)}
+              >
+                {isRosterSlide(slide) ? null : <TeamLogo src={winnerLogo(slide)} size="sm" />}
+                <span>
+                  <i>{slide.awardLabel}</i>
+                  <b>{isRosterSlide(slide) ? "See the lineup" : slide.winnerLabel}</b>
+                </span>
+              </button>
+            ))}
+          </div>
+        </section>
+      ))}
+
+      {cup ? (
+        <section className="an-champ">
+          <span className="an-champ-rays" aria-hidden="true" />
+          <TeamLogo src={winnerLogo(cup)} size="hero" />
+          <div>
+            <small>Stanley Cup champions</small>
+            <strong>{cup.winnerLabel}</strong>
+          </div>
+        </section>
+      ) : null}
     </div>
   );
 }
@@ -993,6 +1355,14 @@ export default function AwardsNight({ franchiseState = {}, eventData = {}, onCon
   }, [awards]);
   const indexGroups = useMemo(() => safeArray(buildCeremonyRailGroups(slides)), [slides]);
   const playerIndex = useMemo(() => buildPlayerIndex(franchiseState), [franchiseState]);
+  const userTeamName = String(
+    franchiseState?.user_team_name ||
+      franchiseState?.user_team?.name ||
+      franchiseState?.user_team?.team_name ||
+      franchiseState?.team_name ||
+      franchiseState?.team?.name ||
+      ""
+  );
   const fanPool = useMemo(() => buildFallbackAwardFans(24, "awards-night-live"), []);
 
   const preShowPool = useMemo(
@@ -1029,7 +1399,7 @@ export default function AwardsNight({ franchiseState = {}, eventData = {}, onCon
   const [phase, setPhase] = useState(PHASE.GATE);
   const [finalistShown, setFinalistShown] = useState(0);
   const [paused, setPaused] = useState(false);
-  const [voiceOn, setVoiceOn] = useState(true);
+  const [voiceOn, setVoiceOn] = useState(false); // Awards Night is read, not spoken
   const [revealedIds, setRevealedIds] = useState(() => new Set());
   const [reactionFeed, setReactionFeed] = useState([]);
   const [continuing, setContinuing] = useState(false);
@@ -1361,8 +1731,9 @@ export default function AwardsNight({ franchiseState = {}, eventData = {}, onCon
     headNum = pad2(slides.length);
     headState = PHASE_LABEL[PHASE.SUMMARY];
     headLive = true;
-    headTitle = summary.headline || "Awards Night complete";
-    if (summary.subline) headMeta.push({ text: summary.subline, tone: "strong" });
+    headTitle = "The NHL Awards";
+    headMeta.push({ text: `${slides.length} honours presented`, tone: "strong" });
+    headMeta.push({ text: seasonLabel(franchiseState) });
   } else {
     headNum = pad2(activeIndex + 1);
     headState = `${categoryLabel(activeSlide)} · ${PHASE_LABEL[phase]}`;
@@ -1388,9 +1759,9 @@ export default function AwardsNight({ franchiseState = {}, eventData = {}, onCon
       </div>
     );
   } else if (phase === PHASE.GATE) {
-    body = <GateBody slides={slides} />;
+    body = <GateBody slides={slides} playerIndex={playerIndex} userTeamName={userTeamName} onPick={jumpToAward} />;
   } else if (phase === PHASE.SUMMARY) {
-    body = <SummaryBody slides={slides} />;
+    body = <SummaryBody slides={slides} playerIndex={playerIndex} />;
   } else if (phase === PHASE.TITLE || (phase === PHASE.SEAL && !hasFinalistPhase && !roster)) {
     body = (
       <TitleBody
@@ -1429,18 +1800,10 @@ export default function AwardsNight({ franchiseState = {}, eventData = {}, onCon
   }
 
   /* ── fan pulse ── */
-  let pulseMode = "pre-show";
-  let pulseTweets = preShowTweets;
-  let pulseEmpty = "Fans are sizing up the finalists. Reactions land after each reveal.";
-  if (phase === PHASE.SUMMARY) {
-    pulseMode = "reactions";
-    pulseTweets = summaryTweets;
-    pulseEmpty = "No reactions recorded.";
-  } else if (awardRevealed) {
-    pulseMode = "reactions";
-    pulseTweets = reactionFeed;
-    pulseEmpty = "Reactions are coming in…";
-  }
+  const pulseStage = !slides.length ? "gate" : phase === PHASE.SUMMARY ? "summary" : phase === PHASE.GATE ? "gate" : awardRevealed ? "post" : "pre";
+  const pulseMode = pulseStage === "post" || pulseStage === "summary" ? "reactions" : "pre-show";
+  const pulseItems = slides.length ? buildPulse({ stage: pulseStage, slide: activeSlide, slides, ev }) : [];
+  const pulseEmpty = "Reactions land once the night begins.";
 
   const displayRevealed =
     phase === PHASE.SUMMARY ? new Set(slides.map((s) => s.id)) : revealedIds;
@@ -1466,13 +1829,7 @@ export default function AwardsNight({ franchiseState = {}, eventData = {}, onCon
               Leave to Hub
             </button>
           ) : null}
-          <button
-            type="button"
-            className={`an-ghost-btn${voiceOn ? " is-on" : ""}`}
-            onClick={toggleVoice}
-          >
-            TTS {voiceOn ? "On" : "Off"}
-          </button>
+{null}
           <button
             type="button"
             className={`an-ghost-btn${paused ? " is-on" : ""}`}
@@ -1591,9 +1948,9 @@ export default function AwardsNight({ franchiseState = {}, eventData = {}, onCon
 
           <FanPulse
             mode={pulseMode}
-            tweets={pulseTweets}
+            items={pulseItems}
             emptyText={pulseEmpty}
-            feedKey={`${phase === PHASE.SUMMARY ? "summary" : activeSlide?.id || "gate"}-${pulseMode}`}
+            feedKey={`${pulseStage}-${activeSlide?.id || "gate"}`}
           />
         </div>
       </div>

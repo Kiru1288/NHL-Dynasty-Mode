@@ -35,7 +35,7 @@ A_NORM, A_HARD = 10.0, 16.0
 V_SKATE, A_SKATE, V_GOALIE = V_SPRINT, A_HARD, 16.0
 CARRY, CARRY_RUSH, PASS, DUMP, SHOT = 13.0, 19.0, 58.0, 58.0, 100.0
 MIN_CARRY_LEG, MIN_SHOT_FLIGHT, RETARGET_S = 1.8, 0.35, 1.2
-CREASE_R, MIN_SEP = 7.0, 4.0  # 4 ft keeps >= 3 ft even with the idle wobble drawn on top
+CREASE_R, MIN_SEP = 7.0, 5.0  # 5 ft: markers and name tags stay readable, bodies never share a spot
 BENCH_DOOR = {"home": (-12.0, 39.0), "away": (12.0, 39.0)}
 BOX_SEAT = {"home": (-7.0, -42.0), "away": (7.0, -42.0)}
 BOX_DOOR = {"home": (-7.0, -39.0), "away": (7.0, -39.0)}
@@ -407,6 +407,13 @@ class MotionV2:
                     if vals:
                         out[trait] = max(0.0, min(1.0, sum(vals) / len(vals)))
                 rows[pid0] = out
+        # Rank each trait among tonight's skaters and blend it with the raw rating, so the fastest and
+        # smartest players on the ice visibly are, even when the two rosters are rated close together.
+        for trait in self._TRAIT_KEYS:
+            have = sorted((q for q in rows if trait in rows[q]), key=lambda q: rows[q][trait])
+            n_ = max(1, len(have) - 1)
+            for i_, q in enumerate(have):
+                rows[q][trait] = max(0.0, min(1.0, 0.3 * rows[q][trait] + 0.7 * (i_ / n_)))
         self._rat_rows = rows
         return rows
 
@@ -419,8 +426,8 @@ class MotionV2:
         rng = self._rng("trait", pid)
         g = {k: (r[k] if k in r else max(0.0, min(1.0, 0.5 + rng.uniform(-0.2, 0.2)))) for k in self._TRAIT_KEYS}
         star = (g["speed"] + g["agility"] + g["hands"] + g["oiq"]) / 4.0 > 0.74
-        t = {"v": 0.92 + 0.16 * g["speed"] + (0.02 if star else 0.0) + rng.uniform(-0.015, 0.015),   # top speed about +/-10 %
-             "a": 0.85 + 0.3 * g["agility"], "turn": 0.65 + 0.7 * g["agility"],
+        t = {"v": 0.84 + 0.30 * g["speed"] + (0.02 if star else 0.0) + rng.uniform(-0.01, 0.01),     # top speed about +/-15 %
+             "a": 0.78 + 0.44 * g["agility"], "turn": 0.6 + 0.8 * g["agility"],
              "stride": rng.uniform(0.6, 0.9), "sph": rng.uniform(0.0, 6.283), "samp": rng.uniform(0.04, 0.08),
              "lane": max(-1.0, min(1.0, rng.uniform(-0.7, 0.7) + (g["hands"] - 0.5) * 0.8 + (0.3 if star else 0.0))),  # + middle, - wall
              "deke": min(1.0, 0.2 + 0.8 * g["hands"] + (0.15 if star else 0.0)), "dper": rng.uniform(0.45, 0.75),
@@ -437,6 +444,12 @@ class MotionV2:
 
     def _role_pid(self, side: str, gc: float, role: str) -> Optional[str]:
         ids = self.lineup_at(gc)[side]
+        if role in ("STAR", "STAR2"):   # the line's best puck handlers run the cycle
+            fw = sorted((p for p in ids if self._book_pos(p) != "D"), key=lambda p: -(self._traits(p)["oiq"] + self._traits(p)["hands"]))
+            pick = fw[0:1] if role == "STAR" else fw[1:2]
+            if pick:
+                return pick[0]
+            role = "W" if role == "STAR" else "W2"
         roles = {r: p for p, r in assign_roles(ids, self._book_pos)}
         for r in {"D1": ("LD", "RD", "D"), "D2": ("RD", "LD", "D"), "W": ("LW", "RW", "C", "F"), "W2": ("RW", "LW", "F", "C"),
                   "C": ("C", "LW", "RW", "F")}.get(role, (role,)):
@@ -508,7 +521,7 @@ class MotionV2:
 
     def _route(self, X: str, g0: float, p0: Tuple[float, float], car: Optional[str], gB: float,
                L: Optional[Tuple[float, float]], shooter: Optional[str], rng: random.Random, *, rush: bool = False,
-               pp: bool = False, shot: Optional[str] = None) -> List[Dict[str, Any]]:
+               pp: bool = False, shot: Optional[str] = None, odd: bool = False) -> List[Dict[str, Any]]:
         u0, v0 = self.rel(X, g0, *p0)
         s = 1.0 if rng.random() < 0.5 else -1.0
         wps: List[Tuple[str, float, float, str]] = []
@@ -549,6 +562,14 @@ class MotionV2:
         lu = lv = 0.0
         if L is not None:
             lu, lv = self.rel(X, g0, *L)
+        # Odd-man rush (the engine rolled a rush chance and the puck starts outside their zone): break out,
+        # then a second forward carries up the far lane and feeds the shooter across. No zone set-up.
+        odd = bool(odd and L is not None and u0 < 12.0 and T >= 4.5 and lu > 40.0 and not pp)
+        if odd:
+            far = -1.0 if lv >= 0 else 1.0
+            wps = [w_ for w_ in wps if _kb(w_[0]) != "entry" and w_[1] < 12.0 and _kb(w_[0]) != "dump"]
+            tail = [("carry", 6.0, far * 20.0, "MATE"), ("carry", max(30.0, lu - 20.0), far * 17.0, "MATE"), ("pass", lu, lv, "SHOOTER")]
+            return self._route_segs(X, g0, (u0, v0), car, wps + tail, T, shooter, rng, shot=shot, odd_tail=3)
 
         def oz_seq(name: str, sg: float) -> List[Tuple[str, float, float, str]]:
             return {
@@ -560,6 +581,15 @@ class MotionV2:
                 "walkout": [("carry", 85.0, sg * 30.0, "W"), ("carry", 93.0, sg * 8.0, "W"), ("carry", 93.0, -sg * 8.0, "W"), ("carry", 80.0, -sg * 20.0, "W")],
                 "net_front": [("carry", 84.0, sg * 32.0, "W"), ("pass", 30.0, sg * 20.0, "D1"), ("carry", 32.0, sg * 8.0, "D1"), ("pass:saucer", 62.0, sg * 30.0, "W")],
                 "quick_strike": [],
+                # east-west looks: the puck changes sides through the seam, across the top or behind the net
+                "royal_road": [("carry", 68.0, sg * 31.0, "STAR"), ("pass:saucer", 66.0, -sg * 27.0, "STAR2"), ("carry", 79.0, -sg * 28.0, "STAR2"),
+                               ("pass", 31.0, -sg * 16.0, "D2")],
+                "high_switch": [("pass", 31.0, sg * 22.0, "D1"), ("carry", 33.0, -sg * 8.0, "D1"), ("pass", 58.0, -sg * 31.0, "W2"),
+                                ("carry", 81.0, -sg * 30.0, "W2")],
+                "behind_net": [("carry", 86.0, sg * 27.0, "STAR"), ("carry", 94.0, sg * 6.0, "STAR"), ("pass", 86.0, -sg * 24.0, "C"),
+                               ("carry", 70.0, -sg * 31.0, "C"), ("pass", 31.0, -sg * 10.0, "D2")],
+                "weak_side": [("pass", 30.0, sg * 20.0, "D1"), ("pass", 31.0, -sg * 16.0, "D2"), ("pass", 64.0, -sg * 31.0, "W2"),
+                              ("carry", 82.0, -sg * 27.0, "W2")],
                 "pp_umbrella": [("pass", 31.0, 0.0, "D1"), ("carry", 33.0, sg * 6.0, "D1"), ("pass", 60.0, sg * 27.0, "W"), ("carry", 63.0, sg * 25.0, "W")],
                 "pp_overload": [("pass", 60.0, sg * 27.0, "W"), ("carry", 66.0, sg * 30.0, "W"), ("pass", 80.0, sg * 18.0, "C"), ("pass:drop", 62.0, sg * 26.0, "W")],
                 "pp_low": [("carry", 84.0, sg * 20.0, "W"), ("pass:saucer", 84.0, -sg * 16.0, "W2"), ("carry", 80.0, -sg * 24.0, "W2"), ("pass", 32.0, -sg * 8.0, "D1")],
@@ -572,7 +602,8 @@ class MotionV2:
                 w = {"pp_umbrella": 1.0, "pp_overload": 0.8, "pp_low": 0.7}
             else:
                 w = {"low_cycle": 1.0, "overload": 0.7, "umbrella": 0.6 + (0.7 if 0 < lu < 42 else 0.0), "walkout": 0.4 + 0.6 * tr["hands"],
-                     "net_front": 0.6 + (0.5 if shot == "tip" else 0.0), "quick_strike": 0.25}
+                     "net_front": 0.6 + (0.5 if shot == "tip" else 0.0), "quick_strike": 0.25,
+                     "royal_road": 0.5 + 0.7 * tr["hands"], "high_switch": 0.8, "behind_net": 0.7, "weak_side": 0.8}
             return oz_seq(self._pick_pattern(X, g0, "ozone", w, rng), 1.0 if rng.random() < 0.5 else -1.0)
 
         final = None
@@ -622,12 +653,16 @@ class MotionV2:
         return self._route_segs(X, g0, (u0, v0), car, seq, T, shooter, rng, shot=shot)
 
     def _route_segs(self, X: str, g0: float, start_uv: Tuple[float, float], car: Optional[str], seq: List[Tuple[str, float, float, str]],
-                    T: float, shooter: Optional[str], rng: random.Random, rush: bool = False, shot: Optional[str] = None) -> List[Dict[str, Any]]:
+                    T: float, shooter: Optional[str], rng: random.Random, rush: bool = False, shot: Optional[str] = None,
+                    odd_tail: int = 0) -> List[Dict[str, Any]]:
         # resolve who holds the puck at each step so kinds are right before timing (a "pass" to the
         # player who already has it is a carry), then drop early waypoints rather than speed things up
         def who_of(role: str, hold_: Optional[str]) -> Optional[str]:
             if role == "SHOOTER":
                 return shooter or hold_
+            if role == "MATE":   # the fastest forward who isn't the shooter leads the rush
+                fw_ = [q for q in self.lineup_at(g0 + T)[X] if q != shooter and self._book_pos(q) != "D"]
+                return max(fw_, key=lambda q: self._traits(q)["speed"]) if fw_ else hold_
             if role == "CAR":
                 return hold_ or self._role_pid(X, g0 + T, "C")
             if role == "-":
@@ -672,7 +707,7 @@ class MotionV2:
         if not seq:  # nothing planned (very short gap): the holder protects the puck where he is
             seq = [("carry", max(-85.0, min(85.0, start_uv[0] + 4.0)), start_uv[1] * 0.95, "CAR")]
         seq = resolve(seq)
-        if shooter and len(seq) >= 2 and seq[-1][3] == "SHOOTER" and shot not in ("tip", "wraparound", "one_timer"):
+        if shooter and len(seq) >= 2 and seq[-1][3] == "SHOOTER" and shot not in ("tip", "wraparound", "one_timer") and not odd_tail:
             # the shooter already touched it earlier: he keeps it and carries to his spot from there
             hold_, last_i = car, None
             for i, (k, u, v, role) in enumerate(seq[:-1]):
@@ -700,14 +735,23 @@ class MotionV2:
                     sq = sq[:-1] + [("carry", prv[1] + 8.0, prv[2], who_), sq[-1]]  # a beat in the zone while the shooter gets there
             return sq
 
-        seq = resolve(entry_fix(seq))
+        seq = resolve(seq if odd_tail else entry_fix(seq))
         durs = timing(seq)
-        while len(seq) > 2 and sum(durs) > T * 1.15:
-            seq = resolve(entry_fix(seq[1:]))
+        while len(seq) > max(2, odd_tail) and sum(durs) > T * 1.15:
+            seq = resolve(seq[1:] if odd_tail else entry_fix(seq[1:]))
             durs = timing(seq)
+        if odd_tail:   # the rush itself runs at rush speed
+            for i in range(max(0, len(seq) - odd_tail), len(seq)):
+                if _kb(seq[i][0]) == "carry":
+                    durs[i] *= CARRY / CARRY_RUSH
         tot = sum(durs) or 1.0
         if tot < T:
-            idx = [i for i, (k, *_x) in enumerate(seq) if _kb(k) == "carry"]
+            # Spare time goes to the earlier carries only. The last move to the shot (and an odd-man rush)
+            # keeps its natural speed, so nobody walks into a shooting lane and waits there.
+            keep = max(1, odd_tail) if shooter else 0
+            idx = [i for i, (k, *_x) in enumerate(seq) if _kb(k) == "carry" and i < len(seq) - keep]
+            if not idx and len(seq) > keep:
+                idx = [0]
             extra = T - tot
             if idx:
                 ct = sum(durs[i] for i in idx) or 1.0
@@ -731,10 +775,13 @@ class MotionV2:
             g1 = g + d
             pa = self.ab(X, g, *cur)
             pb = self.ab(X, g, u, v)
+            n_before = len(segs)
             if role == "SHOOTER":
                 who = shooter or holder
                 if kb == "pass" and who == holder:
                     kb = "carry"  # the shooter already has it: he carries to his spot
+            elif role == "MATE":
+                who = who_of("MATE", holder)
             elif role == "CAR":
                 who = holder or self._role_pid(X, g, "C")
             elif role == "-":
@@ -775,8 +822,16 @@ class MotionV2:
                     sg["ptype"] = "dump"
                 segs.append(sg)
                 holder = None
+            if odd_tail and role in ("MATE", "SHOOTER"):
+                for sg_ in segs[n_before:]:
+                    sg_["rush"] = True
+                    sg_["odd"] = shooter
+                    sg_["car_fast"] = True
             cur = (u, v)
             g = g1
+        if shooter:
+            for sg_ in segs[-2:]:
+                sg_["pre_shot"] = True   # the last touches before a real shot: forwards go to the net
         return segs
 
     def _pass_path(self, sg: Dict[str, Any], kf: str, rng: random.Random) -> None:
@@ -942,11 +997,13 @@ class MotionV2:
             L = (float((B.get("shot_loc") or {}).get("x", 0.0)), float((B.get("shot_loc") or {}).get("y", 0.0)))
             shooter = a.get("shooter_id")
             rush = a.get("chance") == "breakaway"
+            odd = (not rush) and "RUSH" in str(a.get("chance_raw") or "").upper()
         elif B["type"] == "shootout_attempt" or (B["type"] == "period_start" and int(B.get("period") or 0) == 5):
             return [_seg("hold", g0, gB, state["puck"], state["puck"], ph="shootout")] if gB > g0 else []
         else:
             X = state.get("side") if state.get("side") in SIDES else ("home" if rng.random() < 0.5 else "away")
             L, shooter, rush = None, None, False
+            odd = False
         st = dict(state)
         # derived stoppage in long gaps (before the build-up to B)
         if B["type"] in ("attempt", "goal") and gB - g0 >= 20.0:
@@ -1003,7 +1060,8 @@ class MotionV2:
                 tq = gB - rng.uniform(0.1, 0.3)
             if tq <= g + 0.2:
                 tq = gB
-            r_segs = self._route(X, g, p, car, tq, L, shooter, rng, rush=rush, pp=pp, shot=shot)
+            r_segs = self._route(X, g, p, car, tq, L, shooter, rng, rush=rush, pp=pp, shot=shot,
+                                 odd=odd)
             segs += r_segs
             last = r_segs[-1] if r_segs else None
             if shot in ("one_timer", "tip") and not (last is not None and last["k"] == "pass" and last.get("rcv") == shooter):
@@ -1625,7 +1683,14 @@ class MotionV2:
         if poss is None:                           # loose puck: whoever's attacking zone it is in plays it as attack
             poss = side if pu > BLUE else (opp(side) if pu < -BLUE else None)
         car = seg.get("car") if k in ("carry", "hold") else (seg.get("rcv") if k == "pass" else None)
-        tac = (getattr(self.loop, "tactics", None) or {}) if side == self.loop.lg.user_side else {}
+        if side == self.loop.lg.user_side:
+            tac = getattr(self.loop, "tactics", None) or {}
+        else:
+            # the other bench has a system too, fixed for the night, so the two teams don't play the same shape
+            h_t = zlib.crc32(f"{getattr(self.loop.lg, 'live_id', '')}:{side}".encode())
+            opts = ("passive", "balanced", "aggressive")
+            tac = {"forecheck": opts[h_t % 3], "defense": opts[(h_t // 3) % 3]}
+        t_def, t_fc = tac.get("defense"), tac.get("forecheck")
         spot: Dict[str, Tuple[float, float]] = {}
 
         def lim_onside(u: float) -> float:
@@ -1650,7 +1715,8 @@ class MotionV2:
                     spot.update(self._assign(side, gc, [p for p in rest if p not in spot], f_pts + d_pts))
                 else:
                     # 2-1-2 cycle: F1 on the puck, F2 low support, F3 high slot, D on the points shading to the puck
-                    d_pts = [(30.0, max(-28.0, min(28.0, 0.55 * pv + 14.0 * s))), (31.0, max(-26.0, min(26.0, 0.35 * pv - 12.0 * s)))]
+                    # strong-side D walks the wall with the puck, weak-side D holds the far point: the whole blue line is covered
+                    d_pts = [(30.0, max(-30.0, min(30.0, 0.5 * pv + 14.0 * s))), (31.0, max(-28.0, min(28.0, 0.12 * pv - 19.0 * s)))]
                     if n <= 3:   # 3v3: one D high, two forwards
                         d_pts = d_pts[:1]
                     spot.update(self._assign(side, gc, [p for p in D_ids if p != car], d_pts))
@@ -1659,10 +1725,28 @@ class MotionV2:
                         f_pts = [(83.0, -4.0 * s), (62.0, 30.0 * s), (70.0, -24.0 * s)]
                     else:
                         low = toward(pu, pv, 85.0, -6.0 * s, 12.0) if pu < 80.0 else (pu - 13.0, pv * 0.45)
-                        f_pts = [low, (66.0, 0.25 * pv), (78.0, -16.0 * s)]
+                        f_pts = [low, (64.0, 0.1 * pv), (76.0, -25.0 * s)]   # F2 low support, F3 high slot, weak-side winger stays wide
                     spot.update(self._assign(side, gc, fw, f_pts))
                     for p in [q for q in ids if q not in spot and q != car]:
                         spot[p] = (70.0, -20.0 * s)
+                    # Off the puck, forwards go to the net instead of holding a spot. On the last touches before
+                    # a real shot one screens and one takes the rebound lane; otherwise each forward dives
+                    # back-door on his own rhythm, and the higher his offensive IQ the more often he goes.
+                    busy = {car, seg.get("rcv"), seg.get("car")}
+                    free = [q for q in fw if q not in busy and q in spot]
+                    if seg.get("pre_shot") and free:
+                        free.sort(key=lambda q: math.hypot(spot[q][0] - 83.0, spot[q][1]))
+                        spot[free[0]] = (83.0, -5.0 * s)
+                        if len(free) > 1:
+                            spot[free[1]] = (72.0, 5.0 * s)
+                    else:
+                        for q in free:
+                            iq = self._traits(q)["oiq"]
+                            h_ = zlib.crc32(q.encode())
+                            per = 6.0 + (h_ % 5) + 6.0 * (1.0 - iq)
+                            if (gc + (h_ % 13)) % per < 2.4:
+                                v_ = spot[q][1]
+                                spot[q] = (79.0 + 4.0 * iq, (-6.5 if v_ >= 0 else 6.5) if abs(v_) < 14.0 else v_ * 0.42)
             elif pu > -BLUE:
                 # neutral zone with the puck: width lanes, a trailer, D trailing the play (nobody offside)
                 lanes = [(lim_onside(pu + 10.0), 26.0), (lim_onside(pu + 10.0), -26.0), (pu - 12.0, 0.3 * pv)]
@@ -1677,6 +1761,18 @@ class MotionV2:
                 for pid in list(spot):
                     u, v = spot[pid]
                     spot[pid] = (min(u, pu - 6.0), v)  # support trails the breakaway
+            if seg.get("odd"):
+                # odd-man rush: the shooter drives the far lane level with the puck, the third forward trails, D join late
+                tgt = seg.get("odd")
+                k_ = 0
+                for pid in list(spot):
+                    if pid == tgt:
+                        spot[pid] = (lim_onside(min(pu + 4.0, 80.0)), -17.0 * s)
+                    elif pid in D_ids:
+                        spot[pid] = (pu - 32.0, 14.0 if k_ % 2 == 0 else -14.0)
+                        k_ += 1
+                    else:
+                        spot[pid] = (pu - 15.0, 3.0 * s)
         else:
             # defending
             if pu <= -BLUE:
@@ -1690,7 +1786,9 @@ class MotionV2:
                     spot.update(self._assign(side, gc, [p for p in ids if p not in spot], pts_f + pts_d))
                 else:
                     # strong-side D on the carrier, weak-side D net-front, C low support, wingers on the points
-                    on_puck = toward(pu, pv, -89.0, 0.0, 5.0)
+                    # system: aggressive pressures the puck and the points, passive packs the slot and gives up the outside
+                    gap_c, gap_w, sag = (3.5, 4.0, 0.08) if t_def == "aggressive" else ((7.0, 13.0, 0.42) if t_def == "passive" else (5.0, 7.0, 0.2))
+                    on_puck = toward(pu, pv, -89.0, 0.0, gap_c)
                     d_pts = [on_puck, (-82.0, -5.0 * s)]
                     spot.update(self._assign(side, gc, D_ids, d_pts))
                     att = [q for q in opp_ids if q in self.pos and self.loop.book.pos(q) != "G" and q != seg.get("car")]
@@ -1698,7 +1796,7 @@ class MotionV2:
                     w_pts = []
                     for q in pointmen:
                         qu, qv = self.rel(side, gc, *self.pos[q][:2])
-                        w_pts.append(toward(qu, qv, -89.0, 0.0, 7.0))
+                        w_pts.append(toward(qu, qv, -89.0, 0.0, gap_w))
                     while len(w_pts) < 2:
                         w_pts.append((-42.0, (20.0 if len(w_pts) == 0 else -20.0)))
                     c_pt = (-74.0, 8.0 * s)
@@ -1713,9 +1811,9 @@ class MotionV2:
                                 self._marks[p_] = q
                     for pid, (u, v) in list(spot.items()):   # the unit collapses toward the slot
                         if pid not in self._marks and (u, v) != on_puck:
-                            spot[pid] = (u + (-72.0 - u) * 0.2, v * 0.8)
+                            spot[pid] = (u + (-72.0 - u) * sag, v * (1.0 - sag))
             elif pu < BLUE:
-                aggressive = tac.get("forecheck") == "aggressive"
+                aggressive = t_fc == "aggressive"
                 if aggressive:   # 1-2-2 forecheck high
                     f_pts = [(pu - 5.0, pv), (pu - 16.0, 20.0 * s), (pu - 30.0, -12.0 * s)]
                     d_pts = [(max(-80.0, pu - 45.0), 15.0), (max(-80.0, pu - 45.0), -15.0)]
@@ -1726,13 +1824,33 @@ class MotionV2:
                 spot.update(self._assign(side, gc, D_ids, d_pts))
             else:
                 # forecheck in their end: F1 on the puck, F2 cuts off the strong wall, F3 high, D hold the line
-                pinch = 36.0 if abs(pv) > 30.0 and tac.get("defense") != "passive" else 30.0
-                f_pts = [(pu - 5.0, pv), (max(pu - 15.0, 42.0), 30.0 * s), (55.0, 0.2 * pv)]
+                if t_fc == "aggressive":      # 2-1-2: two forwards hunt below the dots, D pinch down the wall
+                    f_pts = [(pu - 4.0, pv), (max(pu - 9.0, 52.0), 24.0 * s if abs(pv) < 20.0 else 0.5 * pv), (58.0, 0.15 * pv)]
+                    d_line = [(40.0 if abs(pv) > 26.0 else 33.0, 27.0 * s), (31.0, -12.0 * s)]
+                elif t_fc == "passive":       # 1-4: one forward shadows, everyone else waits in the neutral zone
+                    f_pts = [(pu - 12.0, 0.7 * pv), (22.0, 22.0 * s), (20.0, -20.0 * s)]
+                    d_line = [(6.0, 13.0 * s), (4.0, -13.0 * s)]
+                else:                         # 1-2-2: F1 on the puck, F2 cuts off the strong wall, F3 high, D hold the line
+                    pinch = 36.0 if abs(pv) > 30.0 and t_def != "passive" else 30.0
+                    f_pts = [(pu - 5.0, pv), (max(pu - 15.0, 42.0), 30.0 * s), (55.0, 0.2 * pv)]
+                    d_line = [(pinch, 26.0 * s), (30.0, -12.0 * s)]
                 spot.update(self._assign(side, gc, F_ids, f_pts))
-                spot.update(self._assign(side, gc, D_ids, [(pinch, 26.0 * s), (30.0, -12.0 * s)]))
+                spot.update(self._assign(side, gc, D_ids, d_line))
             if seg.get("rush") and poss == opp(side):
                 for pid in list(spot):
                     spot[pid] = (min(spot[pid][0], pu - 9.0), spot[pid][1] * 0.6)  # defenders trail the breakaway
+            if seg.get("odd") and poss == opp(side) and ids:
+                # one defender is back, between the puck and the net, taking the pass away; the rest are chasing
+                pool = D_ids or list(ids)
+                back = min(pool, key=lambda q: self.rel(side, gc, *self.pos[q][:2])[0] if q in self.pos else 0.0)
+                k_ = 0
+                for pid in ids:
+                    if pid == back:
+                        spot[pid] = (max(-82.0, pu - 15.0), 0.45 * pv)
+                    else:
+                        lag = 10.0 + 7.0 * k_ - 7.0 * self._traits(pid)["speed"]   # quick backcheckers close the gap
+                        spot[pid] = (pu + lag, 0.6 * pv + (9.0 if k_ % 2 == 0 else -9.0))
+                        k_ += 1
         for pid in ids:
             if pid not in spot:
                 spot[pid] = (lim_onside(pu - 10.0) if poss == side else pu - 10.0, -10.0 * s)

@@ -77,7 +77,20 @@ def _ctx_for(session: Any) -> Dict[str, Any]:
 
 def _finish(out: Dict[str, Any], it: Any, q: str, t0: float) -> Dict[str, Any]:
     """Stamp the interpretation, and say which parts of the question the answer couldn't honour."""
+    from . import converse
     from .answers4 import caveats
+
+    session = _SESSION_FOR_EVIDENCE.get("s")
+    if session is not None:
+        try:
+            # A dead end about the club ("No games played yet") becomes an on-paper read.
+            from .data import live_view as _view_of
+
+            out = converse.rescue(out, str(it.intent or ""), q, _view_of(session), it.slots or {})
+            if it.band == "low" and out.get("clarify") is not None:
+                out = converse.not_understood(out, _view_of(session), it.slots or {})
+        except Exception:
+            log.debug("puckgpt conversation rescue failed", exc_info=True)
 
     # The planner and reasoning layers already say what they could and couldn't split.
     own = str(it.intent or "").split(":")[0] in ("team_plan", "game_records", "reason", "verdict", "events")
@@ -93,6 +106,10 @@ def _finish(out: Dict[str, Any], it: Any, q: str, t0: float) -> Dict[str, Any]:
     except Exception:
         log.debug("analytics check failed", exc_info=True)
     out.pop("_evidence_done", None)
+    try:
+        out = converse.voice(out, str(it.intent or ""))
+    except Exception:
+        log.debug("puckgpt voice failed", exc_info=True)
     out["interpretation"] = it.as_dict()
     out["elapsed_ms"] = round((time.perf_counter() - t0) * 1000, 1)
     out.pop("list_ids", None)
@@ -103,9 +120,49 @@ _SESSION_FOR_EVIDENCE: Dict[str, Any] = {}
 
 
 def ask(session: Any, query: str) -> Dict[str, Any]:
+    """Conversation front door: chatter, follow-ups on the last reply, and several questions at once."""
+    from . import converse
+
+    t0 = time.perf_counter()
+    raw = str(query or "").strip()
+    ctx = _ctx_for(session)
+    try:
+        chat = converse.small_talk(raw, live_view(session), ctx) if raw else None
+    except Exception:
+        log.debug("puckgpt small talk failed", exc_info=True)
+        chat = None
+    if chat:
+        intent, out = chat
+        out["say"] = out.get("answer")
+        out["interpretation"] = {"intent": intent, "confidence": 1.0, "band": "high", "rewritten": raw, "slots": {}}
+        out["elapsed_ms"] = round((time.perf_counter() - t0) * 1000, 1)
+        return out
+    parts = converse.split_questions(raw)
+    if len(parts) > 1:
+        done = []
+        for part in parts:
+            res = _ask_one(session, part)
+            done.append((part, res))
+        out = converse.merge(done)
+        converse.remember(ctx, raw, done[-1][1])
+        return out
+    out = _ask_one(session, raw)
+    converse.remember(ctx, raw, out)
+    return out
+
+
+def _ask_one(session: Any, query: str) -> Dict[str, Any]:
     t0 = time.perf_counter()
     _SESSION_FOR_EVIDENCE["s"] = session
+    from . import converse
     from .normalize import normalize
+
+    asked = str(query or "").strip()
+    try:
+        asked = converse.expand(asked, live_view(session))
+    except Exception:
+        log.debug("puckgpt expand failed", exc_info=True)
+    query = converse.rewrite(asked)
 
     # Slang, texting shorthand and typos are cleaned once, so every layer reads the same words.
     q = normalize(str(query or "").strip()) or str(query or "").strip()
@@ -125,6 +182,50 @@ def ask(session: Any, query: str) -> Dict[str, Any]:
                 "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1)}
 
     it = interpret(q, view.world, ctx)
+
+    # Judgment questions ("are we good enough to win the Cup", "what do we need") and
+    # questions that belong to one handler whatever the layers below would guess.
+    try:
+        judged = converse.judgment(asked, view, it.slots or {})
+    except Exception:
+        log.exception("puckgpt judgment layer failed")
+        judged = None
+    if judged:
+        it.intent, out = judged
+        it.confidence, it.band, it.rewritten = 0.9, "high", " ".join(asked.split())
+        if out.get("focus_ids"):
+            ctx["players"] = out["focus_ids"][:4]
+        ctx["intent"] = it.intent
+        return _finish(out, it, q, t0)
+    # Specific front-office facts (captain, next game, expiring deals, oldest player…).
+    try:
+        from . import facts
+
+        fact = facts.match(asked, view, it.slots or {}, ctx)
+    except Exception:
+        log.exception("puckgpt facts layer failed")
+        fact = None
+    if fact:
+        it.intent, out = fact
+        it.confidence, it.band, it.rewritten = 0.9, "high", " ".join(asked.split())
+        if out.get("focus_ids"):
+            ctx["players"] = out["focus_ids"][:4]
+            ctx["history"] = ([p for p in ctx.get("history") or [] if p != out["focus_ids"][0]] + out["focus_ids"][:1])[-20:]
+        if out.get("list_ids"):
+            ctx["list"] = out["list_ids"][:15]
+        ctx["intent"] = it.intent
+        return _finish(out, it, q, t0)
+    forced = converse.directive(asked)
+    if forced and forced[0] in HANDLERS:
+        it.intent, it.slots = forced[0], {**(it.slots or {}), **forced[1]}
+        it.confidence, it.band, it.rewritten = 0.9, "high", " ".join(asked.split())
+        try:
+            out = HANDLERS[it.intent](view, it.slots, {"raw": q.lower(), "language": it.language, "conv": ctx})
+        except Exception:
+            log.exception("puckgpt handler %s failed", it.intent)
+            out = {"answer": "That question hit a snag reading the save.", "analysis": ["Try rephrasing, or ask something narrower."]}
+        ctx["intent"] = it.intent
+        return _finish(out, it, q, t0)
     from . import answers6
 
     try:

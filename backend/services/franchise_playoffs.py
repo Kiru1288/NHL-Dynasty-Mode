@@ -153,6 +153,8 @@ def _sync_same_night_slate(live: Dict[str, Any]) -> None:
             target = day
         else:
             target = min(tips)
+            if target - day > 3:
+                target = day + 1   # never more than a short break between games (also repairs stretched old saves)
         for r in rows:
             r["schedule_track"] = "mwf" if int(r.get("round_index") or 0) < 4 else "scf"
             next_g = max(1, int(r.get("next_game") or 1))
@@ -161,6 +163,7 @@ def _sync_same_night_slate(live: Dict[str, Any]) -> None:
             else:
                 # Re-anchor remaining travel calendar so the next tip is `target`.
                 r["series_start_day"] = int(target)
+                r["anchor_game"] = int(next_g)
                 # Walk remaining games from tonight using travel rests.
                 dates = list(r.get("schedule_dates") or [])
                 while len(dates) < 7:
@@ -217,18 +220,32 @@ def _series_game_day(row: Dict[str, Any], game_number: int) -> int:
         track = str(row.get("schedule_track") or "mwf").lower()
         offsets = _TRACK_OFFSETS.get(track) or _TRACK_OFFSETS["mwf"]
     # Prefer travel-aware cumulative schedule when home teams are known.
-    if row.get("team_high_id") and row.get("team_low_id") and int(row.get("round_index") or 0) < 4:
+    # series_start_day is the night of game `anchor_game` (1 for a fresh series). After a re-sync it is the
+    # night of the NEXT game, so rest days are only counted from that game on. Counting from game 1 again
+    # was stretching every gap (2 days, then 5, 7, 10 ...).
+    anchor = max(1, min(7, int(row.get("anchor_game") or 1)))
+    if g < anchor:
+        dates = row.get("schedule_dates") or []
+        if len(dates) >= g:
+            try:
+                return int(dates[g - 1])
+            except (TypeError, ValueError):
+                pass
+        return start
+    if row.get("team_high_id") and row.get("team_low_id"):
         day = start
-        for n in range(2, g + 1):
+        for n in range(anchor + 1, g + 1):
             day += _rest_days_before_game(row, n) + 1
         return day
-    return start + int(offsets[g - 1])
+    return start + int(offsets[g - 1]) - int(offsets[anchor - 1])
 
 
 def _assign_series_schedule(row: Dict[str, Any], *, track: str, start_day: int) -> None:
     row["schedule_track"] = track
     row["series_start_day"] = int(start_day)
     next_g = max(1, int(row.get("next_game") or 1))
+    if next_g <= 1 or not row.get("anchor_game"):
+        row["anchor_game"] = 1
     row["scheduled_day"] = _series_game_day(row, next_g)
     row["schedule_dates"] = [_series_game_day(row, g) for g in range(1, 8)]
 
@@ -1036,6 +1053,15 @@ def _try_advance_bracket(session: FranchiseSession, live: Dict[str, Any]) -> Non
         if int(s.get("round_index") or 0) == 1
     })
 
+    # Rounds move league-wide: the next round opens only when every series of the round before it is over,
+    # so East and West always play the same game number on the same night.
+    def _round_done(n: int) -> bool:
+        rows = [s for s in series if int(s.get("round_index") or 0) == n]
+        return bool(rows) and all(_series_complete(s) for s in rows)
+
+    r1_all_done = _round_done(1)
+    r2_all_done = _round_done(2)
+
     for conf in confs:
         conf_key = None if conf == "League" else conf
         r1 = [
@@ -1043,7 +1069,7 @@ def _try_advance_bracket(session: FranchiseSession, live: Dict[str, Any]) -> Non
             if int(s.get("round_index") or 0) == 1
             and (s.get("conference") == conf_key or (conf == "League" and not s.get("conference")))
         ]
-        if not r1 or not all(_series_complete(s) for s in r1):
+        if not r1 or not all(_series_complete(s) for s in r1) or not r1_all_done:
             continue
         r1 = sorted(r1, key=lambda s: int(s.get("bracket_slot") or 0))
         winners = _sort_winners_by_standings(session, [_winner_id(s) for s in r1 if _winner_id(s)])
@@ -1089,7 +1115,7 @@ def _try_advance_bracket(session: FranchiseSession, live: Dict[str, Any]) -> Non
             if int(s.get("round_index") or 0) == 2
             and (s.get("conference") == conf_key or (conf == "League" and not s.get("conference")))
         ]
-        if r2_active and all(_series_complete(s) for s in r2_active):
+        if r2_active and all(_series_complete(s) for s in r2_active) and r2_all_done:
             w2 = _sort_winners_by_standings(session, [_winner_id(s) for s in r2_active if _winner_id(s)])
             cf = next(
                 (
@@ -1422,6 +1448,20 @@ def _handle_playoff_action_inner(
         games = []
         due = _due_active_series(live, cpu_only=False)
         note = None
+        if not due and body.get("skip_off_days"):
+            # "Sim Next Game": travel days pass on their own, so one press is always one game in every live series.
+            guard = 0
+            while not due and guard < 8 and not live.get("completed"):
+                guard += 1
+                if not any(s.get("status") == "active" for s in live.get("series") or []):
+                    _try_advance_bracket(session, live)
+                    if not any(s.get("status") == "active" for s in live.get("series") or []):
+                        break
+                else:
+                    live["playoff_day"] = int(live.get("playoff_day") or 0) + 1
+                    _try_advance_bracket(session, live)
+                _sync_same_night_slate(live)
+                due = _due_active_series(live, cpu_only=False)
         if not due:
             note = "Off day — no tips tonight"
         for row in list(due):

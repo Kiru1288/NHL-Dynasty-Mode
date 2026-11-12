@@ -696,6 +696,8 @@ _ALERT_I18N: Dict[str, Dict[str, str]] = {
         "pp": "Power play for {team} ({label})", "pk": "Penalty kill for {team} ({label})",
         "fatigue": "{player} is gassed — change lines?", "hot": "{player} is hot: {pts} pts, {sog} SOG",
         "cold": "{player} is struggling ({pm} on ice) — sit him?", "goalie": "{player} is struggling: {ga} GA, {svp} save pct",
+        "blender": "Outshot {them}-{us} over the last {mins} minutes. Time to put the lines in a blender?",
+        "caved": "Line {line} is getting caved in: {ca} shot attempts against, {cf} for. Change who is out there?",
         "momentum": "Momentum swinging to {team}", "timeout_suggest": "Two quick goals against — call a timeout?",
         "pull_suggest": "Down {n} late — pull the goalie?",
     },
@@ -774,6 +776,7 @@ if _LC is not None:
 _COACH_WHAT: Dict[str, Dict[str, str]] = {
     "en": {"pull": "goalie pulled for an extra attacker", "return": "goalie back in net", "timeout": "timeout",
            "shorten_bench": "shortening the bench", "roll_lines": "rolling all four lines", "normal_rotation": "normal rotation",
+           "blender": "the lines go in the blender", "unblend": "back to the original lines",
            "next_line": "sending out {unit}", "bench_player": "benching {player}", "unbench": "{player} back in the rotation",
            "tactics": "new tactics ({detail})", "line": "line {n}", "pair": "pair {n}"},
     "fr": {"pull": "gardien retiré pour un attaquant supplémentaire", "return": "gardien de retour devant le filet", "timeout": "temps d'arrêt",
@@ -1030,6 +1033,38 @@ class _PlayerBook:
     def __init__(self) -> None:
         self.chips: Dict[str, Dict[str, Any]] = {}
         self.side: Dict[str, str] = {}
+        self.traits: Dict[str, Dict[str, float]] = {}
+
+    @staticmethod
+    def _trait(p: Any, *keys: str) -> float:
+        """A rating as 0..1 (60 -> 0, 95 -> 1). The first key present on the player wins; missing reads as average."""
+        r = getattr(p, "ratings", None) or {}
+        for k in keys:
+            try:
+                v = float(r.get(k))
+            except (TypeError, ValueError):
+                continue
+            if v > 0:
+                return max(0.0, min(1.0, (v - 60.0) / 35.0))
+        return 0.4
+
+    def trait(self, pid: Optional[str], key: str) -> float:
+        """The player's rating as a rank among everyone in this game (0 = lowest on the ice tonight, 1 = highest).
+
+        Ranking inside the game is what makes the fast players look fast and the smart ones look smart,
+        whatever the league's overall rating spread is.
+        """
+        cache = getattr(self, "_rank_cache", None)
+        if cache is None or cache[0] != len(self.traits):
+            ranks: Dict[str, Dict[str, float]] = {}
+            for k in ("spd", "acc", "off", "pas", "hnd", "def"):
+                order = sorted(self.traits, key=lambda q: self.traits[q].get(k, 0.4))
+                n = max(1, len(order) - 1)
+                for i, q in enumerate(order):
+                    ranks.setdefault(q, {})[k] = i / n
+            cache = (len(self.traits), ranks)
+            self._rank_cache = cache
+        return float((cache[1].get(pid or "") or {}).get(key, 0.5))
 
     def add(self, p: Any, side: Optional[str]) -> str:
         if p is None:
@@ -1044,6 +1079,16 @@ class _PlayerBook:
             name = _pname(p)
             self.chips[pid] = {"player_id": pid, "name": name, "short": _short_name(name), "number": _pnum(p), "pos": _ppos(p),
                                "hs": _headshot_fields(p, pid, name, _ppos(p))}
+        if pid not in self.traits:
+            T = self._trait
+            self.traits[pid] = {
+                "spd": T(p, "skg_speed", "speed", "skg_transition_speed"),
+                "acc": T(p, "skg_acceleration", "acceleration", "skg_speed", "speed"),
+                "off": T(p, "off_offensive_awareness", "offensive_awareness", "off_shot_iq", "off_finishing"),
+                "pas": T(p, "pm_passing_vision", "pm_passing_accuracy", "passing"),
+                "hnd": T(p, "pc_puck_control", "puck_control", "pc_deking", "deking"),
+                "def": T(p, "def_defensive_awareness", "defensive_awareness", "def_stick_checking", "stick_checking"),
+            }
         if side:
             self.side.setdefault(pid, side)
         return pid
@@ -1396,6 +1441,20 @@ class _EnginePass:
                 new = self._deploy(side, units, new, i)
             new = self._bench(side, units, new, i)
             self._note_line(side, units, new, i, st)
+            if st == "EV":
+                for e in self._active("shuffle", side, i)[-1:]:
+                    swap = e.get("map") or {}
+                    objs = {_pid(q): q for ln in (units.get("lines") or []) for q in ln}
+                    on = {_pid(q) for q in new}
+                    out_: List[Any] = []
+                    for q in new:
+                        tgt = swap.get(_pid(q))
+                        if tgt and tgt in objs and (tgt not in on or tgt in swap):
+                            out_.append(objs[tgt])
+                        else:
+                            out_.append(q)
+                    if len({_pid(q) for q in out_}) == len(out_):
+                        new = out_
             return new, extra
         except Exception:
             logger.warning("live on-ice hook failed", exc_info=True)
@@ -1913,6 +1972,7 @@ class AlertEngine:
         self._against: List[float] = []
         self._n = 0
         self._last_tick = -999.0
+        self._att: List[Tuple[float, str, Optional[int]]] = []  # (t, shooting side, user's forward line on the ice)
 
     def add(self, kind: str, severity: str, params: Dict[str, Any], t: float, seq: int, *,
             player_id: Optional[str] = None, action: Optional[Dict[str, Any]] = None, ttl: float = 12.0,
@@ -1956,6 +2016,24 @@ class AlertEngine:
                                  action={"kind": "bench_player", "payload": {"player_id": pid}}, ttl=20.0, cooldown=600.0, key=str(pm))
             for pid in [ev.get("shooter_id")] + list(ev.get("assist_ids") or []):
                 self._hot(pid, t, seq)
+        if typ in ("attempt", "goal") and side in _SIDES:
+            uf = (loop.state.on_line.get(user) or {}).get("F")
+            self._att = [x for x in self._att if t - x[0] <= 600.0] + [(t, side, int(uf) if uf is not None else None)]
+            if loop.manpower(t).get("home_skaters") == loop.manpower(t).get("away_skaters"):
+                recent = [x for x in self._att if t - x[0] <= 300.0]
+                us = sum(1 for x in recent if x[1] == user)
+                them = len(recent) - us
+                if them >= 7 and us <= 2 and t >= 300.0:
+                    self.add("blender", "med", {"us": us, "them": them, "mins": 5}, t, seq,
+                             action={"kind": "blender", "payload": {"on": True}}, ttl=25.0, cooldown=420.0)
+                if uf is not None:
+                    mine = [x for x in self._att if x[2] == int(uf)]
+                    ca = sum(1 for x in mine if x[1] != user)
+                    cf = len(mine) - ca
+                    if ca >= 6 and cf <= 1:
+                        nxt = f"F{((int(uf) + 1) % 4) + 1}"
+                        self.add("caved", "med", {"line": int(uf) + 1, "ca": ca, "cf": cf}, t, seq,
+                                 action={"kind": "next_line", "payload": {"line": nxt}}, ttl=20.0, cooldown=480.0, key=str(uf))
         if typ in ("attempt", "goal"):
             if ev.get("outcome") in ("SAVED", "GOAL"):
                 self._hot(ev.get("shooter_id"), t, seq)
@@ -3077,6 +3155,46 @@ def _clampxy(x: float, y: float) -> Tuple[float, float]:
     return max(-_MX, min(_MX, x)), max(-_MY, min(_MY, y))
 
 
+_CREASE_R = 8.0                # keep-out radius around each net (crease + cage); skaters go around, never through
+
+
+def _out_of_crease(x: float, y: float, margin: float = 0.0) -> Tuple[float, float]:
+    """Push a skater point out of either crease/net so nobody stands in or skates through the blue paint."""
+    if abs(x) > _NET_X + 4.5:
+        return x, y  # behind the cage is normal skating room
+    for cx in (-(_NET_X + 1.0), _NET_X + 1.0):
+        dx, dy = x - cx, y
+        d = math.hypot(dx, dy)
+        r = _CREASE_R + margin
+        if d < r:
+            if d < 1e-6:
+                dx, dy, d = (-1.0 if cx > 0 else 1.0), 0.0, 1.0
+            return cx + dx / d * r, dy / d * r
+    return x, y
+
+
+def _crease_detour(a: Tuple[float, float], b: Tuple[float, float]) -> Optional[Tuple[float, float]]:
+    """A waypoint that takes the straight carry a->b around the crease, or None if the path is already clear."""
+    for cx in (-(_NET_X + 1.0), _NET_X + 1.0):
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        L2 = dx * dx + dy * dy
+        if L2 < 1e-6:
+            continue
+        k = max(0.0, min(1.0, ((cx - a[0]) * dx + (0.0 - a[1]) * dy) / L2))
+        qx, qy = a[0] + k * dx, a[1] + k * dy
+        d = math.hypot(qx - cx, qy)
+        if d < _CREASE_R + 1.0 and 0.02 < k < 0.98 and abs(qx) <= _NET_X + 4.5:
+            if d < 1e-3:
+                qx, qy, d = cx + (-1.0 if cx > 0 else 1.0), 0.0, 1.0
+            r = _CREASE_R + 3.5
+            vx, vy = _clampxy(cx + (qx - cx) / d * r, (qy / d) * r)
+            # stay on the ice side of the goal line when the natural detour would go through the cage
+            if abs(vx) > _NET_X - 1.0 and abs(vy) < 6.0:
+                vx = math.copysign(_NET_X - r, cx)
+            return vx, vy
+    return None
+
+
 class MotionTrack:
     """Deterministic 0.5 s motion frames for the span just simulated.
 
@@ -3263,6 +3381,15 @@ class MotionTrack:
         return {"t0": float(t0), "t1": float(max(t1, t0 + 0.01)), "kind": kind, "p0": p0, "p1": p1, "side": side,
                 "car": car, "rcv": rcv, "ph": ph, "fo": fo, "why": why}
 
+    def _skill_pid(self, side: str, t: float, role: str) -> Optional[str]:
+        """Who handles the puck in the cycle: the best offensive forwards touch it most, the better passer runs the point."""
+        book = self.loop.book
+        ids = self.lineup_at(t)[side]
+        fw = sorted((p for p in ids if book.pos(p) != "D"), key=lambda p: -(book.trait(p, "off") + 0.6 * book.trait(p, "hnd")))
+        de = sorted((p for p in ids if book.pos(p) == "D"), key=lambda p: -book.trait(p, "pas"))
+        pick = {"W": fw[0:1], "W2": fw[1:2], "C": fw[2:3], "D1": de[0:1], "D2": de[1:2]}.get(role) or []
+        return pick[0] if pick else self._role_pid(side, t, role)
+
     def _role_pid(self, side: str, t: float, role: str) -> Optional[str]:
         ids = self.lineup_at(t)[side]
         roles = dict((r, p) for p, r in _assign_roles(ids, self.loop.book))
@@ -3386,29 +3513,87 @@ class MotionTrack:
         return segs, tA + tau + 0.8, rim, None, None
 
     def _route(self, X: str, t0: float, p0: Tuple[float, float], car: Optional[str], tB: float,
-               L: Optional[Tuple[float, float]], shooter: Optional[str], rng: random.Random) -> List[Dict[str, Any]]:
+               L: Optional[Tuple[float, float]], shooter: Optional[str], rng: random.Random,
+               chance: str = "") -> List[Dict[str, Any]]:
         """Possession script for team X from p0 at t0 to the shot at L at tB (L None: just keep possession)."""
         u0, v0 = self._rel(X, t0, *p0)
         s = 1.0 if rng.random() < 0.5 else -1.0
         wps: List[Tuple[str, float, float, str]] = []
+        T0 = max(0.5, tB - t0)
+        rush = L is not None and "RUSH" in chance and T0 >= 4.5
+        if rush:
+            return self._rush_route(X, t0, (u0, v0), car, tB, L, shooter, rng, s)
         if u0 < -30.0:
-            if rng.random() < 0.5:
+            # three breakouts: D-to-D reverse and up the wall, a stretch pass up the middle, or the D skates it out
+            k = rng.random()
+            if k < 0.4:
                 wps.append(("pass", -78.0, -s * 14.0, "D2"))
-            wps.append(("pass", -30.0, s * 30.0, "W"))
-            wps.append(("carry", 4.0, s * 24.0, "W"))
-        elif u0 < 22.0:
-            wps.append(("carry", 8.0, max(-25.0, min(25.0, v0)), "CAR"))
-        if u0 < 25.0:
-            if rng.random() < 0.7:
-                wps.append(("carry", 30.0, s * 20.0, "W" if u0 < -30.0 else "CAR"))
+                wps.append(("pass", -34.0, -s * 31.0, "W2"))
+                wps.append(("carry", 2.0, -s * 22.0, "W2"))
+                s = -s
+            elif k < 0.7:
+                wps.append(("carry", -70.0, s * 8.0, "CAR"))
+                wps.append(("pass", -8.0, s * 5.0, "C"))
+                wps.append(("carry", 14.0, s * 20.0, "C"))
             else:
-                wps.append(("loose", 88.0, s * 33.0, "-"))
+                wps.append(("pass", -30.0, s * 30.0, "W"))
+                wps.append(("pass", -6.0, -s * 8.0, "C"))      # wall to the middle: the puck changes sides
+                wps.append(("carry", 10.0, -s * 18.0, "C"))
+                s = -s
+        elif u0 < 22.0:
+            if T0 > 9.0 and rng.random() < 0.45:               # regroup: back to the D, across, and up the other side
+                wps.append(("pass", -34.0, s * 14.0, "D1"))
+                wps.append(("pass", -36.0, -s * 16.0, "D2"))
+                wps.append(("pass", -4.0, -s * 28.0, "W2"))
+                s = -s
+            else:
+                wps.append(("carry", 8.0, max(-25.0, min(25.0, v0)), "CAR"))
+        if u0 < 25.0:
+            k = rng.random()
+            if k < 0.45:
+                wps.append(("carry", 32.0, s * 24.0, "CAR"))                     # wide carry
+            elif k < 0.75:
+                wps.append(("carry", 34.0, s * 6.0, "CAR"))                      # middle drive, drop to the trailer
+                wps.append(("pass", 44.0, -s * 22.0, "W2"))
+                s = -s
+            else:
+                wps.append(("loose", 88.0, s * 33.0, "-"))                       # dump and chase
                 wps.append(("carry", 80.0, s * 30.0, "W"))
-        cycle = [("carry", 82.0, s * 30.0, "W"), ("pass", 38.0, s * 20.0, "D1"), ("pass", 38.0, -s * 20.0, "D2"),
-                 ("pass", 62.0, -s * 30.0, "W2"), ("carry", 80.0, -s * 28.0, "W2"), ("pass", 60.0, s * 28.0, "W")]
+        # Perimeter cycle only: the puck stays on the walls and the points until the real shot, so nobody
+        # holds it in a shooting lane without shooting. Three patterns, picked per possession, with jitter.
+        j = lambda: rng.uniform(-3.0, 3.0)  # noqa: E731
+        patterns = (
+            [("carry", 82.0 + j(), s * 30.0, "W"), ("pass", 38.0 + j(), s * 20.0 + j(), "D1"), ("pass", 38.0 + j(), -s * 20.0 + j(), "D2"),
+             ("pass", 62.0 + j(), -s * 30.0, "W2"), ("carry", 80.0 + j(), -s * 29.0, "W2"), ("pass", 60.0 + j(), s * 29.0, "W")],
+            [("carry", 70.0 + j(), s * 32.0, "W"), ("pass", 40.0 + j(), s * 8.0 + j(), "D1"), ("carry", 42.0 + j(), -s * 14.0 + j(), "D1"),
+             ("pass", 66.0 + j(), -s * 31.0, "W2"), ("pass", 84.0 + j(), -s * 22.0 + j(), "C"), ("pass", 58.0 + j(), s * 30.0, "W")],
+            [("carry", 84.0 + j(), s * 26.0 + j(), "W"), ("pass", 84.0 + j(), -s * 24.0 + j(), "C"), ("carry", 72.0 + j(), -s * 31.0, "C"),
+             ("pass", 39.0 + j(), -s * 18.0 + j(), "D2"), ("pass", 39.0 + j(), s * 18.0 + j(), "D1"), ("pass", 64.0 + j(), s * 31.0, "W")],
+        )
+        patterns = patterns + (
+            # behind the net and out the far side (the puck goes east-west below the goal line)
+            [("carry", 86.0 + j(), s * 24.0, "W"), ("carry", 95.0, s * 8.0, "W"), ("carry", 95.0, -s * 8.0, "W"),
+             ("pass", 66.0 + j(), -s * 30.0, "W2"), ("pass", 40.0 + j(), -s * 12.0 + j(), "D2"), ("pass", 62.0 + j(), s * 30.0, "C")],
+            # winger walks the wall up high and across the top, then down low on the other side
+            [("carry", 60.0 + j(), s * 31.0, "W"), ("carry", 47.0 + j(), s * 8.0, "W"), ("carry", 50.0 + j(), -s * 20.0, "W"),
+             ("pass", 82.0 + j(), -s * 27.0, "W2"), ("pass", 40.0 + j(), s * 14.0 + j(), "D1"), ("pass", 70.0 + j(), s * 31.0, "C")],
+        )
+        cycle = patterns[int(rng.random() * len(patterns)) % len(patterns)]
+        setup: List[Tuple[str, float, float, str]] = []
         if L is not None:
             lu, lv = self._rel(X, t0, *L)
             final = ("pass" if shooter and shooter != car else "carry", lu, lv, "SHOOTER")
+            side_of = 1.0 if lv >= 0 else -1.0
+            # The last touch before the shot matches the kind of chance the engine rolled.
+            if "ONE_TIMER" in chance:                               # cross-ice feed, shot off the pass
+                setup = [("carry", max(58.0, lu - 2.0), -side_of * 26.0, "FEED")]
+                final = ("pass", lu, lv, "SHOOTER")
+            elif chance in ("NET_FRONT", "HIGH_DANGER_SLOT", "SLOT", "PP_SLOT"):   # fed from down low to a man cutting in
+                setup = [("carry", 87.0, (side_of if abs(lv) > 2 else s) * 21.0, "FEED")]
+                final = ("pass", lu, lv, "SHOOTER")
+            elif chance == "POINT_SHOT":                            # low-to-high
+                setup = [("carry", 80.0, side_of * 29.0, "FEED")]
+                final = ("pass", lu, lv, "SHOOTER")
         else:
             final = None
 
@@ -3427,11 +3612,13 @@ class MotionTrack:
 
         body = list(wps)
         ci = 0
-        while final is not None and total(body + [final]) < 0.75 * T and ci < 24:
+        while final is not None and total(body + setup + [final]) < 0.9 * T and ci < 40:
             body.append(cycle[ci % len(cycle)])
             ci += 1
+        if setup and total(body + setup + [final]) <= T * 1.15:
+            body += setup
         if final is None:
-            while total(body) < 0.9 * T and ci < 24:
+            while total(body) < 0.9 * T and ci < 40:
                 body.append(cycle[ci % len(cycle)])
                 ci += 1
         seq = body + ([final] if final is not None else [])
@@ -3443,7 +3630,12 @@ class MotionTrack:
             prev = (u, v)
         tot = sum(durs) or 1.0
         if tot < T:
-            carry_idx = [i for i, (k, *_x) in enumerate(seq) if k == "carry"]
+            # Spare time goes to perimeter carries only. The last leg (the move to the shot) keeps its
+            # natural speed, so the shooter gets the puck and lets it go instead of walking into the slot.
+            last = len(seq) - 1 if final is not None else -1
+            carry_idx = [i for i, (k, *_x) in enumerate(seq) if k == "carry" and i != last]
+            if not carry_idx and last > 0:
+                carry_idx = [0]
             extra = T - tot
             if carry_idx:
                 ctot = sum(durs[i] for i in carry_idx)
@@ -3464,6 +3656,12 @@ class MotionTrack:
             pb = self._abs(X, t, u, v)
             if role == "SHOOTER":
                 who = shooter or holder
+            elif role == "FEED":   # best passer on the ice who isn't the shooter
+                book = self.loop.book
+                opts = [q for q in self.lineup_at(t1)[X] if q != shooter and book.pos(q) != "D"] or [q for q in self.lineup_at(t1)[X] if q != shooter]
+                who = max(opts, key=lambda q: book.trait(q, "pas")) if opts else holder
+            elif role in ("W", "W2", "C", "D1", "D2"):
+                who = self._skill_pid(X, t1, role)
             elif role == "CAR":
                 who = holder or self._role_pid(X, t, "C")
             elif role == "-":
@@ -3476,7 +3674,15 @@ class MotionTrack:
                     pt = min(t1 - 0.1, t + max(0.35, math.hypot(mid[0] - pa[0], mid[1] - pa[1]) / _PASS))
                     segs.append(self._seg(t, pt, "pass", pa, mid, side=X, car=holder, rcv=who))
                     t, pa = pt, mid
-                segs.append(self._seg(t, t1, "carry", pa, pb, side=X, car=who or holder))
+                via = _crease_detour(pa, pb)
+                if via is not None and t1 - t > 0.6:
+                    d1 = math.hypot(via[0] - pa[0], via[1] - pa[1])
+                    d2 = math.hypot(pb[0] - via[0], pb[1] - via[1])
+                    tm = t + (t1 - t) * d1 / max(1e-6, d1 + d2)
+                    segs.append(self._seg(t, tm, "carry", pa, via, side=X, car=who or holder))
+                    segs.append(self._seg(tm, t1, "carry", via, pb, side=X, car=who or holder))
+                else:
+                    segs.append(self._seg(t, t1, "carry", pa, pb, side=X, car=who or holder))
                 holder = who or holder
             elif k == "pass":
                 segs.append(self._seg(t, t1, "pass", pa, pb, side=X, car=holder, rcv=who))
@@ -3486,6 +3692,47 @@ class MotionTrack:
                 holder = None
             cur = (u, v)
             t = t1
+        return segs
+
+    def _rush_route(self, X: str, t0: float, uv0: Tuple[float, float], car: Optional[str], tB: float,
+                    L: Tuple[float, float], shooter: Optional[str], rng: random.Random, s: float) -> List[Dict[str, Any]]:
+        """An odd-man rush: regroup in their own end, then up ice at speed for a shot off the rush."""
+        book = self.loop.book
+        lu, lv = self._rel(X, t0, *L)
+        ids = self.lineup_at(tB)[X]
+        fw = [q for q in ids if book.pos(q) != "D"] or list(ids)
+        two = shooter is not None and len(fw) >= 2 and rng.random() < 0.7        # 2-on-1 with a pass, or a solo rush
+        mate = max((q for q in fw if q != shooter), key=lambda q: book.trait(q, "spd"), default=None) if two else None
+        lead = mate or shooter or car
+        v = _CARRY * (1.12 + 0.3 * book.trait(lead, "spd"))                     # fast skaters get up ice quicker
+        lane = -(1.0 if lv >= 0 else -1.0) if two else (1.0 if lv >= 0 else -1.0)
+        start = (min(uv0[0], -22.0), lane * 20.0)
+        gate = (lu - 16.0, lane * 17.0) if two else (lu - 14.0, lv * 0.7)
+        t_run = math.hypot(gate[0] - start[0], gate[1] - start[1]) / v
+        t_fin = max(0.35, math.hypot(lu - gate[0], lv - gate[1]) / (_PASS if two else v))
+        t_go = max(t0 + 0.4, tB - t_run - t_fin)
+        segs: List[Dict[str, Any]] = []
+        t, cur, holder = t0, uv0, car
+        A = lambda uv, tt: self._abs(X, tt, *uv)  # noqa: E731
+        # hold it in their own end (D-to-D) until it's time to go
+        hop = 0
+        while t_go - t > 2.2 and hop < 6:
+            d = self._skill_pid(X, t, "D1" if hop % 2 == 0 else "D2")
+            spot = (max(-80.0, min(-52.0, uv0[0] - 20.0)), (s if hop % 2 == 0 else -s) * 15.0)
+            t1 = min(t_go - 0.6, t + max(1.4, min(3.2, (t_go - t) / 2.0)))
+            segs.append(self._seg(t, t + 0.8, "pass", A(cur, t), A(spot, t), side=X, car=holder, rcv=d))
+            segs.append(self._seg(t + 0.8, t1, "carry", A(spot, t), A((spot[0] + 5.0, spot[1] * 0.8), t), side=X, car=d))
+            t, cur, holder = t1, (spot[0] + 5.0, spot[1] * 0.8), d
+            hop += 1
+        # the outlet, then the rush
+        segs.append(self._seg(t, t_go, "pass", A(cur, t), A(start, t), side=X, car=holder, rcv=lead))
+        run = self._seg(t_go, tB - t_fin, "carry", A(start, t_go), A(gate, t_go), side=X, car=lead)
+        run["rush"] = True
+        segs.append(run)
+        fin = self._seg(tB - t_fin, tB, "pass" if two else "carry", A(gate, t_go), A((lu, lv), t_go), side=X,
+                        car=lead, rcv=shooter if two else None)
+        fin["rush"] = True
+        segs.append(fin)
         return segs
 
     def _buildup(self, t0: float, p0: Tuple[float, float], side0: Optional[str], car0: Optional[str],
@@ -3499,11 +3746,16 @@ class MotionTrack:
             X = a.get("side") if a.get("side") in _SIDES else "home"
             L: Optional[Tuple[float, float]] = self._shot_loc(B)
             shooter = a.get("shooter_id")
+            chance = str(a.get("chance_raw") or "").upper()
+            if a.get("rush") or "rush" in [str(x).lower() for x in (a.get("tags") or [])]:
+                chance = chance if "RUSH" in chance else "RUSH_" + chance
         elif B["type"] == "shootout_attempt" or (B["type"] == "period_start" and int(B.get("period") or 0) == 5):
             return [self._seg(t0, tB, "hold", p0, p0, ph="shootout")]
         else:
             X = side0 if side0 in _SIDES else ("home" if rng.random() < 0.5 else "away")
             L, shooter = None, None
+        if B["type"] not in ("attempt", "goal"):
+            chance = ""
         t, p, side, car = t0, p0, side0, car0
         if side is None or car is None:
             rec = X if rng.random() < 0.6 or tB - t < 6.0 else _opp(X)
@@ -3511,7 +3763,7 @@ class MotionTrack:
             dt = min(1.2, max(0.4, (tB - t) * 0.2))
             segs.append(self._seg(t, t + dt, "loose", p, p))
             t, side, car = t + dt, rec, nearest
-        if side != X and tB - t > 8.0:
+        if side != X and tB - t > 14.0:
             dY = min(0.35 * (tB - t), 12.0)
             Y = side
             yu, yv = self._rel(Y, t, *p)
@@ -3528,7 +3780,7 @@ class MotionTrack:
             tq = math.floor(tB * 2.0) / 2.0
             if tq <= t + 0.2:
                 tq = tB
-            segs += self._route(X, t, p, car, tq, L, shooter, rng)
+            segs += self._route(X, t, p, car, tq, L, shooter, rng, chance)
             if tq < tB:
                 segs.append(self._seg(tq, tB, "hold", L, L, side=X, car=shooter))
         else:
@@ -3642,6 +3894,33 @@ class MotionTrack:
             return self._faceoff_spots(side, t, seg["fo"], ids)
         Wst, Wwk = ("LW", "RW") if s > 0 else ("RW", "LW")
         Dst, Dwk = ("LD", "RD") if s > 0 else ("RD", "LD")
+        book = self.loop.book
+        if seg.get("rush") and poss in _SIDES and n >= 3 and seg["ph"] == "play":
+            car = seg.get("car")
+            lane = 1.0 if pv >= 0 else -1.0
+            if poss == side:    # puck carrier, a partner driving the far lane, the third man trailing, D joining late
+                fw = sorted((q for q in ids if q != car and book.pos(q) != "D"), key=lambda q: -book.trait(q, "spd"))
+                de = [q for q in ids if q != car and book.pos(q) == "D"]
+                rcv = seg.get("rcv")
+                if rcv in fw:
+                    fw.remove(rcv)
+                    fw.insert(0, rcv)
+                for i, q in enumerate(fw):
+                    spot[q] = (min(pu + 3.0, 82.0), -lane * 17.0) if i == 0 else (pu - 16.0 - 8.0 * (i - 1), lane * 4.0)
+                for i, q in enumerate(de):
+                    spot[q] = (pu - 34.0 - 6.0 * i, (14.0 if i == 0 else -14.0))
+            else:               # one defender back between the puck and the net; everyone else is chasing the play
+                de = sorted((q for q in ids if book.pos(q) == "D"), key=lambda q: (self.pos.get(q) or [0, 0])[0] * self._dir(side, t))
+                back = de[0] if de else (ids[0] if ids else None)
+                k = 0
+                for q in ids:
+                    if q == back:
+                        spot[q] = (max(-82.0, pu - 15.0), 0.45 * pv)      # backing in, taking away the pass
+                    else:
+                        gap = 9.0 + 7.0 * k - 6.0 * book.trait(q, "spd")  # quicker backcheckers close the gap
+                        spot[q] = (pu + gap, (0.6 * pv) + (-1.0) ** k * 9.0)
+                        k += 1
+            return {q: _out_of_crease(*self._abs(side, t, u, v), margin=1.0) for q, (u, v) in spot.items()}
         if seg["ph"] == "goal":
             scorer_side = seg.get("side")
             for pid in ids:
@@ -3683,14 +3962,51 @@ class MotionTrack:
                     put(("C",), 64.0, 14.0 * s)
                     put((Wst, Wwk, "F"), 72.0, -16.0 * s)
                     put((Dst, Dwk, "D"), 38.0, 0.0)
+                # Off the puck: forwards cut to the net instead of standing still. Right before a real shot
+                # the weak side crashes for the screen and the rebound; in between, the smarter the player,
+                # the more often he dives back-door. The weak-side D slides across the blue line with the puck.
+                car = seg.get("car")
+                busy = {car, seg.get("rcv")}
+                nxtA = self._pair(t)[1]
+                to_shot = 99.0
+                if nxtA is not None and nxtA.get("type") in ("attempt", "goal") and (nxtA.get("att") or {}).get("side") == side:
+                    to_shot = self.te(nxtA) - t
+                    busy.add((nxtA.get("att") or {}).get("shooter_id"))
+                fws = [q for q in ids if q not in busy and book.pos(q) != "D" and q in spot]
+                if 0.0 < to_shot < 2.6 and fws:
+                    fws.sort(key=lambda q: abs(spot[q][0] - 81.0))
+                    spot[fws[0]] = (83.5, -5.5 * s)                        # screen / back door
+                    if len(fws) > 1:
+                        spot[fws[1]] = (73.0, 4.0 * s)                     # high slot for the rebound
+                else:
+                    for q in fws:
+                        iq = book.trait(q, "off")
+                        h = zlib.crc32(q.encode())
+                        period = 6.0 + (h % 5) + 5.0 * (1.0 - iq)          # high-IQ forwards cut about twice as often
+                        ph_ = (t + (h % 13)) % period
+                        if ph_ < 2.4:
+                            u_, v_ = spot[q]
+                            away = -1.0 if v_ >= 0 else 1.0
+                            depth = 78.0 + 5.0 * iq
+                            spot[q] = (depth, (v_ * 0.25 if abs(v_) > 12 else away * 6.5))   # dive to the far post
+                for q in ids:
+                    if book.pos(q) == "D" and q not in busy and q in spot and abs(spot[q][1]) < 16.0:
+                        u_, v_ = spot[q]
+                        spot[q] = (u_ + (4.0 if book.trait(q, "off") > 0.6 else 0.0), v_ + 0.35 * pv)
             else:
-                put(("C",), min(pu + 10.0, 70.0), 0.2 * pv)
-                put((Wst,), min(pu + 22.0, 72.0), 28.0 * s)
-                put((Wwk,), min(pu + 18.0, 70.0), -26.0 * s)
+                # onside: until the puck is at the blue line (u 25), forwards hold up at it instead of drifting in
+                line = 72.0 if pu >= 21.0 else 23.0
+                put(("C",), min(pu + 10.0, line), 0.2 * pv)
+                put((Wst,), min(pu + 22.0, line), 28.0 * s)
+                put((Wwk,), min(pu + 18.0, line), -26.0 * s)
                 put((Dst, "D"), max(-86.0, min(pu - 18.0, 30.0)), 16.0 * s)
                 put((Dwk, "D"), max(-86.0, min(pu - 20.0, 28.0)), -16.0 * s)
                 put(("F",), min(pu + 14.0, 70.0), -10.0 * s)
         else:
+            # The user's tactics shape how his skaters defend, so a change on the Tactics tab shows on the ice.
+            tac = self.loop.tactics if side == self.loop.lg.user_side else {}
+            fc = str(tac.get("forecheck") or "balanced")
+            dz = str(tac.get("pk_style" if (n < n_opp) else "defense") or "balanced")
             fwd = [p for p, r in roles if r in ("C", "LW", "RW", "F")]
             f1 = None
             if fwd and poss is not None:
@@ -3707,13 +4023,42 @@ class MotionTrack:
                         put(("C", "LW", "F"), -60.0, sh)
                         put(("LD", "D"), -80.0, 9.0)
                         put(("RD", "D"), -80.0, -9.0)
+                elif dz == "aggressive":   # pressure: wingers jump the points, strong-side D attacks the wall
+                    put(("C",), -70.0, 0.45 * pv)
+                    put((Wst,), -37.0, 23.0 * s)
+                    put((Wwk,), -40.0, -18.0 * s)
+                    put((Dst, "D"), -78.0, 21.0 * s)
+                    put((Dwk, "D"), -78.0, -6.0 * s)
+                    put(("F",), -58.0, -8.0 * s)
+                elif dz == "passive":      # collapse: five men packed around the slot
+                    put(("C",), -72.0, 0.15 * pv)
+                    put((Wst,), -58.0, 13.0 * s)
+                    put((Wwk,), -60.0, -11.0 * s)
+                    put((Dst, "D"), -79.0, 10.0 * s)
+                    put((Dwk, "D"), -79.0, -9.0 * s)
+                    put(("F",), -64.0, -4.0 * s)
                 else:
-                    put(("C",), -72.0, 0.3 * pv)
-                    put((Wst,), -40.0, 22.0 * s)
-                    put((Wwk,), -42.0, -20.0 * s)
-                    put((Dst, "D"), -80.0, 13.0 * s)
-                    put((Dwk, "D"), -83.0, -4.0 * s)
+                    put(("C",), -70.0, 0.3 * pv)
+                    put((Wst,), -44.0, 22.0 * s)
+                    put((Wwk,), -48.0, -16.0 * s)
+                    put((Dst, "D"), -79.0, 14.0 * s)
+                    put((Dwk, "D"), -78.0, -7.0 * s)
                     put(("F",), -60.0, -8.0 * s)
+            elif fc == "aggressive" and pu >= 22.0:   # 2-1-2: two forwards deep, D pinch at the blue line
+                put(("C",), max(-84.0, pu - 5.0), 0.5 * pv)
+                put((Wst,), max(-84.0, pu - 6.0), 24.0 * s)
+                put((Wwk,), max(-84.0, pu - 20.0), -10.0 * s)
+                put((Dst, "D"), max(27.0, min(pu - 22.0, 44.0)), 20.0 * s)
+                put((Dwk, "D"), max(24.0, min(pu - 30.0, 36.0)), -12.0 * s)
+                put(("F",), max(-84.0, pu - 16.0), 0.0)
+            elif fc == "passive" and pu >= 0.0:       # 1-2-2 trap: one man up, four waiting in the neutral zone
+                put(("C",), min(pu - 18.0, 34.0), 0.3 * pv)
+                put(("LW",), min(pu - 34.0, 12.0), 22.0)
+                put(("RW",), min(pu - 34.0, 12.0), -22.0)
+                put(("LD", "D"), min(pu - 52.0, -14.0), 13.0)
+                put(("RD", "D"), min(pu - 52.0, -14.0), -13.0)
+                put(("F",), min(pu - 30.0, 14.0), 0.0)
+                f1 = None  # nobody chases; the trap waits
             else:
                 put(("C",), max(-84.0, pu - 12.0), 0.3 * pv)
                 put(("LW",), max(-84.0, pu - 14.0), 18.0)
@@ -3733,11 +4078,23 @@ class MotionTrack:
                 near = min(opp_ids, key=lambda q: math.hypot(self.pos[q][0] - ax, self.pos[q][1] - ay))
                 qu, qv = self._rel(side, t, self.pos[near][0], self.pos[near][1])
                 if math.hypot(qu - u, qv - v) < 20.0:
-                    spot[pid] = (0.65 * u + 0.35 * (qu - 5.0), 0.65 * v + 0.35 * qv)
+                    k = 0.55 if dz == "aggressive" else (0.18 if dz == "passive" else 0.35)  # tight man-to-man vs. hold the zone
+                    k *= 0.7 + 0.6 * book.trait(pid, "def")                                  # sharp defenders stay on their man
+                    spot[pid] = ((1.0 - k) * u + k * (qu - 5.0), (1.0 - k) * v + k * qv)
         for pid in ids:
             if pid not in spot:
                 spot[pid] = (pu - 10.0, 0.0)
-        return {pid: self._abs(side, t, u, v) for pid, (u, v) in spot.items()}
+        out: Dict[str, Tuple[float, float]] = {}
+        live = seg["ph"] == "play"
+        for pid, (u, v) in spot.items():
+            if live:
+                # players keep gliding around their spot instead of freezing on it (own slow rhythm per player)
+                h = zlib.crc32(pid.encode())
+                w = 0.55 + (h % 7) * 0.06
+                u += 2.6 * math.sin(t * w + (h % 31))
+                v += 2.6 * math.cos(t * w * 0.8 + (h % 17))
+            out[pid] = _out_of_crease(*self._abs(side, t, u, v), margin=1.0)
+        return out
 
     def _step(self, t: float, dt: float, seg: Dict[str, Any], lineup: Dict[str, List[str]], goalies: Dict[str, Optional[str]]) -> Tuple[float, float]:
         puck = self._seg_puck(seg, t)
@@ -3774,23 +4131,32 @@ class MotionTrack:
                 continue
             dx, dy = tx - st[0], ty - st[1]
             dist = math.hypot(dx, dy)
-            vmax = 9.0 if slow else _V_SKATE
-            want = min(vmax, dist * 1.8)
+            bk = self.loop.book
+            tr = {"spd": bk.trait(pid, "spd"), "acc": bk.trait(pid, "acc")}
+            top = min(31.9, 20.5 + 11.4 * tr["spd"])                                # 20.5 to 31.9 ft/s by speed rating
+            if pid == seg.get("car"):
+                top = max(top, 24.5)                                                # the carrier always keeps up with his puck
+            vmax = 9.0 if slow else top
+            want = min(vmax, dist * (1.5 + 0.7 * float(tr.get("acc", 0.4))))
             if dist > 1e-6:
                 vx, vy = dx / dist * want, dy / dist * want
             else:
                 vx = vy = 0.0
             ax, ay = vx - st[2], vy - st[3]
             amag = math.hypot(ax, ay)
-            lim = _A_SKATE * dt
+            lim = _A_SKATE * (0.78 + 0.5 * float(tr.get("acc", 0.4))) * dt
             if amag > lim:
                 ax, ay = ax / amag * lim, ay / amag * lim
             st[2] += ax
             st[3] += ay
             sp = math.hypot(st[2], st[3])
-            if sp > _V_SKATE:
-                st[2], st[3] = st[2] / sp * _V_SKATE, st[3] / sp * _V_SKATE
+            if sp > top:
+                st[2], st[3] = st[2] / sp * top, st[3] / sp * top
             st[0], st[1] = _clampxy(st[0] + st[2] * dt, st[1] + st[3] * dt)
+            if pid != seg.get("car") or seg["kind"] != "carry":
+                nx_, ny_ = _out_of_crease(st[0], st[1])
+                if (nx_, ny_) != (st[0], st[1]):
+                    st[0], st[1] = nx_, ny_  # slide around the paint
         for side in _SIDES:
             g = goalies.get(side)
             if not g:
@@ -4042,7 +4408,7 @@ class CoachController:
     """User orders: validated, applied immediately by re-simulating the rest of the game
     from the next unplayed attempt (same seed => identical past), or rejected with a reason."""
 
-    ALLOWED = ("roll_lines", "shorten_bench", "next_line", "bench_player", "pull_goalie", "timeout", "tactics")
+    ALLOWED = ("roll_lines", "shorten_bench", "next_line", "bench_player", "pull_goalie", "timeout", "tactics", "blender")
 
     def __init__(self, loop: "LiveEventLoop") -> None:
         self.loop = loop
@@ -4274,6 +4640,46 @@ class CoachController:
                 human = f"{pname} benched" if bench else f"{pname} back in the rotation"
                 pres.update(action="bench_player" if bench else "unbench",
                             what=W("bench_player" if bench else "unbench", player=pname), player_id=pid, bench=bench)
+        elif kind == "blender":
+            # Shuffle the wingers across the top three lines (centres stay). The engine keeps picking a line
+            # slot; the shuffle decides which three forwards that slot now means, from the next shift on.
+            on = _truthy(payload.get("on"), True)
+            base_f = getattr(loop, "_blender_base", None)
+            if base_f is None:
+                base_f = [list(ln) for ln in (loop.lines[user].get("F") or [])]
+                loop._blender_base = base_f
+            for e in effects:
+                if e.get("kind") == "shuffle" and e.get("side") == user and e.get("until_idx") is None:
+                    e["until_idx"] = k
+            new_f = [list(ln) for ln in base_f]
+            if on:
+                slots = [(j, i) for j, ln in enumerate(base_f[:3]) if len(ln) >= 3
+                         for i, q in enumerate(ln) if i != next((x for x, c in enumerate(ln) if loop.book.pos(c) == "C"), 0)]
+                wings = [base_f[j][i] for j, i in slots]
+                prev = [list(ln) for ln in (loop.lines[user].get("F") or [])]
+                r = random.Random(zlib.crc32(str(order.get("id")).encode()))
+                best = list(wings)
+                for _try in range(40):
+                    cand = list(wings)
+                    r.shuffle(cand)
+                    trial = [list(ln) for ln in base_f]
+                    for (j, i), q in zip(slots, cand):
+                        trial[j][i] = q
+                    best = cand
+                    # every line must change, both from the original lines and from what is out there now
+                    if all(set(trial[j]) != set(base_f[j]) and (j >= len(prev) or set(trial[j]) != set(prev[j]))
+                           for j in {j for j, _i in slots}):
+                        break
+                for (j, i), q in zip(slots, best):
+                    new_f[j][i] = q
+                swap = {a: b for ln0, ln1 in zip(base_f, new_f) for a, b in zip(ln0, ln1) if a != b}
+                if swap:
+                    effects.append({**base, "kind": "shuffle", "map": swap, "until_idx": None})
+                names = " / ".join("-".join(loop.book.short(q) or loop.book.name(q) for q in ln) for ln in new_f[:3])
+                human = f"Lines shuffled: {names}"
+            else:
+                human = "Original lines restored"
+            pres.update(action="blender" if on else "unblend", what=W("blender" if on else "unblend"), lines=new_f, on=on)
         else:  # tactics
             tac = dict(loop.tactics)
             for e in effects:
@@ -4719,6 +5125,11 @@ class LiveEventLoop:
                     G.append(gid)
             if G:
                 self.lines[side]["G"] = G[:2]
+        swap = next((e.get("map") for e in reversed(self._effects) if e.get("kind") == "shuffle" and e.get("until_idx") is None
+                     and e.get("side") == self.lg.user_side), None)
+        if swap:
+            u = self.lg.user_side
+            self.lines[u]["F"] = [[swap.get(q, q) for q in ln] for ln in self.lines[u]["F"]]
         tl = self._build_timeline(result, cap)
         if not splice:
             self._timeline = tl
@@ -5196,6 +5607,10 @@ class LiveEventLoop:
             self.tactics = dict(pres.get("tactics") or self.tactics)
         elif kind in ("shorten_bench", "roll_lines"):
             self.deploy_mode = str(pres.get("mode") or "normal")
+        elif kind == "blender":
+            if pres.get("lines"):
+                self.lines[user]["F"] = [list(ln) for ln in pres["lines"]]
+            self.blended = bool(pres.get("on"))
         elif kind == "bench_player":
             pid = str(pres.get("player_id"))
             if "double" in pres:
