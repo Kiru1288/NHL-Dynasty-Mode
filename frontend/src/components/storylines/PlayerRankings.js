@@ -8,8 +8,9 @@ import { api } from "../../services/api";
 import PlayerHeadshot from "../PlayerHeadshot";
 import TeamLogoBadge from "../ui/TeamLogoBadge";
 import { resolveFranchiseTeamLogo } from "../../utils/teamLogos";
+import { ensurePlayerHeadshotFields } from "../../utils/playerHeadshots";
 
-const asPlayer = (r) => ({ ...r, id: r.player_id, player_id: r.player_id, team_abbrev: r.team, overall: r.ovr });
+const asPlayer = (r) => ensurePlayerHeadshotFields({ ...r, id: r.player_id, player_id: r.player_id, team_abbrev: r.team, overall: r.ovr });
 const logoFor = (r) => resolveFranchiseTeamLogo({ team_id: r.team_id, abbrev: r.team, abbreviation: r.team, name: r.team });
 
 const COVER_LINES = {
@@ -77,13 +78,21 @@ export default function PlayerRankings({ userTeamId, onOpenPlayer }) {
 
   const top = board?.rows?.[0];
   const rest = board?.rows?.slice(1) || [];
+  const half = Math.ceil(rest.length / 2);
+  const cols = rest.length > 6 ? [rest.slice(0, half), rest.slice(half)] : [rest];
+  const coverLine = top ? (COVER_LINES[board.key] || ((r) => r.name))(top) : "";
+  const showOvrCorner = top && !/OVR$/.test(String(top.display || ""));
 
   return (
-    <section className="slr" aria-label="Player rankings">
-      <header className="slr-head">
+    <section className="slr bbb-hon" aria-label="Player rankings">
+      <header className="ccx-head bbb-head bbb-hon__head">
         <div>
-          <span className="slr-kicker">The Bench Buzz rankings</span>
-          <h2 className="slr-title">Hot or Not</h2>
+          <span className="ccx-kicker">The Bench Buzz rankings</span>
+          <h2 className="ccx-title">Hot or Not</h2>
+          <p className="bbb-lede">
+            {board ? `${board.label}: ${board.method}` : "Who's hot, who's not, and the numbers that put them there."}
+            {state.data?.stats_source ? ` Stats: ${state.data.stats_source}.` : ""}
+          </p>
         </div>
         <div className="slr-switches">
           <div className="slr-seg" role="group" aria-label="Ranking type">
@@ -118,46 +127,65 @@ export default function PlayerRankings({ userTeamId, onOpenPlayer }) {
       {state.loading && !state.data ? <p className="slr-empty">Counting the votes…</p> : null}
 
       {board ? (
-        <div className="slr-board">
+        <div className="bbb-hon__board">
           {top ? (
-            <article className="slr-cover" onClick={() => onOpenPlayer?.(top.player_id)} role="button" tabIndex={0}
+            <article className="bbb-cover" onClick={() => onOpenPlayer?.(top.player_id)} role="button" tabIndex={0}
               onKeyDown={(e) => (e.key === "Enter" ? onOpenPlayer?.(top.player_id) : null)}>
-              <span className="slr-sticker">#1</span>
-              <div className="slr-cover__face">
-                <PlayerHeadshot player={asPlayer(top)} size="lg" showFlag={false} style={{ "--size": "220px" }} />
-                <span className="slr-cover__logo"><TeamLogoBadge teamLogo={logoFor(top)} teamName={top.team} size={64} variant="badge" /></span>
+              <span className="bbb-cover__sticker">#1</span>
+              <div className="bbb-cover__photo">
+                <PlayerHeadshot player={asPlayer(top)} size="lg" preferPhoto showFlag={false} number={null} />
+                <span className="bbb-cover__logo"><TeamLogoBadge teamLogo={logoFor(top)} teamName={top.team} size={58} variant="badge" /></span>
+                {showOvrCorner ? <span className="bbb-cover__ovr"><small>OVR</small>{top.ovr}</span> : null}
               </div>
-              <div className="slr-cover__copy">
-                <span className="slr-cover__cat">{board.label}</span>
-                <h3>{(COVER_LINES[board.key] || ((r) => r.name))(top)}</h3>
-                <p className="slr-cover__num">{top.display}</p>
-                <p className="slr-cover__why">{top.name} · {top.position} · {top.team} · age {top.age} — {top.why}</p>
+              <div className="bbb-cover__copy">
+                <span className="bbb-cover__cat">{board.label}</span>
+                <h3>{coverLine}</h3>
+                <p className="bbb-cover__num">{top.display}<Trend d={top.ovr_delta} /></p>
+                <p className="bbb-cover__who">{top.name} · {top.position} · {top.team} · age {top.age}</p>
+                <p className="bbb-cover__why">{top.why}{top.line && top.line !== top.why ? ` · ${top.line}` : ""}</p>
               </div>
-              <span className="slr-cover__ovr" aria-label={`Overall ${top.ovr}`}><small>OVR</small>{top.ovr}</span>
             </article>
           ) : (
             <p className="slr-empty">{board.empty_reason || "Nobody qualifies yet."}</p>
           )}
           {rest.length ? (
-            <ol className="slr-list" start={2}>
-              {rest.map((r) => (
-                <li key={r.player_id}>
-                  <button type="button" onClick={() => onOpenPlayer?.(r.player_id)}>
-                    <span className="slr-rank">{r.rank}</span>
-                    <span className="slr-face"><PlayerHeadshot player={asPlayer(r)} size="sm" showFlag={false} style={{ "--size": "56px" }} /></span>
-                    <span className="slr-logo"><TeamLogoBadge teamLogo={logoFor(r)} teamName={r.team} size={40} variant="badge" /></span>
-                    <span className="slr-who"><b>{r.name}</b><small>{r.position} · {r.team} · age {r.age}</small></span>
-                    <span className="slr-ovr"><small>OVR</small>{r.ovr}</span>
-                    <span className="slr-why">{r.why}</span>
-                    <span className="slr-val">{r.display}</span>
-                  </button>
-                </li>
+            <div className={`bbb-hon__cols is-${cols.length}`}>
+              {cols.map((col, ci) => (
+                <ol key={ci} className="bbb-hon__list">
+                  {col.map((r) => (
+                    <li key={r.player_id}>
+                      <button type="button" className="bbb-row" onClick={() => onOpenPlayer?.(r.player_id)}>
+                        <span className="bbb-row__rank">{r.rank}</span>
+                        <span className="bbb-row__face">
+                          <PlayerHeadshot player={asPlayer(r)} size="md" preferPhoto showFlag={false} number={null} />
+                          <span className="bbb-row__logo"><TeamLogoBadge teamLogo={logoFor(r)} teamName={r.team} size={30} variant="badge" /></span>
+                        </span>
+                        <span className="bbb-row__who">
+                          <b>{r.name}</b>
+                          <small>{r.position} · {r.team} · age {r.age}{/OVR$/.test(String(r.display || "")) ? "" : ` · ${r.ovr} OVR`}</small>
+                          <em>{r.why}{r.line && r.line !== r.why ? ` · ${r.line}` : ""}</em>
+                        </span>
+                        <span className="bbb-row__val">{r.display}<Trend d={r.ovr_delta} /></span>
+                      </button>
+                    </li>
+                  ))}
+                </ol>
               ))}
-            </ol>
+            </div>
           ) : null}
-          <p className="slr-method"><b>How it's ranked:</b> {board.method} Source: {board.source}.</p>
+          <p className="slr-method bbb-hon__method"><b>How it's ranked:</b> {board.method} Source: {board.source}.</p>
         </div>
       ) : null}
     </section>
+  );
+}
+
+function Trend({ d }) {
+  const n = Number(d);
+  if (!Number.isFinite(n) || Math.abs(n) < 0.5) return null;
+  return (
+    <span className={`bbb-trend ${n > 0 ? "is-up" : "is-down"}`} title={`${n > 0 ? "+" : ""}${n.toFixed(1)} OVR since opening night`}>
+      {n > 0 ? "▲" : "▼"}{Math.abs(n).toFixed(1)}
+    </span>
   );
 }

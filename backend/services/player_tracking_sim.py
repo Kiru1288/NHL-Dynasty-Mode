@@ -2497,6 +2497,8 @@ class CommentaryWriter:
         bu = False
         if typ in ("attempt", "goal") and not ev.get("empty_net"):
             bu = self._buildup_call(ev, ept)
+            if typ == "attempt" and ept is not None:
+                ept += 0.45   # the result is called when the puck gets there, not as it leaves the stick
         if typ in ("faceoff", "stoppage", "rule", "line_change", "delayed_penalty", "hit"):
             if typ == "faceoff" and meta.get("reason") == "period_start" and int(ev["period"]) == 1:
                 self.say(t, seq, [("faceoff_open", {}, {})], 2, "calm", pt=ept)
@@ -2597,7 +2599,7 @@ class CommentaryWriter:
             return False
         if self.story_q and imp < 2 and ev["type"] != "goal":
             return False
-        bpt = ept - self.rng.uniform(2.2, 3.6)
+        bpt = ept - self.rng.uniform(1.0, 1.7)   # with the play, not ahead of it: the call lands as the pass or move happens
         if bpt - self._last_pt < 3.0 or not self._pt_free(bpt, 3.0, 1.2):
             return False
         book = self.loop.book

@@ -100,7 +100,8 @@ def _team_season(results: List[Dict[str, Any]], tid: str) -> Dict[str, Any]:
         if k != kind:
             break
         streak += 1
-    return {"games": games, "gp": gp, "w": w, "otl": otl, "l": gp - w - otl, "pts": 2 * w + otl, "gf": gf, "ga": ga,
+    form = ["W" if g["won"] else ("O" if g["extra"] else "L") for g in last]
+    return {"games": games, "gp": gp, "form": form, "w": w, "otl": otl, "l": gp - w - otl, "pts": 2 * w + otl, "gf": gf, "ga": ga,
             "last10": f"{lw}-{len(last) - lw - lotl}-{lotl}", "last10_w": lw, "streak": f"{kind}{streak}" if kind else ""}
 
 
@@ -207,33 +208,73 @@ def build_preview(session: Any, high_id: str, low_id: str) -> Dict[str, Any]:
         sk = [r for r in rows if r.get("pos") != "G" and r.get("gp", 0) >= 20 and (not top or r["id"] != top["id"])]
         return max(sk, key=lambda r: (r.get("gwg", 0), r.get("pts", 0) / max(1, r.get("gp", 1))), default=None)
 
-    def mini(r, kind="skater"):
+    def mini(r, kind="skater", ab="", why=""):
         if not r:
             return None
+        base = {"id": r["id"], "player_id": r["id"], "name": r["name"], "age": r.get("age"), "ovr": r.get("ovr"), "gp": r.get("gp", 0)}
         if kind == "goalie":
             sv = r.get("sv_pct")
             line = f".{int(round(sv * 1000)):03d} SV%" if sv else f"{r.get('w', 0)} W"
-            return {"id": r["id"], "name": r["name"], "pos": "G", "line": f"{r.get('w', 0)} W · {line}"}
-        return {"id": r["id"], "name": r["name"], "pos": r.get("pos"), "line": f"{r.get('g', 0)}G {r.get('a', 0)}A · {r.get('pts', 0)} pts"}
+            return {**base, "pos": "G", "line": f"{r.get('w', 0)} W · {line}", "w": r.get("w", 0), "sv_pct": sv, "so": r.get("so", 0),
+                    "why": why or f"Started {r.get('gp', 0)} games for {ab}" + (f", {r.get('so', 0)} shutouts" if r.get("so") else "")}
+        return {**base, "pos": r.get("pos"), "line": f"{r.get('g', 0)}G {r.get('a', 0)}A · {r.get('pts', 0)} pts",
+                "g": r.get("g", 0), "a": r.get("a", 0), "pts": r.get("pts", 0), "ppp": r.get("ppp", 0), "gwg": r.get("gwg", 0),
+                "toi_pg": r.get("toi_pg"), "why": why}
+
+    def star_why(r, ab):
+        if not r:
+            return ""
+        return f"Leads {ab} with {r.get('pts', 0)} points in {r.get('gp', 0)} games"
+
+    def x_why(r):
+        if not r:
+            return ""
+        if r.get("gwg", 0) >= 3:
+            return f"{r['gwg']} game-winning goals this season"
+        if r.get("ppp", 0) >= 15:
+            return f"{r['ppp']} power-play points"
+        ppg = r.get("pts", 0) / max(1, r.get("gp", 1))
+        return f"{ppg:.2f} points per game behind the top line"
 
     th, tl = top_skater(hp), top_skater(lp)
+    xh, xl = xfactor(hp, th), xfactor(lp, tl)
     injuries = [{"team": ab, "name": r["name"], "ovr": r.get("ovr")}
                 for ab, rows in ((ha, hp), (la, lp)) for r in rows if r.get("injured") and (r.get("ovr") or 0) >= 78]
     injuries.sort(key=lambda x: -(x.get("ovr") or 0))
 
     # Pressure (0-100): favourites, long droughts and old cores feel it most.
+    # Returns the score and the parts that built it, so the UI can explain it.
     def pressure(s, d, rows, is_fav):
-        score = 38 + (22 if is_fav else 0)
-        score += 12 * max(0.0, s["pts"] / max(1, 2 * s["gp"]) - 0.55) / 0.15
+        why: List[str] = []
+        score = 38.0
+        if is_fav:
+            score += 22
+            why.append("Series favourite (+22)")
+        pace = 12 * max(0.0, s["pts"] / max(1, 2 * s["gp"]) - 0.55) / 0.15
+        if pace >= 1:
+            why.append(f"{s['pts']}-point season raises expectations (+{int(round(pace))})")
+        score += pace
         yrs = d.get("years")
-        score += 14 if d.get("never") else (min(14, (yrs or 0) / 3) if yrs is not None else 4)
+        if d.get("never"):
+            score += 14
+            why.append("Never won the Cup (+14)")
+        elif yrs is not None:
+            bump = min(14, (yrs or 0) / 3)
+            score += bump
+            if bump >= 1:
+                why.append(f"{yrs} years since the last Cup (+{int(round(bump))})")
+        else:
+            score += 4
         core = sorted((r for r in rows if r.get("pos") != "G"), key=lambda r: -(r.get("ovr") or 0))[:5]
-        if core and sum(r.get("age", 0) for r in core) / len(core) >= 29:
-            score += 8
-        return int(max(5, min(99, round(score))))
+        if core:
+            avg_age = sum(r.get("age", 0) for r in core) / len(core)
+            if avg_age >= 29:
+                score += 8
+                why.append(f"Top five skaters average {avg_age:.1f} years old (+8)")
+        return int(max(5, min(99, round(score)))), why
 
-    pr_h = pressure(hs, dh, hp, fav_high)
-    pr_l = pressure(ls, dl, lp, not fav_high)
+    pr_h, why_h = pressure(hs, dh, hp, fav_high)
+    pr_l, why_l = pressure(ls, dl, lp, not fav_high)
 
     gap = hs["pts"] - ls["pts"]
     rivalry = RIVALRIES.get(frozenset((ha, la)))
@@ -284,17 +325,29 @@ def build_preview(session: Any, high_id: str, low_id: str) -> Dict[str, Any]:
         "odds": {"high": round(p_series * 100), "low": 100 - round(p_series * 100)},
         "pick": pick,
         "season_series": h2h_line,
+        "h2h": {"high": h2h_w, "low": len(h2h) - h2h_w,
+                "games": [{"gf": g["gf"], "ga": g["ga"], "won": g["won"], "extra": g["extra"]} for g in h2h]},
+        "projection": {"p_game": round(p_game * 100), "fav": ha if fav_high else la, "length": length},
         "history": history,
         "teams": {
             "high": {"abbrev": ha, "record": f"{hs['w']}-{hs['l']}-{hs['otl']}", "pts": hs["pts"], "gf": hs["gf"], "ga": hs["ga"],
                      "last10": hs["last10"], "streak": hs["streak"], "drought": dh, "pressure": pr_h,
-                     "star": mini(th), "goalie": mini(starter(hp), "goalie"), "xfactor": mini(xfactor(hp, th))},
+                     "star": mini(th, ab=ha, why=star_why(th, ha)), "goalie": mini(starter(hp), "goalie", ab=ha),
+                     "xfactor": mini(xh, ab=ha, why=x_why(xh)), "gp": hs["gp"], "form": hs["form"], "pressure_why": why_h},
             "low": {"abbrev": la, "record": f"{ls['w']}-{ls['l']}-{ls['otl']}", "pts": ls["pts"], "gf": ls["gf"], "ga": ls["ga"],
                     "last10": ls["last10"], "streak": ls["streak"], "drought": dl, "pressure": pr_l,
-                    "star": mini(tl), "goalie": mini(starter(lp), "goalie"), "xfactor": mini(xfactor(lp, tl))},
+                    "star": mini(tl, ab=la, why=star_why(tl, la)), "goalie": mini(starter(lp), "goalie", ab=la),
+                    "xfactor": mini(xl, ab=la, why=x_why(xl)), "gp": ls["gp"], "form": ls["form"], "pressure_why": why_l},
         },
         "injuries": injuries[:4],
     }
+    try:
+        from services.franchise_sim import _attach_storyline_headshots
+
+        minis = [m for side in out["teams"].values() for m in (side.get("star"), side.get("goalie"), side.get("xfactor")) if m]
+        _attach_storyline_headshots(session, minis)
+    except Exception:
+        log.debug("preview headshots failed", exc_info=True)
     with _LOCK:
         if len(_CACHE) > 64:
             _CACHE.clear()

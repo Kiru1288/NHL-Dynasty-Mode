@@ -142,6 +142,26 @@ def _emit_public(
     )
 
 
+_CONCERN_FOLLOW_UPS = {
+    "role": (
+        "{name}'s frustration over his role hasn't gone away",
+        "Weeks later, {name} still does not have the role he wants, and people around the team say it is starting to show.",
+    ),
+    "contract": (
+        "Still no contract peace for {name}'s camp",
+        "{name}'s side keeps watching the market. Nothing has changed since the first rumblings.",
+    ),
+    "team_belonging": (
+        "{name} still looks like an outsider in the {team} room",
+        "The distance between {name} and the group has not closed. Teammates say he keeps to himself.",
+    ),
+    "winning": (
+        "The losing is still eating at {name}",
+        "{team}'s results have not turned, and {name} is not hiding how much it bothers him.",
+    ),
+}
+
+
 def emit_concern_threshold_storylines(session: Any, rng: random.Random) -> int:
     """Publish when role / contract / belonging / winning pressure crosses a line."""
     entities = getattr(session, "universe_players", None) or {}
@@ -232,9 +252,28 @@ def emit_concern_threshold_storylines(session: Any, rng: random.Random) -> int:
             if pressure < (22 if ambition_boost else 28):
                 continue
             stable = f"concern|{key}|{player_id}|{season}|{day // 21}"
+            # The 21-day bucket alone let the same beat re-fire the day the bucket rolled
+            # over (Sep 27 and Oct 6 both ran "X wants a clearer read on his role").
+            last_by = getattr(session, "_concern_story_last_day", None)
+            if not isinstance(last_by, dict):
+                last_by = {}
+                try:
+                    session._concern_story_last_day = last_by
+                except Exception:
+                    pass
+            last_key = f"{key}|{player_id}"
+            last_day = last_by.get(last_key)
+            if last_day is not None and day - int(last_day) < 21:
+                continue
             ok, _rep = _can_fire(session, stable, day, "minor")
             if not ok:
                 continue
+            if last_day is not None:
+                # A follow-up reads as a follow-up, not a reprint of the first story.
+                headline, summary = _CONCERN_FOLLOW_UPS.get(key, (headline, summary))
+                headline = headline.format(name=name, team=tname)
+                summary = summary.format(name=name, team=tname)
+            last_by[last_key] = day
             writers = [w for w in BEAT_WRITERS if w.get("specialty") in ("local", "performance", "contracts")]
             writer = rng.choice(writers or BEAT_WRITERS)
             _emit_public(

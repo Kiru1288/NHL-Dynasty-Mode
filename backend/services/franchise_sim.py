@@ -5060,7 +5060,7 @@ def get_cached_narrative_universe_payload(session: FranchiseSession, *, force: b
     ):
         payload = cached.get("payload")
         if isinstance(payload, dict):
-            return dict(payload)
+            return _with_bench_buzz_features(session, dict(payload))
     from app.sim_engine.franchise.storyline_engine import build_narrative_universe_payload  # noqa: WPS433
 
     payload = _slim_narrative_for_client(session, build_narrative_universe_payload(session))
@@ -5070,7 +5070,21 @@ def get_cached_narrative_universe_payload(session: FranchiseSession, *, force: b
         "version": _NARRATIVE_UNIVERSE_CACHE_VERSION,
         "payload": payload,
     }
-    return dict(payload) if isinstance(payload, dict) else {}
+    return _with_bench_buzz_features(session, dict(payload) if isinstance(payload, dict) else {})
+
+
+def _with_bench_buzz_features(session: FranchiseSession, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Bench Buzz feature desks (Three Stars, Mailbag, Hot Seat, Rumour Ledger).
+
+    Rides along with narrative_universe so both GET /state (heavy) and GET /narrative
+    deliver it; has its own per-sim-day cache in services/bench_buzz_features.py."""
+    try:
+        from services.bench_buzz_features import build_bench_buzz_features  # noqa: WPS433
+
+        payload["bench_buzz_features"] = build_bench_buzz_features(session)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    return payload
 
 
 def _peek_cached_narrative_universe_payload(session: FranchiseSession) -> Dict[str, Any]:
@@ -7147,7 +7161,24 @@ def _build_stats_central_payload(session: FranchiseSession) -> Dict[str, Any]:
                 standings=getattr(session, "standings", None),
                 season_length=season_len,
                 sealed=race_sealed,
+                limit=10,
             )
+            try:
+                _bbb_abbr_by_tid = {
+                    str(getattr(t, "team_id", None) or getattr(t, "id", "") or ""): _franchise_team_abbrev(t)
+                    for t in league_teams
+                }
+                for _bbb_board in list((enriched["awards_race"] or {}).get("boards") or []):
+                    for _bbb_card in list((_bbb_board or {}).get("leaders") or []):
+                        if not isinstance(_bbb_card, dict):
+                            continue
+                        _ab = str(_bbb_card.get("team_abbr") or "").strip()
+                        if not _ab or _ab.isdigit():
+                            _fix = _bbb_abbr_by_tid.get(str(_bbb_card.get("team_id") or _ab))
+                            if _fix and _fix != "?":
+                                _bbb_card["team_abbr"] = _fix
+            except Exception:
+                logging.getLogger(__name__).debug("awards race abbr fix failed", exc_info=True)
             try:
                 _stamp_awards_race_momentum(session, enriched["awards_race"], cursor, season_year)
             except Exception:
@@ -11346,13 +11377,31 @@ def _attach_storyline_headshots(session: FranchiseSession, rows: List[Dict[str, 
         if isinstance(r, dict) and r.get("player_id") and not r.get("nhl_headshot_url")
     }
     want.discard("")
-    if not want:
+
+    def _row_name(r: Dict[str, Any]) -> str:
+        nm = str(r.get("player_name") or "").strip()
+        if not nm:
+            plist = r.get("players")
+            if isinstance(plist, list) and plist:
+                nm = str(plist[0] or "").strip()
+        return nm.lower()
+
+    # Trade wire rows often carry only a name (no player_id); the UI then drew a
+    # generated cartoon face for a real NHL player. Resolve those by name too.
+    want_names = {
+        _row_name(r)
+        for r in rows
+        if isinstance(r, dict) and not r.get("player_id") and not r.get("nhl_headshot_url") and _row_name(r)
+    }
+    want_names.discard("")
+    if not want and not want_names:
         return rows
     try:
         from app.sim_engine.generation.player_headshots import nhl_headshot_fields_from_player  # noqa: WPS433
     except Exception:
         return rows
     found: Dict[str, Dict[str, Any]] = {}
+    found_names: Dict[str, Dict[str, Any]] = {}
     league = getattr(getattr(session, "sim", None), "league", None)
     pools: List[Any] = []
     for tm in list(getattr(league, "teams", None) or []):
@@ -11362,18 +11411,25 @@ def _attach_storyline_headshots(session: FranchiseSession, rows: List[Dict[str, 
     for pool in pools:
         for pl in list(pool or []):
             pid = str(getattr(pl, "id", "") or "")
-            if pid in want and pid not in found:
-                try:
-                    fields = nhl_headshot_fields_from_player(pl)
-                except Exception:
-                    fields = {}
+            pname = str(getattr(pl, "name", "") or "").strip().lower()
+            hit_id = pid in want and pid not in found
+            hit_name = bool(pname) and pname in want_names and pname not in found_names
+            if not (hit_id or hit_name):
+                continue
+            try:
+                fields = nhl_headshot_fields_from_player(pl)
+            except Exception:
+                fields = {}
+            if hit_id:
                 found[pid] = fields
-        if len(found) >= len(want):
+            if hit_name:
+                found_names[pname] = dict(fields or {})
+        if len(found) >= len(want) and len(found_names) >= len(want_names):
             break
     for r in rows:
         if not isinstance(r, dict):
             continue
-        fields = found.get(str(r.get("player_id") or ""))
+        fields = found.get(str(r.get("player_id") or "")) if r.get("player_id") else found_names.get(_row_name(r))
         if fields:
             for k, v in fields.items():
                 r.setdefault(k, v)
@@ -11553,6 +11609,10 @@ def _normalize_storyline_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
         "goofy_kind",
         "trade_demand",
         "tags",
+        # Structured story effects (life beats); the prose no longer carries numbers.
+        "effect_lines",
+        "effect_days",
+        "universe_event_id",
     ):
         if raw.get(key) is not None:
             out[key] = raw.get(key)
@@ -12265,6 +12325,18 @@ def _cpu_trade_asset_lines(
     return to_lines[:10], from_lines[:10]
 
 
+def _popups_with_cards(session: Any) -> List[Dict[str, Any]]:
+    """Pending popups for the payload, the first few with a player card (age, line, percentiles, trade value)."""
+    pops = list(getattr(session, "pending_ui_popups", None) or [])[:64]
+    try:
+        from services.popup_player_card import enrich_popups
+
+        return enrich_popups(session, pops)
+    except Exception:
+        logging.getLogger(__name__).debug("popup player cards failed", exc_info=True)
+        return pops
+
+
 def _trade_popup_resolve_player(session: Optional[FranchiseSession], team_id: str, player_id: str) -> Optional[Any]:
     if session is None or not player_id:
         return None
@@ -12681,8 +12753,10 @@ def _structured_trade_assets_from_execution(
                     "role_line": " | ".join([p for p in (pos, archetype) if p]),
                     "age": age,
                     "ovr": ovr,
-                    "cap_hit_m": round(float(cap_hit), 2) if cap_hit is not None else None,
-                    "years_left": years_left,
+                    # A $0 cap hit means no contract on file (unsigned RFA / import gap), not a
+                    # free player: leave it off the card instead of printing "$0.00M".
+                    "cap_hit_m": round(float(cap_hit), 2) if cap_hit is not None and float(cap_hit) > 0 else None,
+                    "years_left": years_left if cap_hit is not None and float(cap_hit) > 0 else None,
                     "retained_salary": retained if retained else None,
                     "trade_value": round(float(tv), 1) if tv is not None else None,
                     "season_stats": stats,
@@ -15595,6 +15669,20 @@ def _bridge_universe_events_to_story_wire(session: FranchiseSession, *, limit: i
         for ev in (getattr(session, "storyline_events", None) or [])
         if isinstance(ev, dict)
     }
+    # Life/interaction events already written by the universe engine carry their source
+    # event id as ``universe_event_id`` (no stable_key), so the bridge used to re-publish
+    # them as a second card ("Unsettled home life ... Tyler Boucher" twice, same day).
+    existing_heads = set()
+    for ev in getattr(session, "storyline_events", None) or []:
+        if not isinstance(ev, dict):
+            continue
+        for k in ("universe_event_id", "cause_event_id"):
+            if ev.get(k):
+                existing.add(str(ev.get(k)))
+        h = str(ev.get("headline") or "").strip().lower()
+        if h:
+            existing_heads.add((h, str(ev.get("player_id") or "")))
+    existing.discard("")
     rows = list(getattr(session, "universe_interaction_queue", None) or [])
     rows += list(getattr(session, "universe_interactions", None) or [])[-80:]
     rows += list(getattr(session, "universe_event_log", None) or [])[-80:]
@@ -15614,7 +15702,13 @@ def _bridge_universe_events_to_story_wire(session: FranchiseSession, *, limit: i
         stable = str(raw.get("stable_key") or raw.get("id") or f"univ|{headline[:120]}")
         if not stable or stable in existing:
             continue
+        if raw.get("storyline_id") and str(raw.get("storyline_id")) in existing:
+            continue
+        head_key = (headline.lower(), str(raw.get("player_id") or raw.get("actor_id") or ""))
+        if head_key in existing_heads:
+            continue
         existing.add(stable)
+        existing_heads.add(head_key)
         cause_type = str(raw.get("cause_type") or "").upper()
         category = str(raw.get("category") or "")
         if not category:
@@ -18544,6 +18638,22 @@ def _awards_recent_form(session: Any, season_year: int, pid: str, last_n: int = 
     if rn <= 0 or sn <= 0:
         return None
     out: Dict[str, Any] = {"games": rn}
+    per_game: List[Any] = []
+    for gid in gids[-last_n:]:
+        row = ((games.get(gid) or {}).get("lines") or {}).get(str(pid))
+        if not row:
+            continue
+        try:
+            if ssa > 0:
+                gsa = int(row[sai] or 0) if len(row) > sai else 0
+                gsv = int(row[svi] or 0) if len(row) > svi else 0
+                per_game.append(round(gsv / gsa, 3) if gsa else None)
+            else:
+                per_game.append(int(row[gi] or 0) + int(row[ai] or 0))
+        except (IndexError, TypeError, ValueError):
+            continue
+    if per_game:
+        out["per_game"] = per_game
     if ssa > 0:
         r_sv = (rsv / rsa) if rsa else None
         s_sv = ssv / ssa
@@ -18610,6 +18720,15 @@ def _stamp_awards_race_momentum(session: Any, race: Any, cursor: int, season_yea
                     form_cache[pid] = _awards_recent_form(session, season_year, pid)
                 if form_cache[pid]:
                     leader["form"] = form_cache[pid]
+            # Daily rank trail (oldest -> newest, None = off the board) for the
+            # awards desk sparkline; only real stored snapshots, never invented.
+            if pid:
+                trail = []
+                for h in hist[-14:]:
+                    ids = list(((h.get("boards") or {}).get(str(b.get("id"))) or []))
+                    trail.append(ids.index(pid) + 1 if pid in ids else None)
+                if len(trail) >= 2:
+                    leader["rank_history"] = trail
 
 
 def _build_wjc_game_box_score(
@@ -27159,7 +27278,7 @@ def _build_lean_core_section(
         "season_anchor_events": season_anchor_event_markers(int(session.season_calendar_year)),
         "pending_decisions": pending_snap,
         "pendingDecisions": pending_snap,
-        "pending_ui_popups": list(getattr(session, "pending_ui_popups", None) or [])[:64],
+        "pending_ui_popups": _popups_with_cards(session),
         "timeline": list(session.timeline[-80:]),
         "calendar_events": list(getattr(session, "calendar_events", []) or [])[-48:],
         "schedule_diagnostics": getattr(session, "schedule_diagnostics", {}) or {},
@@ -27706,7 +27825,7 @@ def _build_state_payload_impl(session: FranchiseSession, *, include_heavy: bool 
         "pending_decisions": pending_snap,
         "pendingDecisions": pending_snap,
         # Oldest-first pending queue: never hide older undismissed items behind a newest-only tail.
-        "pending_ui_popups": list(getattr(session, "pending_ui_popups", None) or [])[:64],
+        "pending_ui_popups": _popups_with_cards(session),
         "storyline_choices": storyline_choices,
         "notifications": notifications_norm,
         "timeline": list(session.timeline[-80:]),
@@ -27714,6 +27833,7 @@ def _build_state_payload_impl(session: FranchiseSession, *, include_heavy: bool 
         "active_storylines": len(storylines_norm),
         "narrative_summary": narrative_summary,
         "narrative_universe": narrative_universe if include_heavy else {},
+        "bench_buzz_features": (narrative_universe or {}).get("bench_buzz_features") if include_heavy else None,
         "trade_demand_crisis": trade_demand_crisis,
         "trade_deadline": trade_deadline,
         "trade_stability_roster_flags": dict(getattr(session, "trade_stability_roster_flags", None) or {}),

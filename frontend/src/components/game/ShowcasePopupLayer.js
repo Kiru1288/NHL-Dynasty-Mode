@@ -406,47 +406,303 @@ function TradeWireBody({ pop, onDismiss, onDismissAllTrades, onAction, queuedTra
   );
 }
 
+function popTeam(pop) {
+  const c = pop.player_card || {};
+  const abbr = String(c.team_abbr || pop.team_abbrev || pop.team_abbr || "").toUpperCase();
+  const name = c.team_name || pop.team_name || "";
+  const logo =
+    resolveFranchiseTeamLogo({ team_id: c.team_id || pop.team_id, team_name: name, name, team_abbrev: abbr, abbrev: abbr }, name) ||
+    (abbr ? toLogoUrl(getTeamLogoSrc(abbr)) : "") ||
+    "";
+  return { abbr, name, logo };
+}
+
+const pctTone = (p) => (p >= 80 ? "elite" : p >= 60 ? "good" : p >= 40 ? "avg" : p >= 20 ? "low" : "poor");
+
+/** Hero: photo, who he is, his club's logo and the three numbers that matter (OVR, POT, trade value). */
 function AlertIdentity({ pop }) {
+  const c = pop.player_card || {};
   const ovr = Number(pop.player_overall || pop.overall || 0);
   const pot = Number(pop.player_potential || pop.potential || 0);
   const name = pop.player_name;
-  const teamName = pop.team_name || pop.team_abbrev || pop.team_abbr || "";
-  if (!name && !teamName) return null;
-  const logo =
-    resolveFranchiseTeamLogo(
-      {
-        team_id: pop.team_id,
-        team_name: pop.team_name,
-        team_abbrev: pop.team_abbrev || pop.team_abbr,
-        abbrev: pop.team_abbrev || pop.team_abbr,
-      },
-      pop.team_name || teamName
-    ) || "";
+  const team = popTeam(pop);
+  if (!name && !team.name && !team.abbr) return null;
+  const pos = c.position || pop.player_position || pop.position || "";
+  const age = c.age ?? pop.player_age;
+  const meta = [pos, age ? `Age ${age}` : null, c.shoots ? `Shoots ${c.shoots}` : null, c.archetype || null].filter(Boolean);
+  const tv = c.trade_value;
   return (
-    <div className="media-alert__identity">
+    <div className="pa-hero">
       {name ? (
-        <PlayerHeadshot
-          player={{
-            ...pop,
-            name,
-            id: pop.player_id,
-            position: pop.player_position || pop.position,
-            overall: ovr || undefined,
-            potential: pot || undefined,
-          }}
-          size="lg"
-          preferPhoto
-          showFlag={false}
-        />
+        <div className="pa-hero__face">
+          <PlayerHeadshot
+            player={{ ...pop, name, id: pop.player_id, position: pos, overall: ovr || undefined, potential: pot || undefined }}
+            size="lg"
+            preferPhoto
+            showFlag={false}
+          />
+        </div>
       ) : null}
-      {logo ? (
-        <img className="media-alert__team-logo" src={logo} alt="" />
-      ) : teamName ? (
-        <span className="media-alert__team-fallback">{String(teamName).slice(0, 3).toUpperCase()}</span>
+      <div className="pa-hero__who">
+        {name ? <b className="pa-hero__name">{name}</b> : null}
+        {meta.length ? <span className="pa-hero__meta">{meta.join(" · ")}</span> : null}
+        {team.name || team.abbr ? (
+          <span className="pa-hero__team">
+            <span>{team.name || team.abbr}</span>
+          </span>
+        ) : null}
+      </div>
+      {team.logo ? (
+        <div className="pa-hero__logo" title={team.name || team.abbr}>
+          <img src={team.logo} alt={team.name || team.abbr || ""} />
+        </div>
       ) : null}
-      <div className="media-alert__ratings">
-        {ovr > 0 ? <span className="media-alert__ovr">OVR {Math.round(ovr)}</span> : null}
-        {pot > 0 ? <span className="media-alert__pot">POT {Math.round(pot)}</span> : null}
+      <div className="pa-hero__nums">
+        {ovr > 0 ? (
+          <div className="pa-num is-ovr">
+            <b>{Math.round(ovr)}</b>
+            <small>OVR</small>
+          </div>
+        ) : null}
+        {pot > 0 ? (
+          <div className="pa-num is-pot">
+            <b>{Math.round(pot)}</b>
+            <small>POT</small>
+          </div>
+        ) : null}
+        {tv != null ? (
+          <div className="pa-num is-tv" title={c.value_tier ? `Trade value tier: ${c.value_tier}` : "Trade value"}>
+            <b>{Number(tv).toFixed(1)}</b>
+            <small>Trade value</small>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/* 8x8 pixel icons (Double Dash style), drawn as crisp SVG squares. Letters pick the colour. */
+const PX_COLORS = { k: "#071233", y: "#ffd23a", o: "#ff8a1f", w: "#ffffff", b: "#9fd8ff", g: "#9be564", r: "#ff4f8b", c: "#ffe7c4", n: "#8a5a20" };
+const PX_ICONS = {
+  claim: ["..kkkk..", ".kcyyck.", ".kcccck.", ".kckkck.", ".kcccck.", ".kckkck.", ".kcccck.", ".kkkkkk."],
+  clock: ["..kkkk..", ".kwwwwk.", "kwwkwwwk", "kwwkwwwk", "kwwkkkwk", "kwwwwwwk", ".kwwwwk.", "..kkkk.."],
+  cash: ["...kk...", ".kkggkk.", "kggkkggk", "kggkgggk", ".kggkgk.", "kgggkggk", ".kkggkk.", "...kk..."],
+  depth: ["kkkkkkkk", "kbbbbbbk", "kkkkkkkk", "kyyyyy.k", "kkkkkkkk", "kbbb...k", "kkkkkkkk", "........"],
+  stick: [".....kk.", ".....kn.", "....kn..", "....kn..", "...kn...", "..kn....", "kkkn....", "kkkk...."],
+  chart: ["......k.", ".....kr.", "...k.kr.", "..ko.kr.", ".kyokr..", "kyyokr..", "kkkkkkkk", "........"],
+  star: ["...kk...", "...yy...", "kkyyyykk", ".kyyyyk.", "..kyyk..", ".kyykyk.", ".kyk.kyk", "........"],
+  muscle: ["..kk....", ".kook...", ".kook...", "kooookk.", "koooooo.", "kooooook", ".kooooo.", "..kkkk.."],
+  puck: ["........", "..kkkk..", ".kwwwwk.", "kkkkkkkk", "kkkkkkkk", ".kkkkkk.", "........", "........"],
+};
+function PixelIcon({ name, size = 22 }) {
+  const rows = PX_ICONS[name] || PX_ICONS.puck;
+  const cells = [];
+  rows.forEach((row, y) =>
+    String(row)
+      .slice(0, 8)
+      .split("")
+      .forEach((ch, x) => {
+        if (PX_COLORS[ch]) cells.push(<rect key={`${x}-${y}`} x={x} y={y} width="1.02" height="1.02" fill={PX_COLORS[ch]} />);
+      })
+  );
+  return (
+    <svg className="pa-px" width={size} height={size} viewBox="0 0 8 8" shapeRendering="crispEdges" aria-hidden="true">
+      {cells}
+    </svg>
+  );
+}
+
+function seasonLine(st) {
+  if (!st || !(Number(st.gp) > 0) || st.source === "none") return [];
+  const goalie = st.kind === "goalie";
+  const sv = st.sv_pct != null ? (Number(st.sv_pct) > 1 ? Number(st.sv_pct) / 100 : Number(st.sv_pct)).toFixed(3).replace(/^0/, "") : null;
+  const rows = goalie
+    ? [["GP", st.gp], ["W", st.w], ["L", st.l], ["SV%", sv], ["GAA", st.gaa != null ? Number(st.gaa).toFixed(2) : null], ["SO", st.so]]
+    : [["GP", st.gp], ["G", st.g], ["A", st.a], ["PTS", st.pts], ["P/GP", Number(st.gp) > 0 && st.pts != null ? (Number(st.pts) / Number(st.gp)).toFixed(2) : null], ["+/-", st.plus_minus != null ? (Number(st.plus_minus) > 0 ? `+${st.plus_minus}` : st.plus_minus) : null], ["xGF%", st.xgf_pct != null ? Number(st.xgf_pct).toFixed(1) : null], ["WAR", st.war != null ? Number(st.war).toFixed(1) : null]];
+  return rows.filter(([, v]) => v != null && v !== "");
+}
+
+function Sec({ icon, title, sub, tone = "", children }) {
+  return (
+    <section className={`pa-sec ${tone ? `pa-sec--${tone}` : ""}`}>
+      <h4>
+        <PixelIcon name={icon} />
+        <span>{title}</span>
+        {sub ? <em>{sub}</em> : null}
+      </h4>
+      {children}
+    </section>
+  );
+}
+
+/** This season (and last), league percentiles at his position, skills, contract and value. Only what the save knows. */
+function PlayerCardSections({ card }) {
+  if (!card || typeof card !== "object") return null;
+  const st = card.season || {};
+  const cur = seasonLine(st);
+  const last = seasonLine(card.last_season ? { ...card.last_season, source: "prior" } : null);
+  const pcts = Array.isArray(card.percentiles) ? card.percentiles : [];
+  const pool = card.percentile_pool || {};
+  const money = [
+    card.cap_hit_m != null ? ["Cap hit", `$${Number(card.cap_hit_m).toFixed(2)}M`] : null,
+    card.years_left != null ? ["Term left", `${card.years_left} ${card.years_left === 1 ? "year" : "years"}`] : null,
+    card.trade_value != null ? ["Trade value", Number(card.trade_value).toFixed(1)] : null,
+    card.value_tier ? ["Value tier", card.value_tier] : null,
+  ].filter(Boolean);
+  const skills = Array.isArray(card.skills) ? card.skills : [];
+  const wv = card.waiver || null;
+  const fit = card.depth_fit || null;
+  const career = card.career && Number(card.career.gp) > 0 ? card.career : null;
+  const ranked = [...skills].sort((x, y) => y.value - x.value);
+  const read = { best: ranked.slice(0, 2), worst: ranked.length > 3 ? ranked.slice(-2).reverse() : [] };
+  if (!cur.length && !last.length && !pcts.length && !money.length && !skills.length && !wv) return null;
+  const statBlock = (rows) => (
+    <div className="pa-line">
+      {rows.map(([k, v]) => (
+        <div key={k}>
+          <b>{v}</b>
+          <small>{k}</small>
+        </div>
+      ))}
+    </div>
+  );
+  return (
+    <div className="pa-card">
+      <div className="pa-col">
+        {wv || fit ? (
+          <Sec icon="claim" title={wv ? "Waiver claim" : "Fit on your roster"} tone="deal">
+            <div className="pa-money">
+              {wv?.claim_priority ? (
+                <div className={wv.claim_priority <= 8 ? "is-good" : wv.claim_priority >= 24 ? "is-bad" : ""}>
+                  <small>Your claim priority</small>
+                  <b>
+                    #{wv.claim_priority}
+                    <em> of {wv.claim_teams}</em>
+                  </b>
+                </div>
+              ) : null}
+              {wv ? (
+                <div>
+                  <small>Claims close</small>
+                  <b>{wv.days_left <= 0 ? "Today" : wv.days_left === 1 ? "In 1 day" : `In ${wv.days_left} days`}</b>
+                </div>
+              ) : null}
+              {wv?.user_cap_space_m != null ? (
+                <div className={wv.fits_cap ? "is-good" : "is-bad"}>
+                  <small>Your cap space</small>
+                  <b>
+                    ${Number(wv.user_cap_space_m).toFixed(2)}M<em>{wv.fits_cap ? " · fits" : " · won't fit"}</em>
+                  </b>
+                </div>
+              ) : null}
+              {fit ? (
+                <div className={fit.rank <= Math.ceil(fit.of / 3) ? "is-good" : ""}>
+                  <small>On your depth chart</small>
+                  <b>
+                    #{fit.rank}
+                    <em> of {fit.of} {fit.group}</em>
+                  </b>
+                </div>
+              ) : null}
+            </div>
+          </Sec>
+        ) : null}
+        {cur.length ? (
+          <Sec icon="stick" title={st.source === "nhl_prior" ? `Last season · ${st.label || ""}` : `This season · ${st.label || ""}`}>
+            {statBlock(cur)}
+          </Sec>
+        ) : (
+          <Sec icon="stick" title="This season">
+            <p className="pa-note">{st.note || "No games played yet this season."}</p>
+          </Sec>
+        )}
+        {last.length ? (
+          <Sec icon="clock" title={`Last season · ${card.last_season.label || ""}`}>
+            {statBlock(last)}
+          </Sec>
+        ) : null}
+        {career ? (
+          <Sec icon="star" title="NHL career" sub={`${career.seasons} ${career.seasons === 1 ? "season" : "seasons"}`}>
+            {statBlock(
+              (career.w != null
+                ? [["GP", career.gp], ["W", career.w], ["SO", career.so]]
+                : [["GP", career.gp], ["G", career.g], ["A", career.a], ["PTS", career.pts], ["P/GP", career.gp ? (career.pts / career.gp).toFixed(2) : null]]
+              ).filter(([, v]) => v != null)
+            )}
+          </Sec>
+        ) : null}
+        {read.best.length ? (
+          <Sec icon="puck" title="Scouting read">
+            <div className="pa-read">
+              <div className="is-up">
+                <small>Strengths</small>
+                {read.best.map((k) => (
+                  <span key={k.key}>▲ {String(k.key).replace(/_/g, " ")} <b>{k.value}</b></span>
+                ))}
+              </div>
+              <div className="is-down">
+                <small>Watch out for</small>
+                {read.worst.map((k) => (
+                  <span key={k.key}>▼ {String(k.key).replace(/_/g, " ")} <b>{k.value}</b></span>
+                ))}
+              </div>
+            </div>
+          </Sec>
+        ) : null}
+      </div>
+      <div className="pa-col">
+        <Sec
+          icon="chart"
+          title="League analytics"
+          sub={pcts.length ? `percentile vs ${pool.n || ""} ${pool.group || "players"}${pool.season ? ` · ${pool.season}` : ""}${pool.min_gp ? ` · ${pool.min_gp}+ GP` : ""}` : ""}
+        >
+          {pcts.length ? (
+            <ul className="pa-pcts">
+              {pcts.map((p) => (
+                <li key={p.key} className={`is-${pctTone(p.pct)}`}>
+                  <span className="pa-pcts__label">{p.label}</span>
+                  <span className="pa-pcts__val">{p.value}</span>
+                  <span className="pa-pcts__bar" aria-hidden="true">
+                    <i style={{ width: `${Math.max(3, p.pct)}%` }} />
+                  </span>
+                  <b className="pa-pcts__pct">
+                    {p.pct}
+                    <small>th</small>
+                  </b>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="pa-note">Percentiles appear once enough of the league has played a few games.</p>
+          )}
+        </Sec>
+        {money.length ? (
+          <Sec icon="cash" title="Contract & value">
+            <div className="pa-money">
+              {money.map(([k, v]) => (
+                <div key={k}>
+                  <small>{k}</small>
+                  <b>{v}</b>
+                </div>
+              ))}
+            </div>
+          </Sec>
+        ) : null}
+        {skills.length ? (
+          <Sec icon="muscle" title="Skill profile">
+            <ul className="pa-skills">
+              {skills.map((k) => (
+                <li key={k.key} className={`is-${k.value >= 82 ? "elite" : k.value >= 75 ? "good" : k.value >= 68 ? "avg" : "low"}`}>
+                  <span>{String(k.key).replace(/_/g, " ")}</span>
+                  <i aria-hidden="true">
+                    <em style={{ width: `${Math.max(4, Math.min(100, ((k.value - 40) / 55) * 100))}%` }} />
+                  </i>
+                  <b>{k.value}</b>
+                </li>
+              ))}
+            </ul>
+          </Sec>
+        ) : null}
       </div>
     </div>
   );
@@ -458,7 +714,6 @@ function MediaAlertShell({ pop, children, onDismiss, onAction, actions = [], que
   const kindLabel = String(pop.kind || pop.type || "")
     .replace(/_/g, " ")
     .toUpperCase();
-  const team = pop.team_abbrev || pop.team_abbr;
   const showKind = kindLabel && kindLabel.toLowerCase() !== String(source).toLowerCase();
 
   return (
@@ -472,22 +727,25 @@ function MediaAlertShell({ pop, children, onDismiss, onAction, actions = [], que
         </button>
       </div>
 
-      <AlertIdentity pop={pop} />
-
       <div className="media-alert__hero-text">
         <h3 className="media-alert__headline" id="showcase-popup-title">
           {pop.headline || pop.title || "Update"}
         </h3>
-        {pop.player_name || team ? (
-          <p className="media-alert__byline">
-            {pop.player_name ? <strong>{pop.player_name}</strong> : null}
-            {pop.player_name && team ? " · " : null}
-            {team ? <span>{team}</span> : null}
-          </p>
-        ) : null}
       </div>
 
-      <div className="media-alert__body-scroll">{children}</div>
+      <AlertIdentity pop={pop} />
+
+      <div className="media-alert__body-scroll">
+        <PlayerCardSections card={pop.player_card} />
+        {false && pop.player_id && (!pop.player_card || Array.isArray(pop.player_card._errors)) ? (
+          <p className="pa-diag">
+            {!pop.player_card
+              ? "Player card not sent by the server (restart the API with start_api.ps1)."
+              : `Player card partly failed: ${pop.player_card._errors.join(" | ")}`}
+          </p>
+        ) : null}
+        {children}
+      </div>
 
       {actions.length ? (
         <div className="media-alert__actions">
@@ -553,9 +811,9 @@ function StorylineBody({ pop, onDismiss, onDismissAllTrades, onAction, queuedTra
   const demand = pop.trade_demand || null;
   const storyText =
     pop.body ||
-    pop.headline ||
+    (pop.summary && pop.summary !== pop.headline ? pop.summary : "") ||
     pop.story_report ||
-    pop.summary ||
+    pop.headline ||
     pop.description ||
     pop.storyline_text ||
     "";
@@ -569,9 +827,6 @@ function StorylineBody({ pop, onDismiss, onDismissAllTrades, onAction, queuedTra
 
   const stats = [
     { label: "Player", value: pop.player_name ? null : pop.culprit_player_name || null },
-    { label: "Position", value: pop.player_position || null },
-    { label: "OVR", value: Number(pop.player_overall) > 0 ? Math.round(Number(pop.player_overall)) : null },
-    { label: "POT", value: Number(pop.player_potential || pop.potential) > 0 ? Math.round(Number(pop.player_potential || pop.potential)) : null },
     {
       label: "Status",
       value: demand
@@ -684,10 +939,12 @@ function StorylineBody({ pop, onDismiss, onDismissAllTrades, onAction, queuedTra
         </section>
       ) : null}
 
-      <section className="media-alert__section">
-        <h4 className="media-alert__section-title">{demand ? "Demand" : "Story Report"}</h4>
-        <p className="media-alert__story">{storyText}</p>
-      </section>
+      {pop.kind === "waiver" && pop.player_card && (pop.player_card.age || pop.player_card.waiver) ? null : (
+        <section className="media-alert__section">
+          <h4 className="media-alert__section-title">{demand ? "Demand" : "Story Report"}</h4>
+          <p className="media-alert__story">{storyText}</p>
+        </section>
+      )}
 
       {demand ? (
         <section className="media-alert__section media-alert__section--impact">
@@ -1003,7 +1260,7 @@ export function ShowcasePopupLayer() {
     window.addEventListener("nhl-live-sim", on);
     return () => window.removeEventListener("nhl-live-sim", on);
   }, []);
-  const { franchiseState, onDismissShowcasePopups, setScreen, resumeInterruptedSim, cancelSimResume, setStatsCentralTab, onResolveDecision } = useGameUI();
+  const { franchiseState, onDismissShowcasePopups, setScreen, resumeInterruptedSim, cancelSimResume, setStatsCentralTab, onResolveDecision, refreshFranchise } = useGameUI();
   const userTeamId = franchiseState?.user_team_id || franchiseState?.team?.team_id || "";
   const rawQueue = (franchiseState?.pending_ui_popups || []).filter(
     (p) => p && !isFranchiseCinematicPopup(p) && isImportantPopup(p, userTeamId)
@@ -1021,6 +1278,25 @@ export function ShowcasePopupLayer() {
     : rawQueue;
   const first = visiblePopups[0];
   const [flash, setFlash] = useState("");
+  // The alert built right after a sim can carry an incomplete player card (the waiver wire is still being
+  // written while that response is built). Ask for fresh state once per alert; the next build has it all.
+  const refreshedRef = React.useRef(new Set());
+  useEffect(() => {
+    const card = first?.player_card;
+    const pid = first?.player_id;
+    const key = String(first?.id || pid || "");
+    if (!pid || !key || refreshedRef.current.has(key)) return;
+    if (card && !Array.isArray(card._errors) && (card.age || card.waiver)) return;
+    refreshedRef.current.add(key);
+    const t = window.setTimeout(() => {
+      try {
+        refreshFranchise?.();
+      } catch (e) {
+        /* ignore */
+      }
+    }, 150);
+    return () => window.clearTimeout(t);
+  }, [first, refreshFranchise]);
 
   useEffect(() => {
     if (!flash) return undefined;
@@ -1137,7 +1413,7 @@ export function ShowcasePopupLayer() {
         tabIndex={-1}
       />
       <div
-        className={`showcase-popup__panel showcase-popup__panel--v2 ${isMediaAlert ? "showcase-popup__panel--media" : ""} ${isTradeAlert ? "showcase-popup__panel--trade-wire" : ""} ${isObituary ? "showcase-popup__panel--obituary" : ""} showcase-popup__panel--${theme}`}
+        className={`showcase-popup__panel showcase-popup__panel--v2 ${isMediaAlert ? "showcase-popup__panel--media" : ""} ${isTradeAlert ? "showcase-popup__panel--trade-wire" : ""} ${isObituary ? "showcase-popup__panel--obituary" : ""} ${first?.player_card && (first.player_card.age || first.player_card.waiver || first.player_card.season) ? "showcase-popup__panel--card" : ""} showcase-popup__panel--${theme}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby="showcase-popup-title"

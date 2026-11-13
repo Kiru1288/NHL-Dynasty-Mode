@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useState } from "react";
 import PlayerHeadshot from "../PlayerHeadshot";
 import { ensurePlayerHeadshotFields } from "../../utils/playerHeadshots";
+import { resolveFranchiseTeamLogo } from "../../utils/teamLogos";
 
 /* Awards race desk: one trophy on stage at a time with a narrative read, a
-   top-5 race track (gap to the leader), rank movement since about a week ago
+   top-10 race track (gap to the leader), rank movement since about a week ago
    and last-10 form, plus a wall of every ballot showing how tight it is. */
 
 const arr = (v) => (Array.isArray(v) ? v : []);
@@ -65,7 +66,7 @@ function suspense(board) {
 }
 
 function Movement({ leader }) {
-  if (leader?.new_entry) return <span className="ard-move is-new" title="New to the top 5 since last week">NEW</span>;
+  if (leader?.new_entry) return <span className="ard-move is-new" title="New to the top 10 since last week">NEW</span>;
   const d = num(leader?.rank_delta);
   if (d == null) return <span className="ard-move is-flat" title="No earlier snapshot yet">·</span>;
   if (d > 0) return <span className="ard-move is-up" title={`Up ${d} since last week`}>▲{d}</span>;
@@ -103,6 +104,49 @@ function narrative(board) {
   if (!climber && !hot && c) bits.push(`${lastName(c.name)} rounds out the podium.`);
   bits.push(sus.note);
   return { head, body: bits.join(" ") };
+}
+
+/** Daily rank trail on this ballot (stored snapshots only; gaps = off the board). */
+function RankTrail({ trail }) {
+  const t = arr(trail);
+  if (t.length < 2) return <span className="bbb-spark is-empty" title="Rank history builds as days pass">new</span>;
+  const W = 84, H = 26, depth = 11;
+  const pts = t.map((r, i) => [(i / (t.length - 1)) * (W - 4) + 2, r == null ? null : 2 + ((Math.min(r, depth) - 1) / (depth - 1)) * (H - 4)]);
+  const segs = [];
+  let cur = [];
+  for (const [x, y] of pts) {
+    if (y == null) { if (cur.length) segs.push(cur); cur = []; } else cur.push(`${x.toFixed(1)},${y.toFixed(1)}`);
+  }
+  if (cur.length) segs.push(cur);
+  const last = pts[pts.length - 1];
+  const first = t.find((r) => r != null);
+  return (
+    <span className="bbb-spark" title={`Rank over the last ${t.length} days: ${t.map((r) => (r == null ? "–" : r)).join(" → ")}`}>
+      <svg viewBox={`0 0 ${W} ${H}`} width={W} height={H} aria-hidden>
+        {segs.map((sg, i) => (sg.length > 1 ? <polyline key={i} points={sg.join(" ")} /> : null))}
+        {last[1] != null ? <circle cx={last[0]} cy={last[1]} r="3" /> : null}
+      </svg>
+      <small>{first != null ? `#${first}` : "off"} → #{t[t.length - 1] ?? "–"}</small>
+    </span>
+  );
+}
+
+/** Last-10 game strip: points per game (skaters) or save % per game (goalies). */
+function FormStrip({ form }) {
+  const g = arr(form?.per_game);
+  if (!g.length) return null;
+  const goalie = form?.kind === "goalie";
+  const max = goalie ? 1 : Math.max(3, ...g.map((v) => Number(v) || 0));
+  return (
+    <span className={`bbb-strip${goalie ? " is-g" : ""}`} title={goalie ? `Save % by game: ${g.map((v) => (v == null ? "–" : Number(v).toFixed(3))).join(", ")}` : `Points by game: ${g.join(", ")}`}>
+      {g.map((v, i) => {
+        const n = Number(v) || 0;
+        const h = goalie ? Math.max(8, Math.min(100, ((n - 0.8) / 0.2) * 100)) : n > 0 ? Math.max(25, (n / max) * 100) : 8;
+        const tone = goalie ? (n >= 0.92 ? "is-hot" : n < 0.88 ? "is-cold" : "") : n >= 2 ? "is-hot" : n === 0 ? "is-cold" : "";
+        return <i key={i} className={tone} style={{ height: `${h}%` }} />;
+      })}
+    </span>
+  );
 }
 
 export default function AwardsRaceDesk({ boards, status, sealed, sealedMessage, windowDays }) {
@@ -173,19 +217,26 @@ export default function AwardsRaceDesk({ boards, status, sealed, sealedMessage, 
               <p className="ard-story__body">{story.body}</p>
             </article>
 
+            <div className="bbb-lanehead" aria-hidden>
+              <span>#</span><span>Player</span><span>Gap to the leader</span><span>Ballot numbers</span><span>Rank trail</span><span>Last 10</span>
+            </div>
             <ol className="ard-track">
               {arr(board.leaders).map((l, i) => {
                 const portrait = ensurePlayerHeadshotFields({ ...l, id: l.player_id, player_id: l.player_id });
                 const g = gaps[i] || {};
+                const abbr = /^\d+$/.test(s(l.team_abbr)) ? "" : s(l.team_abbr);
+                const teamTxt = abbr || "—";
+                const logo = abbr || l.team_id != null ? resolveFranchiseTeamLogo({ team_id: l.team_id, team_abbrev: abbr, abbrev: abbr, abbreviation: abbr }, abbr) || "" : "";
                 return (
-                  <li key={`${board.id}-${l.player_id || l.name}-${i}`} className={`ard-lane ${i === 0 ? "is-leader" : ""}`}>
+                  <li key={`${board.id}-${l.player_id || l.name}-${i}`} className={`ard-lane bbb-lane ${i === 0 ? "is-leader" : ""}`}>
                     <span className="ard-rank">{i + 1}</span>
-                    <span className="ard-face">
-                      {l.position === "HC" ? <span className="ard-coach">HC</span> : <PlayerHeadshot player={portrait} size="xs" showFlag={false} />}
+                    <span className="ard-face bbb-lane__face">
+                      {l.position === "HC" ? <span className="ard-coach">HC</span> : <PlayerHeadshot player={portrait} size="md" preferPhoto showFlag={false} number={null} />}
+                      {logo ? <img className="bbb-lane__logo" src={logo} alt="" /> : null}
                     </span>
                     <span className="ard-who">
                       <b>{s(l.name, "Player")}</b>
-                      <i>{s(l.team_abbr)}{l.position && l.position !== "HC" ? ` · ${l.position}` : ""}{l.gp ? ` · ${l.gp} GP` : ""}</i>
+                      <i>{teamTxt}{l.position && l.position !== "HC" ? ` · ${l.position}` : ""}{l.gp ? ` · ${l.gp} GP` : ""}</i>
                     </span>
                     <span className="ard-bar" aria-hidden>
                       <span className="ard-bar__fill" style={{ width: `${Math.min(100, Math.max(0, g.pct || 0))}%` }} />
@@ -197,7 +248,11 @@ export default function AwardsRaceDesk({ boards, status, sealed, sealedMessage, 
                         <span key={m.label}><small>{m.label}</small>{fmtMetric(m)}</span>
                       ))}
                     </span>
-                    <FormChip form={l.form} />
+                    <RankTrail trail={l.rank_history} />
+                    <span className="bbb-lane__form">
+                      <FormStrip form={l.form} />
+                      <FormChip form={l.form} />
+                    </span>
                   </li>
                 );
               })}

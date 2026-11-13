@@ -1624,7 +1624,7 @@ function buildCandidateCards(award, franchiseState) {
 
     const statLine = isTeamAward
       ? item.record
-        ? `${item.record} ? ${roundStat(firstDefined(item.points, item.pts))} pts`
+        ? `${item.record} · ${roundStat(firstDefined(item.points, item.pts))} pts`
         : teamName
       : points
         ? `${roundStat(points)} PTS`
@@ -2282,7 +2282,7 @@ export function buildAwardTickerItems(awards) {
   const chunks = [];
 
   for (const award of awards) {
-    chunks.push(`${award.awardLabel} ? ${award.winnerLabel}`);
+    chunks.push(`${award.awardLabel} — ${award.winnerLabel}`);
 
     if (award.awardKey === "stanley") {
       chunks.push(`${award.winnerLabel} crowned Stanley Cup champions`);

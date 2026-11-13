@@ -27,6 +27,24 @@ import { resolveChapterMap, chapterNumericValue } from "../utils/chapterAttribut
 import PlayerRankings from "../components/storylines/PlayerRankings";
 import FalloutBoard from "../components/storylines/FalloutBoard";
 import AwardsRaceDesk from "../components/storylines/AwardsRaceDesk";
+import TradeBoard, { TradeValueLeaders } from "../components/storylines/TradeBoard";
+import { TopProspectsBoard, ProspectPoolsBoard } from "../components/storylines/ProspectBoards";
+import PressRoomDesk from "../components/storylines/PressRoomDesk";
+import RoomAndLifeDesk from "../components/storylines/RoomAndLifeDesk";
+import ThreeStarsDesk from "../components/storylines/ThreeStarsDesk";
+import MailbagDesk from "../components/storylines/MailbagDesk";
+import HotSeatDesk from "../components/storylines/HotSeatDesk";
+import RumourLedgerDesk from "../components/storylines/RumourLedgerDesk";
+import {
+  BuzzFace,
+  BuzzEffects,
+  BuzzHeat,
+  InsidersDesk,
+  ArchiveDesk,
+  cleanStoryProse,
+  dedupeStories,
+  storyEffectLines,
+} from "../components/storylines/BuzzNewsroom";
 
 /*
   StorylinesScreen — franchise narrative command center.
@@ -223,6 +241,10 @@ const DEPARTMENTS = [
   { id: "prospect_leaderboard", label: "Top Prospects", glyph: "★" },
   { id: "insiders", label: "Insiders", glyph: "◇" },
   { id: "awards_race", label: "Awards", glyph: "★" },
+  { id: "three_stars", label: "Three Stars", glyph: "✪" },
+  { id: "mailbag", label: "Mailbag", glyph: "✉" },
+  { id: "hot_seat", label: "Hot Seat", glyph: "♨" },
+  { id: "rumour_ledger", label: "Rumour Ledger", glyph: "✓" },
   { id: "press_room", label: "Press Room", glyph: "▤" },
   { id: "archive", label: "Archive", glyph: "▥" },
 ];
@@ -868,7 +890,11 @@ function MeetingResultOverlay({ outcome, onDismiss }) {
           {pid ? <PlayerHeadshot player={outcome?.portrait || { id: pid, player_id: pid }} size={84} /> : null}
           <div>
             <strong>{name}</strong>
-            {impact.choice_label ? <span>You: “{str(impact.choice_label)}”</span> : null}
+            {impact.said || impact.choice_label ? (
+              <span>
+                {impact.said ? <>You: “{str(impact.said)}”</> : <>You chose: {str(impact.choice_label)}</>}
+              </span>
+            ) : null}
           </div>
         </div>
         <blockquote className="md-result__quote">“{str(impact.quote)}”</blockquote>
@@ -1010,163 +1036,6 @@ function StoryEffectBreakdown({ story, compact = false }) {
             </p>
           ) : null}
         </div>
-      ) : null}
-    </div>
-  );
-}
-
-function LockerRoomDashboard({ narrativeUniverse, franchiseState, stories = [] }) {
-  const hallmark = asObject(narrativeUniverse?.hallmark_panels);
-  const culture = asObject(hallmark.room_pulse || narrativeUniverse?.locker_room?.culture);
-  const risks = asArray(hallmark.character_risks);
-  const leaders = asArray(hallmark.unheralded_leaders);
-  const pulse = collectLockerPulse(franchiseState, { limit: 12 });
-  const uid = str(franchiseState?.user_team_id);
-  const roomWire = stories.filter((s) => {
-    if (s.categoryKey === "personal_life" || s.categoryKey === "locker_room") return true;
-    const tokens = categoryTokens(s.category || s.type);
-    if (tokens.includes("press")) return false;
-    return tokens.includes("locker") || tokens.includes("personal") || tokens.includes("life");
-  });
-  const lifeStories = pulse.lifeStories.length
-    ? pulse.lifeStories
-    : roomWire.filter((s) => s.categoryKey === "personal_life").slice(0, 10);
-  const recentUniverse = asArray(narrativeUniverse?.recent_universe_events)
-    .filter((ev) => !uid || str(ev?.team_id) === uid)
-    .slice(-8)
-    .reverse();
-  const hasCultureData = Object.keys(culture).length > 0;
-  const pulseParts = [culture.unity, culture.confidence, culture.belonging].filter((v) => v != null && v !== "");
-  const pulseScore = pulseParts.length
-    ? Math.round(pulseParts.reduce((sum, v) => sum + Number(v), 0) / pulseParts.length)
-    : null;
-  const clubLabel = teamLabel(franchiseState);
-
-  if (!hasCultureData && !risks.length && !leaders.length && !pulse.people.length && !lifeStories.length && !recentUniverse.length) {
-    return (
-      <EmptyPanel
-        kicker="Locker room"
-        title="No culture data yet"
-        body="Advance the calendar to sync locker-room metrics. If you just completed a meeting, refresh or sim a day to reload narrative data."
-      />
-    );
-  }
-
-  return (
-    <div className="sl-locker-dash sl-locker-dash--cinematic">
-      <header className="sl-locker-dash__head">
-        <p className="sl-room__kicker">Culture · {clubLabel}</p>
-        <h2>Room and life</h2>
-        <p className="sl-room__sub">Locker-room pulse, character profiles, and off-ice beats tied to your roster.</p>
-      </header>
-      <div className="sl-locker-dash__pulse">
-        {pulseScore != null ? (
-          <div className="sl-locker-dash__gauge" style={{ "--pulse": `${pulseScore}%` }}>
-            <strong>{pulseScore}</strong>
-            <span>Room pulse</span>
-          </div>
-        ) : null}
-        <div className="sl-locker-dash__culture">
-          {Object.entries(culture).map(([key, val]) => (
-            <div key={key} className="sl-num">
-              <span>{formatEffectLabel(key)}</span>
-              <strong>{Math.round(Number(val) || 0)}</strong>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {lifeStories.length || roomWire.length ? (
-        <section className="sl-locker-dash__section">
-          <h3>Story beats</h3>
-          <div className="sl-locker-dash__cards sl-locker-dash__cards--wire">
-            {(lifeStories.length ? lifeStories : roomWire.slice(0, 8)).map((row) => (
-              <article key={str(row.id || row.headline)} className="sl-locker-card sl-locker-card--story">
-                <span className="sl-locker-card__tag">Off ice</span>
-                <strong>{str(row.playerName || row.headline)}</strong>
-                <p>{str(row.summary || row.headline)}</p>
-              </article>
-            ))}
-          </div>
-        </section>
-      ) : (
-        <section className="sl-locker-dash__section">
-          <h3>Story beats</h3>
-          <p className="sl-muted">No life or locker-room stories on the wire yet. After a 30-day sim, restart the backend and refresh — stories backfill automatically.</p>
-        </section>
-      )}
-
-      {recentUniverse.length ? (
-        <section className="sl-locker-dash__section">
-          <h3>Recent triggers</h3>
-          <div className="sl-locker-dash__cards sl-locker-dash__cards--wire">
-            {recentUniverse.map((ev) => (
-              <article key={str(ev.id || ev.kind)} className="sl-locker-card sl-locker-card--trigger">
-                <span className="sl-locker-card__tag">{formatEffectLabel(ev.kind || ev.type || "event")}</span>
-                <strong>{str(ev.player_name || ev.headline || "Roster event")}</strong>
-                <p>{str(ev.summary || ev.headline || ev.description || "A character or room trigger fired.")}</p>
-              </article>
-            ))}
-          </div>
-        </section>
-      ) : null}
-
-      {pulse.people.length ? (
-        <section className="sl-locker-dash__section">
-          <h3>Who they are</h3>
-          <div className="sl-locker-dash__cards">
-            {pulse.people.slice(0, 12).map((row) => (
-              <article key={row.playerId || row.name} className="sl-locker-card sl-locker-card--person">
-                <PlayerHeadshot player={row.portrait ? { ...row.portrait, id: row.playerId, player_id: row.playerId } : { id: row.playerId, player_id: row.playerId, name: row.name }} size={48} />
-                <div className="sl-locker-card__body">
-                  <strong>{row.name}</strong>
-                  <span className="sl-locker-card__meta">
-                    {row.position ? `${row.position} · ` : ""}
-                    {row.character || "Profile"}
-                  </span>
-                  <p>{row.line}</p>
-                  <div className="sl-locker-card__chips">
-                    {row.chips.map((chip) => (
-                      <em key={chip} className="sl-niche-badge">{chip}</em>
-                    ))}
-                  </div>
-                </div>
-              </article>
-            ))}
-          </div>
-        </section>
-      ) : null}
-      {risks.length ? (
-        <section className="sl-locker-dash__section">
-          <h3>Character risks</h3>
-          <div className="sl-locker-dash__cards">
-            {risks.map((row) => (
-              <article key={str(row.player_id)} className="sl-locker-card">
-                <strong>{str(row.player_name || "Player")}</strong>
-                <span>Disruption risk {Math.round(Number(row.disruption_risk) || 0)}</span>
-                {asArray(row.niche_abilities).map((n) => (
-                  <em key={str(n.id)} className="sl-niche-badge">{str(n.label || n.id)}</em>
-                ))}
-              </article>
-            ))}
-          </div>
-        </section>
-      ) : null}
-      {leaders.length ? (
-        <section className="sl-locker-dash__section">
-          <h3>Unheralded leaders</h3>
-          <div className="sl-locker-dash__cards">
-            {leaders.map((row) => (
-              <article key={str(row.player_id)} className="sl-locker-card">
-                <strong>{str(row.player_name || "Player")}</strong>
-                <span>Room value {Math.round(Number(row.room_value) || 0)}</span>
-                {asArray(row.niche_abilities).map((n) => (
-                  <em key={str(n.id)} className="sl-niche-badge">{str(n.label || n.id)}</em>
-                ))}
-              </article>
-            ))}
-          </div>
-        </section>
       ) : null}
     </div>
   );
@@ -1351,8 +1220,10 @@ function normalizeStory(raw, idx, state) {
     storylineId: str(raw?.storyline_id || raw?.id || id),
     raw,
     headline: headline || "Untitled storyline",
-    summary: str(raw?.short_summary || raw?.summary || raw?.description || raw?.details || raw?.text || ""),
-    description: str(raw?.description || raw?.details || raw?.summary || ""),
+    // Story copy reads as prose; engine readings / "Effect:" receipts move to effectLines.
+    summary: cleanStoryProse(str(raw?.short_summary || raw?.summary || raw?.description || raw?.details || raw?.text || "")),
+    description: cleanStoryProse(str(raw?.description || raw?.details || raw?.summary || "")),
+    effectLines: storyEffectLines(raw || {}),
     cause: str(raw?.cause || ""),
     causeType: str(raw?.cause_type || ""),
     causeEventId: str(raw?.cause_event_id || ""),
@@ -1470,6 +1341,10 @@ function collectStories(state) {
     seen.add(s.id);
     out.push(s);
   });
+  // Old saves carry reprints of the same beat (same headline, same player, same week).
+  const unique = dedupeStories(out);
+  out.length = 0;
+  out.push(...unique);
   out.sort((a, b) => {
     if (a.requiresAction !== b.requiresAction) return a.requiresAction ? -1 : 1;
     if (b.priorityRank !== a.priorityRank) return b.priorityRank - a.priorityRank;
@@ -1682,6 +1557,10 @@ function buildSocialPosts(stories, narrativeUniverse, { currentIso = null, maxAg
       reposts: p.reposts,
       replies: p.replies,
       outlet: str(p.outlet || ""),
+      sentiment: Number(p.sentiment) || 0,
+      cat: str(p.cat || ""),
+      teamIds: asArray(p.team_ids).map((t) => str(t)),
+      kindRaw: str(p.kind || ""),
     }));
   }
   // Fallback when the live feed is empty: wire copies of storylines, posted by a news
@@ -2326,199 +2205,387 @@ function extractTradeBoard(story) {
   };
 }
 
-function tradeAssetStatLine(stats) {
-  const st = stats && typeof stats === "object" ? stats : null;
-  if (!st || !Number(st.gp)) return "";
-  const label = str(st.label || "");
-  if (st.w != null || st.sv_pct != null) {
-    const sv = Number(st.sv_pct);
-    const svTxt = Number.isFinite(sv) && sv > 0 ? ` · ${(sv > 1 ? sv / 100 : sv).toFixed(3)}` : "";
-    return `${label ? `${label}: ` : ""}${st.gp} GP · ${st.w ?? 0}-${st.l ?? 0}${svTxt}`;
-  }
-  return `${label ? `${label}: ` : ""}${st.gp} GP · ${st.g ?? 0}-${st.a ?? 0}-${st.pts ?? 0}`;
-}
-
-function TradeAssetChip({ asset, compact = false }) {
-  const name = str(asset?.display_name || asset?.player_name || asset?.name || "Asset");
-  const ovr = asset?.ovr != null ? Math.round(Number(asset.ovr)) : null;
-  const pot = asset?.pot != null ? Math.round(Number(asset.pot)) : null;
-  const tv = asset?.trade_value != null ? Number(asset.trade_value) : null;
-  const pos = str(asset?.position || "");
-  const isPick = str(asset?.asset_type).toLowerCase().includes("pick");
-  const statLine = isPick ? "" : tradeAssetStatLine(asset?.season_stats);
-  return (
-    <div className={`sl-trade-asset${compact ? " is-compact" : ""}${isPick ? " is-pick" : ""}`}>
-      <div className="sl-trade-asset__row">
-        {!isPick ? (
-          <PlayerHeadshot
-            player={ensurePlayerHeadshotFields({ ...asset, id: asset?.player_id, name, position: pos })}
-            size="sm"
-            className="sl-trade-asset__face"
-            flag={null}
-            number={null}
-          />
-        ) : (
-          <span className="sl-trade-asset__pickmark">PK</span>
-        )}
-        <div className="sl-trade-asset__body">
-          <div className="sl-trade-asset__head">
-            <strong title={name}>{name}</strong>
-          </div>
-          <div className="sl-trade-asset__meta">
-            {pos ? <em>{pos}</em> : null}
-            {asset?.age ? <span>Age {asset.age}</span> : null}
-            {asset?.cap_hit_m != null ? <span>${Number(asset.cap_hit_m).toFixed(2)}M{asset?.years_left ? ` × ${asset.years_left}y` : ""}</span> : null}
-            {tv != null ? <span className="sl-trade-asset__tv">Trade Value {tv.toFixed(1)}</span> : null}
-          </div>
-          {statLine ? <div className="sl-trade-asset__stats">{statLine}</div> : null}
-        </div>
-        {ovr != null && !isPick ? (
-          <div className="sl-trade-asset__ratings">
-            <span><b>{ovr}</b><i>OVR</i></span>
-            {pot != null && pot > ovr ? <span className="is-pot"><b>{pot}</b><i>POT</i></span> : null}
-          </div>
-        ) : null}
-      </div>
-      {tv != null && !compact ? (
-        <div className="sl-trade-asset__bar" aria-hidden>
-          <span style={{ width: `${Math.min(100, (tv / 85) * 100)}%` }} />
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function TradeValueMeter({ leftValue = 0, rightValue = 0, leftAbbr = "", rightAbbr = "" }) {
-  const lv = Math.max(0, Number(leftValue) || 0);
-  const rv = Math.max(0, Number(rightValue) || 0);
-  const total = Math.max(lv + rv, 1);
-  const leftPct = Math.round((lv / total) * 100);
-  const rightPct = 100 - leftPct;
-  const delta = Math.abs(lv - rv);
-  const fair = delta <= Math.max(4, total * 0.08);
-  // Gap as a share of the bigger side: edge < 20% < wins < 35% < fleece.
-  const gapPct = delta / Math.max(lv, rv, 1);
-  const winAbbr = lv > rv ? leftAbbr || "Left" : rightAbbr || "Right";
-  const loseAbbr = lv > rv ? rightAbbr || "Right" : leftAbbr || "Left";
-  const verdict = fair
-    ? "Balanced deal"
-    : gapPct < 0.2
-      ? `Edge ${winAbbr}`
-      : gapPct < 0.35
-        ? `${winAbbr} wins trade`
-        : `${winAbbr} fleeces ${loseAbbr}`;
-  return (
-    <div className="sl-trade-meter" aria-label="Trade value comparison">
-      <div className="sl-trade-meter__labels">
-        <span>{leftAbbr || "A"} · {lv ? lv.toFixed(1) : "—"}</span>
-        <em>{verdict}</em>
-        <span>{rightAbbr || "B"} · {rv ? rv.toFixed(1) : "—"}</span>
-      </div>
-      <div className="sl-trade-meter__track">
-        <span className="sl-trade-meter__left" style={{ width: `${leftPct}%` }} />
-        <span className="sl-trade-meter__right" style={{ width: `${rightPct}%` }} />
-      </div>
-    </div>
-  );
-}
-
-function TradeSummaryPanel({ story, compact = false }) {
+function TradeSummaryPanel({ story, compact = false, variant, showCategory = false }) {
   const board = extractTradeBoard(story);
   if (!board) return <TradeSwap story={story} />;
-  const leftAbbr = str(board.left?.abbreviation || board.left?.team_abbrev || "").slice(0, 4).toUpperCase();
-  const rightAbbr = str(board.right?.abbreviation || board.right?.team_abbrev || "").slice(0, 4).toUpperCase();
-  const leftAssets = asArray(board.left?.acquired_assets);
-  const rightAssets = asArray(board.right?.acquired_assets);
-  return (
-    <section className={`sl-trade-board${compact ? " is-compact" : ""}`} aria-label="Trade summary">
-      <div className="sl-trade-board__glow" aria-hidden />
-      {board.category ? <p className="sl-trade-board__kicker">{board.category}</p> : null}
-      <div className="sl-trade-board__teams">
-        <div className="sl-trade-board__side">
-          <TeamMark abbrev={leftAbbr} name={board.left?.display_name} size={compact ? 34 : 46} />
-          <strong>{str(board.left?.display_name || leftAbbr)}</strong>
-          <span>Receives</span>
-          <div className="sl-trade-board__assets">
-            {leftAssets.length ? leftAssets.map((a, i) => <TradeAssetChip key={a?.id || a?.player_id || a?.pick_id || i} asset={a} compact={compact} />) : (
-              <p className="sl-muted">Assets undisclosed</p>
-            )}
-          </div>
-        </div>
-        <div className="sl-trade-board__mid" aria-hidden>
-          <em>⇄</em>
-          <span>Value check</span>
-        </div>
-        <div className="sl-trade-board__side">
-          <TeamMark abbrev={rightAbbr} name={board.right?.display_name} size={compact ? 34 : 46} />
-          <strong>{str(board.right?.display_name || rightAbbr)}</strong>
-          <span>Receives</span>
-          <div className="sl-trade-board__assets">
-            {rightAssets.length ? rightAssets.map((a, i) => <TradeAssetChip key={a?.id || a?.player_id || a?.pick_id || i} asset={a} compact={compact} />) : (
-              <p className="sl-muted">Assets undisclosed</p>
-            )}
-          </div>
-        </div>
-      </div>
-      {(board.leftValue > 0 || board.rightValue > 0) ? (
-        <TradeValueMeter
-          leftValue={board.leftValue}
-          rightValue={board.rightValue}
-          leftAbbr={leftAbbr}
-          rightAbbr={rightAbbr}
-        />
-      ) : null}
-      {board.reason && !compact ? <p className="sl-trade-board__reason">{board.reason}</p> : null}
-    </section>
-  );
+  return <TradeBoard board={board} variant={variant || (compact ? "compact" : "case")} showCategory={showCategory} />;
 }
 
 /* ------------------------------------------------------------------ */
 /* story card + lead story                                             */
 /* ------------------------------------------------------------------ */
 
+function storyFaceProps(story) {
+  const raw = asObject(story?.raw) || {};
+  const numericTeam = /^\d+$/.test(String(story?.teamName || ""));
+  return {
+    name: story?.playerName || "",
+    playerId: story?.playerId || raw.player_id || "",
+    position: story?.playerPosition || "",
+    raw,
+    teamId: story?.teamId,
+    teamName: numericTeam ? "" : story?.teamName,
+    teamAbbrev: raw.team_abbrev || story?.teamAbbrev || "",
+  };
+}
+
+function storyClubLabel(story) {
+  const t = String(story?.teamName || "");
+  return !t || /^\d+$/.test(t) ? "League" : t;
+}
+
+function shortStoryDate(story) {
+  const d = parseStoryDate(story?.raw || story);
+  return d ? d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "";
+}
+
+// Rumour-mill clipping (2026-11-13 overhaul, `bba-` namespace): big face, full date,
+// "Your club" as an inline sticker (it used to sit on top of the date), effects as stat
+// lines instead of prose, and a footer that says when / how hot / which club.
 function StoryCard({ story, socialCount, onOpen, index }) {
   const breaking = isBreakingStory(story);
   const tier = heatTier(story.heat);
+  const fx = story.effectLines || { lines: [], days: 0 };
+  const when = shortStoryDate(story);
   return (
     <button
       type="button"
-      className={`sl-card sl-card--${tier}${breaking ? " is-breaking" : ""}${story.isUserTeam ? " is-ours" : ""}${
-        story.priorityRank >= 4 ? " is-prio-critical" : story.priorityRank >= 3 ? " is-prio-high" : ""
+      className={`bba-clip bba-clip--${tier}${breaking ? " is-breaking" : ""}${story.isUserTeam ? " is-ours" : ""}${
+        story.priorityRank >= 4 ? " is-big" : ""
       }${isGoofyStory(story) ? " is-goofy" : ""} ${story.freshness || ""}`}
       style={{ animationDelay: `${Math.min(index, 12) * 28}ms` }}
       onClick={() => onOpen(story.id)}
     >
-      <div className="sl-card__top">
+      <span className="bba-clip__top">
         <CategoryTag story={story} />
-        {story.requiresAction ? <span className="sl-card__decision">Your call</span> : story.priorityRank >= 4 ? <span className="sl-card__prio">Big one</span> : null}
-        <span className="sl-card__age">{story.ageLabel || "—"}</span>
+        {story.isUserTeam ? <span className="bba-clip__club">Your club</span> : null}
+        {story.requiresAction ? (
+          <span className="bba-clip__call">Your call</span>
+        ) : story.priorityRank >= 4 ? (
+          <span className="bba-clip__big">Big one</span>
+        ) : null}
+        <time className="bba-clip__when" title={prettyDate(story.date)}>
+          {story.ageLabel || when || "—"}
+        </time>
+      </span>
+      <span className="bba-clip__body">
+        <BuzzFace {...storyFaceProps(story)} size={96} />
+        <span className="bba-clip__text">
+          <strong className="bba-clip__head">{story.headline}</strong>
+          {story.summary ? <span className="bba-clip__lede">{story.summary}</span> : null}
+        </span>
+      </span>
+      <BuzzEffects lines={fx.lines} days={fx.days} compact />
+      <span className="bba-clip__foot">
+        <span className="bba-clip__meta">
+          {when ? <b>{when}</b> : null}
+          <span>{storyClubLabel(story)}</span>
+          {socialCount ? <span>{formatCount(socialCount)} posts</span> : null}
+        </span>
+        <BuzzHeat value={story.heat} />
+        <span className="bba-clip__go">Read on</span>
+      </span>
+    </button>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* trade desk: wide deal tickets + market rail (2026-11 overhaul)      */
+/* ------------------------------------------------------------------ */
+
+function dealNumbers(story) {
+  const b = extractTradeBoard(story);
+  if (!b) return null;
+  const lv = Math.max(0, Number(b.leftValue) || 0);
+  const rv = Math.max(0, Number(b.rightValue) || 0);
+  const names = [str(b.left?.display_name || b.left?.abbreviation), str(b.right?.display_name || b.right?.abbreviation)].filter(Boolean);
+  const nAssets = asArray(b.left?.acquired_assets).length + asArray(b.right?.acquired_assets).length;
+  return { board: b, lv, rv, total: lv + rv, gap: Math.abs(lv - rv), gapPct: Math.abs(lv - rv) / Math.max(lv, rv, 1), names, nAssets };
+}
+
+function DealTicket({ story, socialCount, onOpen, index }) {
+  const rumor = /rumou?r/i.test(`${story.categoryKey || ""} ${story.category || ""} ${story.type || ""}`);
+  const dn = dealNumbers(story);
+  const big = dn && (dn.total >= 90 || dn.nAssets >= 5);
+  return (
+    <article
+      className={`sl-dt${rumor ? " is-rumor" : ""}${story.isUserTeam ? " is-ours" : ""}${big ? " is-big" : ""}`}
+      style={{ animationDelay: `${Math.min(index, 10) * 30}ms` }}
+    >
+      <header className="sl-dt__head">
+        <span className="sl-dt__tag">{rumor ? "Rumour" : "Trade wire"}</span>
+        {story.isUserTeam ? <span className="sl-dt__flag">Your club</span> : null}
+        {big ? <span className="sl-dt__flag is-gold">Blockbuster</span> : null}
+        <h3 className="sl-dt__title">{story.headline}</h3>
+        {dn?.board?.category ? <span className="bbb-dt-cat">{dn.board.category.replace(/\btrade\b/i, "deal")}</span> : null}
+        <span className="sl-dt__age">{story.ageLabel || prettyDate(story.date) || ""}</span>
+      </header>
+      <div className="sl-dt__body">
+        {dn && (asArray(dn.board.left?.acquired_assets).length || asArray(dn.board.right?.acquired_assets).length) ? (
+          <TradeBoard board={dn.board} variant="sheet" />
+        ) : (
+          <>
+            <TradeSwap story={story} />
+            {story.summary ? <p className="sl-dt__summary">{story.summary}</p> : null}
+          </>
+        )}
       </div>
-      <div className="sl-card__body">
-        <TeamMark abbrev={story.teamName} name={story.teamName} size={28} />
-        <StoryFace story={story} size={46} />
-        <div className="sl-card__text">
-          <h3>{story.headline}</h3>
-          {story.summary ? <p>{story.summary}</p> : null}
-          {story.triggerReasons?.length ? (
-            <MeetingCausePanel reasons={story.triggerReasons} title="Why this fired" />
-          ) : story.triggerReason ? (
-            <p className="sl-card__trigger">{story.triggerReason}</p>
-          ) : null}
-          {isTradeDeskStory(story) ? <TradeSummaryPanel story={story} compact /> : null}
-          <StoryEffectBreakdown story={story} compact />
+      <footer className="sl-dt__foot">
+        <span>
+          {[story.reporterName || story.sourceLabel ? `Filed by ${story.reporterName || story.sourceLabel}` : null, heatLabel(story.heat), socialCount ? `${formatCount(socialCount)} posts` : null]
+            .filter(Boolean)
+            .join(" · ")}
+        </span>
+        <button type="button" className="sl-dt__open" onClick={() => onOpen(story.id)}>
+          Open the file ▶
+        </button>
+      </footer>
+    </article>
+  );
+}
+
+function TradeDeskRail({ stories, onOpen }) {
+  const deals = stories.map((s) => ({ s, dn: dealNumbers(s), rumor: /rumou?r/i.test(`${s.categoryKey || ""} ${s.category || ""} ${s.type || ""}`) }));
+  const done = deals.filter((d) => !d.rumor);
+  const rumors = deals.filter((d) => d.rumor);
+  const ours = deals.filter((d) => d.s.isUserTeam);
+  const counts = new Map();
+  for (const d of done) for (const n of d.dn?.names || []) counts.set(n, (counts.get(n) || 0) + 1);
+  const active = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const maxActive = Math.max(1, ...active.map((a) => a[1]));
+  const valued = done.filter((d) => d.dn && d.dn.total > 0);
+  const biggest = [...valued].sort((a, b) => b.dn.total - a.dn.total)[0];
+  const lopsided = [...valued].filter((d) => d.dn.gapPct >= 0.2).sort((a, b) => b.dn.gapPct - a.dn.gapPct)[0];
+  const assets = done.reduce((n, d) => n + (d.dn?.nAssets || 0), 0);
+  return (
+    <aside className="sl-dtrail" aria-label="Trade market">
+      <section className="sl-dtrail__card is-orange">
+        <h4>Market pulse</h4>
+        <div className="sl-dtrail__tiles">
+          <div><b>{done.length}</b><small>deals done</small></div>
+          <div><b>{rumors.length}</b><small>rumours</small></div>
+          <div><b>{assets}</b><small>assets moved</small></div>
+          <div className={ours.length ? "is-gold" : ""}><b>{ours.length}</b><small>involve you</small></div>
+        </div>
+      </section>
+      {biggest ? (
+        <section className="sl-dtrail__card">
+          <h4>Biggest deal</h4>
+          <button type="button" className="sl-dtrail__pick" onClick={() => onOpen(biggest.s.id)}>
+            <strong>{biggest.dn.names.join(" ⇄ ")}</strong>
+            <span>{biggest.dn.total.toFixed(1)} total value · {biggest.dn.nAssets} assets</span>
+          </button>
+        </section>
+      ) : null}
+      <TradeValueLeaders stories={done.map((d) => d.s)} extract={extractTradeBoard} onOpen={onOpen} />
+      {lopsided ? (
+        <section className="sl-dtrail__card is-coral">
+          <h4>Most lopsided</h4>
+          <button type="button" className="sl-dtrail__pick" onClick={() => onOpen(lopsided.s.id)}>
+            <strong>{lopsided.dn.names.join(" ⇄ ")}</strong>
+            <span>
+              {(lopsided.dn.lv > lopsided.dn.rv ? lopsided.dn.names[0] : lopsided.dn.names[1]) || "One side"} up {Math.round(lopsided.dn.gapPct * 100)}% on value
+            </span>
+          </button>
+        </section>
+      ) : null}
+      <section className="sl-dtrail__card">
+        <h4>Busiest front offices</h4>
+        {active.length ? (
+          <ol className="sl-dtrail__bars">
+            {active.map(([n, c]) => (
+              <li key={n}>
+                <span>{n}</span>
+                <i><em style={{ width: `${Math.round((c / maxActive) * 100)}%` }} /></i>
+                <b>{c}</b>
+              </li>
+            ))}
+          </ol>
+        ) : (
+          <p className="sl-dtrail__empty">No completed deals yet.</p>
+        )}
+      </section>
+      <section className="sl-dtrail__card is-sky">
+        <h4>Your club on the wire</h4>
+        {ours.length ? (
+          <ul className="sl-dtrail__list">
+            {ours.slice(0, 5).map((d) => (
+              <li key={d.s.id}>
+                <button type="button" onClick={() => onOpen(d.s.id)}>{d.s.headline}</button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="sl-dtrail__empty">You haven't been part of a move yet. The Trade Desk is open when you are.</p>
+        )}
+      </section>
+    </aside>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* social: pulse header + trends rail (2026-11 overhaul)               */
+/* ------------------------------------------------------------------ */
+
+function socialStats(posts, userTid) {
+  const rows = asArray(posts);
+  const mine = rows.filter((p) => asArray(p.teamIds).includes(str(userTid)) || str(p.teamId) === str(userTid));
+  const eng = (p) => Number(p.likes || 0) + 2 * Number(p.reposts || 0) + Number(p.replies || 0);
+  const top = [...rows].sort((a, b) => eng(b) - eng(a))[0] || null;
+  const avgSent = (list) => (list.length ? list.reduce((n, p) => n + (Number(p.sentiment) || 0), 0) / list.length : 0);
+  const people = new Map();
+  for (const p of rows) {
+    const n = str(p.playerName);
+    if (!n) continue;
+    const cur = people.get(n) || { name: n, pid: p.playerId, posts: 0, eng: 0, sent: 0 };
+    cur.posts += 1;
+    cur.eng += eng(p);
+    cur.sent += Number(p.sentiment) || 0;
+    people.set(n, cur);
+  }
+  const trending = [...people.values()].sort((a, b) => b.posts - a.posts || b.eng - a.eng).slice(0, 6);
+  const voices = new Map();
+  for (const p of rows) {
+    if (!p.verified || p.authorType === "player") continue;
+    const k = p.handle;
+    const cur = voices.get(k) || { name: p.name, handle: p.handle, badge: p.badge, outlet: p.outlet, posts: 0, eng: 0 };
+    cur.posts += 1;
+    cur.eng += eng(p);
+    voices.set(k, cur);
+  }
+  const loud = [...voices.values()].sort((a, b) => b.eng - a.eng).slice(0, 5);
+  const cats = new Map();
+  for (const p of rows) {
+    const c = str(p.cat || p.kindRaw || "post").replace(/_/g, " ");
+    cats.set(c, (cats.get(c) || 0) + 1);
+  }
+  return {
+    total: rows.length,
+    mine: mine.length,
+    players: rows.filter((p) => p.authorType === "player").length,
+    rumors: rows.filter((p) => /rumou?r|claim|speculation/i.test(`${p.cat} ${p.cred || ""}`)).length,
+    mood: avgSent(mine.length ? mine : rows),
+    top,
+    topEng: top ? eng(top) : 0,
+    trending,
+    loud,
+    cats: [...cats.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6),
+  };
+}
+
+function moodLabel(v) {
+  if (v >= 0.35) return { txt: "Buzzing", tone: "lime", face: "😄" };
+  if (v >= 0.1) return { txt: "Upbeat", tone: "lime", face: "🙂" };
+  if (v > -0.1) return { txt: "Split", tone: "gold", face: "😐" };
+  if (v > -0.35) return { txt: "Grumbling", tone: "orange", face: "😒" };
+  return { txt: "Torches out", tone: "coral", face: "😡" };
+}
+
+function SocialPulse({ posts, userTid, teamLabel, sub }) {
+  const st = socialStats(posts, userTid);
+  const mood = moodLabel(st.mood);
+  return (
+    <section className="sx-pulse" aria-label="Social pulse">
+      <div className="sx-pulse__brand">
+        <b>{sub === "icehole" ? "IceHole" : sub === "burner" ? "Burner" : "Puckr"}</b>
+        <span>{sub === "icehole" ? "Fan forums" : sub === "burner" ? "Your anonymous account" : "The league's timeline"}</span>
+      </div>
+      <div className="sx-pulse__tiles">
+        <div className="sx-tile">
+          <small>On the timeline</small>
+          <b>{formatCount(st.total)}</b>
+          <span>posts</span>
+        </div>
+        <div className="sx-tile is-sky">
+          <small>About {teamLabel || "your club"}</small>
+          <b>{formatCount(st.mine)}</b>
+          <span>{st.total ? `${Math.round((st.mine / st.total) * 100)}% of the noise` : "quiet"}</span>
+        </div>
+        <div className={`sx-tile is-${mood.tone}`}>
+          <small>Fan mood</small>
+          <b>
+            {mood.face} {mood.txt}
+          </b>
+          <span>{st.mood >= 0 ? "+" : ""}{st.mood.toFixed(2)} sentiment</span>
+        </div>
+        <div className="sx-tile is-orange">
+          <small>From the players</small>
+          <b>{formatCount(st.players)}</b>
+          <span>{st.rumors} rumours flying</span>
         </div>
       </div>
-      <div className="sl-card__foot">
-        <span className="sl-card__byline">
-          {[
-            /^\d+$/.test(String(story.teamName || "")) || !story.teamName ? "League" : story.teamName,
-            heatLabel(story.heat),
-            socialCount ? `${formatCount(socialCount)} posts` : null,
-          ].filter(Boolean).join(" · ")}
-        </span>
-        <span className="sl-card__open">Read on</span>
-      </div>
-    </button>
+      {st.top ? (
+        <div className="sx-pulse__top">
+          <small>Post of the day · {formatCount(st.topEng)} interactions</small>
+          <p>
+            <b>{st.top.name}</b> {st.top.text.length > 150 ? `${st.top.text.slice(0, 149)}…` : st.top.text}
+          </p>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function SocialTrends({ posts, userTid, onAuthor }) {
+  const st = socialStats(posts, userTid);
+  const maxP = Math.max(1, ...st.trending.map((t) => t.posts));
+  const maxC = Math.max(1, ...st.cats.map((c) => c[1]));
+  return (
+    <div className="sx-trends">
+      <section className="sx-card is-gold">
+        <h4>Trending names</h4>
+        {st.trending.length ? (
+          <ol className="sx-bars">
+            {st.trending.map((t, i) => {
+              const m = moodLabel(t.posts ? t.sent / t.posts : 0);
+              return (
+                <li key={t.name}>
+                  <span className="sx-bars__rank">{i + 1}</span>
+                  <button type="button" className="sx-bars__name" onClick={() => t.pid && onAuthor?.(t.pid)} title={`${t.posts} posts · ${m.txt}`}>
+                    {t.name}
+                  </button>
+                  <i><em style={{ width: `${Math.round((t.posts / maxP) * 100)}%` }} /></i>
+                  <b>{m.face}</b>
+                </li>
+              );
+            })}
+          </ol>
+        ) : (
+          <p className="sx-empty">Nobody's trending yet.</p>
+        )}
+      </section>
+      <section className="sx-card is-sky">
+        <h4>What people post about</h4>
+        <ol className="sx-bars is-cats">
+          {st.cats.map(([c, n]) => (
+            <li key={c}>
+              <span className="sx-bars__name">{c}</span>
+              <i><em style={{ width: `${Math.round((n / maxC) * 100)}%` }} /></i>
+              <b>{n}</b>
+            </li>
+          ))}
+        </ol>
+      </section>
+      <section className="sx-card">
+        <h4>Loudest voices</h4>
+        {st.loud.length ? (
+          <ul className="sx-voices">
+            {st.loud.map((v) => (
+              <li key={v.handle}>
+                <span className={`sx-badge is-${str(v.badge).toLowerCase() || "media"}`}>{v.badge || "media"}</span>
+                <div>
+                  <b>{v.name}</b>
+                  <small>{v.handle}{v.outlet ? ` · ${v.outlet}` : ""}</small>
+                </div>
+                <em>{formatCount(v.eng)}</em>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="sx-empty">No verified accounts posting yet.</p>
+        )}
+      </section>
+    </div>
   );
 }
 
@@ -2589,19 +2656,22 @@ function LeadStory({ story, socialCount, onOpen, choiceOptions, onResolve, busyC
           ? "Exclusive"
           : "Top story";
   return (
-    <section className={`sl-lead sl-lead--${tier}`} aria-label="Lead story">
-      <div className="sl-lead__portrait">
+    <section className={`sl-lead sl-lead--${tier} bba-lead`} aria-label="Lead story">
+      <div className="sl-lead__portrait bba-lead__frame">
         <span className="sl-lead__sticker">{sticker}</span>
-        <StoryFace story={story} size={132} />
+        <BuzzFace {...storyFaceProps(story)} size={196} className="bba-face--lead" />
         <span className="sl-lead__heat">{heatLabel(story.heat) || "On the wire"}</span>
       </div>
       <div className="sl-lead__main">
         <div className="sl-lead__kickers">
           <CategoryTag story={story} size="md" />
-          <span className="sl-lead__age">{story.ageLabel || "—"}</span>
+          <span className="sl-lead__age">
+            {[shortStoryDate(story), story.ageLabel].filter(Boolean).join(" · ") || "—"}
+          </span>
         </div>
         <h2 className="sl-lead__headline">{story.headline}</h2>
-        {story.summary ? <p className="sl-lead__summary">{story.summary}</p> : null}
+        {story.summary ? <p className="sl-lead__summary bba-lead__lede">{story.summary}</p> : null}
+        <BuzzEffects lines={story.effectLines?.lines || []} days={story.effectLines?.days || 0} />
         {story.triggerReasons?.length ? (
           <MeetingCausePanel reasons={story.triggerReasons} title="Why this story fired" />
         ) : null}
@@ -2760,6 +2830,9 @@ function MeetingChoice({ choice, disabled, onClick }) {
   return (
     <button type="button" className={`sl-mchoice sl-mchoice--${risk}`} disabled={disabled} onClick={onClick}>
       <strong>{str(choice?.label)}</strong>
+      {choice?.say && str(choice.say) !== str(choice.label) ? (
+        <span className="bbc-say">“{str(choice.say)}”</span>
+      ) : null}
       {choice?.detail ? <span className="sl-mchoice__detail">{str(choice.detail)}</span> : null}
       {choice?.read ? <em className="sl-mchoice__read">{str(choice.read)}</em> : null}
     </button>
@@ -2808,7 +2881,7 @@ function MeetingRoom({ meeting, closing, busy, portrait, onChoose, onLeave, onSh
           {closing ? "← Back to his file" : "← Leave room"}
         </button>
         <div className="sl-pm-hero">
-          <PlayerHeadshot player={portrait} size={88} />
+          <div className="bbc-face" style={{ "--bbc-face": "128px" }}><PlayerHeadshot player={portrait} size="lg" preferPhoto /></div>
           <div>
             <p className="sl-room__kicker">Private meeting · door closed</p>
             <h2>{name}</h2>
@@ -3146,10 +3219,9 @@ function PlayerMeetingsPanel({
             ← Leave room
           </button>
           <div className="sl-pm-hero">
-            <PlayerHeadshot
-              player={portraitOf(str(activeMeeting.player_id))}
-              size={88}
-            />
+            <div className="bbc-face" style={{ "--bbc-face": "128px" }}>
+              <PlayerHeadshot player={portraitOf(str(activeMeeting.player_id))} size="lg" preferPhoto />
+            </div>
             <div>
               <p className="sl-room__kicker">Private meeting · door closed</p>
               <h2>{str(activeMeeting.player_name)}</h2>
@@ -3211,7 +3283,7 @@ function PlayerMeetingsPanel({
             ← Roster
           </button>
           <div className="sl-pm-hero">
-            <PlayerHeadshot player={portraitOf(str(selected.player_id))} size={88} />
+            <div className="bbc-face" style={{ "--bbc-face": "128px" }}><PlayerHeadshot player={portraitOf(str(selected.player_id))} size="lg" preferPhoto /></div>
             <div>
               <p className="sl-room__kicker">Player file · private office</p>
               <h2>{str(selected.player_name)}</h2>
@@ -3488,203 +3560,267 @@ function PlayerMeetingsPanel({
     setSelectedPlayerId(str(pid));
     setView("player");
   };
+  const activePromises = asArray(promises.active);
+  const sevRank = { critical: 0, warning: 1, watch: 2 };
+  const sortedNeeds = [...needs].sort(
+    (a, b) => (sevRank[str(a.top_severity)] ?? 3) - (sevRank[str(b.top_severity)] ?? 3)
+  );
 
   return (
-    <div className="sl-room sl-room--cinematic md-desk">
-      <header className="md-head">
-        <div>
-          <p className="md-kicker">GM office · relationship desk</p>
-          <h2>Player meetings</h2>
-          <p className="md-sub">Who needs a conversation, why, and which talk fixes it.</p>
+    <div className="sl-room sl-room--cinematic md-desk bbc-meet">
+      <header className="bbc-meet-head">
+        <div className="bbc-meet-head__title">
+          <span className="bbc-label">GM office · relationship desk</span>
+          <h2 className="bbc-h">Player Meetings</h2>
+          <p>Who needs a conversation, why it matters, and which talk fixes it.</p>
         </div>
-        <div className="md-tally" role="list">
-          <MeetingTally tone="critical" label="Urgent" value={summary.critical} />
-          <MeetingTally tone="warning" label="Needs a talk" value={summary.warning} />
-          <MeetingTally tone="request" label="Asked to see you" value={requests.length} />
-          <MeetingTally tone="good" label="Good news" value={goodNews.length} />
-          <MeetingTally tone="calm" label="Content" value={summary.content} />
+        <div className="bbc-tally" role="list">
+          {[
+            ["critical", "Urgent", summary.critical],
+            ["warning", "Needs a talk", summary.warning],
+            ["request", "Asked to see you", requests.length],
+            ["good", "Good news", goodNews.length],
+            ["calm", "Content", summary.content],
+          ].map(([tone, label, value]) => (
+            <div key={tone} role="listitem" className={`bbc-tally__item is-${tone}${Number(value) ? "" : " is-zero"}`}>
+              <strong>{Number(value) || 0}</strong>
+              <span>{label}</span>
+            </div>
+          ))}
         </div>
       </header>
 
       <MeetingOutcomePanel outcome={lastOutcome} onDismiss={() => setLastOutcome(null)} />
       {notice ? <p className="sl-notice">{notice}</p> : null}
 
-      {requests.length ? (
-        <section className="md-section">
-          <h3 className="md-section__title">
-            He asked to see you <em>{requests.length}</em>
-          </h3>
-          <div className="md-requests">
-            {requests.map((req) => {
-              const tone = str(req.tone) || "neutral";
-              const pid = str(req.player_id || req.actor_id);
-              return (
-                <article key={str(req.id)} className={`md-request is-${tone}`}>
-                  <div className="md-request__who">
-                    <PlayerHeadshot player={portraitOf(pid)} size={44} />
-                    <div>
-                      <strong>{str(req.player_name || "Player")}</strong>
-                      <span className={`md-tone md-tone--${tone}`}>
-                        {tone === "positive" ? "Positive" : tone === "negative" ? "Complaint" : "Request"} ·{" "}
-                        {meetingKindLabel(req.kind)}
-                      </span>
-                    </div>
-                  </div>
-                  <h4>{str(req.title)}</h4>
-                  <p>{str(req.summary)}</p>
-                  <div className="md-request__choices">
-                    {req.conversation ? (
-                      <button
-                        type="button"
-                        className="md-choice md-choice--open"
-                        disabled={busy}
-                        onClick={() => openRequestRoom(req)}
-                      >
-                        <strong>Bring him in</strong>
-                        <span>{str(asObject(req.conversation).mood || "")}{asObject(req.conversation).stature_label ? ` · ${str(req.conversation.stature_label)}` : ""}</span>
-                      </button>
-                    ) : (
-                      asArray(req.choices).map((c) => (
-                        <button
-                          key={str(c.id)}
-                          type="button"
-                          className="md-choice"
-                          disabled={busy}
-                          onClick={() => handleResolveRequest(str(req.id), str(c.id))}
-                        >
-                          <strong>{str(c.label)}</strong>
-                          {c.detail || c.description ? <span>{str(c.detail || c.description)}</span> : null}
+      <div className="bbc-meet-grid">
+        <div className="bbc-meet-main">
+          {requests.length ? (
+            <section className="bbc-meet-sec">
+              <div className="bbc-sechead">
+                <h3 className="bbc-h bbc-h--sm">He asked to see you</h3>
+                <span className="bbc-count">{requests.length}</span>
+              </div>
+              <div className="bbc-requests">
+                {requests.map((req) => {
+                  const tone = str(req.tone) || "neutral";
+                  const pid = str(req.player_id || req.actor_id);
+                  const conv = asObject(req.conversation);
+                  const quote = asArray(req.dialogue).find(
+                    (d) => str(d?.speaker) && !["GM", "You", "narration"].includes(str(d.speaker))
+                  );
+                  return (
+                    <article key={str(req.id)} className={`bbc-paper bbc-request is-${tone}`}>
+                      <div className="bbc-face" style={{ "--bbc-face": "112px" }}>
+                        <PlayerHeadshot player={portraitOf(pid)} size="lg" preferPhoto />
+                      </div>
+                      <div className="bbc-request__body">
+                        <span className={`bbc-stamp is-${tone}`}>
+                          {tone === "positive" ? "Good news" : tone === "negative" ? "Complaint" : "Request"} · {meetingKindLabel(req.kind)}
+                        </span>
+                        <button type="button" className="bbc-namelink" onClick={() => openPlayer(pid)}>
+                          {str(req.player_name || "Player")}
                         </button>
-                      ))
-                    )}
-                  </div>
-                </article>
-              );
-            })}
-          </div>
-        </section>
-      ) : null}
-
-      <div className="md-columns">
-        <section className="md-section">
-          <h3 className="md-section__title md-section__title--bad">
-            Problems to fix <em>{needs.length}</em>
-          </h3>
-          {needs.length ? (
-            <div className="md-cards">
-              {needs.map((row) => (
-                <article key={str(row.player_id)} className={`md-card is-${str(row.top_severity) || "watch"}`}>
-                  <header className="md-card__head">
-                    <PlayerHeadshot player={portraitOf(str(row.player_id))} size={48} />
-                    <div className="md-card__id">
-                      <button type="button" className="md-link" onClick={() => openPlayer(row.player_id)}>
-                        {str(row.player_name)}
-                      </button>
-                      <span>
-                        {str(row.position)} · {row.age} · OVR {row.overall}
-                      </span>
-                    </div>
-                    <SeverityPill severity={row.top_severity} />
-                  </header>
-                  <MeetingMeters rel={row.relationship} />
-                  <ul className="md-issues">
-                    {asArray(row.issues).map((iss, i) => (
-                      <MeetingIssueRow
-                        key={`${str(iss.code)}-${i}`}
-                        item={iss}
-                        busy={busy}
-                        onFix={(iid) => handleStart(str(row.player_id), iid)}
-                      />
-                    ))}
-                    {row.requested_meeting && !asArray(row.issues).length ? (
-                      <li className="md-issue is-watch">
-                        <div>
-                          <strong>Asked for a meeting</strong>
-                          <p>Answer his request above.</p>
+                        <strong className="bbc-request__head">{str(req.title)}</strong>
+                        {req.summary ? <p>{str(req.summary)}</p> : null}
+                        {quote ? (
+                          <blockquote>
+                            <em>{str(quote.speaker)}:</em> “{str(quote.text)}”
+                          </blockquote>
+                        ) : null}
+                        {conv.stakes ? <p className="bbc-stakes">{str(conv.stakes)}</p> : null}
+                        <div className="bbc-request__acts">
+                          {req.conversation ? (
+                            <button
+                              type="button"
+                              className="md-choice md-choice--open bbc-go"
+                              disabled={busy}
+                              onClick={() => openRequestRoom(req)}
+                            >
+                              <strong>Bring him in →</strong>
+                              <span>
+                                {str(conv.mood || "")}
+                                {conv.stature_label ? ` · ${str(conv.stature_label)}` : ""}
+                              </span>
+                            </button>
+                          ) : (
+                            asArray(req.choices).map((c) => (
+                              <button
+                                key={str(c.id)}
+                                type="button"
+                                className="md-choice bbc-go"
+                                disabled={busy}
+                                onClick={() => handleResolveRequest(str(req.id), str(c.id))}
+                              >
+                                <strong>{str(c.label)}</strong>
+                                {c.detail || c.description ? <span>{str(c.detail || c.description)}</span> : null}
+                              </button>
+                            ))
+                          )}
                         </div>
-                      </li>
-                    ) : null}
-                  </ul>
-                </article>
-              ))}
-            </div>
-          ) : (
-            <div className="md-empty">
-              <strong>No problems on the desk</strong>
-              <span>Nobody on the roster has a grievance that needs a meeting right now.</span>
-            </div>
-          )}
-        </section>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            </section>
+          ) : null}
 
-        <section className="md-section">
-          <h3 className="md-section__title md-section__title--good">
-            Good news · positive meetings <em>{goodNews.length}</em>
-          </h3>
-          {goodNews.length ? (
-            <div className="md-cards">
-              {goodNews.map((row) => (
-                <article key={str(row.player_id)} className="md-card is-good">
-                  <header className="md-card__head">
-                    <PlayerHeadshot player={portraitOf(str(row.player_id))} size={48} />
-                    <div className="md-card__id">
-                      <button type="button" className="md-link" onClick={() => openPlayer(row.player_id)}>
-                        {str(row.player_name)}
-                      </button>
-                      <span>
-                        {str(row.position)} · {row.age} · OVR {row.overall}
-                        {row.ovr_trend === "up" ? " ↑" : ""}
-                      </span>
+          <section className="bbc-meet-sec">
+            <div className="bbc-sechead">
+              <h3 className="bbc-h bbc-h--sm">Problems to fix</h3>
+              <span className="bbc-count is-bad">{needs.length}</span>
+              <span className="bbc-sechead__note">Worst first. Each fix opens the meeting that addresses it.</span>
+            </div>
+            {sortedNeeds.length ? (
+              <div className="bbc-problems">
+                {sortedNeeds.map((row) => {
+                  const rel = asObject(row.relationship);
+                  const sev = str(row.top_severity) || "watch";
+                  return (
+                    <article key={str(row.player_id)} className={`bbc-paper bbc-problem is-${sev}`}>
+                      <div className="bbc-problem__who">
+                        <div className="bbc-face" style={{ "--bbc-face": "88px" }}>
+                          <PlayerHeadshot player={portraitOf(str(row.player_id))} size="lg" preferPhoto />
+                        </div>
+                        <div className="bbc-problem__id">
+                          <button type="button" className="bbc-namelink" onClick={() => openPlayer(row.player_id)}>
+                            {str(row.player_name)}
+                          </button>
+                          <span>
+                            {str(row.position)} · {row.age} · OVR {row.overall}
+                          </span>
+                          <SeverityPill severity={row.top_severity} />
+                        </div>
+                        <div className="bbc-problem__meters">
+                          {[
+                            ["Morale", rel.morale],
+                            ["Trust", rel.gm_trust],
+                            ["Role", rel.role_satisfaction],
+                          ].map(([label, v]) => (
+                            <div key={label} className="bbc-problem__meter">
+                              <span>{label}</span>
+                              <MiniMeter value={v} />
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                      <ul className="bbc-issues">
+                        {asArray(row.issues).map((iss, i) => (
+                          <MeetingIssueRow
+                            key={`${str(iss.code)}-${i}`}
+                            item={iss}
+                            busy={busy}
+                            onFix={(iid) => handleStart(str(row.player_id), iid)}
+                          />
+                        ))}
+                        {row.requested_meeting && !asArray(row.issues).length ? (
+                          <li className="md-issue is-watch">
+                            <div>
+                              <strong>Asked for a meeting</strong>
+                              <p>Answer his request above.</p>
+                            </div>
+                          </li>
+                        ) : null}
+                      </ul>
+                    </article>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="bbc-paper bbc-calm">
+                <strong>No problems on the desk</strong>
+                <span>Nobody on the roster has a grievance that needs a meeting right now.</span>
+              </div>
+            )}
+          </section>
+        </div>
+
+        <aside className="bbc-meet-side">
+          <section className="bbc-meet-sec">
+            <div className="bbc-sechead">
+              <h3 className="bbc-h bbc-h--sm">Good news</h3>
+              <span className="bbc-count is-good">{goodNews.length}</span>
+            </div>
+            {goodNews.length ? (
+              <div className="bbc-goods">
+                {goodNews.map((row) => (
+                  <article key={str(row.player_id)} className="bbc-paper bbc-good">
+                    <div className="bbc-good__who">
+                      <div className="bbc-face" style={{ "--bbc-face": "72px" }}>
+                        <PlayerHeadshot player={portraitOf(str(row.player_id))} size="lg" preferPhoto />
+                      </div>
+                      <div>
+                        <button type="button" className="bbc-namelink" onClick={() => openPlayer(row.player_id)}>
+                          {str(row.player_name)}
+                        </button>
+                        <span>
+                          {str(row.position)} · {row.age} · OVR {row.overall}
+                          {row.ovr_trend === "up" ? " ↑" : ""}
+                        </span>
+                      </div>
                     </div>
-                    <span className="md-pill md-pill--good">Opportunity</span>
-                  </header>
-                  <ul className="md-issues">
-                    {asArray(row.openings).map((op, i) => (
-                      <MeetingIssueRow
-                        key={`${str(op.code)}-${i}`}
-                        item={{ ...op, severity: "good" }}
-                        busy={busy}
-                        onFix={(iid) => handleStart(str(row.player_id), iid)}
-                      />
-                    ))}
-                  </ul>
-                </article>
-              ))}
+                    <ul className="bbc-issues">
+                      {asArray(row.openings).map((op, i) => (
+                        <MeetingIssueRow
+                          key={`${str(op.code)}-${i}`}
+                          item={{ ...op, severity: "good" }}
+                          busy={busy}
+                          onFix={(iid) => handleStart(str(row.player_id), iid)}
+                        />
+                      ))}
+                    </ul>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <div className="bbc-paper bbc-calm">
+                <strong>Nothing to celebrate yet</strong>
+                <span>Hot streaks, extension windows and room leaders show up here.</span>
+              </div>
+            )}
+          </section>
+
+          <section className="bbc-meet-sec">
+            <div className="bbc-sechead">
+              <h3 className="bbc-h bbc-h--sm">Promises you owe</h3>
+              <span className="bbc-count">{activePromises.length}</span>
             </div>
-          ) : (
-            <div className="md-empty">
-              <strong>Nothing to celebrate yet</strong>
-              <span>Hot streaks, extension windows and room leaders show up here.</span>
-            </div>
-          )}
-        </section>
+            {activePromises.length ? (
+              <ul className="bbc-promises">
+                {activePromises.map((p) => {
+                  const left = p.games_remaining != null ? Number(p.games_remaining) : null;
+                  const who = roster.find((r) => str(r.player_id) === str(p.player_id));
+                  return (
+                    <li
+                      key={str(p.id || `${p.player_id}-${p.type}`)}
+                      className={`bbc-paper bbc-promise${left != null && left <= 3 ? " is-due" : ""}`}
+                    >
+                      <div className="bbc-face" style={{ "--bbc-face": "48px" }}>
+                        <PlayerHeadshot player={portraitOf(str(p.player_id))} size="lg" preferPhoto />
+                      </div>
+                      <div>
+                        <strong>{str(who?.player_name || p.player_name || "Player")}</strong>
+                        <span>{str(p.description || p.type)}</span>
+                      </div>
+                      <em>{left != null ? `${left} GP left` : "Open"}</em>
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : (
+              <p className="bbc-quiet">You haven't promised anyone anything. Promises made in meetings are tracked here.</p>
+            )}
+          </section>
+        </aside>
       </div>
 
-      {asArray(promises.active).length ? (
-        <section className="md-section">
-          <h3 className="md-section__title">
-            Promises you owe <em>{asArray(promises.active).length}</em>
-          </h3>
-          <div className="md-promises">
-            {promises.active.map((p) => {
-              const left = p.games_remaining != null ? Number(p.games_remaining) : null;
-              const who = roster.find((r) => str(r.player_id) === str(p.player_id));
-              return (
-                <div key={str(p.id || `${p.player_id}-${p.type}`)} className={`md-promise ${left != null && left <= 3 ? "is-due" : ""}`}>
-                  <strong>{str(who?.player_name || p.player_name || "Player")}</strong>
-                  <span>{str(p.description || p.type)}</span>
-                  <em>{left != null ? `${left} game${left === 1 ? "" : "s"} left` : "Open"}</em>
-                </div>
-              );
-            })}
-          </div>
-        </section>
-      ) : null}
-
-      <section className="md-section">
+      <section className="md-section bbc-meet-roster">
         <div className="md-section__bar">
-          <h3 className="md-section__title">
-            Full roster <em>{roster.length}</em>
-          </h3>
+          <div className="bbc-sechead">
+            <h3 className="bbc-h bbc-h--sm">Full roster</h3>
+            <span className="bbc-count">{roster.length}</span>
+          </div>
           <input
             type="search"
             className="sl-input"
@@ -3715,7 +3851,9 @@ function PlayerMeetingsPanel({
                 onMouseEnter={() => loadPlayerDetail(str(row.player_id), { background: true })}
               >
                 <span className="md-table__who">
-                  <i className="md-dot" aria-hidden />
+                  <span className="bbc-face" style={{ "--bbc-face": "34px" }}>
+                    <PlayerHeadshot player={portraitOf(str(row.player_id))} size="lg" preferPhoto showFlag={false} />
+                  </span>
                   <strong>{str(row.player_name)}</strong>
                   <em>
                     {str(row.position)} · {row.age}
@@ -3747,16 +3885,6 @@ function meterTone(v) {
   return "good";
 }
 
-function MeetingTally({ tone, label, value }) {
-  const n = Number(value) || 0;
-  return (
-    <div role="listitem" className={`md-tally__item is-${tone} ${n ? "" : "is-zero"}`}>
-      <strong>{n}</strong>
-      <span>{label}</span>
-    </div>
-  );
-}
-
 function SeverityPill({ severity }) {
   const s = str(severity) || "watch";
   const label = s === "critical" ? "Urgent" : s === "warning" ? "Needs a talk" : s === "good" ? "Opportunity" : "Keep an eye";
@@ -3773,24 +3901,6 @@ function MiniMeter({ value }) {
       </span>
       <b>{ok ? Math.round(n) : "—"}</b>
     </span>
-  );
-}
-
-function MeetingMeters({ rel }) {
-  const r = asObject(rel);
-  return (
-    <div className="md-meters">
-      {[
-        ["Morale", r.morale],
-        ["Trust in GM", r.gm_trust],
-        ["Role", r.role_satisfaction],
-      ].map(([label, v]) => (
-        <div key={label} className="md-meter">
-          <span>{label}</span>
-          <MiniMeter value={v} />
-        </div>
-      ))}
-    </div>
   );
 }
 
@@ -3891,107 +4001,6 @@ function StoryImpactReport({ report }) {
 /* ------------------------------------------------------------------ */
 /* main screen                                                         */
 /* ------------------------------------------------------------------ */
-
-function formatRaceMetric(metric) {
-  if (!metric || metric.value == null || metric.value === "") return "—";
-  const n = Number(metric.value);
-  if (!Number.isFinite(n)) return "—";
-  if (metric.kind === "pct") {
-    const scaled = Math.abs(n) > 1.5 ? n : n * 100;
-    return `${scaled.toFixed(1)}%`;
-  }
-  if (metric.kind === "signed") {
-    const sign = n > 0 ? "+" : "";
-    return `${sign}${n.toFixed(1)}`;
-  }
-  return String(Math.round(n));
-}
-
-function AwardsRacePanel({ boards, status, sealed, sealedMessage }) {
-  const list = asArray(boards);
-  if (sealed) {
-    return (
-      <section className="sl-awards">
-        <header className="sl-awards__head">
-          <p>League desk</p>
-          <h2>Awards race</h2>
-          <span>Sealed for the final 15 days.</span>
-        </header>
-        <p className="sl-awards__sealed">
-          {sealedMessage || "The race is dark. Whoever is leading when the season ends keeps the trophy."}
-        </p>
-        {null}
-      </section>
-    );
-  }
-  return (
-    <section className="sl-awards">
-      <header className="sl-awards__head">
-        <p>League desk</p>
-        <h2>Awards race</h2>
-        <span>The leader when the season ends keeps the trophy. This board goes dark for the last 15 days.</span>
-      </header>
-      {status === "loading" && !list.length ? (
-        <p className="sl-awards__status">Pulling the race from the awards ledger…</p>
-      ) : null}
-      {status === "error" ? (
-        <p className="sl-awards__status">The awards ledger did not load. Advance a day and open this desk again.</p>
-      ) : null}
-      {status !== "loading" && status !== "error" && !list.length ? (
-        <p className="sl-awards__status">No qualified players yet. The race fills in as games hit the ledger.</p>
-      ) : null}
-      <div className="sl-awards__grid">
-        {list.map((board) => (
-          <article key={board.id || board.name} className="sl-awards__card">
-            <header>
-              <strong>{str(board.name)}</strong>
-              <em>{str(board.blurb)}</em>
-            </header>
-            <ol>
-              {asArray(board.leaders).length ? (
-                asArray(board.leaders).map((leader, index) => {
-                  const portrait = ensurePlayerHeadshotFields({
-                    ...leader,
-                    id: leader.player_id,
-                    player_id: leader.player_id,
-                  });
-                  return (
-                    <li key={`${board.id}-${leader.player_id || leader.name}-${index}`}>
-                      <span className="sl-awards__rank">{index + 1}</span>
-                      {leader.position === "HC" ? (
-                        <span className="sl-awards__coach" aria-hidden>HC</span>
-                      ) : (
-                        <PlayerHeadshot player={portrait} size="xs" showFlag={false} />
-                      )}
-                      <span className="sl-awards__who">
-                        <b>{str(leader.name, "Player")}</b>
-                        <i>
-                          {str(leader.team_abbr)}
-                          {leader.position && leader.position !== "HC" ? ` · ${leader.position}` : ""}
-                        </i>
-                      </span>
-                      <span className="sl-awards__nums">
-                        {asArray(leader.metrics).map((metric) => (
-                          <span key={metric.label}>
-                            <small>{metric.label}</small>
-                            {formatRaceMetric(metric)}
-                          </span>
-                        ))}
-                      </span>
-                    </li>
-                  );
-                })
-              ) : (
-                <li className="sl-awards__empty">No qualified names on this ballot yet.</li>
-              )}
-            </ol>
-          </article>
-        ))}
-      </div>
-      {null}
-    </section>
-  );
-}
 
 export default function StorylinesScreen() {
   const {
@@ -4192,6 +4201,15 @@ export default function StorylinesScreen() {
     orgPressure[userTeamId(franchiseState)] || orgPressure[str(franchiseState?.user_team_id || "")] || null;
 
   const narrativeUniverse = asObject(franchiseState?.narrative_universe);
+  // Bench Buzz feature desks (Three Stars / Mailbag / Hot Seat / Rumour Ledger). Rides on
+  // narrative_universe; older servers send neither key and the desks show a note.
+  const benchBuzzFeatures =
+    (narrativeUniverse?.bench_buzz_features && typeof narrativeUniverse.bench_buzz_features === "object"
+      ? narrativeUniverse.bench_buzz_features
+      : null) ||
+    (franchiseState?.bench_buzz_features && typeof franchiseState.bench_buzz_features === "object"
+      ? franchiseState.bench_buzz_features
+      : null);
   const playerMeetingsPayload = asObject(narrativeUniverse?.player_meetings);
   const pressQueue = asArray(narrativeUniverse?.press_conference_queue).filter((p) =>
     ["pending", "in_progress"].includes(str(p?.status))
@@ -4569,6 +4587,7 @@ export default function StorylinesScreen() {
     if (selected.cause) items.push(selected.cause);
     asArray(selected.recoveryConditions).forEach((r) => items.push(r));
     Object.entries(selected.evidence || {})
+      .filter(([, v]) => v != null && typeof v !== "object")
       .slice(0, 3)
       .forEach(([k, v]) => items.push(`${formatEffectLabel(k)}: ${v}`));
     if (!items.length) items.push(deriveFollowUp(selected));
@@ -4591,6 +4610,28 @@ export default function StorylinesScreen() {
       });
     if (selected.sourceLabel && !selected.reporterName) list.push({ label: "Source", name: selected.sourceLabel });
     return list;
+  }, [selected]);
+
+  // Only scalar evidence reads as a number tile ("[object Object]" otherwise).
+  const caseEvidence = useMemo(
+    () =>
+      Object.entries(asObject(selected?.evidence)).filter(
+        ([, v]) => v != null && v !== "" && (typeof v === "number" || typeof v === "string")
+      ),
+    [selected]
+  );
+
+  // Trade rows put "BOS receives: … EDM receives: … Context: …" in one run-on string; the
+  // trade board already shows the assets, so only the context sentence stays as prose.
+  const caseContext = useMemo(() => {
+    if (!selected) return null;
+    const text = str(selected.description).trim();
+    if (!text || text === selected.summary) return null;
+    if (/\breceives:/i.test(text)) {
+      const ctx = text.split(/\bContext:\s*/i)[1];
+      return ctx ? { label: "Context", text: ctx.trim() } : null;
+    }
+    return { label: "", text };
   }, [selected]);
 
   const infoRows = useMemo(() => {
@@ -4751,6 +4792,7 @@ export default function StorylinesScreen() {
               count = asArray(narrativeUniverse?.team_sanctions).filter((s) => s && s.active !== false && (s.is_user != null ? s.is_user : String(s.team_id ?? "") === utid)).length;
             }
             if (d.id === "press_room") count = pressQueue.length;
+            if (d.id === "mailbag") count = asArray(benchBuzzFeatures?.mailbag?.letters).filter((l) => l && !l.answered).length;
             if (d.id === "locker_room") {
               const pulse = collectLockerPulse(franchiseState, { limit: 24 });
               const roomStories = stories.filter(
@@ -4820,11 +4862,25 @@ export default function StorylinesScreen() {
             initialPlayerId={pendingMeetingPlayerId}
           />
         ) : department === "locker_room" ? (
-          <LockerRoomDashboard narrativeUniverse={narrativeUniverse} franchiseState={franchiseState} stories={stories} />
+          <RoomAndLifeDesk
+            narrativeUniverse={narrativeUniverse}
+            franchiseState={franchiseState}
+            stories={stories}
+            clubLabel={teamLabel(franchiseState)}
+            emptyState={
+              <EmptyPanel
+                kicker="Locker room"
+                title="No culture data yet"
+                body="Advance the calendar to sync locker-room metrics. If you just finished a meeting, sim a day to reload the room."
+              />
+            }
+          />
         ) : department === "consequences" ? (
           <FalloutBoard narrativeUniverse={narrativeUniverse} stories={stories} onOpenStory={openStory} franchiseState={franchiseState} />
         ) : department === "social" ? (
-          <div className="sl-two">
+          <>
+          <SocialPulse posts={socialPosts} userTid={userTeamId(franchiseState)} teamLabel={str(franchiseState?.user_team_name || "").split(/\s+/).pop()} sub={socialSubTab} />
+          <div className="sl-two sx-layout">
             <div>
               <div className="sl-subtabs">
                 {[
@@ -5017,7 +5073,10 @@ export default function StorylinesScreen() {
                       setDepartment("player_meetings");
                     }}
                   />
+                  <SocialTrends posts={socialPosts} userTid={userTeamId(franchiseState)} onAuthor={(pid) => setAuthorFilter(pid)} />
                 </>
+              ) : socialSubTab === "puckr" ? (
+                <SocialTrends posts={socialPosts} userTid={userTeamId(franchiseState)} onAuthor={(pid) => setAuthorFilter(pid)} />
               ) : (
                 <div className="sl-panel">
                   <h3>Trending now</h3>
@@ -5043,296 +5102,46 @@ export default function StorylinesScreen() {
               )}
             </aside>
           </div>
+          </>
         ) : department === "prospect_pools" ? (
-          <div className="sl-two">
-            <div className="sl-feed">
-              {prospectPoolRankings.some((row) => row.count > 0) ? (
-                prospectPoolRankings.map((row, idx) => {
-                  const isUser = row.team_id === userTeamId(franchiseState).toUpperCase();
-                  const logo =
-                    resolveFranchiseTeamLogo(
-                      { team_abbrev: row.team_id, abbrev: row.team_id, team_name: row.name },
-                      row.name || row.team_id
-                    ) || "";
-                  return (
-                    <article
-                      key={row.team_id}
-                      className="sl-insider"
-                      style={{ animationDelay: `${Math.min(idx, 10) * 24}ms` }}
-                    >
-                      <div className="sl-insider__head">
-                        <strong>
-                          #{row.poolRank} · {row.name}
-                        </strong>
-                        <em>{row.count} in pool</em>
-                      </div>
-                      <p>
-                        Average top-{PROSPECT_POOL_TOP_N} potential rank{" "}
-                        <strong>{row.avgRank != null ? row.avgRank.toFixed(1) : "—"}</strong>
-                        {row.topProspect ? (
-                          <>
-                            {" "}
-                            · Headliner {row.topProspect.name} (#{row.topProspect.potentialRank} ·{" "}
-                            {row.topProspect.potential} POT)
-                          </>
-                        ) : null}
-                      </p>
-                      <div className="sl-insider__meta">
-                        {logo ? (
-                          <span>
-                            <img src={logo} alt="" width={16} height={16} style={{ verticalAlign: "middle" }} />{" "}
-                            {row.team_id}
-                          </span>
-                        ) : (
-                          <span>{row.team_id}</span>
-                        )}
-                        <span>Avg ceiling {row.avgPotential ? row.avgPotential.toFixed(1) : "—"}</span>
-                        {isUser ? <span>Your org</span> : null}
-                      </div>
-                    </article>
-                  );
-                })
-              ) : (
-                <EmptyPanel
-                  kicker="Prospect Pools · quiet"
-                  title="No ranked pools yet"
-                  body="Rights-held prospects need potential data from your roster browser. Start or advance a Real NHL franchise to populate the pipeline."
-                />
-              )}
-            </div>
-            <aside className="sl-rail">
-              <div className="sl-panel">
-                <div className="sl-pulse">
-                  <span>Your pool rank</span>
-                  <strong>{userProspectPoolRow ? `#${userProspectPoolRow.poolRank}` : "—"}</strong>
-                  <p>
-                    {userProspectPoolRow?.avgRank != null
-                      ? `Avg top-${PROSPECT_POOL_TOP_N} potential rank ${userProspectPoolRow.avgRank.toFixed(1)} across ${userProspectPoolRow.count} prospects`
-                      : "Pipeline not ranked yet"}
-                  </p>
-                </div>
-                <h3>League snapshot</h3>
-                <div className="sl-effects">
-                  {prospectPoolRankings.slice(0, 10).map((row) => (
-                    <div key={row.team_id} className="sl-trend">
-                      <b>{row.poolRank}</b>
-                      <span>{row.name}</span>
-                      <em>{row.avgRank != null ? row.avgRank.toFixed(1) : "—"}</em>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              {userProspectPoolRow?.prospects?.length ? (
-                <div className="sl-panel">
-                  <h3>Your pipeline</h3>
-                  <div className="sl-effects">
-                    {userProspectPoolRow.prospects.slice(0, 8).map((p) => (
-                      <div
-                        key={p.player_id || p.name}
-                        className="sl-trend sl-trend--click"
-                        role="button"
-                        tabIndex={0}
-                        onClick={() => p.raw && setDossierProspect(p.raw)}
-                      >
-                        <b>{p.potentialRank}</b>
-                        <span>{p.name}</span>
-                        <em>{p.potential} POT</em>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-            </aside>
-          </div>
+          <ProspectPoolsBoard
+            rows={prospectPoolRankings}
+            userRow={userProspectPoolRow}
+            topN={PROSPECT_POOL_TOP_N}
+            onOpen={setDossierProspect}
+            empty={
+              <EmptyPanel
+                kicker="Prospect Pools · quiet"
+                title="No ranked pools yet"
+                body="Rights-held prospects need potential data from your roster browser. Start or advance a Real NHL franchise to populate the pipeline."
+              />
+            }
+          />
         ) : department === "prospect_leaderboard" ? (
-          <div className="sl-two">
-            <div className="sl-feed">
-              {leagueProspectLeaderboard.length ? (
-                leagueProspectLeaderboard.map((p, idx) => {
-                  const isUser = p.team_id === userTeamId(franchiseState).toUpperCase();
-                  const abbr = p.team_abbr || p.team_id;
-                  const logo =
-                    resolveFranchiseTeamLogo(
-                      { team_abbrev: abbr, abbrev: abbr, abbreviation: abbr, team_name: p.team_name },
-                      p.team_name || abbr
-                    ) || "";
-                  return (
-                    <article
-                      key={p.player_id || `${p.team_id}:${p.name}`}
-                      className={`sl-insider sl-prospect-row${isUser ? " is-user" : ""}`}
-                      style={{ animationDelay: `${Math.min(idx, 12) * 20}ms` }}
-                      role="button"
-                      tabIndex={0}
-                      title={`Open ${p.name}'s dossier`}
-                      onClick={() => p.raw && setDossierProspect(p.raw)}
-                      onKeyDown={(e) => {
-                        if ((e.key === "Enter" || e.key === " ") && p.raw) {
-                          e.preventDefault();
-                          setDossierProspect(p.raw);
-                        }
-                      }}
-                    >
-                      <div className="sl-prospect-row__logo">
-                        {logo ? <img src={logo} alt={p.team_name || abbr} /> : <span>{abbr}</span>}
-                      </div>
-                      <div className="sl-prospect-row__body">
-                        <div className="sl-prospect-row__name">
-                          <b>#{p.leagueRank}</b> {p.name}
-                        </div>
-                        <div className="sl-prospect-row__meta">
-                          {[p.position, p.age != null ? `Age ${p.age}` : "", p.league].filter(Boolean).join(" · ")}
-                        </div>
-                        <div className="sl-prospect-row__team">
-                          Rights held by <strong>{p.team_name || abbr}</strong>
-                          {isUser ? <em> · Your org</em> : null}
-                        </div>
-                      </div>
-                      <div className="sl-prospect-row__ratings">
-                        {p.ovr ? (
-                          <span className="sl-prospect-row__ovr">
-                            {Math.round(p.ovr)}
-                            <small>OVR</small>
-                          </span>
-                        ) : null}
-                        <span className="sl-prospect-row__pot">
-                          {p.potential}
-                          <small>POT</small>
-                        </span>
-                      </div>
-                    </article>
-                  );
-                })
-              ) : (
-                <EmptyPanel
-                  kicker="Top Prospects · quiet"
-                  title="No ranked prospects yet"
-                  body="Individual potential ranks need rights-held prospects with potential data. Start or advance a Real NHL franchise to populate the board."
-                />
-              )}
-            </div>
-            <aside className="sl-rail">
-              <div className="sl-panel">
-                <div className="sl-pulse">
-                  <span>Your org on board</span>
-                  <strong>{userTeamProspectsOnLeaderboard.length}</strong>
-                  <p>
-                    {userTeamProspectsOnLeaderboard[0]
-                      ? `Best: ${userTeamProspectsOnLeaderboard[0].name} (#${userTeamProspectsOnLeaderboard[0].leagueRank} · ${userTeamProspectsOnLeaderboard[0].potential} POT)`
-                      : "No prospects in the top 75 yet"}
-                  </p>
-                </div>
-                <h3>Your pipeline (ranked)</h3>
-                <div className="sl-effects">
-                  {userTeamProspectsOnLeaderboard.length ? (
-                    userTeamProspectsOnLeaderboard.slice(0, 12).map((p) => (
-                      <div
-                        key={p.player_id || p.name}
-                        className="sl-trend sl-trend--click"
-                        role="button"
-                        tabIndex={0}
-                        onClick={() => p.raw && setDossierProspect(p.raw)}
-                      >
-                        <b>{p.leagueRank}</b>
-                        <span>{p.name}</span>
-                        <em>{p.potential} POT</em>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="sl-trend">
-                      <b>—</b>
-                      <span>No ranked prospects</span>
-                      <em />
-                    </div>
-                  )}
-                </div>
-              </div>
-              <div className="sl-panel">
-                <h3>League top 10</h3>
-                <div className="sl-effects">
-                  {leagueProspectLeaderboard.slice(0, 10).map((p) => (
-                    <div
-                      key={p.player_id || p.name}
-                      className="sl-trend sl-trend--click"
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => p.raw && setDossierProspect(p.raw)}
-                    >
-                      <b>{p.leagueRank}</b>
-                      <span>{p.name}</span>
-                      <em>{p.potential}</em>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </aside>
-          </div>
+          <TopProspectsBoard
+            rows={leagueProspectLeaderboard}
+            userRows={userTeamProspectsOnLeaderboard}
+            userTeamId={userTeamId(franchiseState)}
+            onOpen={setDossierProspect}
+            empty={
+              <EmptyPanel
+                kicker="Top Prospects · quiet"
+                title="No ranked prospects yet"
+                body="Individual potential ranks need rights-held prospects with potential data. Start or advance a Real NHL franchise to populate the board."
+              />
+            }
+          />
         ) : department === "insiders" ? (
-          <div className="sl-two">
-            <div className="sl-feed">
-              {insiderItems.length ? (
-                insiderItems
-                  .slice()
-                  .reverse()
-                  .slice(0, 48)
-                  .map((item, idx) => {
-                    const sid = str(item.storyline_id || item.world_event_id || idx);
-                    const match = stories.find((s) => str(s.storylineId) === sid || str(s.id) === sid);
-                    return (
-                      <button
-                        key={sid}
-                        type="button"
-                        className="sl-insider"
-                        onClick={() => openFiledBeat(item)}
-                      >
-                        <div className="sl-insider__head">
-                          <strong>{str(item.headline || match?.headline || "Desk note")}</strong>
-                          <em>{knowledgeLevelLabel(item.public_knowledge_level)}</em>
-                        </div>
-                        <p>{str(item.summary || match?.summary || "")}</p>
-                        <div className="sl-insider__meta">
-                          <span>{str(item.reporter_name || item.source_label || "Insider")}</span>
-                          {item.outlet_name ? <span>{item.outlet_name}</span> : null}
-                          <span>{str(item.knowledge_type || "report").replace(/_/g, " ")}</span>
-                          {item.player_name ? <span>{item.player_name}</span> : null}
-                          {item.calendar_iso ? <span>{prettyDate(item.calendar_iso)}</span> : null}
-                        </div>
-                      </button>
-                    );
-                  })
-              ) : (
-                <EmptyPanel
-                  kicker="Insiders · quiet"
-                  title="No private layers yet"
-                  body="Rumors, claims, and confirmed facts land here as the knowledge graph fills in."
-                />
-              )}
-            </div>
-            <aside className="sl-rail">
-              {beatWriters.length ? (
-                <div className="sl-panel">
-                  <h3>Beat desks</h3>
-                  <div className="sl-effects">
-                    {beatWriters.slice(0, 10).map((writer) => (
-                      <div key={str(writer.id || writer.name)} className="sl-effect">
-                        <span>{str(writer.name)}</span>
-                        <strong>{str(writer.specialty || writer.role || writer.outlet)}</strong>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-              <div className="sl-panel">
-                <h3>Player dossiers</h3>
-                {playerDossiers.length ? (
-                  playerDossiers.slice(0, 8).map((dossier) => (
-                    <DossierCard key={str(dossier.player_id || dossier.player_name)} dossier={dossier} compact />
-                  ))
-                ) : (
-                  <p className="sl-choice-empty">Dossiers publish after the next calendar tick.</p>
-                )}
-              </div>
-            </aside>
-          </div>
+          <InsidersDesk
+            items={insiderItems}
+            stories={stories}
+            beatWriters={beatWriters}
+            dossiers={playerDossiers}
+            onOpen={openFiledBeat}
+            renderDossier={(dossier) => (
+              <DossierCard key={str(dossier.player_id || dossier.player_name)} dossier={dossier} compact />
+            )}
+          />
         ) : department === "awards_race" ? (
           <AwardsRaceDesk
             windowDays={awardsRace?.momentum_window_days}
@@ -5341,234 +5150,41 @@ export default function StorylinesScreen() {
             sealed={Boolean(awardsRace?.sealed)}
             sealedMessage={awardsRace?.sealed_message}
           />
+        ) : department === "three_stars" ? (
+          <ThreeStarsDesk features={benchBuzzFeatures} />
+        ) : department === "mailbag" ? (
+          <MailbagDesk features={benchBuzzFeatures} onRefresh={() => hydrateFranchiseNarrative?.({ force: true })} />
+        ) : department === "hot_seat" ? (
+          <HotSeatDesk features={benchBuzzFeatures} />
+        ) : department === "rumour_ledger" ? (
+          <RumourLedgerDesk features={benchBuzzFeatures} />
         ) : department === "press_room" ? (
-          <div className="sl-pressroom">
-            <div className="sl-pressroom__intro">
-              <div>
-                <strong>Press Room</strong>
-                <p>
-                  When a story about your club heats up, reporters book a media availability. Every answer
-                  you give changes things for real — and you can see each effect before you pick.
-                </p>
-              </div>
-              <ul className="sl-pressroom__levers">
-                <li>Fan confidence</li>
-                <li>Player morale &amp; trust</li>
-                <li>Story heat</li>
-                <li>Trade rumours</li>
-                <li>Reporter relationships</li>
-              </ul>
-              <p className="sl-pressroom__rule">
-                Availabilities close after {4} days, at most two a week. Skipping one is treated like a cold
-                "no comment"; simming past one sends a brief team statement, which costs half as much. Dodge a
-                question and the reporter may follow up. Reporters remember what you said last time, and the
-                player you talk about hears every word.
-              </p>
-            </div>
-            {pressOutcome ? (
-              <MeetingOutcomePanel
-                outcome={pressOutcome}
-                kicker="Press conference"
-                onDismiss={() => setPressOutcome(null)}
-              />
-            ) : null}
-            {pressQueue.length ? (
-              pressQueue.map((press) => {
-                const today = Number(playerMeetingsPayload?.calendar_day);
-                const daysLeft =
-                  press.expires_day != null && Number.isFinite(today)
-                    ? Math.max(0, Number(press.expires_day) - today)
-                    : null;
-                const qs = asArray(press.questions);
-                const answeredIds = new Set(asArray(press.answered_questions).map((id) => str(id)));
-                const coverageByQ = new Map(asArray(press.coverage).map((c) => [str(c.question_id), c]));
-                return (
-                  <article key={str(press.id)} className="sl-press">
-                    <div className="sl-press__head">
-                      <div className="sl-press__title">
-                        <strong>{str(press.headline || "Media availability scheduled")}</strong>
-                        {press.player_name ? <span>About {press.player_name}</span> : null}
-                      </div>
-                      <div className="sl-press__status">
-                        <span className="sl-press__progress">
-                          {answeredIds.size}/{qs.length} answered
-                        </span>
-                        {daysLeft != null ? (
-                          <span className={`sl-press__deadline${daysLeft <= 1 ? " is-urgent" : ""}`}>
-                            {daysLeft === 0 ? "Closes today" : `Closes in ${daysLeft} day${daysLeft === 1 ? "" : "s"}`}
-                          </span>
-                        ) : null}
-                      </div>
-                    </div>
-                    <div className="sl-press__body">
-                      <div className="sl-press__why">
-                        <span className="sl-press__why-label">Why the media is here</span>
-                        {press.context?.record ? (
-                          <span className="sl-press__trigger">
-                            Record {str(press.context.record)}
-                            {press.context.league_rank ? ` · #${Number(press.context.league_rank)}` : ""}
-                          </span>
-                        ) : null}
-                        {asArray(press.context_triggers).map((t) => (
-                          <span key={str(t.code)} className="sl-press__trigger">
-                            {str(t.label)}
-                          </span>
-                        ))}
-                      </div>
-                      {qs.map((q, qi) => {
-                        const done = answeredIds.has(str(q.id));
-                        const cov = coverageByQ.get(str(q.id));
-                        if (done) {
-                          return (
-                            <div key={str(q.id)} className="sl-press__q sl-press__q--done">
-                              <div className="sl-press__reporter">
-                                Q{qi + 1} · {str(q.reporter_name || "Reporter")}
-                                {q.outlet ? ` · ${q.outlet}` : ""}
-                              </div>
-                              <p className="sl-press__question">{str(q.question || "")}</p>
-                              {cov?.quote ? (
-                                <blockquote className="sl-press-quote">“{str(cov.quote)}”</blockquote>
-                              ) : (
-                                <p className="sl-press__answer">
-                                  You said <b>{str(cov?.response_label || "—")}</b>
-                                </p>
-                              )}
-                              {cov?.headline ? <p className="sl-press__answer">Headline: <em>{str(cov.headline)}</em></p> : null}
-                              {cov?.reaction ? <p className="sl-press-reaction">{str(cov.reaction)}</p> : null}
-                            </div>
-                          );
-                        }
-                        return (
-                          <div key={str(q.id)} className="sl-press__q">
-                            <div className="sl-press__reporter">
-                              <i aria-hidden />
-                              {q.is_followup ? "Follow-up" : `Q${qi + 1}`} · {str(q.reporter_name || "Reporter")}
-                              {q.outlet ? ` · ${q.outlet}` : ""}
-                              {q.reporter_mood === "hostile" ? " · has an edge" : q.reporter_mood === "friendly" ? " · friendly" : ""}
-                            </div>
-                            <p className="sl-press__question">{str(q.question || "")}</p>
-                            <div className="sl-choices sl-choices--press">
-                              {asArray(q.responses).map((resp) => {
-                                const sid = str(press.storyline_id || press.id);
-                                const choiceId = `${str(q.id)}:${str(resp.id)}`;
-                                const busy = busyChoice === `${sid}:${choiceId}`;
-                                return (
-                                  <ResponseChoiceButton
-                                    key={resp.id}
-                                    response={resp}
-                                    className="sl-choice sl-choice--press"
-                                    disabled={Boolean(busyChoice)}
-                                    busy={busy}
-                                    onClick={() => handlePressResponse(press, str(q.id), str(resp.id))}
-                                  />
-                                );
-                              })}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </article>
-                );
-              })
-            ) : (
+          <PressRoomDesk
+            queue={pressQueue}
+            recent={pressRecent}
+            calendarDay={playerMeetingsPayload?.calendar_day}
+            busyChoice={busyChoice}
+            windowDays={4}
+            onRespond={(press, qid, rid) => handlePressResponse(press, qid, rid)}
+            outcome={
+              pressOutcome ? (
+                <MeetingOutcomePanel
+                  outcome={pressOutcome}
+                  kicker="Press conference"
+                  onDismiss={() => setPressOutcome(null)}
+                />
+              ) : null
+            }
+            emptyState={
               <EmptyPanel
                 kicker="Press room · clear"
                 title="No media availability scheduled"
                 body="Reporters book one when a story about your club gets hot (a skid, a streak, trade rumours, a breakout or a slump). It'll show up here with a 4-day window."
               />
-            )}
-            {pressRecent.length ? (
-              <section className="sl-pressroom__recent">
-                <h4>Recent coverage</h4>
-                {pressRecent.map((press) => (
-                  <div key={str(press.id)} className={`sl-press-recent is-${str(press.status)}`}>
-                    <span className="sl-press-recent__status">
-                      {str(press.status) === "expired" ? "Skipped" : "Held"}
-                    </span>
-                    <div>
-                      <strong>{str(press.headline || "Media availability")}</strong>
-                      {asArray(press.coverage).map((c, i) => (
-                        <p key={i}>
-                          {c.quote ? <>“{str(c.quote)}” → </> : c.response_label ? <><b>{str(c.response_label)}</b> → </> : null}
-                          {str(c.headline || "")}
-                          {c.reaction ? <span className="sl-press-reaction"> {str(c.reaction)}</span> : null}
-                        </p>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </section>
-            ) : null}
-          </div>
+            }
+          />
         ) : department === "archive" ? (
-          <div>
-            {narrativeEras.length ? (
-              narrativeEras
-                .slice()
-                .reverse()
-                .map((era) => (
-                  <article key={str(era.season)} className="sl-era">
-                    <div className="sl-era__head">
-                      <h3>{str(era.label || `Season ${era.season}`)}</h3>
-                      <span>{Number(era.story_count || 0)} archived beats</span>
-                    </div>
-                    {asArray(era.themes).length ? (
-                      <div className="sl-era__themes">
-                        {era.themes.map((theme) => (
-                          <span key={theme}>{theme}</span>
-                        ))}
-                      </div>
-                    ) : null}
-                    <div className="sl-era__stories">
-                      {asArray(era.top_stories).map((story, idx) => (
-                        <button
-                          key={str(story.storyline_id || story.headline || idx)}
-                          type="button"
-                          onClick={() => openFiledBeat(story)}
-                        >
-                          <strong>{str(story.headline || "Archived beat")}</strong>
-                          <em>
-                            {str(story.category || "storyline")}
-                            {story.heat != null ? ` · heat ${Math.round(Number(story.heat))}` : ""}
-                            {story.calendar_iso ? ` · ${prettyDate(story.calendar_iso)}` : ""}
-                          </em>
-                        </button>
-                      ))}
-                    </div>
-                  </article>
-                ))
-            ) : narrativeArchive.length ? (
-              <article className="sl-era">
-                <div className="sl-era__head">
-                  <h3>League archive</h3>
-                  <span>{narrativeArchive.length} beats on file</span>
-                </div>
-                <div className="sl-era__stories">
-                  {narrativeArchive
-                    .slice()
-                    .reverse()
-                    .slice(0, 24)
-                    .map((story, idx) => (
-                      <button
-                        key={str(story.storyline_id || story.headline || idx)}
-                        type="button"
-                        onClick={() => openFiledBeat(story)}
-                      >
-                        <strong>{str(story.headline || "Archived beat")}</strong>
-                        <em>{prettyDate(story.calendar_iso) || str(story.season || "—")}</em>
-                      </button>
-                    ))}
-                </div>
-              </article>
-            ) : (
-              <EmptyPanel
-                kicker="Archive · empty"
-                title="No sealed eras yet"
-                body="Completed seasons are preserved here — themes, top stories, and the beats that defined them."
-              />
-            )}
-          </div>
+          <ArchiveDesk eras={narrativeEras} archive={narrativeArchive} onOpen={openFiledBeat} />
         ) : (department === "front_page" || department === "trade_desk") && deskStories.length === 0 && !openCase ? (
           <EmptyPanel
             kicker={department === "trade_desk" ? "Trade desk" : "Story desk"}
@@ -5587,12 +5203,12 @@ export default function StorylinesScreen() {
           />
         ) : openCase ? (
           /* ================= CASE FILE ================= */
-          <div className="sl-case" ref={caseRef}>
+          <div className="sl-case bba-case" ref={caseRef}>
             <div className="sl-case__main">
               <div className="sl-case__hero">
-                <div style={{ display: "grid", gap: 12, justifyItems: "center" }}>
-                  <StoryFace story={openCase} size={104} />
-                  <HeatRing value={openCase.heat} size={62} />
+                <div className="bba-case__face">
+                  <BuzzFace {...storyFaceProps(openCase)} size={132} />
+                  {Number(openCase.heat) > 0 ? <HeatRing value={openCase.heat} size={62} /> : null}
                 </div>
                 <div className="sl-case__hero-main">
                   <div className="sl-case__crumbs">
@@ -5621,6 +5237,7 @@ export default function StorylinesScreen() {
                     ) : null}
                   </div>
                   {openCase.summary ? <p className="sl-case__lede">{openCase.summary}</p> : null}
+                  <BuzzEffects lines={openCase.effectLines?.lines || []} days={openCase.effectLines?.days || 0} />
                   {openCase.pressConferenceId &&
                   pressQueue.some((p) => str(p.id) === str(openCase.pressConferenceId)) ? (
                     <button
@@ -5646,12 +5263,15 @@ export default function StorylinesScreen() {
                     <p className="sl-case__prose">{openCase.triggerReason}</p>
                   </section>
                 ) : null}
-                {openCase.description && openCase.description !== openCase.summary ? (
-                  <p className="sl-case__prose">{openCase.description}</p>
+                {caseContext ? (
+                  <p className="sl-case__prose bba-case__context">
+                    {caseContext.label ? <b>{caseContext.label}</b> : null}
+                    {caseContext.text}
+                  </p>
                 ) : null}
 
                 {isRumourStory(openCase) || isTradeDeskStory(openCase) ? (
-                  <TradeSummaryPanel story={openCase} />
+                  <TradeSummaryPanel story={openCase} variant="case" showCategory />
                 ) : null}
                 <ConductChannels story={openCase} />
                 {selectedDossier ? <DossierCard dossier={selectedDossier} /> : null}
@@ -5673,46 +5293,40 @@ export default function StorylinesScreen() {
 
                 <div className="sl-tabpanel">
                   {activeTab === "details" ? (
-                    <div className="sl-cols">
-                      <div>
-                        <h4>Information</h4>
-                        {infoRows.length ? (
-                          infoRows.map(([label, val]) => (
+                    <div className={`sl-cols bba-case__cols bba-case__cols--${1 + (infoRows.length || caseEvidence.length ? 1 : 0) + (parties.length ? 1 : 0)}`}>
+                      {infoRows.length || caseEvidence.length ? (
+                        <div>
+                          <h4>Information</h4>
+                          {infoRows.map(([label, val]) => (
                             <div key={label} className="sl-kv">
                               <span>{label}</span>
                               <span>{val}</span>
                             </div>
-                          ))
-                        ) : (
-                          <p className="sl-muted">No sourcing details on file.</p>
-                        )}
-                        {Object.keys(openCase.evidence || {}).length ? (
-                          <div className="sl-nums">
-                            {Object.entries(openCase.evidence)
-                              .slice(0, 4)
-                              .map(([k, v]) => (
+                          ))}
+                          {caseEvidence.length ? (
+                            <div className="sl-nums">
+                              {caseEvidence.slice(0, 4).map(([k, v]) => (
                                 <div key={k} className="sl-num" title={`${formatEffectLabel(k)}: ${v}`}>
                                   <strong>{String(v)}</strong>
                                   <span>{formatEffectLabel(k)}</span>
                                 </div>
                               ))}
-                          </div>
-                        ) : null}
-                      </div>
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
 
-                      <div>
-                        <h4>Parties involved</h4>
-                        {parties.length ? (
-                          parties.map((p) => (
+                      {parties.length ? (
+                        <div>
+                          <h4>Parties involved</h4>
+                          {parties.map((p) => (
                             <div key={p.label} className="sl-kv">
                               <span>{p.label}</span>
                               <span>{p.name}</span>
                             </div>
-                          ))
-                        ) : (
-                          <p className="sl-muted">No named parties on file.</p>
-                        )}
-                      </div>
+                          ))}
+                        </div>
+                      ) : null}
 
                       <div>
                         <h4>Key factors</h4>
@@ -5801,9 +5415,10 @@ export default function StorylinesScreen() {
               </div>
             </div>
 
-            <aside className="sl-rail">
-              <div className={`sl-panel${choiceOptions.length ? " sl-panel--desk" : ""}`}>
-                <h3>{choiceOptions.length ? "Your call" : "GM decisions"}</h3>
+            <aside className="sl-rail bba-case__rail">
+              {choiceOptions.length ? (
+              <div className="sl-panel sl-panel--desk">
+                <h3>Your call</h3>
                 {choiceOptions.length ? (
                   <div className="sl-choices">
                     {choiceOptions.map((opt) => {
@@ -5824,9 +5439,23 @@ export default function StorylinesScreen() {
                       );
                     })}
                   </div>
-                ) : (
-                  <p className="sl-choice-empty">Nothing to decide here. The story develops on its own.</p>
-                )}
+                ) : null}
+              </div>
+              ) : null}
+
+              <div className="sl-panel bba-glance">
+                <h3>At a glance</h3>
+                <dl className="bba-glance__list">
+                  <div><dt>Filed</dt><dd>{prettyDate(openCase.date)}{openCase.ageLabel ? ` · ${openCase.ageLabel}` : ""}</dd></div>
+                  <div><dt>Beat</dt><dd>{categoryMeta(openCase).label}</dd></div>
+                  {storyClubLabel(openCase) !== "League" ? <div><dt>Club</dt><dd>{storyClubLabel(openCase)}</dd></div> : null}
+                  {openCase.playerName ? <div><dt>Subject</dt><dd>{openCase.playerName}</dd></div> : null}
+                  {Number(openCase.heat) > 0 ? <div><dt>Heat</dt><dd><BuzzHeat value={openCase.heat} /></dd></div> : null}
+                  {credibilityLabel(openCase.credibility) ? <div><dt>Sourcing</dt><dd>{credibilityLabel(openCase.credibility)}</dd></div> : null}
+                  {openCase.reporterName ? <div><dt>Reporter</dt><dd>{openCase.reporterName}{openCase.outletName ? ` · ${openCase.outletName}` : ""}</dd></div> : null}
+                  {socialCountFor(openCase) ? <div><dt>Chatter</dt><dd>{formatCount(socialCountFor(openCase))} posts</dd></div> : null}
+                  {openCase.repeatCount > 0 ? <div><dt>Follow-up</dt><dd>Beat #{openCase.repeatCount + 1}</dd></div> : null}
+                </dl>
               </div>
 
               {Object.keys(openCase.effects || {}).length ? (
@@ -5871,6 +5500,23 @@ export default function StorylinesScreen() {
                       <span>{knowledgeLevelLabel(openCase.publicKnowledgeLevel)}</span>
                     </div>
                   ) : null}
+                </div>
+              ) : null}
+
+              {relatedStories.length ? (
+                <div className="sl-panel bba-more-on">
+                  <h3>More on this</h3>
+                  <div className="bba-more-on__list">
+                    {relatedStories.slice(0, 5).map((r) => (
+                      <button key={r.id} type="button" className="bba-more-on__row" onClick={() => openStory(r.id)}>
+                        <BuzzFace {...storyFaceProps(r)} size={48} showLogo={false} />
+                        <span>
+                          <strong>{r.headline}</strong>
+                          <em>{[shortStoryDate(r), categoryMeta(r).label].filter(Boolean).join(" · ")}</em>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
                 </div>
               ) : null}
             </aside>
@@ -5963,6 +5609,25 @@ export default function StorylinesScreen() {
                 title="Nothing matches"
                 body={filterEmptyMsg || "No stories match this filter or search."}
               />
+            ) : department === "trade_desk" ? (
+              <div className="sl-dtlayout">
+                <div className="sl-dtfeed">
+                  {(sortId === "latest" ? groupStoriesByWeek(gridStories) : [{ key: "all", label: "", stories: gridStories }]).map((g) => (
+                    <div key={g.key} className="sl-dtweek">
+                      {g.label ? (
+                        <div className="sl-dtweek__head">
+                          <h4>{g.label}</h4>
+                          <span>{g.stories.length} {g.stories.length === 1 ? "move" : "moves"}</span>
+                        </div>
+                      ) : null}
+                      {g.stories.map((s, i) => (
+                        <DealTicket key={s.id} story={s} index={i} socialCount={socialCountFor(s)} onOpen={openStory} />
+                      ))}
+                    </div>
+                  ))}
+                </div>
+                <TradeDeskRail stories={filtered} onOpen={openStory} />
+              </div>
             ) : sortId === "latest" ? (
               groupStoriesByWeek(gridStories).map((g) => (
                 <div key={g.key} className="sl-week">

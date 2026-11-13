@@ -185,3 +185,166 @@ export function retireeToHeadshotPlayer(row) {
     team_name: getRetireeTeam(row),
   };
 }
+
+/* ---------- Tribute screen helpers (fields are optional: old saves lack them) ---------- */
+
+function num(v) {
+  if (v === undefined || v === null || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Career totals: real NHL career when the backend sends it, else what the save recorded. */
+export function getCareerTotals(row) {
+  const c = row?.career_totals;
+  if (c && typeof c === "object" && num(c.gp) > 0) {
+    return {
+      source: "nhl",
+      gp: num(c.gp),
+      g: num(c.g),
+      a: num(c.a),
+      pts: num(c.pts),
+      pm: num(c.pm),
+      w: num(c.w),
+      so: num(c.so),
+      sv_pct: num(c.sv_pct),
+      gaa: num(c.gaa),
+      seasons: num(c.seasons),
+      first: c.first_season || null,
+      last: c.last_season || null,
+      teams: Array.isArray(c.teams) ? c.teams.filter(Boolean) : [],
+    };
+  }
+  const t = getLeagueTotals(row, "nhl");
+  return {
+    source: "save",
+    gp: num(t.gp),
+    g: num(t.g),
+    a: num(t.a),
+    pts: num(t.pts),
+    pm: num(t.pm),
+    w: num(t.w),
+    so: num(t.so),
+    sv_pct: num(t.sv_pct),
+    gaa: num(t.gaa),
+    seasons: null,
+    first: null,
+    last: null,
+    teams: [],
+  };
+}
+
+export function isMinorLeagueRetiree(row) {
+  if (row?.level) return true;
+  return row?.retirement_type === "depth_retirement" && row?.seasons_played == null;
+}
+
+export function isUserTeamRetiree(row, userTeamId) {
+  if (row?.is_user_team) return true;
+  return userTeamId != null && userTeamId !== "" && String(row?.team_id ?? "") === String(userTeamId);
+}
+
+export function tributeScore(row) {
+  const c = getCareerTotals(row);
+  const ovr = getRetireeOverall(row) ?? 0;
+  const goalie = isGoalieRetiree(row);
+  const production = goalie ? (c.w || 0) * 2 : c.pts || 0;
+  return ovr * 10 + production * 0.06 + (c.gp || 0) * 0.01 + (Number(row?.cups_won) || 0) * 25;
+}
+
+export function fmtInt(v) {
+  const n = num(v);
+  return n == null ? "—" : Math.round(n).toLocaleString("en-US");
+}
+
+export function fmtSigned(v) {
+  const n = num(v);
+  if (n == null) return "—";
+  return n > 0 ? `+${Math.round(n)}` : String(Math.round(n));
+}
+
+export function fmtSvPct(v) {
+  const n = num(v);
+  if (n == null || n <= 0) return "—";
+  const frac = n > 1.5 ? n / 100 : n;
+  return frac.toFixed(3).replace(/^0/, "");
+}
+
+export function fmtGaa(v) {
+  const n = num(v);
+  return n == null || n <= 0 ? "—" : n.toFixed(2);
+}
+
+export function fmtMillions(v) {
+  const n = num(v);
+  if (n == null || n <= 0) return null;
+  return `$${n >= 10 ? n.toFixed(1) : n.toFixed(2).replace(/0$/, "")}M`;
+}
+
+export function draftLine(row) {
+  const d = row?.draft && typeof row.draft === "object" ? row.draft : null;
+  const legacy = row?.draft_info && typeof row.draft_info === "object" ? row.draft_info : {};
+  const year = d?.draft_year ?? legacy.draft_year;
+  const round = d?.draft_round ?? legacy.draft_round;
+  const pick = d?.draft_overall_pick ?? legacy.draft_pick ?? legacy.draft_overall_pick;
+  const team = d?.draft_team_abbr;
+  if (d?.undrafted) return "Undrafted";
+  if (!year && !round && !pick) return null;
+  const parts = [];
+  if (year) parts.push(String(year));
+  if (round) parts.push(`round ${round}`);
+  if (pick) parts.push(`#${pick} overall`);
+  return `${parts.join(", ")}${team ? ` by ${team}` : ""}`;
+}
+
+export function contractLine(row) {
+  const c = row?.last_contract;
+  if (!c || typeof c !== "object") return null;
+  const aav = fmtMillions(c.aav_millions);
+  if (!aav) return null;
+  const yrs = num(c.years_remaining) || 0;
+  if (yrs > 0) {
+    const total = fmtMillions(c.walked_away_millions);
+    return `${aav} AAV, ${yrs} year${yrs === 1 ? "" : "s"} left${total ? ` (${total} walked away from)` : ""}`;
+  }
+  return `${aav} AAV, expiring`;
+}
+
+/** Trophy names grouped with counts, Stanley Cups first. */
+export function trophySummary(row) {
+  const list = Array.isArray(row?.trophies) ? row.trophies : [];
+  const counts = new Map();
+  list.forEach((t) => {
+    const name = String(t?.award_name || "").trim();
+    if (!name) return;
+    counts.set(name, (counts.get(name) || 0) + 1);
+  });
+  const out = [...counts.entries()].map(([name, n]) => ({ name, n }));
+  out.sort((a, b) => {
+    const ac = /stanley cup/i.test(a.name) ? 1 : 0;
+    const bc = /stanley cup/i.test(b.name) ? 1 : 0;
+    if (ac !== bc) return bc - ac;
+    return b.n - a.n || a.name.localeCompare(b.name);
+  });
+  return out;
+}
+
+export function finalSeasonLine(row, goalie) {
+  const f = row?.final_season;
+  if (!f || typeof f !== "object" || !num(f.gp)) return null;
+  if (goalie) {
+    return [
+      `${fmtInt(f.gp)} GP`,
+      f.wins != null ? `${fmtInt(f.wins)} W` : null,
+      f.svPct != null ? `${fmtSvPct(f.svPct)} SV%` : null,
+      f.gaa != null ? `${fmtGaa(f.gaa)} GAA` : null,
+    ].filter(Boolean).join(" · ");
+  }
+  return [
+    `${fmtInt(f.gp)} GP`,
+    `${fmtInt(f.g)} G`,
+    `${fmtInt(f.a)} A`,
+    `${fmtInt(f.pts)} PTS`,
+    f.plusMinus != null ? fmtSigned(f.plusMinus) : null,
+  ].filter(Boolean).join(" · ");
+}

@@ -124,6 +124,50 @@ function firstPresent(...values) {
   return undefined;
 }
 
+// Real NHL abbreviations by full name / city / nickname, so name-only rows never become "NEW" / "SAN".
+const NHL_ABBR_BY_KEY = {
+  anaheimducks: "ANA", anaheim: "ANA", ducks: "ANA",
+  arizonacoyotes: "ARI", coyotes: "ARI",
+  bostonbruins: "BOS", boston: "BOS", bruins: "BOS",
+  buffalosabres: "BUF", buffalo: "BUF", sabres: "BUF",
+  calgaryflames: "CGY", calgary: "CGY", flames: "CGY",
+  carolinahurricanes: "CAR", carolina: "CAR", hurricanes: "CAR",
+  chicagoblackhawks: "CHI", chicago: "CHI", blackhawks: "CHI",
+  coloradoavalanche: "COL", colorado: "COL", avalanche: "COL",
+  columbusbluejackets: "CBJ", columbus: "CBJ", bluejackets: "CBJ",
+  dallasstars: "DAL", dallas: "DAL", stars: "DAL",
+  detroitredwings: "DET", detroit: "DET", redwings: "DET",
+  edmontonoilers: "EDM", edmonton: "EDM", oilers: "EDM",
+  floridapanthers: "FLA", florida: "FLA", panthers: "FLA",
+  losangeleskings: "LAK", losangeles: "LAK", kings: "LAK",
+  minnesotawild: "MIN", minnesota: "MIN", wild: "MIN",
+  montrealcanadiens: "MTL", montreal: "MTL", canadiens: "MTL",
+  nashvillepredators: "NSH", nashville: "NSH", predators: "NSH",
+  newjerseydevils: "NJD", newjersey: "NJD", devils: "NJD",
+  newyorkislanders: "NYI", nyislanders: "NYI", islanders: "NYI",
+  newyorkrangers: "NYR", nyrangers: "NYR", rangers: "NYR",
+  ottawasenators: "OTT", ottawa: "OTT", senators: "OTT",
+  philadelphiaflyers: "PHI", philadelphia: "PHI", flyers: "PHI",
+  pittsburghpenguins: "PIT", pittsburgh: "PIT", penguins: "PIT",
+  sanjosesharks: "SJS", sanjose: "SJS", sharks: "SJS",
+  seattlekraken: "SEA", seattle: "SEA", kraken: "SEA",
+  stlouisblues: "STL", stlouis: "STL", saintlouisblues: "STL", blues: "STL",
+  tampabaylightning: "TBL", tampabay: "TBL", lightning: "TBL",
+  torontomapleleafs: "TOR", toronto: "TOR", mapleleafs: "TOR",
+  utahmammoth: "UTA", utahhockeyclub: "UTA", utah: "UTA", mammoth: "UTA",
+  vancouvercanucks: "VAN", vancouver: "VAN", canucks: "VAN",
+  vegasgoldenknights: "VGK", vegas: "VGK", goldenknights: "VGK",
+  washingtoncapitals: "WSH", washington: "WSH", capitals: "WSH",
+  winnipegjets: "WPG", winnipeg: "WPG", jets: "WPG",
+};
+
+export function nhlAbbrFromName(value) {
+  const key = normalizeLogoToken(value);
+  if (!key) return "";
+  // Exact matches only: "Ottawa 67's" or "Kingston Frontenacs" must never map to an NHL club.
+  return NHL_ABBR_BY_KEY[key] || "";
+}
+
 export function getTeamAbbreviation(team) {
   if (!team) return "";
 
@@ -131,6 +175,8 @@ export function getTeamAbbreviation(team) {
     const s = String(team).trim();
     if (!s) return "";
     if (s.length <= 4 && !s.includes(" ")) return s.toUpperCase();
+    const known = nhlAbbrFromName(s);
+    if (known) return known;
     if (s.includes(" ")) return s.split(/\s+/)[0].slice(0, 3).toUpperCase();
     return s.slice(0, 3).toUpperCase();
   }
@@ -145,12 +191,21 @@ export function getTeamAbbreviation(team) {
     team.team_abbrev
   );
 
-  if (rawExplicit) return String(rawExplicit).slice(0, 4).toUpperCase();
+  if (rawExplicit) {
+    const ex = String(rawExplicit).trim();
+    // A full name passed as the abbreviation ("Boston Bruins") must not become "BOST".
+    if (ex.length <= 4 && !ex.includes(" ")) return ex.toUpperCase();
+    const known = nhlAbbrFromName(ex);
+    if (known) return known;
+  }
+
+  const nm = String(team.name || team.team_name || team.full_name || "").trim();
+  const knownName = nhlAbbrFromName(nm) || nhlAbbrFromName(team.city || team.location || team.market || "");
+  if (knownName) return knownName;
 
   const city = String(team.city || team.location || team.market || "").trim();
   if (city) return city.slice(0, 3).toUpperCase();
 
-  const nm = String(team.name || team.team_name || team.full_name || "").trim();
   if (nm) {
     if (nm.includes(" ")) return nm.split(/\s+/)[0].slice(0, 3).toUpperCase();
     return nm.slice(0, 3).toUpperCase();

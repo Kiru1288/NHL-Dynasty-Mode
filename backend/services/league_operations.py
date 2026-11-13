@@ -925,8 +925,18 @@ def calculate_team_revenue(
             except Exception:
                 payroll_m = summer * 0.55
         expenses = revenue * expense_ratio + payroll_m * 0.06
+        summer_fines_m = 0.0
+        try:
+            from app.sim_engine.franchise.storyline_engine import team_league_fines_m  # noqa: WPS433
+
+            summer_fines_m = float(team_league_fines_m(session, str(team_id), int(getattr(session, "season_calendar_year", 0) or 0)) or 0.0)
+        except Exception:
+            summer_fines_m = 0.0
+        expenses += summer_fines_m
         profit = revenue - expenses
         summer_tags = ["Season Tickets", "Summer Books"]
+        if summer_fines_m > 0:
+            summer_tags.insert(0, "League Fine")
         for tag in list(global_draw.get("global_draw_tags") or []):
             if tag not in summer_tags:
                 summer_tags.insert(0, tag)
@@ -950,6 +960,7 @@ def calculate_team_revenue(
             "revenue": round(revenue, 1),
             "revenue_m": round(revenue, 1),
             "expenses": round(expenses, 1),
+            "league_fines_m": round(summer_fines_m, 2),
             "profit": round(profit, 1),
             "win_pct": round(win_pct, 3),
             "fan_sentiment": round(fan_sent, 1),
@@ -1061,6 +1072,15 @@ def calculate_team_revenue(
     except Exception:
         bonus_cash_m = 0.0
     expenses += bonus_cash_m
+    # League fines from storyline sanctions are a cash cost for the season issued.
+    league_fines_m = 0.0
+    try:
+        from app.sim_engine.franchise.storyline_engine import team_league_fines_m  # noqa: WPS433
+
+        league_fines_m = float(team_league_fines_m(session, str(team_id), int(getattr(session, "season_calendar_year", 0) or 0)) or 0.0)
+    except Exception:
+        league_fines_m = 0.0
+    expenses += league_fines_m
     profit = revenue - expenses
     attendance_rate = _clamp(
         0.55
@@ -1098,6 +1118,8 @@ def calculate_team_revenue(
         reason_tags.append("Arena Drag")
     if conduct_rev_mult < 0.97:
         reason_tags.append("Conduct Fallout")
+    if league_fines_m > 0:
+        reason_tags.append("League Fine")
 
     # Max 2 chips — superstar tags first, then strongest other signals
     deduped: List[str] = []
@@ -1137,6 +1159,7 @@ def calculate_team_revenue(
         "revenue_m": round(revenue, 1),
         "expenses": round(expenses, 1),
         "signing_bonus_cash_m": round(bonus_cash_m, 2),
+        "league_fines_m": round(league_fines_m, 2),
         "profit": round(profit, 1),
         "attendance_rate": round(attendance_rate, 3),
         "fan_sentiment": round(fan_sent, 1),

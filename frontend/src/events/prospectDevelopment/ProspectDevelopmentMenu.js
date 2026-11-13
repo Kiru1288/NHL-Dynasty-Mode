@@ -1,214 +1,449 @@
-import React, { useMemo, useState } from "react";
+import React, { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useGameUI } from "../../game/GameUIContext";
 import { SCREENS } from "../../game/constants";
 import { getTeamLogoSrc } from "../../utils/teamLogos";
 import PlayerHeadshot from "../../components/PlayerHeadshot";
+import TeamLogoBadge from "../../components/ui/TeamLogoBadge";
 import { pickFranchiseData } from "../eventUtils";
 import {
   extractDevelopmentPlayers,
   extractLeagueNhlDevelopment,
   summarizeDevelopmentReport,
   groupPlayersByOrg,
-  sortDevelopmentPlayers,
   ovrDeltaClass,
-  formatSeasonStats,
+  reconciledDevelopmentTrend,
+  computeDevelopmentOverview,
+  seasonStatCells,
   ORG_GROUPS,
 } from "./prospectDevelopmentHelpers";
 
-const TABS = [
-  { id: "org", label: "Your Organization" },
-  { id: "league", label: "League NHL" },
+const VIEWS = [
+  { id: "org", label: "Your organization" },
+  { id: "league", label: "Around the NHL" },
 ];
 
-function SideNavButton({ active, icon, label, onClick }) {
-  return (
-    <button
-      type="button"
-      className={`nhlcal-side-button${active ? " is-active" : ""}`}
-      onClick={onClick}
-    >
-      <span className="nhlcal-side-icon">{icon}</span>
-      <span className="nhlcal-side-label">{label}</span>
-    </button>
-  );
+const POSITIONS = [
+  { id: "all", label: "All" },
+  { id: "F", label: "Forwards" },
+  { id: "D", label: "Defence" },
+  { id: "G", label: "Goalies" },
+];
+
+const COLUMNS = [
+  { id: "name", label: "Player", cls: "is-player" },
+  { id: "team", label: "Team", cls: "is-team" },
+  { id: "age", label: "Age", cls: "is-age" },
+  { id: "ovr_delta", label: "Overall change", cls: "is-change" },
+  { id: "potential", label: "POT", cls: "is-pot" },
+  { id: "attrs", label: "Top gains", cls: "is-attrs", sortable: false },
+];
+
+function num(v, fb = 0) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fb;
 }
 
-function TeamLogo({ team, size = "large" }) {
-  const src = getTeamLogoSrc(team);
-  if (!src) {
-    const label = String(team?.abbrev || team?.abbr || team?.name || "TM").slice(0, 3).toUpperCase();
-    return (
-      <span className={`nhlcal-team-logo size-${size} nhldev-logo-fallback`} aria-hidden>
-        {label}
-      </span>
-    );
+function signed(n, digits = 0) {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return "0";
+  const s = digits ? v.toFixed(digits) : String(Math.round(v));
+  if (Number(s) === 0) return digits ? (0).toFixed(digits) : "0";
+  return v > 0 ? `+${s}` : s;
+}
+
+function posGroup(pos) {
+  const p = String(pos || "").toUpperCase();
+  if (p === "G") return "G";
+  if (["D", "LD", "RD"].includes(p)) return "D";
+  return "F";
+}
+
+function headshotPlayer(p) {
+  return { ...(p.raw || {}), id: p.id, player_id: p.id, name: p.name, position: p.position, age: p.age };
+}
+
+function teamLogoFor(p, fallbackTeam) {
+  const lg = String(p.league || "").toUpperCase();
+  const isOrgPro = lg === "NHL" || lg === "AHL" || lg === "ECHL" || p.pool === "nhl" || p.pool === "ahl";
+  // Junior / European clubs have no NHL logo; a name lookup there would map
+  // "Ottawa 67's" onto the Senators via its first three letters.
+  if (!isOrgPro && !p.teamAbbrev) return null;
+  if (p.teamAbbrev || p.teamName) {
+    const src = getTeamLogoSrc({ team_abbrev: p.teamAbbrev, name: p.teamName, team_name: p.teamName });
+    if (src) return src;
   }
+  if (isOrgPro && fallbackTeam) return getTeamLogoSrc(fallbackTeam);
+  return null;
+}
+
+function Shot({ player, size = 56 }) {
   return (
-    <span className={`nhlcal-team-logo size-${size}`}>
-      <img src={src} alt="" loading="lazy" />
+    <span className="dev2-shot" style={{ "--dev2-shot": `${size}px` }} aria-hidden>
+      <PlayerHeadshot
+        player={headshotPlayer(player)}
+        size="lg"
+        preferPhoto
+        showFlag={false}
+        style={{ "--size": `${size}px` }}
+      />
     </span>
   );
 }
 
-function PlayerAvatar({ player, size = 52 }) {
+function Logo({ player, fallbackTeam, size = 36 }) {
+  const src = teamLogoFor(player, fallbackTeam);
+  if (!src) return <span className="dev2-leaguecode">{player.league !== "—" ? player.league : ""}</span>;
+  return <TeamLogoBadge teamLogo={src} teamName={player.team} size={size} variant="badge" className="dev2-logo" />;
+}
+
+function DeltaBar({ delta, max }) {
+  const d = num(delta);
+  const pct = max > 0 ? Math.min(100, (Math.abs(d) / max) * 100) : 0;
   return (
-    <div className="nhldev-avatar" style={{ width: size, height: size }} aria-hidden>
-      <PlayerHeadshot
-        player={player}
-        size={size >= 70 ? "lg" : "sm"}
-        style={{ "--size": `${Math.round(size / 1.22)}px` }}
-      />
-    </div>
+    <span className={`dev2-dbar ${d > 0 ? "is-up" : d < 0 ? "is-down" : "is-flat"}`} aria-hidden>
+      <span className="dev2-dbar-fill" style={{ width: `${Math.max(d ? 6 : 0, pct)}%` }} />
+    </span>
   );
 }
 
-function CompactRow({ player, selected, onSelect }) {
-  const deltaCls = ovrDeltaClass(player.ovrDelta);
+function trendTone(p) {
+  const t = reconciledDevelopmentTrend(p);
+  if (t === "Breakout" || t === "Improved") return "up";
+  if (t === "Regressed") return "down";
+  return "flat";
+}
+
+function PlayerRow({ player, selected, onSelect, maxDelta, fallbackTeam }) {
+  const d = num(player.ovrDelta);
+  const gains = (player.topAttributes || []).filter((a) => a.delta > 0).slice(0, 3);
+  const drops = (player.topAttributes || []).filter((a) => a.delta < 0).slice(0, 2);
+  const shown = gains.length ? gains : drops;
   return (
     <button
       type="button"
-      className={`nhldev-prospect-row${selected ? " is-selected" : ""}`}
+      className={`dev2-row${selected ? " is-selected" : ""}`}
       onClick={() => onSelect(player)}
+      aria-pressed={selected}
     >
-      <PlayerAvatar player={player} size={56} />
-      <div className="nhldev-row-main">
-        <div className="nhldev-row-head">
-          <strong>{player.name}</strong>
-          <span className="nhldev-row-ovr">{player.ovr} OVR</span>
-        </div>
-        <div className="nhldev-row-meta">
-          <span>{player.position}</span>
-          <span>Age {player.age}</span>
-          {player.potential != null ? <span>POT {player.potential}</span> : null}
-          <span>{player.league !== "—" ? player.league : player.team}</span>
-        </div>
-        <div className="nhldev-row-line">
-          <span className="nhldev-ovr-shift">
-            {player.previousOvr} → {player.ovr}
-            <em className={`nhldev-delta-pill ${deltaCls}`}>{player.ovrDeltaLabel}</em>
+      <span className="dev2-cell is-player">
+        <Shot player={player} size={60} />
+        <span className="dev2-who">
+          <span className="dev2-name">{player.name}</span>
+          <span className="dev2-meta">
+            {player.position} · {player.league !== "—" ? player.league : "Unassigned"}
+            {player.team && player.team !== "—" ? ` · ${player.team}` : ""}
           </span>
-        </div>
-        {player.primaryReason ? (
-          <div className="nhldev-row-reason">
-            <span className="nhldev-reason-text">{player.primaryReason}</span>
-          </div>
-        ) : null}
-      </div>
+        </span>
+      </span>
+      <span className="dev2-cell is-team">
+        <Logo player={player} fallbackTeam={fallbackTeam} size={40} />
+      </span>
+      <span className="dev2-cell is-age">{player.age}</span>
+      <span className="dev2-cell is-change">
+        <span className="dev2-ovrline">
+          <span className="dev2-ovr-prev">{player.previousOvr}</span>
+          <span className="dev2-arrow">→</span>
+          <span className="dev2-ovr-now">{player.ovr}</span>
+          <span className={`dev2-delta is-${ovrDeltaClass(d)}`}>{signed(d)}</span>
+        </span>
+        <DeltaBar delta={d} max={maxDelta} />
+      </span>
+      <span className="dev2-cell is-pot">{player.potential ?? "—"}</span>
+      <span className="dev2-cell is-attrs">
+        {shown.length ? (
+          shown.map((a) => (
+            <span key={a.key} className={`dev2-gain ${a.delta > 0 ? "is-up" : "is-down"}`}>
+              {a.label} <b>{a.display}</b>
+            </span>
+          ))
+        ) : (
+          <span className="dev2-quiet">No rating moved</span>
+        )}
+      </span>
     </button>
   );
 }
 
-function DetailPanel({ player, franchiseTeam }) {
-  if (!player) {
-    return (
-      <section className="nhlcal-card nhldev-detail">
-        <header className="nhlcal-card-header">
-          <div>
-            <p>Development</p>
-            <h3>Select Player</h3>
-          </div>
-        </header>
-        <p className="nhlcal-small-empty">Select a player to see overall and attribute growth.</p>
-      </section>
-    );
-  }
-
-  const deltaCls = ovrDeltaClass(player.ovrDelta);
-  const statsLine = formatSeasonStats(player);
-  const attrs = (player.allAttributes?.length ? player.allAttributes : player.topAttributes) || [];
-  const teamLabel = (() => {
-    if (player.league === "NHL" || String(player.orgGroup || "").startsWith("NHL")) {
-      return franchiseTeam || player.team || "—";
-    }
-    return player.team || franchiseTeam || "—";
-  })();
-
+function MoverLine({ player, onSelect }) {
+  const d = num(player.ovrDelta);
   return (
-    <section className="nhlcal-card nhldev-detail">
-      <header className="nhlcal-card-header nhldev-detail-head">
-        <PlayerAvatar player={player} size={72} />
-        <div>
-          <p>{player.league} · {teamLabel}</p>
-          <h3>{player.name}</h3>
-        </div>
-        <span className="nhlcal-header-pill">{player.position}</span>
-      </header>
+    <button type="button" className="dev2-mover" onClick={() => onSelect(player)}>
+      <Shot player={player} size={44} />
+      <span className="dev2-mover-who">
+        <span className="dev2-mover-name">{player.name}</span>
+        <span className="dev2-mover-meta">
+          {player.position} · {player.age} · {player.previousOvr} → {player.ovr}
+        </span>
+      </span>
+      <span className={`dev2-mover-delta is-${ovrDeltaClass(d)}`}>{signed(d)}</span>
+    </button>
+  );
+}
 
-      <div className="nhldev-detail-hero">
-        <div className="nhldev-detail-ovr-block">
-          <span className="nhldev-detail-ovr-label">Overall change</span>
-          <strong className="nhldev-detail-ovr-value">
-            {player.previousOvr}
-            <em>→</em>
-            {player.ovr}
-          </strong>
-          <span className={`nhldev-delta-pill large ${deltaCls}`}>{player.ovrDeltaLabel}</span>
-        </div>
-        <div className="nhldev-detail-stat-grid">
+function SummaryBand({ overview, onSelect, scopeLabel }) {
+  const maxAbs = Math.max(1, ...overview.ageGroups.map((g) => Math.abs(g.avg)));
+  return (
+    <section className="dev2-summary" aria-label="Development summary">
+      <div className="dev2-sum-totals">
+        <div className="dev2-sum-scope">{scopeLabel}</div>
+        <div className="dev2-bignums">
           <div>
-            <span>Previous OVR</span>
-            <strong>{player.previousOvr}</strong>
+            <span className="dev2-bignum is-up">{overview.improved}</span>
+            <span className="dev2-biglabel">improved</span>
           </div>
           <div>
-            <span>Current OVR</span>
-            <strong>{player.ovr}</strong>
+            <span className="dev2-bignum is-down">{overview.regressed}</span>
+            <span className="dev2-biglabel">regressed</span>
           </div>
           <div>
-            <span>Age</span>
-            <strong>{player.age}</strong>
-          </div>
-          <div>
-            <span>Potential</span>
-            <strong>{player.potential != null ? player.potential : "—"}</strong>
+            <span className="dev2-bignum">{overview.unchanged}</span>
+            <span className="dev2-biglabel">unchanged</span>
           </div>
         </div>
+        <p className="dev2-sum-line">
+          {overview.total} players · average {signed(overview.avg, 1)} OVR · net {signed(overview.netGain)} overall points
+        </p>
       </div>
 
-      <div className="nhldev-detail-block">
-        <h4>Attribute growth</h4>
-        {attrs.length ? (
-          <ul className="nhldev-attr-list">
-            {attrs.map((a) => (
-              <li key={a.key} className={a.delta > 0 ? "is-up" : a.delta < 0 ? "is-down" : ""}>
-                <span>{a.label}</span>
-                <strong>
-                  {a.before != null && a.after != null
-                    ? `${Math.round(a.before)} → ${Math.round(a.after)} `
-                    : ""}
-                  ({a.display})
-                </strong>
-              </li>
-            ))}
-          </ul>
+      <div className="dev2-sum-col">
+        <div className="dev2-sum-head">Biggest risers</div>
+        {overview.risers.length ? (
+          overview.risers.map((p) => <MoverLine key={p.id} player={p} onSelect={onSelect} />)
         ) : (
-          <p className="nhlcal-small-empty">
-            {Math.abs(player.ovrDelta) < 1
-              ? "No attribute movement recorded this cycle."
-              : "Overall moved, but individual attribute deltas were not logged."}
-          </p>
+          <p className="dev2-quiet">Nobody gained overall.</p>
         )}
       </div>
 
-      {player.primaryReason ? (
-        <div className="nhldev-detail-block">
-          <h4>Notes</h4>
-          <p className="nhldev-bullet-line">{player.primaryReason}</p>
-        </div>
-      ) : null}
+      <div className="dev2-sum-col">
+        <div className="dev2-sum-head">Biggest fallers</div>
+        {overview.fallers.length ? (
+          overview.fallers.map((p) => <MoverLine key={p.id} player={p} onSelect={onSelect} />)
+        ) : (
+          <p className="dev2-quiet">Nobody lost overall this year.</p>
+        )}
+      </div>
 
-      {statsLine ? (
-        <div className="nhldev-detail-block">
-          <h4>Season</h4>
-          <p className="nhldev-stats-line">{statsLine}</p>
+      <div className="dev2-sum-col">
+        <div className="dev2-sum-head">Average change by age</div>
+        <ul className="dev2-ages">
+          {overview.ageGroups.map((g) => (
+            <li key={g.id} className={g.count ? "" : "is-empty"}>
+              <span className="dev2-age-label">{g.label}</span>
+              <span className="dev2-age-track">
+                <span
+                  className={`dev2-age-fill ${g.avg > 0 ? "is-up" : g.avg < 0 ? "is-down" : ""}`}
+                  style={{ width: `${g.count ? Math.max(4, (Math.abs(g.avg) / maxAbs) * 100) : 0}%` }}
+                />
+              </span>
+              <span className="dev2-age-val">{g.count ? signed(g.avg, 1) : "—"}</span>
+              <span className="dev2-age-n">{g.count}</span>
+            </li>
+          ))}
+        </ul>
+        <div className="dev2-split">
+          <div>
+            <span className="dev2-split-num">{signed(overview.prospects.avg, 1)}</span>
+            <span className="dev2-split-label">
+              Prospects, 23 and under ({overview.prospects.improved} of {overview.prospects.count} up)
+            </span>
+          </div>
+          <div>
+            <span className="dev2-split-num">{signed(overview.vets.avg, 1)}</span>
+            <span className="dev2-split-label">
+              Veterans, 24 and over ({overview.vets.improved} of {overview.vets.count} up)
+            </span>
+          </div>
         </div>
-      ) : null}
+      </div>
     </section>
   );
 }
 
+function DetailView({ player, fallbackTeam, franchiseLabel }) {
+  if (!player) {
+    return (
+      <aside className="dev2-detail">
+        <p className="dev2-quiet">Select a player to see why his rating moved.</p>
+      </aside>
+    );
+  }
+  const d = num(player.ovrDelta);
+  const attrs = (player.allAttributes?.length ? player.allAttributes : player.topAttributes) || [];
+  const stats = seasonStatCells(player);
+  const drivers = player.growthDrivers || [];
+  const notes = [player.primaryReason, ...(player.secondaryReasons || [])].filter(Boolean).join(" · ");
+  const isOrgPro = player.league === "NHL" || player.league === "AHL" || String(player.orgGroup || "").startsWith("NHL");
+  const teamLabel = isOrgPro && !player.teamName ? franchiseLabel : player.team;
+  const room = player.potential != null ? Math.max(0, player.potential - player.ovr) : null;
+  const history = (player.developmentHistory || []).filter((h) => h && h.season != null).slice(-5);
+  const outlook = player.outlook;
+  const statsLeague = player.seasonStats?.league;
+
+  return (
+    <aside className="dev2-detail" aria-label={`${player.name} development detail`}>
+      <header className="dev2-d-head">
+        <Shot player={player} size={128} />
+        <div className="dev2-d-id">
+          <div className="dev2-d-name" role="heading" aria-level={2}>{player.name}</div>
+          <div className="dev2-d-team">
+            <Logo player={player} fallbackTeam={fallbackTeam} size={44} />
+            <span>{teamLabel && teamLabel !== "—" ? teamLabel : "Unassigned"}</span>
+          </div>
+          <div className="dev2-d-meta">
+            {player.position} · Age {player.age} · {player.league !== "—" ? player.league : "No league"}
+            {player.developmentPhase ? ` · ${player.developmentPhase}` : ""}
+          </div>
+        </div>
+      </header>
+
+      <div className="dev2-d-ovr">
+        <div className="dev2-d-ovrnums">
+          <span className="dev2-d-prev">{player.previousOvr}</span>
+          <span className="dev2-d-arrow">→</span>
+          <span className="dev2-d-now">{player.ovr}</span>
+          <span className={`dev2-d-delta is-${ovrDeltaClass(d)}`}>{signed(d)}</span>
+        </div>
+        <dl className="dev2-d-facts">
+          <div><dt>Potential</dt><dd>{player.potential ?? "—"}</dd></div>
+          <div><dt>Room left</dt><dd>{room ?? "—"}</dd></div>
+          <div><dt>Trend</dt><dd className={`is-${trendTone(player)}`}>{reconciledDevelopmentTrend(player)}</dd></div>
+          {player.readinessTier && player.readinessTier !== "—" && player.orgGroup !== "NHL / AHL" ? (
+            <div><dt>Readiness</dt><dd>{player.readinessTier}</dd></div>
+          ) : null}
+        </dl>
+      </div>
+
+      {notes ? <p className="dev2-d-notes" title={notes}>{notes}</p> : null}
+
+      <section className="dev2-d-block">
+        <div className="dev2-d-h">Why he moved</div>
+        {drivers.length ? (
+          <ul className="dev2-drivers">
+            {drivers.map((dr) => (
+              <li key={dr.key} className={`is-${dr.tone || "neutral"}`}>
+                <span className="dev2-drv-dot" aria-hidden />
+                <span className="dev2-drv-label">{dr.label}</span>
+                <span className="dev2-drv-value">{dr.value}</span>
+                <span className="dev2-drv-effect">{dr.effect}</span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="dev2-quiet">
+            Growth factors arrive with the next report load (restart the game server to enable them).
+          </p>
+        )}
+        {outlook?.summary ? <p className="dev2-outlook">Next season: {outlook.summary}</p> : null}
+      </section>
+
+      <section className="dev2-d-block">
+        <div className="dev2-d-h">
+          Season stats{statsLeague ? <span className="dev2-d-hsub"> · {statsLeague}</span> : null}
+        </div>
+        {stats.length ? (
+          <dl className="dev2-stats">
+            {stats.map((c) => (
+              <div key={c.label}>
+                <dt>{c.label}</dt>
+                <dd>{c.value}</dd>
+              </div>
+            ))}
+          </dl>
+        ) : (
+          <p className="dev2-quiet">No games logged this season.</p>
+        )}
+      </section>
+
+      <section className="dev2-d-block">
+        <div className="dev2-d-h">Attribute changes</div>
+        {attrs.length ? (
+          <ul className="dev2-attrs">
+            {attrs.map((a) => (
+              <li key={a.key} className={a.delta > 0 ? "is-up" : "is-down"}>
+                <span className="dev2-attr-label">{a.label}</span>
+                <span className="dev2-attr-track" aria-hidden>
+                  {a.before != null && a.after != null ? (
+                    <>
+                      <span className="dev2-attr-base" style={{ width: `${Math.min(a.before, a.after)}%` }} />
+                      <span
+                        className="dev2-attr-move"
+                        style={{ left: `${Math.min(a.before, a.after)}%`, width: `${Math.abs(a.after - a.before)}%` }}
+                      />
+                    </>
+                  ) : null}
+                </span>
+                <span className="dev2-attr-vals">
+                  {a.before != null && a.after != null ? `${a.before} → ${a.after}` : ""}
+                </span>
+                <span className="dev2-attr-delta">{a.display}</span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="dev2-quiet">
+            {Math.abs(d) < 1 ? "No rating moved this cycle." : "Overall moved, but rating changes were not logged."}
+          </p>
+        )}
+      </section>
+
+      {history.length > 1 ? (
+        <section className="dev2-d-block">
+          <div className="dev2-d-h">Development history</div>
+          <ol className="dev2-history">
+            {history.map((h) => (
+              <li key={`${h.season}-${h.new_ovr ?? h.ovr_after ?? ""}`}>
+                <span className="dev2-h-season">{h.season}</span>
+                <span className="dev2-h-ovr">{h.new_ovr ?? h.ovr_after ?? "—"}</span>
+                <span className={`dev2-h-delta is-${ovrDeltaClass(h.ovr_delta)}`}>
+                  {h.ovr_delta != null ? signed(h.ovr_delta) : ""}
+                </span>
+              </li>
+            ))}
+          </ol>
+        </section>
+      ) : null}
+    </aside>
+  );
+}
+
+function sortRows(list, sortId, dir) {
+  const out = [...list];
+  const mul = dir === "asc" ? 1 : -1;
+  out.sort((a, b) => {
+    let r = 0;
+    switch (sortId) {
+      case "name": r = String(a.name).localeCompare(String(b.name)); break;
+      case "team": r = String(a.team).localeCompare(String(b.team)); break;
+      case "age": r = num(a.age, 99) - num(b.age, 99); break;
+      case "potential": r = num(a.potential, -1) - num(b.potential, -1); break;
+      case "ovr": r = num(a.ovr) - num(b.ovr); break;
+      case "ovr_delta":
+      default: r = num(a.ovrDelta) - num(b.ovrDelta) || num(a.ovr) - num(b.ovr);
+    }
+    return r * mul;
+  });
+  return out;
+}
+
 function seasonLabel(franchiseState) {
   const y = franchiseState?.season_year || franchiseState?.seasonYear;
-  return y ? `${y}–${Number(y) + 1}` : "Franchise Mode";
+  return y ? `${y}–${String(Number(y) + 1).slice(-2)} offseason` : "Offseason";
+}
+
+/** How many fixed-height rows fit in a box, re-measured on resize (the screen never scrolls). */
+function useFitCount(rowPx) {
+  const ref = useRef(null);
+  const [n, setN] = useState(8);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === "undefined") return undefined;
+    const measure = () => setN(Math.max(1, Math.floor(el.clientHeight / rowPx)));
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [rowPx]);
+  return [ref, n];
 }
 
 export default function ProspectDevelopmentMenu({
@@ -221,11 +456,19 @@ export default function ProspectDevelopmentMenu({
   const navigate = gameUI?.navigate || (() => {});
   const franchise = pickFranchiseData(franchiseState, eventData) || franchiseState;
   const team = franchise?.user_team || franchise?.team || franchiseState?.user_team || {};
-  const franchiseLabel = team?.name || team?.full_name || team?.nickname || "Franchise";
+  const devReport = eventData?.development_report ?? franchiseState?.development_report ?? {};
+  const franchiseLabel =
+    team?.name || team?.full_name || team?.nickname || devReport?.user_team_name || "Your club";
+  const fallbackTeam = useMemo(
+    () => ({ ...team, team_abbrev: team?.abbrev || team?.abbr || devReport?.user_team_abbrev }),
+    [team, devReport]
+  );
 
-  const [tab, setTab] = useState("org");
+  const [view, setView] = useState("org");
+  const [group, setGroup] = useState("all");
+  const [pos, setPos] = useState("all");
+  const [sort, setSort] = useState({ id: "ovr_delta", dir: "desc" });
   const [selectedId, setSelectedId] = useState(null);
-  const [expandedGroup, setExpandedGroup] = useState("NHL / AHL");
 
   const orgPlayers = useMemo(
     () => extractDevelopmentPlayers(franchiseState, eventData),
@@ -235,24 +478,40 @@ export default function ProspectDevelopmentMenu({
     () => extractLeagueNhlDevelopment(franchiseState, eventData),
     [franchiseState, eventData]
   );
-  const allPlayers = tab === "league" ? leaguePlayers : orgPlayers;
-  const summary = useMemo(
-    () => summarizeDevelopmentReport(
-      eventData?.development_report ?? franchiseState?.development_report ?? {},
-      orgPlayers
-    ),
-    [eventData, franchiseState, orgPlayers]
-  );
+  const summary = useMemo(() => summarizeDevelopmentReport(devReport, orgPlayers), [devReport, orgPlayers]);
   const orgGroups = useMemo(() => groupPlayersByOrg(orgPlayers), [orgPlayers]);
-  const empty = !allPlayers.length;
+
+  const scoped = view === "league" ? leaguePlayers : orgPlayers;
+  const overview = useMemo(() => computeDevelopmentOverview(scoped), [scoped]);
+
+  const rows = useMemo(() => {
+    let list = scoped;
+    if (view === "org" && group !== "all") list = orgGroups[group] || [];
+    if (pos !== "all") list = list.filter((p) => posGroup(p.position) === pos);
+    return sortRows(list, sort.id, sort.dir);
+  }, [scoped, view, group, orgGroups, pos, sort]);
+
+  const maxDelta = useMemo(() => Math.max(1, ...scoped.map((p) => Math.abs(num(p.ovrDelta)))), [scoped]);
+  const empty = !orgPlayers.length && !leaguePlayers.length;
 
   const selected = useMemo(() => {
-    const list = allPlayers;
-    if (!list.length) return null;
-    return list.find((p) => p.id === selectedId) || list[0];
-  }, [allPlayers, selectedId]);
+    const pool = [...rows, ...scoped];
+    if (!pool.length) return null;
+    return pool.find((p) => p.id === selectedId) || rows[0] || scoped[0];
+  }, [rows, scoped, selectedId]);
 
   const handleSelect = (p) => setSelectedId(p.id);
+  const [rowsRef, perPage] = useFitCount(76);
+  const [pageRaw, setPage] = useState(0);
+  const pageCount = Math.max(1, Math.ceil(rows.length / perPage));
+  const page = Math.min(pageRaw, pageCount - 1);
+  const pageRows = rows.slice(page * perPage, page * perPage + perPage);
+  const filterKey = `${view}|${group}|${pos}|${sort.id}|${sort.dir}`;
+  const lastKey = useRef(filterKey);
+  if (lastKey.current !== filterKey) {
+    lastKey.current = filterKey;
+    if (pageRaw !== 0) setPage(0);
+  }
   const handleBack = () => {
     if (onBack) {
       onBack();
@@ -260,137 +519,188 @@ export default function ProspectDevelopmentMenu({
     }
     navigate(SCREENS.CALENDAR);
   };
+  const toggleSort = (id) =>
+    setSort((s) => (s.id === id ? { id, dir: s.dir === "desc" ? "asc" : "desc" } : { id, dir: id === "name" || id === "team" || id === "age" ? "asc" : "desc" }));
+
+  const userLogo = getTeamLogoSrc(fallbackTeam);
+  const scopeLabel =
+    view === "league" ? "League-wide NHL movers" : `${franchiseLabel} organization`;
 
   return (
-    <div className="nhlcal-root nhldev-root">
-      <aside className="nhlcal-sidebar">
-        <button
-          type="button"
-          className="nhlcal-brand-button"
-          onClick={() => navigate(SCREENS.HUB)}
-          title="Office"
-        >
-          <span className="nhlcal-shield-icon">⌂</span>
+    <div className="dev2-root">
+      <nav className="dev2-rail" aria-label="Franchise navigation">
+        <button type="button" className="dev2-railitem" onClick={() => navigate(SCREENS.HUB)}>
+          <span aria-hidden>▦</span>Office
         </button>
-        <nav className="nhlcal-side-nav" aria-label="Franchise navigation">
-          <SideNavButton icon="▦" label="Office" onClick={() => navigate(SCREENS.HUB)} />
-          <SideNavButton icon="◫" label="Calendar" onClick={() => navigate(SCREENS.CALENDAR)} />
-          <SideNavButton active icon="▲" label="Dev" />
-          <SideNavButton icon="◉" label="Roster" onClick={() => navigate(SCREENS.ROSTER)} />
-        </nav>
-      </aside>
+        <button type="button" className="dev2-railitem" onClick={() => navigate(SCREENS.CALENDAR)}>
+          <span aria-hidden>◫</span>Calendar
+        </button>
+        <span className="dev2-railitem is-active" aria-current="page">
+          <span aria-hidden>▲</span>Development
+        </span>
+        <button type="button" className="dev2-railitem" onClick={() => navigate(SCREENS.ROSTER)}>
+          <span aria-hidden>◉</span>Roster
+        </button>
+      </nav>
 
-      <main className="nhlcal-main nhldev-main">
-        <header className="nhlcal-topbar nhldev-topbar nhldev-topbar--logo">
-          <section className="nhldev-brand-only">
-            <TeamLogo team={team} size="xlarge" />
-          </section>
-
-          <section className="nhlcal-action-cluster">
-            <button type="button" className="nhlcal-quick-link" onClick={handleBack}>
-              {onBack ? "Hub World" : "Calendar"}
-            </button>
-            <div className="nhlcal-date-chip">
-              <span className="nhlcal-date-icon">◫</span>
-              <div>
-                <strong>{seasonLabel(franchiseState)}</strong>
-                <span>Offseason</span>
+      <main className="dev2-main">
+        <header className="dev2-top">
+          <div className="dev2-brand">
+            {userLogo ? (
+              <TeamLogoBadge teamLogo={userLogo} teamName={franchiseLabel} size={84} variant="badge" className="dev2-brandlogo" />
+            ) : null}
+            <div>
+              <div className="dev2-heading" role="heading" aria-level={1}>Player development</div>
+              <div className="dev2-sub">
+                {seasonLabel(franchiseState)} · year-end growth review
+                {!empty ? ` · ${summary.improved} improved, ${summary.regressed} regressed across ${summary.total} in the organization` : ""}
               </div>
             </div>
+          </div>
+          <div className="dev2-actions">
+            <button type="button" className="dev2-textlink" onClick={handleBack}>
+              {onBack ? "Hub World" : "Calendar"}
+            </button>
             {onContinue ? (
-              <button type="button" className="nhlcal-advance-button" onClick={onContinue}>
-                Continue to Lottery
+              <button type="button" className="dev2-primary" onClick={onContinue}>
+                Continue to lottery
               </button>
             ) : null}
-          </section>
+          </div>
         </header>
 
-        {!empty && tab === "org" ? (
-          <p className="nhldev-summary-line">
-            {summary.improved} improved · {summary.regressed} regressed · {summary.total} players
-          </p>
-        ) : null}
-
-        <div className="nhldev-tab-bar">
-          {TABS.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              className={`nhlcal-quick-link${tab === t.id ? " is-active" : ""}`}
-              onClick={() => {
-                setTab(t.id);
-                setSelectedId(null);
-              }}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-
         {empty ? (
-          <section className="nhlcal-empty-state nhldev-empty">
-            <h3>No development data yet.</h3>
-            <p>Advance from salary cap or reload your franchise save.</p>
+          <section className="dev2-empty">
+            <div className="dev2-empty-h">No development data yet</div>
+            <p>Advance from the salary cap stage or reload your franchise save.</p>
             {onContinue ? (
-              <button type="button" className="nhlcal-advance-button" onClick={onContinue}>
-                Continue to Lottery
+              <button type="button" className="dev2-primary" onClick={onContinue}>
+                Continue to lottery
               </button>
             ) : null}
           </section>
         ) : (
-          <section className="nhlcal-content-grid nhldev-grid">
-            <section className="nhlcal-calendar-panel nhldev-panel">
-              {tab === "org" ? (
-                <div className="nhldev-org-groups nhldev-scroll">
-                  {ORG_GROUPS.map((groupName) => {
-                    const list = sortDevelopmentPlayers(orgGroups[groupName] || [], "ovr_delta");
-                    if (!list.length) return null;
-                    const open = expandedGroup === groupName;
-                    return (
-                      <section key={groupName} className="nhldev-org-group">
-                        <button
-                          type="button"
-                          className="nhldev-group-head"
-                          onClick={() => setExpandedGroup(open ? "" : groupName)}
-                        >
-                          <span>{groupName}</span>
-                          <span className="nhldev-group-count">{list.length}</span>
-                        </button>
-                        {open ? (
-                          <div className="nhldev-prospect-list">
-                            {list.map((p) => (
-                              <CompactRow
-                                key={p.id}
-                                player={p}
-                                selected={selected?.id === p.id}
-                                onSelect={handleSelect}
-                              />
-                            ))}
-                          </div>
-                        ) : null}
-                      </section>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div className="nhldev-prospect-list nhldev-scroll">
-                  <p className="nhldev-league-note">
-                    Season-end overall growth across the NHL — find who jumped around the league.
-                  </p>
-                  {leaguePlayers.map((p) => (
-                    <CompactRow
-                      key={p.id}
-                      player={p}
-                      selected={selected?.id === p.id}
-                      onSelect={handleSelect}
-                    />
-                  ))}
-                </div>
-              )}
-            </section>
+          <>
+            <div className="dev2-views" role="tablist" aria-label="Scope">
+              {VIEWS.map((v) => (
+                <button
+                  key={v.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={view === v.id}
+                  className={`dev2-view${view === v.id ? " is-active" : ""}`}
+                  onClick={() => {
+                    setView(v.id);
+                    setGroup("all");
+                    setSelectedId(null);
+                  }}
+                >
+                  {v.label}
+                  <span className="dev2-view-n">{v.id === "league" ? leaguePlayers.length : orgPlayers.length}</span>
+                </button>
+              ))}
+            </div>
 
-            <DetailPanel player={selected} franchiseTeam={franchiseLabel} />
-          </section>
+            {scoped.length ? (
+              <SummaryBand overview={overview} onSelect={handleSelect} scopeLabel={scopeLabel} />
+            ) : null}
+
+            <section className="dev2-body">
+              <div className="dev2-listwrap">
+                <div className="dev2-filters">
+                  {view === "org" ? (
+                    <div className="dev2-filterset" aria-label="Level">
+                      {["all", ...ORG_GROUPS].map((g) => {
+                        const n = g === "all" ? orgPlayers.length : (orgGroups[g] || []).length;
+                        if (g !== "all" && !n) return null;
+                        return (
+                          <button
+                            key={g}
+                            type="button"
+                            className={`dev2-filter${group === g ? " is-active" : ""}`}
+                            onClick={() => setGroup(g)}
+                          >
+                            {g === "all" ? "Whole organization" : g} <span>{n}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="dev2-filterset">
+                      <span className="dev2-filternote">
+                        Every NHL player whose overall moved a full point, all 32 clubs
+                      </span>
+                    </div>
+                  )}
+                  <div className="dev2-filterset" aria-label="Position">
+                    {POSITIONS.map((p) => (
+                      <button
+                        key={p.id}
+                        type="button"
+                        className={`dev2-filter${pos === p.id ? " is-active" : ""}`}
+                        onClick={() => setPos(p.id)}
+                      >
+                        {p.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="dev2-thead" role="row">
+                  {COLUMNS.map((c) =>
+                    c.sortable === false ? (
+                      <span key={c.id} className={`dev2-th ${c.cls}`}>{c.label}</span>
+                    ) : (
+                      <button
+                        key={c.id}
+                        type="button"
+                        className={`dev2-th ${c.cls}${sort.id === c.id ? " is-sorted" : ""}`}
+                        onClick={() => toggleSort(c.id)}
+                      >
+                        {c.label}
+                        {sort.id === c.id ? <span aria-hidden>{sort.dir === "desc" ? " ▼" : " ▲"}</span> : null}
+                      </button>
+                    )
+                  )}
+                </div>
+
+                <div className="dev2-rows" ref={rowsRef}>
+                  {rows.length ? (
+                    pageRows.map((p) => (
+                      <PlayerRow
+                        key={p.id}
+                        player={p}
+                        selected={selected?.id === p.id}
+                        onSelect={handleSelect}
+                        maxDelta={maxDelta}
+                        fallbackTeam={fallbackTeam}
+                      />
+                    ))
+                  ) : (
+                    <p className="dev2-quiet dev2-pad">No players match these filters.</p>
+                  )}
+                </div>
+                {pageCount > 1 ? (
+                  <div className="dev2-pager" role="group" aria-label="Pages">
+                    <span>
+                      {page * perPage + 1}–{Math.min(rows.length, (page + 1) * perPage)} of {rows.length} players
+                    </span>
+                    <button type="button" className="dev2-pager-step" disabled={page <= 0} onClick={() => setPage(page - 1)} aria-label="Previous page">
+                      ‹
+                    </button>
+                    <span>
+                      Page <b>{page + 1}</b> of {pageCount}
+                    </span>
+                    <button type="button" className="dev2-pager-step" disabled={page >= pageCount - 1} onClick={() => setPage(page + 1)} aria-label="Next page">
+                      ›
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+
+              <DetailView player={selected} fallbackTeam={fallbackTeam} franchiseLabel={franchiseLabel} />
+            </section>
+          </>
         )}
       </main>
     </div>

@@ -119,7 +119,7 @@ function Replies({ replies }) {
         </div>
       ))}
       {rows.length > 2 ? (
-        <button type="button" className="psx-linkbtn" onClick={() => setOpen((v) => !v)}>
+        <button type="button" className="bbd-more" onClick={() => setOpen((v) => !v)}>
           {open ? "Hide replies" : `Show ${rows.length - 2} more ${rows.length - 2 === 1 ? "reply" : "replies"}`}
         </button>
       ) : null}
@@ -236,9 +236,9 @@ export function SocialPostCard({ post, index = 0, onOpen, onAuthor }) {
         {post.ratioed ? <span className="psx-chip psx-chip--hot">ratioed</span> : null}
         {post.likes != null ? (
           <>
-            <span>{Number(post.replies || 0).toLocaleString()} replies</span>
-            <span>{Number(post.reposts || 0).toLocaleString()} reposts</span>
-            <span>{Number(post.likes || 0).toLocaleString()} likes</span>
+            <span className="is-rep">{Number(post.replies || 0).toLocaleString()} replies</span>
+            <span className="is-rt">{Number(post.reposts || 0).toLocaleString()} reposts</span>
+            <span className="is-like">{Number(post.likes || 0).toLocaleString()} likes</span>
           </>
         ) : null}
       </div>
@@ -259,10 +259,19 @@ function Meter({ value, tone = "gold" }) {
 /** Right rail for Puckr: your players' accounts, burner watch and the incident log. */
 export function PlayerSocialRail({ summary, onMeet, onAuthor, activeAuthor }) {
   const [tab, setTab] = useState("room");
-  const accounts = arr(summary?.accounts);
+  const [allAccounts, setAllAccounts] = useState(false);
+  const accountsAll = arr(summary?.accounts);
+  // Flagged accounts first, then the rest; the rail shows a handful so it never needs an inner scrollbar.
+  const ROOM_LIMIT = 6;
+  const accountsSorted = [...accountsAll].sort((a, b) => {
+    const fa = a.incident && !a.incident.handled && a.incident.kind !== "guarantee_win" ? 1 : 0;
+    const fb = b.incident && !b.incident.handled && b.incident.kind !== "guarantee_win" ? 1 : 0;
+    return fb - fa;
+  });
+  const accounts = allAccounts ? accountsSorted : accountsSorted.slice(0, ROOM_LIMIT);
   const watch = arr(summary?.burner_watch);
   const incidents = arr(summary?.incidents);
-  const flagged = accounts.filter((a) => a.incident && !a.incident.handled && a.incident.kind !== "guarantee_win");
+  const flagged = accountsAll.filter((a) => a.incident && !a.incident.handled && a.incident.kind !== "guarantee_win");
   return (
     <div className="sl-panel psx-rail">
       <div className="psx-tabs">
@@ -304,6 +313,11 @@ export function PlayerSocialRail({ summary, onMeet, onAuthor, activeAuthor }) {
               </div>
             );
           }) : <p className="sl-decision-empty">No accounts yet. Sim a day.</p>}
+          {accountsAll.length > ROOM_LIMIT ? (
+            <button type="button" className="bbd-railmore" onClick={() => setAllAccounts((v) => !v)}>
+              {allAccounts ? "Show fewer" : `Show all ${accountsAll.length} accounts`}
+            </button>
+          ) : null}
         </div>
       ) : null}
 

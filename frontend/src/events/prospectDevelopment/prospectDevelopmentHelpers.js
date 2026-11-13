@@ -74,13 +74,35 @@ const LEAGUE_CODE_MAP = {
   OHL: "OHL",
   WHL: "WHL",
   QMJHL: "QMJHL",
+  ECHL: "ECHL",
+  // European junior circuits (sim league ids) -> readable names.
+  EU_J: "Europe junior",
+  EU_J_DEL: "Germany U20",
+  EU_J_SHL: "Sweden J20",
+  EU_J_LIIGA: "Finland U20",
+  EU_J_CZ: "Czechia U20",
+  EU_J_KHL_JR: "MHL (Russia)",
+  EU_J_SWISS: "Swiss U20",
+  EU_J_SK: "Slovakia U20",
+  EU_J_AUT: "Austria U20",
+  EU_J_NOR: "Norway U20",
+  EU_J_DEN: "Denmark U20",
+  EU_SUI: "National League",
+  EU_SHL: "SHL",
+  EU_LIIGA: "Liiga",
+  EU_KHL: "KHL",
+  EU_DEL: "DEL",
+  EU_CZE: "Czech Extraliga",
 };
 
 function mapLeagueCode(code) {
   const raw = str(code, "").trim();
   if (!raw) return "";
   const upper = raw.toUpperCase();
-  return LEAGUE_CODE_MAP[upper] || raw;
+  if (LEAGUE_CODE_MAP[upper]) return LEAGUE_CODE_MAP[upper];
+  // Any other internal id ("EU_J_XYZ", "CHL_ABC") reads better without the underscores.
+  if (/^[A-Z0-9]+(_[A-Z0-9]+)+$/.test(upper)) return upper.split("_").slice(-1)[0];
+  return raw;
 }
 
 export function formatProspectLeague(raw = {}) {
@@ -163,40 +185,40 @@ function formatOvrDelta(delta) {
   return n > 0 ? `+${n}` : `${n}`;
 }
 
-function formatAttributeDelta(val) {
-  const n = Math.round(num(val));
-  if (!Number.isFinite(n) || n === 0) return null;
-  return n > 0 ? `+${n}` : `${n}`;
-}
-
-function formatAttrValue(val) {
-  const n = num(val);
-  if (!Number.isFinite(n)) return "—";
-  return String(Math.round(n));
-}
-
 function buildAttributeRows(record, limit = null) {
   const deltas = record?.attribute_deltas || record?.attributeDeltas || {};
   const prev = record?.previous_attributes || {};
   const cur = record?.current_attributes || {};
+  const hasCur = Object.keys(cur).length > 0;
   const rows = Object.entries(deltas)
     .map(([key, val]) => {
       if (!isSkillAttr(key)) return null;
-      const formatted = formatAttributeDelta(val);
-      if (!formatted) return null;
-      const before = prev[key];
-      const after = cur[key];
+      const d = Math.round(num(val));
+      if (!d) return null;
+      // Ledger bookkeeping keys (e.g. season_display_settle) are not ratings.
+      if (hasCur && cur[key] == null) return null;
+      let after = cur[key] != null ? Math.round(num(cur[key])) : null;
+      let before = prev[key] != null ? Math.round(num(prev[key])) : null;
+      if (after != null) after = Math.max(1, Math.min(99, after));
+      // Older reports snapshotted "before" after year-end growth had already
+      // landed, so before == after (often 99 -> 99) next to a real +5. The
+      // logged delta is authoritative: rebuild before from after - delta.
+      if (after != null && (before == null || before === after || after - before !== d)) {
+        before = Math.max(1, Math.min(99, after - d));
+      }
+      const delta = after != null && before != null ? after - before : d;
+      if (!delta) return null;
       return {
         key,
         label: attrLabel(key),
-        delta: num(val),
-        display: formatted,
-        before: before != null ? formatAttrValue(before) : null,
-        after: after != null ? formatAttrValue(after) : null,
+        delta,
+        display: delta > 0 ? `+${delta}` : `${delta}`,
+        before,
+        after,
       };
     })
     .filter(Boolean)
-    .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+    .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta) || String(a.label).localeCompare(String(b.label)));
   return limit != null ? rows.slice(0, limit) : rows;
 }
 
@@ -205,7 +227,7 @@ function topAttributeDeltas(record, limit = 6) {
 }
 
 function allAttributeDeltas(record) {
-  return buildAttributeRows(record, 12);
+  return buildAttributeRows(record, 16);
 }
 
 function isForwardPosition(pos) {
@@ -269,6 +291,12 @@ export function normalizeDevelopmentRecord(record = {}, extras = {}) {
       ? record.development_history
       : EMPTY,
     attributeDeltas: record.attribute_deltas || {},
+    growthDrivers: Array.isArray(record.growth_drivers) ? record.growth_drivers : EMPTY,
+    outlook: record.next_season_outlook && typeof record.next_season_outlook === "object"
+      ? record.next_season_outlook
+      : null,
+    teamAbbrev: str(record.team_abbrev, ""),
+    teamName: str(record.team_name ?? record.team, ""),
     pool: str(record.pool, ""),
     raw: record,
   };
@@ -319,8 +347,18 @@ function rosterEnrichmentMap(franchiseState = {}) {
 function enrichFromRoster(row, enrichMap) {
   if (!row || !enrichMap?.has(row.id)) return row;
   const src = enrichMap.get(row.id);
+  // Older reports carry no photo fields; the roster browser row does.
+  const photo = {};
+  for (const k of ["nhl_headshot_url", "nhl_player_id", "nhl_id", "portrait_url", "headshot_id", "nationality"]) {
+    if (src?.[k] != null && row.raw?.[k] == null) photo[k] = src[k];
+  }
   return {
     ...row,
+    raw: Object.keys(photo).length ? { ...row.raw, ...photo } : row.raw,
+    teamAbbrev: row.teamAbbrev
+      || (["NHL", "AHL", "ECHL"].includes(String(row.league).toUpperCase())
+        ? str(src?.team_abbrev ?? src?.team_abbr, "")
+        : ""),
     team: row.team !== "—" ? row.team : formatProspectTeam(src),
     league: row.league !== "—" ? row.league : formatProspectLeague(src),
   };
@@ -651,4 +689,79 @@ export function trendChipClass(trend) {
   if (c === "up") return "pd-chip--up";
   if (c === "warn") return "pd-chip--warn";
   return "pd-chip--neutral";
+}
+
+/** Development review summary computed from the real per-player OVR deltas. */
+export const AGE_BANDS = [
+  { id: "u21", label: "21 and under", min: 0, max: 21 },
+  { id: "22-25", label: "22 to 25", min: 22, max: 25 },
+  { id: "26-29", label: "26 to 29", min: 26, max: 29 },
+  { id: "30+", label: "30 and over", min: 30, max: 99 },
+];
+
+function avgDelta(list) {
+  if (!list.length) return 0;
+  return list.reduce((s, p) => s + num(p.ovrDelta), 0) / list.length;
+}
+
+export function computeDevelopmentOverview(players = []) {
+  const list = players.filter(Boolean);
+  const byDelta = [...list].sort((a, b) => num(b.ovrDelta) - num(a.ovrDelta) || num(b.ovr) - num(a.ovr));
+  const risers = byDelta.filter((p) => num(p.ovrDelta) > 0).slice(0, 3);
+  const fallers = [...byDelta].reverse().filter((p) => num(p.ovrDelta) < 0).slice(0, 3);
+  const ageGroups = AGE_BANDS.map((band) => {
+    const members = list.filter((p) => {
+      const a = num(p.age, -1);
+      return a >= band.min && a <= band.max;
+    });
+    return { ...band, count: members.length, avg: avgDelta(members) };
+  });
+  const prospects = list.filter((p) => num(p.age, 99) <= 23);
+  const vets = list.filter((p) => num(p.age, 0) >= 24);
+  return {
+    total: list.length,
+    improved: list.filter((p) => num(p.ovrDelta) > 0).length,
+    regressed: list.filter((p) => num(p.ovrDelta) < 0).length,
+    unchanged: list.filter((p) => num(p.ovrDelta) === 0).length,
+    avg: avgDelta(list),
+    netGain: list.reduce((s, p) => s + num(p.ovrDelta), 0),
+    risers,
+    fallers,
+    ageGroups,
+    prospects: { count: prospects.length, avg: avgDelta(prospects), improved: prospects.filter((p) => num(p.ovrDelta) > 0).length },
+    vets: { count: vets.length, avg: avgDelta(vets), improved: vets.filter((p) => num(p.ovrDelta) > 0).length },
+  };
+}
+
+/** Season stat cells for the detail panel (only fields the backend sent). */
+export function seasonStatCells(player = {}) {
+  const s = player?.seasonStats || {};
+  const gp = num(s.gp);
+  if (!gp) return [];
+  const cells = [{ label: "GP", value: gp }];
+  if (player.goalie) {
+    if (s.starts) cells.push({ label: "GS", value: s.starts });
+    if (s.save_pct != null) cells.push({ label: "SV%", value: Number(s.save_pct).toFixed(3).replace(/^0/, "") });
+    if (s.raw_save_pct != null && s.raw_save_pct !== s.save_pct) {
+      cells.push({ label: "Raw SV%", value: Number(s.raw_save_pct).toFixed(3).replace(/^0/, "") });
+    }
+    if (s.gaa != null) cells.push({ label: "GAA", value: Number(s.gaa).toFixed(2) });
+    return cells;
+  }
+  cells.push({ label: "G", value: num(s.goals) });
+  cells.push({ label: "A", value: num(s.assists) });
+  cells.push({ label: "P", value: num(s.points, num(s.goals) + num(s.assists)) });
+  if (s.ppg) cells.push({ label: "P/GP", value: Number(s.ppg).toFixed(2) });
+  if (s.avg_toi_min) {
+    const m = num(s.avg_toi_min);
+    cells.push({ label: "TOI/GP", value: `${Math.floor(m)}:${String(Math.round((m % 1) * 60)).padStart(2, "0")}` });
+  }
+  if (s.plus_minus != null && (s.gf_on || s.ga_on || s.plus_minus)) {
+    const pm = Math.round(num(s.plus_minus));
+    cells.push({ label: "+/-", value: pm > 0 ? `+${pm}` : `${pm}` });
+  }
+  if (s.pp_points) cells.push({ label: "PPP", value: Math.round(num(s.pp_points)) });
+  if (s.xgf_pct != null) cells.push({ label: "xGF%", value: `${(num(s.xgf_pct) * 100).toFixed(1)}` });
+  if (s.blocks) cells.push({ label: "BLK", value: Math.round(num(s.blocks)) });
+  return cells;
 }

@@ -257,6 +257,16 @@ _REACTION_LINES = {
 }
 
 
+def _meeting_impact_from_scene(impact: Any, scene: Any) -> None:
+    """The result card quotes what was actually said in the room, not a generic line."""
+    if not isinstance(impact, dict) or not isinstance(scene, dict) or not scene:
+        return
+    if scene.get("said"):
+        impact["said"] = str(scene["said"])
+    if scene.get("quote") and not impact.get("promise_quote_locked"):
+        impact["quote"] = str(scene["quote"])
+
+
 def build_meeting_impact(
     receipts: Optional[Dict[str, Any]],
     *,
@@ -4033,6 +4043,91 @@ def _user_player_minds(session: Any) -> Dict[str, Any]:
     return out
 
 
+def _press_queue_with_live_context(session: Any) -> List[Dict[str, Any]]:
+    """Open availabilities show today's record and league rank, not the snapshot taken
+    when the reporters booked the room (often before the first game was in the books,
+    which printed 'Record 0-0-0 · #29' — #29 being the alphabetical slot among
+    all-zero clubs). Answered/closed rows keep their historical context."""
+    queue = list(getattr(session, "press_conference_queue", None) or [])
+    if not queue:
+        return []
+    utid = str(getattr(session, "user_team_id", "") or "")
+    try:
+        w, l, o, rec = _team_record(session, utid)
+        ranks = _build_standings_rank_map(session)
+        live_rank = ranks.get(utid)
+    except Exception:
+        return queue
+    gp = max(0, w + l + o)
+    out: List[Dict[str, Any]] = []
+    for entry in queue:
+        if not isinstance(entry, dict) or str(entry.get("status") or "") not in ("pending", "in_progress"):
+            out.append(entry)
+            continue
+        row = dict(entry)
+        ctx = dict(row.get("context") or {})
+        ctx["record_at_booking"] = ctx.get("record")
+        ctx.update(
+            {
+                "record": rec,
+                "wins": w,
+                "losses": l,
+                "otl": o,
+                "games_played": gp,
+                # A rank before anyone has played is just alphabetical order.
+                "league_rank": int(live_rank) if gp > 0 and live_rank else None,
+                "points": (w * 2 + o),
+            }
+        )
+        row["context"] = ctx
+        # Who is asking: role, credibility, and how this reporter gets on with the player
+        # the story is about (read-only — never creates relationship rows here).
+        rel_store = getattr(session, "universe_reporter_relationships", None)
+        plid = str(row.get("player_id") or "")
+        if plid and not row.get("portrait"):
+            try:
+                from app.sim_engine.generation.player_headshots import merge_headshot_into_row  # noqa: WPS433
+
+                pl_obj = _player_from_roster(session, plid)
+                if pl_obj is not None:
+                    row["portrait"] = merge_headshot_into_row(
+                        {"id": plid, "player_id": plid, "name": str(row.get("player_name") or "")}, pl_obj
+                    )
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+        qs_live: List[Dict[str, Any]] = []
+        for q in list(row.get("questions") or []):
+            if not isinstance(q, dict):
+                qs_live.append(q)
+                continue
+            q2 = dict(q)
+            rep = _REPORTER_BY_ID.get(str(q2.get("reporter_id") or "")) or {}
+            info: Dict[str, Any] = {
+                "role": str(rep.get("role") or "").replace("_", " "),
+                "specialty": str(rep.get("specialty") or ""),
+                "credibility": rep.get("credibility_base"),
+            }
+            rel = rel_store.get(f"{q2.get('reporter_id')}|{plid}") if isinstance(rel_store, dict) and plid else None
+            if isinstance(rel, dict):
+                fr = float(rel.get("friction", 25) or 25)
+                tr = float(rel.get("trust", 50) or 50)
+                info["trust"] = round(tr)
+                info["friction"] = round(fr)
+                info["relationship"] = "Has an edge" if fr >= 62 else "Friendly" if tr >= 66 else "Wary" if tr <= 40 else "Neutral"
+            q2["reporter_info"] = info
+            qs_live.append(q2)
+        row["questions"] = qs_live
+        old_rec = str(ctx.get("record_at_booking") or "")
+        if old_rec and old_rec != rec:
+            row["context_triggers"] = [
+                {**t, "label": str(t.get("label") or "").replace(f"({old_rec})", f"(was {old_rec})")}
+                if isinstance(t, dict) else t
+                for t in list(row.get("context_triggers") or [])
+            ]
+        out.append(row)
+    return out
+
+
 def build_narrative_universe_payload(session: Any) -> Dict[str, Any]:
     """API payload for Storylines UI + player dossier media tabs."""
     migrate_session_storyline_state(session)
@@ -4051,7 +4146,7 @@ def build_narrative_universe_payload(session: Any) -> Dict[str, Any]:
         "world_events": list(getattr(session, "decision_event_log", None) or [])[-30:],
         "knowledge_graph": list(getattr(session, "knowledge_graph", None) or [])[-80:],
         "player_narrative_memory": dict(mem) if isinstance(mem, dict) else {},
-        "press_conference_queue": list(getattr(session, "press_conference_queue", None) or []),
+        "press_conference_queue": _press_queue_with_live_context(session),
         "player_minds": _user_player_minds(session),
         "narrative_archive":list(getattr(session, "narrative_archive", None) or [])[-120:],
         "narrative_eras": eras,
@@ -9617,6 +9712,13 @@ def _u_migrate_v2(session: Any) -> None:
             else:
                 setattr(session, key, default)
     session.universe_engine_version = UNIVERSE_ENGINE_VERSION
+    # Old saves: sanctions issued before cap/pick/fine enforcement existed get applied once.
+    if not getattr(session, "_u_sanction_effects_synced", False) and getattr(getattr(session, "sim", None), "league", None) is not None:
+        try:
+            sync_universe_sanction_effects(session)
+            session._u_sanction_effects_synced = True
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _u_personality_for_day(session: Any, player: Any, player_id: str) -> Dict[str, float]:
@@ -10157,6 +10259,8 @@ def _u_record_storyline(session: Any, *, event: Dict[str, Any], headline: str, s
         "impact_reason",
         "impact_lines",
         "readiness_delta",
+        "effect_lines",
+        "effect_days",
     ):
         if event.get(key) is not None:
             row[key] = event.get(key)
@@ -10329,6 +10433,10 @@ def _u_generate_minor_life_events(session: Any, rng: random.Random, days: int = 
                 "knowledge_type": "fact",
                 "record_private_storyline": team_id == user_team_id,
                 "evidence": {"readiness": readiness, "potential": potential_receipt},
+                # Real applied deltas as data; the summary stays prose.
+                "effect_lines": list(spec.get("effect_lines") or []),
+                "effect_days": int(spec.get("effect_days") or 0),
+                "effect_summary": str(spec.get("effect_summary") or ""),
                 "trigger_context": trigger_context,
                 "trigger_reason": trigger_context.get("reason_text"),
                 "trigger_reasons": list(trigger_context.get("reason_lines") or []),
@@ -11526,7 +11634,149 @@ def _u_apply_team_sanction(session: Any, team_id: str, event_type: str, rng: ran
     session.universe_team_sanctions = sanctions[-80:]
     session.universe_cap_penalties = cap_penalties
     session.universe_forfeited_picks = forfeited[-80:]
+    # The ledgers above used to be read by nothing: make the penalty bite.
+    _u_enforce_sanction(session, sanction)
     return sanction
+
+
+def _u_upcoming_forfeit_draft_year(session: Any, requested: int) -> int:
+    """A pick can't be stripped from a draft that is already running or finished."""
+    year = int(requested)
+    state = getattr(session, "draft_state", None)
+    if isinstance(state, dict) and state.get("draft_started"):
+        try:
+            live_year = int(state.get("draft_year") or 0)
+        except (TypeError, ValueError):
+            live_year = 0
+        if live_year and year <= live_year:
+            year = live_year + 1
+    return year
+
+
+def _u_enforce_sanction(session: Any, sanction: Dict[str, Any]) -> Dict[str, Any]:
+    """Apply one sanction's cap penalty, pick forfeitures and fine to the real game state.
+
+    Idempotent: every effect is stamped on ``sanction["applied"]`` (and the pick row
+    carries the sanction id), so re-running for old saves never double-charges.
+    """
+    if not isinstance(sanction, dict):
+        return {}
+    applied = dict(sanction.get("applied") or {})
+    team_id = str(sanction.get("team_id") or "")
+    team = (getattr(session, "team_by_id", None) or {}).get(team_id)
+    sid = str(sanction.get("id") or "")
+    try:
+        season = int(sanction.get("season") or _u_current_meta(session)[2])
+    except (TypeError, ValueError):
+        season = _u_current_meta(session)[2]
+
+    # Cap penalty: season-scoped charge read by the cap snapshot (cap_engine).
+    cap_m = float(sanction.get("cap_penalty_m") or 0.0)
+    if cap_m > 0 and team is not None and not applied.get("cap"):
+        rows = [r for r in (getattr(team, "sanction_cap_penalties", None) or []) if isinstance(r, dict)]
+        if not any(str(r.get("sanction_id")) == sid for r in rows):
+            rows.append({"sanction_id": sid, "season": season, "amount_m": round(cap_m, 2), "event_type": sanction.get("event_type")})
+        try:
+            setattr(team, "sanction_cap_penalties", rows[-20:])
+            applied["cap"] = {"season": season, "season_label": f"{season}-{(season + 1) % 100:02d}", "amount_m": round(cap_m, 2)}
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+
+    # Forfeited picks: strip the pick from the registry so the draft skips it.
+    league = getattr(getattr(session, "sim", None), "league", None)
+    pick_results = list(applied.get("picks") or [])
+    done_keys = {(int(p.get("requested_year") or 0), int(p.get("round") or 0), int(p.get("idx") or 0)) for p in pick_results}
+    for idx, pick in enumerate(list(sanction.get("forfeited_picks") or [])):
+        if not isinstance(pick, dict):
+            continue
+        try:
+            req_year = int(pick.get("draft_year") or season + 1)
+            rnd = int(pick.get("round") or 1)
+        except (TypeError, ValueError):
+            continue
+        if (req_year, rnd, idx) in done_keys or pick.get("applied_pick_id") or pick.get("status") == "forfeited":
+            continue
+        result: Dict[str, Any] = {"idx": idx, "requested_year": req_year, "round": rnd, "status": "no_pick_owned"}
+        if league is not None:
+            try:
+                from app.sim_engine.trades.trade_pick_registry import forfeit_team_pick
+
+                row = forfeit_team_pick(
+                    league,
+                    team_id,
+                    draft_year=_u_upcoming_forfeit_draft_year(session, req_year),
+                    round_num=rnd,
+                    source_id=f"{sid}:{idx}",
+                    reason=str(sanction.get("event_type") or "league_sanction"),
+                )
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+                row = None
+            if row:
+                result.update({
+                    "status": "forfeited",
+                    "pick_id": row.get("pick_id"),
+                    "year": int(row.get("year") or req_year),
+                    "original_team_id": str(row.get("original_team_id") or team_id),
+                })
+                pick["applied_pick_id"] = row.get("pick_id")
+                pick["applied_year"] = int(row.get("year") or req_year)
+                pick["status"] = "forfeited"
+        else:
+            continue
+        pick_results.append(result)
+    if pick_results:
+        applied["picks"] = pick_results
+
+    # Fine: charged as a club expense for that season (league_operations finances).
+    fine_m = float(sanction.get("fine_m") or 0.0)
+    if fine_m > 0 and not applied.get("fine"):
+        applied["fine"] = {"season": season, "amount_m": round(fine_m, 2)}
+
+    sanction["applied"] = applied
+    return applied
+
+
+def sync_universe_sanction_effects(session: Any) -> int:
+    """Back-fill enforcement for sanctions issued before penalties were wired (old saves)."""
+    changed = 0
+    for sanction in getattr(session, "universe_team_sanctions", None) or []:
+        if not isinstance(sanction, dict):
+            continue
+        before = repr(sanction.get("applied"))
+        _u_enforce_sanction(session, sanction)
+        if repr(sanction.get("applied")) != before:
+            changed += 1
+    # Keep the flat pick ledger in step with what actually happened.
+    by_source: Dict[str, List[Dict[str, Any]]] = {}
+    for sanction in getattr(session, "universe_team_sanctions", None) or []:
+        if isinstance(sanction, dict):
+            by_source[str(sanction.get("source_event_id") or "")] = list(sanction.get("forfeited_picks") or [])
+    for pick in getattr(session, "universe_forfeited_picks", None) or []:
+        if not isinstance(pick, dict) or pick.get("status"):
+            continue
+        for twin in by_source.get(str(pick.get("source_event_id") or ""), []):
+            if int(twin.get("round") or 0) == int(pick.get("round") or 0) and twin.get("status"):
+                pick["status"] = twin.get("status")
+                pick["applied_pick_id"] = twin.get("applied_pick_id")
+                pick["applied_year"] = twin.get("applied_year")
+                break
+    return changed
+
+
+def team_league_fines_m(session: Any, team_id: str, season: int) -> float:
+    """Total league fines charged to ``team_id`` for ``season`` (storyline sanctions)."""
+    total = 0.0
+    for sanction in getattr(session, "universe_team_sanctions", None) or []:
+        if not isinstance(sanction, dict) or str(sanction.get("team_id") or "") != str(team_id):
+            continue
+        try:
+            if int(sanction.get("season") or 0) != int(season):
+                continue
+            total += max(0.0, float(sanction.get("fine_m") or 0.0))
+        except (TypeError, ValueError):
+            continue
+    return round(total, 2)
 
 
 def _u_major_event_state_for_season(session: Any, rng: random.Random) -> Dict[str, Any]:
@@ -12095,7 +12345,33 @@ def _enrich_fallout_payload(session: Any, base: Dict[str, Any]) -> None:
         r = {"amount_m": round(val, 2)}
         r.update(_fallout_team_label(session, tid))
         caps.append(r)
-    base["cap_penalty_rows"] = caps
+    # Season-scoped rows straight from what the cap snapshot charges (team ledger), so
+    # an expired penalty from last season no longer reads as if it still bites.
+    season_now = _u_current_meta(session)[2]
+    seasonal: List[Dict[str, Any]] = []
+    for sanction in sanctions:
+        try:
+            amt = float(sanction.get("cap_penalty_m") or 0.0)
+            ssn = int(sanction.get("season") or season_now)
+        except (TypeError, ValueError):
+            continue
+        if amt <= 0:
+            continue
+        applied_cap = (sanction.get("applied") or {}).get("cap") if isinstance(sanction.get("applied"), dict) else None
+        r = {
+            "sanction_id": sanction.get("id"),
+            "amount_m": round(amt, 2),
+            "season": ssn,
+            "season_label": f"{ssn}-{(ssn + 1) % 100:02d}",
+            "status": "active" if ssn == season_now else ("expired" if ssn < season_now else "pending"),
+            "applied": bool(applied_cap),
+            "event_type": sanction.get("event_type"),
+        }
+        r.update(_fallout_team_label(session, sanction.get("team_id")))
+        seasonal.append(r)
+    base["cap_penalty_rows"] = seasonal if seasonal else caps
+    base["fallout_season"] = season_now
+    base["fallout_season_label"] = f"{season_now}-{(season_now + 1) % 100:02d}"
     avail: Dict[str, Any] = {}
     for pid, row in dict(base.get("player_availability") or {}).items():
         if not isinstance(row, dict):
@@ -12112,6 +12388,16 @@ def _enrich_fallout_payload(session: Any, base: Dict[str, Any]) -> None:
         tid = r.get("team_id") or ent.get("team_id") or (getattr(pobj, "team_id", None) if pobj is not None else None)
         if tid:
             r.update(_fallout_team_label(session, tid))
+        if pobj is not None:
+            # Fallout cards show the face of who is sitting (real NHL photo when known).
+            try:
+                from app.sim_engine.generation.player_headshots import merge_headshot_into_row  # noqa: WPS433
+
+                r = merge_headshot_into_row(r, pobj)
+                r.setdefault("position", str(getattr(pobj, "position", "") or getattr(getattr(pobj, "identity", None), "position", "") or ""))
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+            r["player_id"] = str(pid)
         avail[str(pid)] = r
     base["player_availability"] = avail
 
@@ -13883,6 +14169,7 @@ def resolve_gm_player_meeting(session: Any, meeting_id: str, choice_id: str) -> 
     outcome = dict(choice.get("outcome") or {})
     result = _gm_apply_meeting_outcome(session, ctx, str(meeting.get("interaction_type") or ""), choice)
     result["scene"] = scene
+    _meeting_impact_from_scene(result.get("impact"), scene)
     result["conversation"] = {**dict(meeting.get("conversation") or {}), "tension": scene.get("tension_end"), "reaction": scene.get("reaction")}
     if scene.get("walked_out"):
         _u_record_meeting_walkout(session, ctx, meeting)
@@ -14090,7 +14377,7 @@ def resolve_player_meeting_interaction(session: Any, interaction_id: str, choice
         _gm_mark_attention_addressed(session, player_id, swing=swing)
     pname = str(interaction.get("player_name") or entity.get("player_name") or "Player")
     nav = _latest_promise_nav(session, player_id) if player_id else None
-    return {
+    out = {
         "ok": True,
         **result,
         "message": summary["message"],
@@ -14108,6 +14395,8 @@ def resolve_player_meeting_interaction(session: Any, interaction_id: str, choice
         "player_name": pname,
         "scene": scene or None,
     }
+    _meeting_impact_from_scene(out.get("impact"), scene)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -14263,8 +14552,14 @@ def _gm_player_issues_and_openings(
             "warning" if level == 1 else "critical",
             "trade",
             head,
-            f"Main complaint: {complaint or 'general unhappiness'}"
-            + (f" · stability {float(score):.0f}/100" if score is not None else ""),
+            (f"What's eating him: {complaint}." if complaint else "He's unhappy here and hasn't said exactly why.")
+            + (
+                " He's close to asking out."
+                if score is not None and float(score) < 30
+                else " It's building, but it can still be talked down."
+                if level == 1
+                else " He's pulling away from the group."
+            ),
             # Always end with conversations every player can be offered, so a critical
             # stability issue never shows up with no way to act on it.
             top_fixes + ("repair_relationship", "ask_locker_room_concerns", "long_term_plans"),
@@ -14284,17 +14579,22 @@ def _gm_player_issues_and_openings(
             "critical" if gm_trust < 28 else "warning",
             "team",
             "Doesn't trust management",
-            f"GM trust {gm_trust:.0f}/100 · relationship {str(rel.get('label') or '').lower()}",
+            (
+                "He doesn't believe what management tells him anymore."
+                if gm_trust < 28
+                else "He's stopped taking your word at face value."
+            )
+            + (f" The relationship reads as {str(rel.get('label') or '').lower()}." if rel.get("label") else ""),
             ("repair_relationship", "ask_locker_room_concerns"),
         )
     if morale <= 45:
-        why = f" · likely cause: {complaint}" if complaint else ""
         issue(
             "low_morale",
             "critical" if morale <= 25 else "warning",
             "personal",
             "Morale is low" if morale > 25 else "Morale has collapsed",
-            f"Morale {morale:.0f}/100{why}",
+            ("He's in a bad place" if morale <= 25 else "He's down")
+            + (f", mostly over {complaint}." if complaint else ", and it's showing in the room."),
             top_fixes + ("ask_struggles", "personal_wellbeing_check"),
         )
     if role_sat <= 40:
@@ -14303,7 +14603,7 @@ def _gm_player_issues_and_openings(
             "warning",
             "role",
             "Unhappy with his role",
-            f"Role satisfaction {role_sat:.0f}/100 — he wants more minutes or a bigger job.",
+            "He thinks he's earned more minutes or a bigger job than he's getting.",
             _MEETING_FIX_BY_PRESSURE["role"],
         )
     if trade_rumor_heat >= 15:
@@ -14312,7 +14612,9 @@ def _gm_player_issues_and_openings(
             "warning" if trade_rumor_heat >= 30 else "watch",
             "trade",
             "Trade rumours are getting to him",
-            f"Rumour heat {trade_rumor_heat}",
+            "His name keeps coming up in trade talk and he's reading all of it."
+            if trade_rumor_heat >= 30
+            else "He's started noticing his name in trade chatter.",
             _MEETING_FIX_BY_PRESSURE["trade_exposure"],
         )
     if stress >= 55:
@@ -14321,7 +14623,7 @@ def _gm_player_issues_and_openings(
             "warning" if stress >= 68 else "watch",
             "personal",
             "Dealing with off-ice stress",
-            f"Personal stress {stress:.0f}/100",
+            "Life away from the rink is weighing on him." if stress >= 68 else "Something away from the rink has him distracted.",
             ("personal_wellbeing_check",),
         )
     expiring = bool(contract.get("expiring")) or int(contract.get("years_remaining") or 9) <= 1
@@ -14331,7 +14633,12 @@ def _gm_player_issues_and_openings(
             "warning",
             "contract",
             "Expiring contract and unhappy — could walk",
-            "Deal ends this season and the relationship is strained.",
+            (
+                f"His deal is up after this season and things between you are {str(rel.get('label') or 'strained').lower()}."
+                + (" A big ego and an open market is a bad mix." if float(personality.get("ego", 50) or 50) >= 65
+                   else " He's loyal by nature, so there's still time." if float(personality.get("loyalty", 50) or 50) >= 65
+                   else " Other teams will notice.")
+            ),
             ("discuss_upcoming_fa", "contract_expectations", "long_term_plans"),
         )
     for p in player_promises:

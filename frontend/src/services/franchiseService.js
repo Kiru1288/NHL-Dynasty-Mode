@@ -661,6 +661,15 @@ export async function submitStorylineChoice(storylineId, choiceId) {
   return data;
 }
 
+/** Bench Buzz mailbag: answer one fan letter (once per letter). */
+export async function answerBenchBuzzMailbag(letterId, replyId) {
+  const { data } = await api.post("/api/franchise/bench-buzz/mailbag/answer", {
+    letter_id: letterId,
+    reply_id: replyId,
+  });
+  return data;
+}
+
 /** Resolve player-initiated universe meeting. */
 export async function resolvePlayerMeeting(interactionId, choiceId) {
   const { data } = await api.post("/api/franchise/player-meetings/resolve", {

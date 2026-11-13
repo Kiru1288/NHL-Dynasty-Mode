@@ -1359,6 +1359,7 @@ def franchise_summary(session: Any, tid: str) -> Dict[str, Any]:
         "most_games": most_games, "top_homegrown": homegrown, "longest_serving_active": longest_active,
         "longest_captain": dict(longest_cap, seasons=_tenure_seasons(session, longest_cap)) if longest_cap else None,
         "recent_events": [dict(e, headline=_event_headline(session, lg, e)) for e in events[-12:]][::-1],
+        "retired_numbers": dict(lg.get("retired_numbers", {}).get(tid, {}) or {}),
         "coverage_note": _coverage_note(lg),
     }
 

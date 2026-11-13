@@ -435,7 +435,7 @@ LIFESTYLE_LINES: Dict[str, List[str]] = {
     "grinder": ["early skate. empty rink. best part of the day.", "6am lift. no shortcuts.", "film. sleep. repeat."],
     "corporate": ["Great day visiting the kids at the {city} Children's Hospital. They were the real all-stars today. ❤️",
                   "Thanks to everyone who came out to the community skate today. {city} shows up. 🙏", "Proud to support local minor hockey in {city}."],
-    "hype_man": ["{fan} fans you've been unreal this year. next home game LET'S BLOW THE ROOF OFF 🔥", "team dinner. big vibes. {mate} paid (he didn't know) 💸",
+    "hype_man": ["{fan} fans you're the best in the league. next home game LET'S BLOW THE ROOF OFF 🔥", "team dinner. big vibes. {mate} paid (he didn't know) 💸",
                  "shoutout to the equipment guys. legends behind the scenes 🫡"],
     "cryptic": ["📖", "quiet mornings.", "🌲"],
     "loose_cannon": ["pineapple belongs on pizza and so does ketchup. fight me", "hot take: the {rival} are overrated and their mascot is ugly",
@@ -444,11 +444,18 @@ LIFESTYLE_LINES: Dict[str, List[str]] = {
     "lurker": [],
 }
 
-TEAMMATE_REPLIES_WIN = ["🐐", "carried us tonight", "dinner's on you", "that celly though 😂", "my guy 🤝", "🔥🔥🔥", "assist was better than the goal tbh",
-                        "MVP MVP MVP", "send me the clip", "📈📈", "postgame playlist goes crazy btw", "the boys 🫡", "WHAT A NIGHT", "I'll take credit for the screen",
-                        "we're framing that one", "proud of you dawg", "airplane mode until tomorrow, goodnight legends", "💯", "bus ride home is gonna be loud",
-                        "you owe me for that pass", "hardest working guy in the room", "big boy game 💪", "told you it was going in", "🧊🧊🧊"]
-TEAMMATE_REPLIES_LIFE = ["🤣", "invite me next time", "this is why we lose at cards", "who took this photo 💀", "I want a refund on this post", "❤️"]
+# Replies that only make sense if the poster actually scored / starred.
+TEAMMATE_REPLIES_SCORER = ["🐐", "carried us tonight", "that celly though 😂", "assist was better than the goal tbh", "MVP MVP MVP",
+                           "send me the clip", "I'll take credit for the screen", "we're framing that one", "you owe me for that pass",
+                           "told you it was going in", "big boy game 💪", "dinner's on you"]
+TEAMMATE_REPLIES_GOALIE = ["brick wall 🧱", "you stole that one for us", "best seat in the house was the bench tonight", "🧤🔒",
+                           "drinks on me for bailing us out", "sorry about the third period lol. thanks for saving us"]
+# Safe for anyone on the winning side, whatever his line looked like.
+TEAMMATE_REPLIES_WIN = ["my guy 🤝", "🔥🔥🔥", "📈📈", "postgame playlist goes crazy btw", "the boys 🫡", "WHAT A NIGHT", "proud of you dawg", "💯",
+                        "bus ride home is gonna be loud", "hardest working guy in the room", "🧊🧊🧊", "good win boys", "two points, sleep well"]
+# Must read naturally under ANY lifestyle line (text-only posts, no photo, no cards).
+TEAMMATE_REPLIES_LIFE = ["🤣", "❤️", "bro what 💀", "not you posting this 😂", "the group chat is gonna have a field day", "I have questions",
+                         "real", "delete this before the boys see it", "😂😂", "we'll talk about this at practice"]
 FAN_REPLIES_GOOD = ["{last} for captain", "marry me (in a hockey way)", "framing this", "{last} supremacy", "best player on the team and it's not close"]
 FAN_REPLIES_BAD = ["less posting more scoring", "ratio", "delete this", "this aged well", "imagine posting this at {cap}", "log off brother", "we need a trade. yours."]
 FAN_REPLIES_RANT = ["he's not wrong though", "delete this before PR sees it", "absolute cinema", "the screenshot police are on the way 🚨",
@@ -484,11 +491,25 @@ def _f(tmpl: str, ctx: Dict[str, Any]) -> Optional[str]:
     return sfe._fill(tmpl, ctx)
 
 
-def _fresh(F: "sfe._Pass", rng: random.Random, pool: List[str], ctx: Dict[str, Any]) -> Optional[str]:
+def _fresh(F: "sfe._Pass", rng: random.Random, pool: List[str], ctx: Dict[str, Any], *, strict: bool = False) -> Optional[str]:
     filled = [t for t in (_f(p, ctx) for p in pool) if t]
     if not filled:
         return None
+    if strict:
+        return _pick_strict(F, rng, filled)
     return sfe._pick_fresh(F.st, rng, filled)
+
+
+def _pick_strict(F: "sfe._Pass", rng: random.Random, options: List[str], window: int = 240) -> Optional[str]:
+    """Like _pick_fresh, but stays quiet instead of repeating: six players posting
+    "3 hours of sleep and a protein bar. elite." on the same day read as bots."""
+    recent = set(sfe._recent_fps(F.st)[-window:])
+    fresh = [o for o in options if o and sfe._fingerprint(o) not in recent]
+    if not fresh:
+        return None
+    choice = rng.choice(fresh)
+    sfe._remember_fp(F.st, choice)
+    return choice
 
 
 # ---------------------------------------------------------------------------
@@ -565,6 +586,7 @@ def _game_voices(F: "sfe._Pass", g: Dict[str, Any], lines: Dict[str, Dict[str, A
         for weight, pp, d in cands[:n_posts]:
             if weight < (0.35 if tm.get("is_user") else 0.9) or budget["posts"] <= 0:
                 continue
+            d = dict(d, _is_home=(tid == hid), _game_city=F.team(hid).get("city"))
             if won:
                 _win_post(F, rng, pp, d, tm, opp, ws, ls, mine)
             else:
@@ -572,9 +594,12 @@ def _game_voices(F: "sfe._Pass", g: Dict[str, Any], lines: Dict[str, Dict[str, A
             budget["posts"] -= 1
 
 
+_HOME_ONLY_MARKERS = ("thank you {city}", "hats off to {city}", "postgame steak in {city}", "you were LOUD tonight", "Thanks to the fans for the energy")
+
+
 def _ctx_for(F: "sfe._Pass", pp: Dict[str, Any], tm: Dict[str, Any], opp: Dict[str, Any], ws: int, ls: int, d: Dict[str, Any],
              mate: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    return {"score": f"{ws}-{ls}", "opp": opp.get("nick"), "fan": tm.get("fan"), "city": tm.get("city"), "line": sfe._game_line_text(d) if d.get("pts") else None,
+    return {"score": f"{ws}-{ls}", "opp": opp.get("nick"), "fan": tm.get("fan"), "city": d.get("_game_city") or tm.get("city"), "line": sfe._game_line_text(d) if d.get("pts") else None,
             "mate": mate["handle"] if mate else None, "saves": d.get("saves") or None, "dog": pp.get("dog"), "last": pp["last"],
             "rec": F.rec(tm.get("id")).get("rec")}
 
@@ -584,20 +609,33 @@ def _win_post(F, rng, pp, d, tm, opp, ws, ls, mine) -> None:
     mate = persona(F, mate_line["id"]) if mate_line else None
     ctx = _ctx_for(F, pp, tm, opp, ws, ls, d, mate)
     gk = str(d.get("pos") or "").startswith("G")
+    home = d.get("_is_home")
     if gk:
         pool = GOALIE_WIN_LINES if pp["arch"] not in ("cryptic", "lurker", "grinder") else WIN_LINES[pp["arch"]]
+        if ls > 0:
+            # "zero." on a night he let goals in read as broken copy.
+            pool = [p for p in pool if not p.startswith("zero")]
     elif d.get("g", 0) >= 3 or d.get("pts", 0) >= 4:
         pool = BIG_NIGHT_LINES + WIN_LINES.get(pp["arch"], [])[:2]
     else:
         pool = WIN_LINES.get(pp["arch"], WIN_LINES["grinder"])
+    if home is False:
+        # Road win: no thanking the home crowd or "postgame steak in" the wrong city.
+        pool = [p for p in pool if not any(k in p for k in _HOME_ONLY_MARKERS)] or pool
     text = _fresh(F, rng, pool, ctx)
     when = F.stamp(F.iso, 22 * 60 + 25, 23 * 60 + 58, rng)
     post = _player_post(F, pp, text, kind="player_post", when=when, sentiment=0.7, mag=1.2 if d.get("pts", 0) >= 3 else 0.9)
     if not post:
         return
     replies = []
+    if gk:
+        reply_pool = TEAMMATE_REPLIES_GOALIE + TEAMMATE_REPLIES_WIN[:6]
+    elif d.get("g", 0) >= 1 or d.get("pts", 0) >= 2:
+        reply_pool = TEAMMATE_REPLIES_SCORER + TEAMMATE_REPLIES_WIN
+    else:
+        reply_pool = TEAMMATE_REPLIES_WIN
     for mt in _teammates(F, pp["team_id"], pp["pid"], rng, n=rng.randint(1, 3)):
-        replies.append(_reply_row(F, _acct(F, mt), sfe._pick_fresh(F.st, rng, TEAMMATE_REPLIES_WIN), rng, pid=mt["pid"]))
+        replies.append(_reply_row(F, _acct(F, mt), sfe._pick_fresh(F.st, rng, reply_pool), rng, pid=mt["pid"]))
     fan = sfe._fan_account(F, pp["team_id"], "homer", rng)
     replies.append(_reply_row(F, fan, _f(rng.choice(FAN_REPLIES_GOOD), {"last": pp["last"]}) or "", rng, likes=(5, 300)))
     _add_replies(post, replies)
@@ -759,7 +797,7 @@ def _mood_voices(F: "sfe._Pass", budget: Dict[str, int]) -> None:
                 and _cooldown_ok(ps, f"cry:{pp['pid']}", F.day_idx, 8):
             _touch(ps, f"cry:{pp['pid']}", F.day_idx)
             budget["cryptic"] -= 1
-            text = sfe._pick_fresh(F.st, rng, CRYPTIC_LINES)
+            text = _pick_strict(F, rng, CRYPTIC_LINES)
             post = _player_post(F, pp, text, kind="player_cryptic", when=F.stamp(F.iso, 13 * 60, 23 * 60 + 30, rng), sentiment=-0.2, controversy=0.5, mag=1.2)
             if post:
                 post["mood_hint"] = "unhappy"
@@ -770,7 +808,7 @@ def _mood_voices(F: "sfe._Pass", budget: Dict[str, int]) -> None:
                                     kind="cryptic", cat="players", flair="Speculation", when=F.stamp(F.iso, 14 * 60, 23 * 60 + 50, rng),
                                     comments=[sfe._comment(sfe._reddit_user(rng, tm), "he's gone by the deadline. calling it now", rng.randint(80, 600), sent=-0.6),
                                               sfe._comment(sfe._reddit_user(rng, tm), "or he just likes sunsets. relax", rng.randint(60, 400), sent=0.2),
-                                              sfe._comment(sfe._reddit_user(rng), "the 'loyalty is a two way street' arc is never good news", rng.randint(20, 200), sent=-0.3)],
+                                              sfe._comment(sfe._reddit_user(rng), "the 'loyalty is a two way street' arc is never good news" if "loyalty" in str(text) else "a cryptic post at this point of the season is never good news", rng.randint(20, 200), sent=-0.3)],
                                     team_ids=[pp["team_id"]], player_id=pp["pid"], player_name=pp["name"], mag=1.1, sentiment=-0.3, knowledge="speculation")
 
 
@@ -919,7 +957,7 @@ def _lifestyle_voices(F: "sfe._Pass", budget: Dict[str, int], playing: set) -> N
         mates = _teammates(F, tid, pp["pid"], rng, n=2)
         rival = F.team(rng.choice(rivals)).get("nick") if rivals else "Leafs"
         ctx = {"city": tm.get("city"), "fan": tm.get("fan"), "dog": pp["dog"], "mate": mates[0]["handle"] if mates else None, "rival": rival}
-        text = _fresh(F, rng, LIFESTYLE_LINES[pp["arch"]], ctx)
+        text = _fresh(F, rng, LIFESTYLE_LINES[pp["arch"]], ctx, strict=True)
         post = _player_post(F, pp, text, kind="player_lifestyle", when=F.stamp(F.iso, 9 * 60, 21 * 60, rng), sentiment=0.5, mag=0.8,
                             controversy=0.4 if pp["arch"] == "loose_cannon" else 0.05)
         if not post:

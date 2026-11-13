@@ -2114,6 +2114,10 @@ def _normalize_storyline_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
         "goofy_kind",
         "trade_demand",
         "tags",
+        # Structured story effects (life beats) + source event id for wire dedupe.
+        "effect_lines",
+        "effect_days",
+        "universe_event_id",
     ):
         if raw.get(key) is not None:
             out[key] = raw.get(key)

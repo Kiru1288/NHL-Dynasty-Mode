@@ -2550,6 +2550,35 @@ def post_player_meeting_resolve(
     return {**result, "state": franchise_sim.build_state_payload(s, include_heavy=False)}
 
 
+class BenchBuzzMailbagAnswerBody(BaseModel):
+    letter_id: str
+    reply_id: str
+
+
+@app.post("/api/franchise/bench-buzz/mailbag/answer")
+def post_bench_buzz_mailbag_answer(
+    body: BenchBuzzMailbagAnswerBody,
+    x_franchise_session: Optional[str] = Header(default=None),
+) -> dict[str, Any]:
+    """Answer one fan letter (once). Moves fan confidence / media pressure through the
+    same storyline-effects channel the Press Room uses."""
+    s = _session_or_404(x_franchise_session)
+    from services.bench_buzz_features import answer_mailbag_letter, build_bench_buzz_features  # noqa: WPS433
+
+    try:
+        row = answer_mailbag_letter(s, body.letter_id, body.reply_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    try:
+        franchise_sim._invalidate_lean_sections(s, "core")
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    s._cached_lean_state_payload = None
+    s._cached_lean_state_key = None
+    save_session(s)
+    return {"answer": row, "bench_buzz_features": build_bench_buzz_features(s)}
+
+
 @app.post("/api/franchise/player-meetings/start")
 def post_player_meeting_start(
     body: PlayerMeetingStartBody,
@@ -2711,6 +2740,34 @@ def headshot_proxy(url: str = Query(..., max_length=600)):
     except OSError:
         _swallowed_log.debug("headshot cache write failed", exc_info=True)
     return Response(content=body, media_type=media, headers=headers)
+
+
+@app.get("/api/franchise/debug/popup-cards")
+def debug_popup_cards() -> dict[str, Any]:
+    """Read-only: what the pending alerts carry for player cards (diagnosing missing waiver details)."""
+    from services import franchise_store as _fst  # noqa: WPS433
+    from services.popup_player_card import build_player_card  # noqa: WPS433
+
+    out = []
+    for sid, sess in list(getattr(_fst, "_SESSIONS", {}).items())[:3]:
+        rows = []
+        for p in list(getattr(sess, "pending_ui_popups", None) or [])[:10]:
+            if not isinstance(p, dict):
+                continue
+            card = p.get("player_card")
+            row = {"kind": p.get("kind"), "player_id": p.get("player_id"), "team_id": p.get("team_id"),
+                   "card_keys": sorted(card.keys()) if isinstance(card, dict) else None,
+                   "card_errors": (card or {}).get("_errors") if isinstance(card, dict) else None}
+            if p.get("player_id") and len(rows) < 2:
+                try:
+                    fresh = build_player_card(sess, str(p.get("player_id")), str(p.get("team_id") or ""))
+                    row["fresh_keys"] = sorted((fresh or {}).keys())
+                    row["fresh_errors"] = (fresh or {}).get("_errors")
+                except Exception as exc:  # noqa: BLE001
+                    row["fresh_exception"] = f"{type(exc).__name__}: {exc}"
+            rows.append(row)
+        out.append({"session": sid[-6:], "popups": rows})
+    return {"ok": True, "sessions": out}
 
 
 @app.get("/api/health")

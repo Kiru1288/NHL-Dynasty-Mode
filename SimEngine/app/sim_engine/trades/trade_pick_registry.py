@@ -452,6 +452,70 @@ def transfer_pick(league: Any, pick_id: str, new_owner_team_id: str) -> Dict[str
     return dict(row)
 
 
+def forfeit_team_pick(
+    league: Any,
+    team_id: str,
+    *,
+    draft_year: int,
+    round_num: int,
+    source_id: str = "",
+    reason: str = "league_sanction",
+    search_years: int = 3,
+) -> Optional[Dict[str, Any]]:
+    """Strip a pick from ``team_id`` as a league penalty.
+
+    Takes the club's own pick in ``round_num`` for ``draft_year`` when it still holds
+    it; otherwise any pick of that round it owns that year; otherwise it rolls to the
+    next draft year (the NHL moves a forfeiture forward when the pick was dealt).
+    The row is marked resolved + ``forfeited`` so it leaves owned lists, the Trade Hub
+    and the draft order. Idempotent: the same ``source_id`` never forfeits twice.
+    """
+    if league is None:
+        return None
+    tid = _safe_str(team_id)
+    reg = _get_registry(league)
+    if source_id:
+        for row in reg.values():
+            if isinstance(row, dict) and row.get("forfeited") and _safe_str(row.get("forfeit_source_id")) == _safe_str(source_id):
+                return dict(row)
+    try:
+        ensure_draft_pick_registry(league, start_year=int(draft_year))
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    reg = _get_registry(league)
+    rnd = int(round_num)
+    for year in range(int(draft_year), int(draft_year) + max(1, int(search_years))):
+        own_id = canonical_pick_id(year, rnd, tid)
+        candidates: List[Dict[str, Any]] = []
+        own = reg.get(own_id)
+        if isinstance(own, dict) and not own.get("resolved") and _safe_str(own.get("current_owner_team_id")) == tid:
+            candidates.append(own)
+        for row in reg.values():
+            if not isinstance(row, dict) or row is own or row.get("resolved"):
+                continue
+            try:
+                if int(row.get("year") or 0) != year or int(row.get("round") or 0) != rnd:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            if _safe_str(row.get("current_owner_team_id")) == tid:
+                candidates.append(row)
+        if not candidates:
+            continue
+        row = candidates[0]
+        row["resolved"] = True
+        row["resolved_reason"] = "forfeited"
+        row["forfeited"] = True
+        row["forfeited_by_team_id"] = tid
+        row["forfeit_reason"] = str(reason or "league_sanction")
+        row["forfeit_source_id"] = _safe_str(source_id)
+        row["selected_prospect_id"] = None
+        setattr(league, "draft_pick_registry", reg)
+        reconcile_pick_registry_consistency(league)
+        return dict(row)
+    return None
+
+
 def reconcile_pick_registry_consistency(league: Any) -> Dict[str, int]:
     """Rebuild team owned_pick_ids from unresolved registry ownership rows."""
     reg = _get_registry(league)
@@ -607,6 +671,14 @@ def team_owns_own_first(
             "owns_own_first": False,
             "owns_protected_first": False,
             "pick_ownership_reason": "unknown",
+            "pick_id": pick_id,
+        }
+
+    if row.get("forfeited"):
+        return {
+            "owns_own_first": False,
+            "owns_protected_first": False,
+            "pick_ownership_reason": "pick_forfeited",
             "pick_id": pick_id,
         }
 

@@ -340,11 +340,34 @@ def build_full_draft_order(session: FranchiseSession) -> List[Dict[str, Any]]:
             _swallowed_log.debug("suppressed exception", exc_info=True)
 
     picks: List[Dict[str, Any]] = []
+    forfeited_slots: List[Dict[str, Any]] = []
+    reg = getattr(league, "draft_pick_registry", None) if league is not None else None
     overall = 0
     for rnd in range(1, DRAFT_ROUNDS + 1):
         round_slots = round1_slots if rnd == 1 else later_slots
-        for pick_in_round, slot_owner in enumerate(round_slots[:DRAFT_TEAMS], start=1):
+        pick_in_round = 0
+        for slot_owner in round_slots[:DRAFT_TEAMS]:
+            # League-forfeited picks (storyline sanctions) are skipped: the rest of the
+            # round moves up, exactly like an NHL forfeiture.
+            if isinstance(reg, dict):
+                try:
+                    from app.sim_engine.trades.trade_asset import canonical_pick_id
+
+                    frow = reg.get(canonical_pick_id(draft_year, rnd, str(slot_owner)))
+                except Exception:
+                    frow = None
+                if isinstance(frow, dict) and frow.get("forfeited"):
+                    forfeited_slots.append({
+                        "round": rnd,
+                        "pick_id": frow.get("pick_id"),
+                        "team_id": str(frow.get("forfeited_by_team_id") or slot_owner),
+                        "original_owner_team_id": str(slot_owner),
+                        "team_name": _display_team(session, str(frow.get("forfeited_by_team_id") or slot_owner)),
+                        "reason": frow.get("forfeit_reason") or "league_sanction",
+                    })
+                    continue
             overall += 1
+            pick_in_round += 1
             slot = {
                 "round": rnd,
                 "pick_in_round": pick_in_round,
@@ -355,6 +378,11 @@ def build_full_draft_order(session: FranchiseSession) -> List[Dict[str, Any]]:
             }
             slot = _apply_registry_to_slot(session, slot, draft_year)
             picks.append(slot)
+    if forfeited_slots:
+        try:
+            session.draft_forfeited_slots = {"draft_year": draft_year, "slots": forfeited_slots}
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
     if picks:
         picks[0]["playoff_order_source"] = order_source
@@ -2572,8 +2600,11 @@ def get_entry_draft_payload(
         "draft_class_rankings": _sanitize_board_for_client(board),
         "completed_picks": [_strip_private_fields(p) for p in completed],
         "draft_results": [_strip_private_fields(r) for r in (state.get("draft_results") or completed)],
-        "total_picks": TOTAL_PICKS,
-        "picks_remaining": max(0, TOTAL_PICKS - len(completed)),
+        "total_picks": len(state.get("draft_order") or []) or TOTAL_PICKS,
+        "picks_remaining": max(0, (len(state.get("draft_order") or []) or TOTAL_PICKS) - len(completed)),
+        "forfeited_picks": list(((getattr(session, "draft_forfeited_slots", None) or {}).get("slots")) or [])
+        if int((getattr(session, "draft_forfeited_slots", None) or {}).get("draft_year") or 0) == int(state.get("draft_year") or 0)
+        else [],
         "round_recaps": dict(state.get("round_recaps") or {}),
         "trade_offers": offers,
         "draft_day_trade_offers": offers,

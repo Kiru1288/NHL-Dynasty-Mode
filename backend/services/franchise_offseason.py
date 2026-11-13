@@ -2204,6 +2204,8 @@ def _tick_league_contracts(session: FranchiseSession) -> Dict[str, Any]:
                     c = getattr(p, "contract", None)
                     rights = str(getattr(c, "rights_status", getattr(p, "rights_status", "UFA")) or "UFA").upper()
                     row = _serialize_player_row(p, include_ratings=True, session=session, _team=team)
+                    # Cap report filters the user's own expiring players by club.
+                    row.setdefault("team_id", str(getattr(team, "id", "") or getattr(team, "team_id", "") or ""))
                     if outcome == "rfa_rights" or "RFA" in rights:
                         expired_rfas.append(row)
                     else:
@@ -2234,6 +2236,342 @@ def _tick_league_contracts(session: FranchiseSession) -> Dict[str, Any]:
         "expired_rfas": expired_rfas,
         "elc_slides": slide_result,
     }
+
+
+_CAP_REPORT_HEADSHOT_KEYS = ("headshot", "avatar", "portrait", "photo", "nhl_player_id", "skin", "hair", "face")
+
+
+def _cap_pos_group(pos: str) -> str:
+    p = str(pos or "").upper()
+    if p.startswith("G"):
+        return "G"
+    if p in ("D", "LD", "RD") or p.startswith("D"):
+        return "D"
+    return "F"
+
+
+def _cap_record_items(records: Any) -> List[Dict[str, Any]]:
+    """Best-effort list of named dead-money records (retained / buyout / other)."""
+    out: List[Dict[str, Any]] = []
+    items: List[Any] = []
+    if isinstance(records, dict):
+        items = [v for v in records.values() if isinstance(v, dict)]
+    elif isinstance(records, (list, tuple)):
+        items = [v for v in records if isinstance(v, dict)]
+    for it in items:
+        try:
+            rem = it.get("seasons_remaining", it.get("remaining_seasons"))
+            if rem is not None and int(rem) <= 0:
+                continue
+        except (TypeError, ValueError):
+            pass
+        amt = it.get("amount_m", it.get("cap_hit_m", it.get("annual_penalty_m", it.get("amount", it.get("value")))))
+        try:
+            amt_f = float(amt or 0)
+        except (TypeError, ValueError):
+            continue
+        if amt_f > 250:
+            amt_f = amt_f / 1_000_000.0
+        if amt_f <= 0:
+            continue
+        name = str(it.get("player_name") or it.get("name") or it.get("player") or "").strip()
+        other = str(it.get("to_team") or it.get("team_abbrev") or it.get("acquiring_team") or it.get("team") or "").strip()
+        rem_out = it.get("seasons_remaining", it.get("remaining_seasons", it.get("years_remaining")))
+        out.append({
+            "name": name or "Unnamed obligation",
+            "amount": round(amt_f, 3),
+            "seasons_remaining": rem_out,
+            "season": str(it.get("season") or ""),
+            "detail": other,
+        })
+    out.sort(key=lambda r: -float(r.get("amount") or 0))
+    return out[:12]
+
+
+def _build_cap_report_details(
+    session: FranchiseSession,
+    *,
+    user_team: Any,
+    league: Any,
+    user_snap: Dict[str, Any],
+    cap_row: Dict[str, Any],
+    tick: Dict[str, Any],
+    cap_kw: Dict[str, Any],
+    season_year: int,
+) -> Dict[str, Any]:
+    """Front-office detail for the offseason cap report: full contract table, positional
+    split, future commitments, expiring classes, league cap-space table, cap history."""
+    from app.sim_engine.economy.cap_engine import (
+        calculate_team_cap_snapshot,
+        nhl_lower_limit_millions,
+        nhl_minimum_salary_millions,
+        nhl_upper_limit_millions,
+    )
+    from services.contract_economy import _org_contract_players, build_contract_row
+    from services.franchise_sim import _display_team, _franchise_team_abbrev
+
+    sy = int(season_year)
+    next_y = sy + 1  # the season this cap applies to
+    cap_now = float(cap_row.get("upperLimit", cap_row.get("current_cap", 0)) or 0) or float(
+        user_snap.get("upperLimit", 0) or 0
+    )
+    out: Dict[str, Any] = {}
+
+    # --- Contract table ---------------------------------------------------------
+    contracts: List[Dict[str, Any]] = []
+    if user_team is not None:
+        for level, p in _org_contract_players(user_team):
+            try:
+                r = build_contract_row(p, user_team, sy, league)
+            except Exception:
+                continue
+            ctype = str(r.get("contractType") or "").upper()
+            cap_hit = float(r.get("cap_hit_m") or 0)
+            ext = r.get("extension_estimate") or {}
+            row = {
+                "player_id": r.get("player_id"),
+                "id": r.get("player_id"),
+                "name": r.get("name"),
+                "position": r.get("position"),
+                "pos_group": _cap_pos_group(r.get("position")),
+                "age": r.get("age"),
+                "ovr": r.get("overall"),
+                "potential": r.get("potential"),
+                "level": level,
+                "cap_hit": round(cap_hit, 3),
+                "cap_pct": round(cap_hit / cap_now * 100.0, 2) if cap_now > 0 else None,
+                "years_remaining": int(r.get("years_remaining") or 0),
+                "expiry_year": r.get("expiry_year"),
+                "rights": str(r.get("rights_status") or "").upper(),
+                "clause": r.get("clause_label") if r.get("clause_label") not in (None, "None") else "",
+                "contract_type": ctype,
+                "two_way": bool(r.get("two_way")),
+                "entry_level": bool(r.get("entry_level")),
+                "pending_july1": bool(r.get("pending_july1_expiry")),
+                "contract_status": r.get("contract_status"),
+                "extension_signed": bool(r.get("extension_signed")),
+                "extension_aav": r.get("extension_aav_m"),
+                "extension_years": r.get("extension_years"),
+                "est_aav": ext.get("likelyAav"),
+                "est_term": ext.get("likelyTerm"),
+                "value_label": r.get("contract_value_score"),
+            }
+            for k, v in r.items():
+                if any(tok in k for tok in _CAP_REPORT_HEADSHOT_KEYS) and k not in row:
+                    row[k] = v
+            contracts.append(row)
+    contracts.sort(key=lambda r: (-float(r.get("cap_hit") or 0), -float(r.get("ovr") or 0)))
+    out["contracts"] = contracts
+
+    # --- Positional split (NHL cap hits that stay on next season's books) ---------
+    on_books = [
+        r for r in contracts
+        if r.get("level") == "NHL" and float(r.get("cap_hit") or 0) > 0
+        and not r.get("pending_july1") and int(r.get("years_remaining") or 0) > 0
+    ]
+    by_pos: Dict[str, Dict[str, Any]] = {}
+    for g in ("F", "D", "G"):
+        rows_g = [r for r in on_books if r["pos_group"] == g]
+        total_g = sum(float(r["cap_hit"]) for r in rows_g)
+        by_pos[g] = {
+            "group": g,
+            "total": round(total_g, 3),
+            "count": len(rows_g),
+            "avg": round(total_g / len(rows_g), 3) if rows_g else 0.0,
+            "cap_pct": round(total_g / cap_now * 100.0, 1) if cap_now > 0 else None,
+            "top": rows_g[0]["name"] if rows_g else "",
+        }
+    out["by_position"] = [by_pos["F"], by_pos["D"], by_pos["G"]]
+
+    # --- Future commitments (contracts only) ------------------------------------
+    commitments: List[Dict[str, Any]] = []
+    for k in range(0, 5):
+        yr = next_y + k
+        rows_k = [r for r in on_books if int(r.get("years_remaining") or 0) >= k + 1]
+        # A signed extension replaces the expiring deal from the season after it ends.
+        ext_rows = [
+            r for r in contracts
+            if r.get("extension_signed") and r.get("extension_aav")
+            and int(r.get("years_remaining") or 0) < k + 1
+            and int(r.get("years_remaining") or 0) + int(r.get("extension_years") or 0) >= k + 1
+        ]
+        total_k = sum(float(r["cap_hit"]) for r in rows_k) + sum(float(r["extension_aav"] or 0) for r in ext_rows)
+        try:
+            cap_k = float(nhl_upper_limit_millions(yr, league))
+        except Exception:
+            cap_k = cap_now
+        commitments.append({
+            "season": f"{yr}-{(yr + 1) % 100:02d}",
+            "start_year": yr,
+            "committed": round(total_k, 3),
+            "players": len(rows_k) + len(ext_rows),
+            "cap": round(cap_k, 3),
+            "space": round(cap_k - total_k, 3),
+            "projected_cap": yr > next_y,
+        })
+    out["commitments"] = commitments
+
+    # --- Expiring classes ---------------------------------------------------------
+    user_ids = {str(session.user_team_id or "")}
+    if user_team is not None:
+        user_ids.add(str(getattr(user_team, "id", "") or ""))
+        user_ids.add(str(getattr(user_team, "team_id", "") or ""))
+    user_ids.discard("")
+    expiring_now: List[Dict[str, Any]] = [
+        dict(r, source="pending_ufa") for r in contracts if r.get("pending_july1") or int(r.get("years_remaining") or 0) <= 0
+    ]
+    try:
+        from services.contract_economy import compute_market_value_from_row
+    except Exception:
+        compute_market_value_from_row = None  # type: ignore[assignment]
+    for bucket, rights in (("expired_rfas", "RFA"), ("expired_ufas", "UFA")):
+        for t in list(tick.get(bucket) or []):
+            if str(t.get("team_id") or "") not in user_ids:
+                continue
+            est = None
+            if compute_market_value_from_row is not None:
+                try:
+                    est = round(float(compute_market_value_from_row(t, league)), 3)
+                except Exception:
+                    est = None
+            prev = (t.get("contract") or {}).get("cap_hit") if isinstance(t.get("contract"), dict) else None
+            row = {
+                "player_id": t.get("player_id"),
+                "id": t.get("player_id"),
+                "name": t.get("name"),
+                "position": t.get("position"),
+                "pos_group": _cap_pos_group(t.get("position")),
+                "age": t.get("age"),
+                "ovr": t.get("ovr"),
+                "potential": t.get("potential"),
+                "cap_hit": prev,
+                "rights": rights,
+                "est_aav": est,
+                "source": bucket,
+            }
+            for k, v in t.items():
+                if any(tok in k for tok in _CAP_REPORT_HEADSHOT_KEYS) and k not in row:
+                    row[k] = v
+            expiring_now.append(row)
+    expiring_now.sort(key=lambda r: (-float(r.get("ovr") or 0), -float(r.get("est_aav") or 0)))
+    out["expiring_now"] = expiring_now
+    expiring_next = [
+        r for r in contracts
+        if int(r.get("years_remaining") or 0) == 1 and not r.get("pending_july1") and not r.get("extension_signed")
+    ]
+    expiring_next.sort(key=lambda r: (-float(r.get("ovr") or 0), -float(r.get("cap_hit") or 0)))
+    out["expiring_next"] = expiring_next
+
+    # --- Dead money / obligations detail ------------------------------------------
+    dead: Dict[str, Any] = {}
+    for key, snap_key in (
+        ("buried", "buriedCapHit"),
+        ("buyouts", "buyoutCapHit"),
+        ("retained", "retainedSalary"),
+        ("bonus_overage", "bonusOverage"),
+        ("bonus_reserve", "performanceBonusReserve"),
+        ("other_dead", "otherDeadCap"),
+        ("league_penalty", "sanctionCapPenalty"),
+        ("ltir_pool", "ltirPool"),
+        ("ltir_cap_hit", "ltirCapHit"),
+    ):
+        try:
+            dead[key] = round(float(user_snap.get(snap_key, 0) or 0), 3)
+        except (TypeError, ValueError):
+            dead[key] = 0.0
+    items: List[Dict[str, Any]] = []
+    if user_team is not None:
+        for kind, attrs in (
+            ("Retained salary", ("retained_salary", "retained_salaries", "retained_salary_records")),
+            ("Buyout", ("buyout_cap_hits", "buyout_cap_hit", "buyouts")),
+        ):
+            for a in attrs:
+                recs = getattr(user_team, a, None)
+                if recs is not None:
+                    for it in _cap_record_items(recs):
+                        items.append(dict(it, kind=kind))
+                    break
+    dead["items"] = items
+    dead["retained_slots_used"] = user_snap.get("retainedSlotsUsed")
+    dead["retained_slots_max"] = user_snap.get("retainedSlotsMax")
+    out["obligations"] = dead
+
+    # --- League cap-space table -----------------------------------------------------
+    league_rows: List[Dict[str, Any]] = []
+    for tid, tm in (session.team_by_id or {}).items():
+        if tm is None or league is None:
+            continue
+        try:
+            snap = calculate_team_cap_snapshot(tm, league, **cap_kw)
+        except Exception:
+            continue
+        league_rows.append({
+            "team_id": str(tid),
+            "team_name": _display_team(tm),
+            "abbrev": _franchise_team_abbrev(tm),
+            "payroll": round(float(snap.get("totalCapHit", 0) or 0), 3),
+            "cap_space": round(float(snap.get("capSpace", 0) or 0), 3),
+            "floor_space": round(float(snap.get("floorSpace", 0) or 0), 3),
+            "dead_cap": round(
+                float(snap.get("buriedCapHit", 0) or 0) + float(snap.get("buyoutCapHit", 0) or 0)
+                + float(snap.get("retainedSalary", 0) or 0) + float(snap.get("otherDeadCap", 0) or 0), 3),
+            "roster_count": int(snap.get("activeRosterCount", 0) or 0),
+            "is_user": str(tid) == str(session.user_team_id or ""),
+        })
+    league_rows.sort(key=lambda r: -float(r["cap_space"]))
+    for i, r in enumerate(league_rows):
+        r["rank"] = i + 1
+    out["league_table"] = league_rows
+    user_row = next((r for r in league_rows if r["is_user"]), None)
+    out["cap_space_rank"] = user_row["rank"] if user_row else None
+    out["league_team_count"] = len(league_rows)
+    if league_rows:
+        out["league_avg_payroll"] = round(sum(r["payroll"] for r in league_rows) / len(league_rows), 3)
+        out["league_avg_cap_space"] = round(sum(r["cap_space"] for r in league_rows) / len(league_rows), 3)
+        out["teams_over_cap"] = sum(1 for r in league_rows if r["cap_space"] < 0)
+        out["teams_below_floor"] = sum(1 for r in league_rows if r["floor_space"] < 0)
+
+    # --- Cap history + floor -----------------------------------------------------------
+    history: List[Dict[str, Any]] = []
+    for yr in range(next_y - 4, next_y + 2):
+        try:
+            up = float(nhl_upper_limit_millions(yr, league))
+            lo = float(nhl_lower_limit_millions(yr, league))
+        except Exception:
+            continue
+        history.append({
+            "season": f"{yr}-{(yr + 1) % 100:02d}",
+            "start_year": yr,
+            "upper": round(up, 3),
+            "lower": round(lo, 3),
+            "is_current": yr == next_y,
+            "projected": yr > next_y,
+        })
+    for i in range(1, len(history)):
+        prev_up = history[i - 1]["upper"]
+        history[i]["change"] = round(history[i]["upper"] - prev_up, 3)
+        history[i]["change_pct"] = round((history[i]["upper"] - prev_up) / prev_up * 100.0, 1) if prev_up > 0 else None
+    out["cap_history"] = history
+    try:
+        out["floor"] = round(float(cap_row.get("lowerLimit") or user_snap.get("lowerLimit") or nhl_lower_limit_millions(next_y, league)), 3)
+    except Exception:
+        out["floor"] = None
+    try:
+        out["league_min_salary"] = float(nhl_minimum_salary_millions(next_y))
+    except Exception:
+        out["league_min_salary"] = None
+
+    # --- Roster counts --------------------------------------------------------------
+    out["roster_count"] = user_snap.get("activeRosterCount")
+    out["roster_max"] = user_snap.get("activeRosterMax", 23)
+    out["contract_count"] = sum(
+        1 for r in contracts
+        if r.get("contract_type") not in ("AHL", "ECHL", "AHL_ONLY", "ECHL_ONLY", "PTO", "ATO")
+        and not r.get("pending_july1")
+    )
+    out["contract_max"] = 50
+    out["warnings"] = list(user_snap.get("warnings") or [])
+    return out
 
 
 def _cap_status_label(cap_space_m: float) -> str:
@@ -2440,6 +2778,23 @@ def _advance_salary_cap(session: FranchiseSession) -> Dict[str, Any]:
         over_cap_teams=over_cap_teams,
         season_year=sy,
     )
+    try:
+        cap_report["details"] = _build_cap_report_details(
+            session,
+            user_team=user_team,
+            league=league,
+            user_snap=user_snap,
+            cap_row=cap_row,
+            tick=tick,
+            cap_kw=_cap_kw,
+            season_year=sy,
+        )
+        if user_team is not None:
+            from services.franchise_sim import _franchise_team_abbrev
+
+            cap_report["user_team"]["abbrev"] = _franchise_team_abbrev(user_team)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
     payload = {
         "last_season_cap": prev_cap,
@@ -4113,6 +4468,368 @@ def _dev_summary_line(summary: Dict[str, Any]) -> str:
     return " · ".join(parts) if parts else "No notable movement"
 
 
+_DEV_ENRICH_VERSION = 1
+
+
+def _dev_fix_attr_values(rec: Dict[str, Any], player: Any) -> None:
+    """Attribute before/after that agree with the logged delta.
+
+    Year-end progression often runs before the report snapshots, so the "before"
+    snapshot already holds the grown (often 99-capped) value while the ledger keeps
+    the real applied delta. That printed "99 -> 99 (+5)". Rebuild before = after - delta
+    and drop ledger pseudo-keys (e.g. season_display_settle) that are not ratings.
+    """
+    deltas = rec.get("attribute_deltas") or {}
+    if not isinstance(deltas, dict) or not deltas:
+        return
+    ratings = getattr(player, "ratings", None) if player is not None else None
+    ratings = ratings if isinstance(ratings, dict) else {}
+    cur_src = dict(rec.get("current_attributes") or {})
+    clean: Dict[str, int] = {}
+    prev_out: Dict[str, float] = {}
+    cur_out: Dict[str, float] = {}
+    for key, raw_d in deltas.items():
+        try:
+            d = int(round(float(raw_d)))
+        except Exception:
+            continue
+        if d == 0 or not _dev_is_skill_attr(key):
+            continue
+        after = None
+        if key in ratings:
+            try:
+                after = float(ratings[key])
+                if after <= 1.5:
+                    after *= 99.0
+            except Exception:
+                after = None
+        if after is None and key in cur_src:
+            try:
+                after = float(cur_src[key])
+            except Exception:
+                after = None
+        if after is None:
+            if ratings:
+                # Not a rating on this player (ledger bookkeeping key) - drop it.
+                continue
+            clean[key] = d
+            continue
+        after_i = int(round(max(20.0, min(99.0, after))))
+        before_i = int(max(1, min(99, after_i - d)))
+        clean[key] = after_i - before_i
+        if clean[key] == 0:
+            clean.pop(key, None)
+            continue
+        prev_out[key] = before_i
+        cur_out[key] = after_i
+    rec["attribute_deltas"] = clean
+    rec["previous_attributes"] = prev_out
+    rec["current_attributes"] = cur_out
+
+
+def _dev_growth_drivers(rec: Dict[str, Any], player: Any) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Real inputs behind the year's growth, read from the player and his season line."""
+    drivers: List[Dict[str, Any]] = []
+
+    def add(key: str, label: str, value: str, effect: str, tone: str = "neutral") -> None:
+        drivers.append({"key": key, "label": label, "value": value, "effect": effect, "tone": tone})
+
+    age = int(rec.get("age") or _dev_player_age(player) or 0)
+    phase = str(rec.get("development_phase") or "")
+    if age:
+        if age <= 23:
+            eff, tone = "Peak growth years (18-23): the age curve adds the most here.", "good"
+        elif age <= 26:
+            eff, tone = "Steady growth window; gains slow after 26.", "good"
+        elif age <= 29:
+            eff, tone = "Prime: ratings mostly hold, small gains need production.", "neutral"
+        else:
+            eff, tone = "Past 30 the age curve pulls ratings down a little each year.", "bad"
+        add("age", "Age curve", f"{age}{' · ' + phase if phase else ''}", eff, tone)
+
+    try:
+        pot = int(round(float(rec.get("potential") or 0)))
+        prev = int(round(float(rec.get("previous_overall") or 0)))
+    except Exception:
+        pot, prev = 0, 0
+    if pot and prev:
+        gap = pot - prev
+        if gap >= 6:
+            eff, tone = "Lots of room under his ceiling, so the growth budget was large.", "good"
+        elif gap >= 2:
+            eff, tone = "Some room left; growth slows as he nears the ceiling.", "neutral"
+        else:
+            eff, tone = "At or near his ceiling; only production can push him past it.", "neutral"
+        add("runway", "Room to potential", f"{max(0, gap)} (started {prev}, POT {pot})", eff, tone)
+
+    ss = rec.get("season_stats") if isinstance(rec.get("season_stats"), dict) else {}
+    gp = int(ss.get("gp") or 0)
+    avg_toi = ss.get("avg_toi_min")
+    pp_share = float(ss.get("pp_share") or 0.0)
+    usage = ss.get("usage_factor")
+    role = str(getattr(player, "role", "") or "").replace("_", " ").strip()
+    if gp or avg_toi or role:
+        bits = []
+        if avg_toi:
+            mins = float(avg_toi)
+            bits.append(f"{int(mins)}:{int(round((mins % 1) * 60)):02d} TOI/GP")
+        if pp_share > 0:
+            bits.append(f"{round(pp_share * 100)}% of TOI on PP")
+        if role:
+            bits.append(role.title())
+        if gp:
+            bits.append(f"{gp} GP")
+        try:
+            u = float(usage) if usage is not None else None
+        except Exception:
+            u = None
+        if u is not None and u >= 1.0:
+            eff, tone = "Big minutes for his slot sped up development.", "good"
+        elif u is not None and u < 0.8:
+            eff, tone = "Sheltered minutes slowed growth.", "bad"
+        elif gp and gp < 20:
+            eff, tone = "Too few games to earn much in-season growth.", "bad"
+        else:
+            eff, tone = "Normal minutes for his slot.", "neutral"
+        add("ice_time", "Ice time & role", " · ".join(bits) or "-", eff, tone)
+
+    surplus = getattr(player, "_dev_season_points_surplus", None)
+    if gp and not rec.get("goalie"):
+        pts = int(ss.get("points") or 0)
+        val = f"{pts} P in {gp} GP ({float(ss.get('ppg') or 0):.2f} P/GP)"
+        eq = float(ss.get("nhl_eq_ppg") or 0)
+        lg = str(ss.get("league") or "").upper()
+        if lg and lg != "NHL" and eq:
+            val += f" · {eq:.2f} NHL-eq"
+        try:
+            s = float(surplus) if surplus is not None else None
+        except Exception:
+            s = None
+        if s is not None:
+            val += f" · {s:+.0f} pts vs. expected"
+            if s >= 8:
+                eff, tone = "Out-scored what his rating predicts - that earns extra growth.", "good"
+            elif s <= -8:
+                eff, tone = "Scored below what his rating predicts; growth was held back.", "bad"
+            else:
+                eff, tone = "Production in line with his rating.", "neutral"
+        else:
+            eff, tone = "Season production feeds the growth budget.", "neutral"
+        add("production", "Production", val, eff, tone)
+    elif gp and rec.get("goalie"):
+        sv = ss.get("save_pct")
+        val = f"{gp} GP"
+        if sv is not None:
+            val += f" · {float(sv):.3f} SV% (NHL-eq)"
+        if ss.get("gaa") is not None:
+            val += f" · {float(ss['gaa']):.2f} GAA"
+        tone = "good" if sv is not None and float(sv) >= 0.912 else ("bad" if sv is not None and float(sv) < 0.900 else "neutral")
+        add("production", "Goaltending", val, "Save percentage above .905 (league) earns growth.", tone)
+
+    try:
+        from app.sim_engine.progression.development import _get_player_morale  # noqa: WPS433
+
+        morale = float(_get_player_morale(player))
+        add(
+            "morale", "Morale", f"{round(morale * 100)}/100",
+            "Low morale slows growth and can speed decline.",
+            "good" if morale >= 0.65 else ("bad" if morale < 0.4 else "neutral"),
+        )
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+
+    env = getattr(player, "_dev_env_growth_mult", None)
+    coach_q = getattr(player, "coaching_quality", None)
+    if env is not None or coach_q is not None:
+        bits = []
+        tone = "neutral"
+        try:
+            if env is not None:
+                bits.append(f"{float(env):.2f}x growth environment")
+                tone = "good" if float(env) >= 1.03 else ("bad" if float(env) < 0.97 else "neutral")
+            if coach_q is not None:
+                bits.append(f"coaching {round(float(coach_q) * 100)}/100")
+        except Exception:
+            bits = []
+        if bits:
+            add("coaching", "Coaching & development staff", " · ".join(bits),
+                "Team development plan and coaching quality scale prospect growth.", tone)
+
+    focus: List[str] = []
+    try:
+        from app.sim_engine.franchise.player_directives import active_directives  # noqa: WPS433
+
+        focus = [
+            str((r or {}).get("label") or (r or {}).get("id") or "")
+            for r in (active_directives(player) or {}).values()
+            if isinstance(r, dict) and str(r.get("id") or "").startswith("habit_develop")
+        ]
+    except Exception:
+        focus = []
+    focus = [f for f in focus if f]
+    add("focus", "Training focus", ", ".join(focus) if focus else "None set",
+        "A focus steers which attributes the year's growth lands in." if focus
+        else "No focus set, so growth spread across his archetype's attributes.",
+        "good" if focus else "neutral")
+
+    games_left = int(getattr(player, "_world_injury_games_remaining", 0) or 0)
+    label = str(getattr(player, "_world_injury_label", "") or "")
+    last = getattr(player, "_world_injury_last_log", None)
+    if games_left > 0:
+        add("injury", "Injury", f"{label or 'Injured'} · {games_left} games remaining",
+            "Time out of the lineup costs games and growth.", "bad")
+    elif isinstance(last, dict) and last.get("games"):
+        add("injury", "Injury", f"Last: {last.get('tier_label') or last.get('tier') or 'injury'} ({int(last.get('games') or 0)} games) · healthy now",
+            "Recovered; missed games reduce the production that feeds growth.", "neutral")
+    else:
+        add("injury", "Injury", "Healthy", "No injury on record holding him back.", "good")
+
+    outlook: Dict[str, Any] = {}
+    try:
+        from app.sim_engine.progression.development import development_outlook  # noqa: WPS433
+
+        o = development_outlook(player) or {}
+        if o.get("ok"):
+            outlook = {
+                "expected": o.get("expected"),
+                "range_low": o.get("range_low"),
+                "range_high": o.get("range_high"),
+                "summary": o.get("summary"),
+            }
+    except Exception:
+        outlook = {}
+    return drivers, outlook
+
+
+def _dev_enrich_report_payload(session: FranchiseSession, payload: Any) -> Any:
+    """Idempotent in-place enrichment for the Player Development screen (also fixes cached reports)."""
+    if not isinstance(payload, dict) or not payload:
+        return payload
+    if int(payload.get("_enrich_v", 0) or 0) >= _DEV_ENRICH_VERSION:
+        return payload
+    try:
+        from app.sim_engine.generation.player_headshots import nhl_headshot_fields_from_player  # noqa: WPS433
+    except Exception:
+        nhl_headshot_fields_from_player = None  # type: ignore
+    try:
+        from services.franchise_sim import _team_abbr, _display_team
+    except Exception:
+        _team_abbr = None  # type: ignore
+        _display_team = None  # type: ignore
+
+    players: Dict[str, Any] = {}
+    team_of: Dict[str, Any] = {}
+    league = getattr(getattr(session, "sim", None), "league", None)
+    for tm in list(getattr(league, "teams", None) or []):
+        for pool_name in ("roster", "ahl_roster", "echl_roster", "prospect_pool"):
+            for pl in list(getattr(tm, pool_name, None) or []):
+                pid = _dev_player_id(pl)
+                if pid and pid not in players:
+                    players[pid] = pl
+                    team_of[pid] = tm
+    try:
+        for entry in _dev_collect_org_entries(session):
+            players.setdefault(str(entry["player_id"]), entry["player"])
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+
+    def abbr_for(tm: Any) -> str:
+        if tm is None:
+            return ""
+        tid = str(getattr(tm, "team_id", "") or getattr(tm, "id", "") or "")
+        try:
+            if _team_abbr is not None:
+                return str(_team_abbr(tm, tid) or "")
+        except Exception:
+            pass
+        return str(getattr(tm, "abbr", "") or getattr(tm, "abbreviation", "") or "")
+
+    uid = str(getattr(session, "user_team_id", "") or "")
+    user_team = session.team_by_id.get(uid) if uid else None
+    user_abbr = abbr_for(user_team)
+
+    def enrich(rec: Dict[str, Any], *, org: bool) -> None:
+        pid = str(rec.get("player_id") or rec.get("id") or "")
+        pl = players.get(pid)
+        if pl is None:
+            return
+        try:
+            _dev_fix_attr_values(rec, pl)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+        if nhl_headshot_fields_from_player is not None and not rec.get("nhl_headshot_url"):
+            try:
+                rec.update(nhl_headshot_fields_from_player(pl) or {})
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+        for k in ("headshot_id", "face_variant", "nationality", "nationality_code", "jersey_number"):
+            v = getattr(pl, k, None)
+            if v is None:
+                v = getattr(getattr(pl, "identity", None), k, None)
+            if v is not None and k not in rec:
+                rec[k] = v if isinstance(v, (int, float, str)) else str(getattr(v, "value", v))
+        if not rec.get("team_abbrev"):
+            tm = team_of.get(pid)
+            in_user_org = org and str(rec.get("org_group") or "").startswith("NHL")
+            if in_user_org and user_abbr:
+                rec["team_abbrev"] = user_abbr
+            elif tm is not None and (not org or in_user_org):
+                rec["team_abbrev"] = abbr_for(tm)
+        if not org and not rec.get("season_stats"):
+            try:
+                rec["season_stats"] = _dev_season_stats(session, pl)
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+        if not rec.get("age"):
+            rec["age"] = _dev_player_age(pl)
+        if "goalie" not in rec:
+            rec["goalie"] = _dev_is_goalie(pl)
+        if not rec.get("development_phase"):
+            try:
+                rec["development_phase"] = _dev_development_phase(pl)
+            except Exception:
+                pass
+        if not rec.get("growth_drivers"):
+            try:
+                drivers, outlook = _dev_growth_drivers(rec, pl)
+                rec["growth_drivers"] = drivers
+                if outlook:
+                    rec["next_season_outlook"] = outlook
+            except Exception:
+                _swallowed_log.debug("suppressed exception", exc_info=True)
+
+    for rec in payload.get("organization_players") or []:
+        if isinstance(rec, dict):
+            enrich(rec, org=True)
+    seen_ids: set = set()
+    for key in ("league_risers", "league_fallers", "risers", "fallers"):
+        for rec in payload.get(key) or []:
+            if isinstance(rec, dict):
+                # risers/league_risers share row objects after json_safe? enrich each once by id.
+                rid = (key.replace("league_", ""), str(rec.get("player_id") or ""))
+                if rid in seen_ids and rec.get("growth_drivers"):
+                    continue
+                seen_ids.add(rid)
+                enrich(rec, org=False)
+    if user_abbr:
+        payload["user_team_abbrev"] = user_abbr
+    if user_team is not None and _display_team is not None:
+        try:
+            payload["user_team_name"] = str(_display_team(user_team) or "")
+        except Exception:
+            pass
+    payload["_enrich_v"] = _DEV_ENRICH_VERSION
+    return payload
+
+
+def _dev_enrich_report_payload_safe(session: FranchiseSession, payload: Any) -> Any:
+    try:
+        return _dev_enrich_report_payload(session, payload)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+        return payload
+
+
 def _run_offseason_development(session: FranchiseSession) -> Dict[str, Any]:
     from datetime import datetime, timezone
 
@@ -4132,7 +4849,7 @@ def _run_offseason_development(session: FranchiseSession) -> Dict[str, Any]:
         session.development_report_payload = _safe_payload(session.development_report_payload)
         cached = session.development_report_payload
         if int(cached.get("schema_version", 1) or 1) >= 5:
-            return {"development_report": cached}
+            return {"development_report": _dev_enrich_report_payload_safe(session, cached)}
     if getattr(session, "development_report_done", False) and session.development_report_payload:
         payload = _safe_payload(session.development_report_payload)
         session.development_report_payload = payload
@@ -4140,7 +4857,7 @@ def _run_offseason_development(session: FranchiseSession) -> Dict[str, Any]:
             int(payload.get("report_season", 0) or 0) == season_id
             and int(payload.get("schema_version", 1) or 1) >= 5
         ):
-            return {"development_report": payload}
+            return {"development_report": _dev_enrich_report_payload_safe(session, payload)}
 
     import run_sim as rs
     from services.franchise_sim import _player_ovr99
@@ -4355,7 +5072,20 @@ def _run_offseason_development(session: FranchiseSession) -> Dict[str, Any]:
     session.development_report_done = True
     session.development_report_completed_season = season_id
     session.development_report_generated_at = datetime.now(timezone.utc).isoformat()
+    _dev_enrich_report_payload_safe(session, session.development_report_payload)
     return {"development_report": session.development_report_payload}
+
+
+def _draft_lottery_payload_for_client(session: FranchiseSession) -> Any:
+    """Lottery payload with the Lottery Night presentation snapshot (field, prospects)."""
+    payload = session.draft_lottery_payload
+    try:
+        from services.draft_lottery_presentation import ensure_lottery_presentation
+
+        return ensure_lottery_presentation(session, payload)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+        return payload
 
 
 def _run_draft_lottery(session: FranchiseSession) -> Dict[str, Any]:
@@ -4383,6 +5113,12 @@ def _run_draft_lottery(session: FranchiseSession) -> Dict[str, Any]:
                 session.draft_lottery_payload = payload
             except Exception:
                 _swallowed_log.debug("suppressed exception", exc_info=True)
+        try:
+            from services.draft_lottery_presentation import ensure_lottery_presentation
+
+            payload = ensure_lottery_presentation(session, payload)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         return {"draft_lottery": payload}
 
     sim = session.sim
@@ -4419,6 +5155,15 @@ def _run_draft_lottery(session: FranchiseSession) -> Dict[str, Any]:
             "team_name": _display_team(tm) if tm else tid,
             "points": int(row.get("pts", 0)),
             "wins": int(row.get("w", 0)),
+            "record": {
+                "gp": int(row.get("gp", 0) or 0),
+                "w": int(row.get("w", 0) or 0),
+                "l": int(row.get("l", 0) or 0),
+                "otl": int(row.get("otl", 0) or 0),
+                "pts": int(row.get("pts", 0) or 0),
+                **({"gf": int(row.get("gf") or 0)} if row.get("gf") is not None else {}),
+                **({"ga": int(row.get("ga") or 0)} if row.get("ga") is not None else {}),
+            },
         })
 
     picks: List[Dict[str, Any]] = []
@@ -4527,6 +5272,12 @@ def _run_draft_lottery(session: FranchiseSession) -> Dict[str, Any]:
         "ownership_annotated": True,
     }
     session.draft_lottery_payload = payload
+    try:
+        from services.draft_lottery_presentation import ensure_lottery_presentation
+
+        payload = ensure_lottery_presentation(session, payload)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     session.draft_lottery_done = True
     invalidate_session_payload_caches(session, reason="draft_lottery")
     return {"draft_lottery": payload}
@@ -8890,6 +9641,12 @@ def generate_next_season(session: FranchiseSession) -> Dict[str, Any]:
         "draft_class_roll": draft_roll,
     }
     session.next_season_payload = payload
+    try:
+        from services.training_camp import attach_training_camp
+
+        attach_training_camp(session)
+    except Exception:
+        pass
     session.next_season_generated = True
     _mark_stage_completed(session, "free_agency")
     session.offseason_stage = "next_season_reveal"
@@ -9256,7 +10013,7 @@ def build_offseason_state_extras(session: FranchiseSession, *, lean: bool = Fals
         "retirements": session.retirements_payload,
         "board_of_governors": _board_payload_for_state(session, stage),
         "retired_players_archive": list(getattr(session, "retired_players_archive", None) or []),
-        "draft_lottery": session.draft_lottery_payload,
+        "draft_lottery": _draft_lottery_payload_for_client(session),
         "draft_combine": session.draft_combine_payload,
         "draft": _draft_payload_for_state(session.draft_payload, stage),
         "draft_review": getattr(session, "draft_review_payload", None),
@@ -9265,9 +10022,9 @@ def build_offseason_state_extras(session: FranchiseSession, *, lean: bool = Fals
         "fa_market_day": int(getattr(session, "fa_market_day", 0) or 0),
         "contracts": session.resign_payload,
         "salary_cap": session.salary_cap_payload,
-        "development_report": session.development_report_payload,
+        "development_report": _dev_enrich_report_payload_safe(session, session.development_report_payload),
         "hub_warnings": list(getattr(session, "hub_warnings", None) or []),
-        "next_season": session.next_season_payload,
+        "next_season": _next_season_with_camp(session),
         # Each archived season holds that year's full draft results (~4 MB) and grows
         # every year; the client only reads the year, label and champion. Ship a summary.
         "season_history": [
@@ -9411,3 +10168,15 @@ def _spawn_exceptional_status_juniors(
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
     return made
+
+def _next_season_with_camp(session: Any) -> Any:
+    """next_season payload with the training camp block (lazy for older saves)."""
+    ns = getattr(session, "next_season_payload", None)
+    if not ns:
+        return ns
+    try:
+        from services.training_camp import attach_training_camp
+
+        return attach_training_camp(session)
+    except Exception:
+        return ns

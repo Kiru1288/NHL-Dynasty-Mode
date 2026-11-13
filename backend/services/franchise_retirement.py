@@ -43,6 +43,8 @@ RETIREMENT_TYPES = (
     "depth_retirement",
     "legend_farewell",
     "goalie_longevity_retirement",
+    "family_retirement",
+    "free_agent_walkaway",
 )
 
 
@@ -132,8 +134,86 @@ def _player_morale(player: Any) -> float:
     return float(getattr(psych, "morale", getattr(player, "morale", 0.6)) or 0.6)
 
 
+def _psych_value(player: Any, key: str, default: float = 0.5) -> float:
+    psych = getattr(player, "psych", None)
+    try:
+        v = getattr(psych, key, None) if psych is not None else None
+        return float(default if v is None else v)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _true_wear(player: Any) -> float:
+    health = getattr(player, "health", None)
+    try:
+        return _clamp(float(getattr(health, "wear_and_tear", 0.0) or 0.0)) if health else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _injury_count(player: Any) -> int:
+    health = getattr(player, "health", None)
+    hist = getattr(health, "injury_history", None) if health else None
+    return len(hist) if isinstance(hist, list) else 0
+
+
+def _rating_peak(player: Any) -> Tuple[Optional[int], Optional[int]]:
+    """Highest OVR on the rating history (this save) as (ovr, season)."""
+    best: Optional[Tuple[int, Optional[int]]] = None
+    for pt in getattr(player, "rating_history", None) or []:
+        if not isinstance(pt, dict):
+            continue
+        ov = _num(pt.get("ovr"))
+        if ov is None:
+            continue
+        season = pt.get("season")
+        try:
+            season = int(season) if season is not None else None
+        except (TypeError, ValueError):
+            season = None
+        if best is None or ov > best[0]:
+            best = (int(round(ov)), season)
+    pre = _num(getattr(player, "_pre_retirement_ovr", None))
+    if pre is not None and (best is None or pre > best[0]):
+        best = (int(round(pre)), None)
+    return best if best is not None else (None, None)
+
+
+def _award_list(player: Any) -> List[Dict[str, Any]]:
+    """Trophies: real NHL ones (cached at import, never fetched here) + ones won in the save."""
+    out: List[Dict[str, Any]] = []
+    seen = set()
+    if getattr(player, "nhl_awards_fetched", False):
+        for a in getattr(player, "nhl_awards", None) or []:
+            if isinstance(a, dict) and a.get("award_name"):
+                key = (str(a.get("award_name")), str(a.get("season") or ""))
+                if key not in seen:
+                    seen.add(key)
+                    out.append({"award_name": str(a.get("award_name")), "season": a.get("season"), "source": "nhl"})
+    for a in getattr(player, "career_awards", None) or getattr(player, "awards_won", None) or []:
+        if isinstance(a, dict):
+            name = a.get("award_name") or a.get("name") or a.get("award_id")
+            if not name:
+                continue
+            key = (str(name), str(a.get("season") or ""))
+            if key not in seen:
+                seen.add(key)
+                out.append({"award_name": str(name), "award_id": a.get("award_id"), "season": a.get("season"), "source": "save"})
+        elif isinstance(a, str) and a.strip():
+            out.append({"award_name": a.strip(), "season": None, "source": "save"})
+    return out
+
+
 def _cup_wins(player: Any) -> int:
-    return int(getattr(player, "cup_wins", 0) or 0)
+    n = int(getattr(player, "cup_wins", 0) or 0)
+    try:
+        counted = sum(
+            1 for a in _award_list(player)
+            if "stanley cup" in str(a.get("award_name") or "").lower() or str(a.get("award_id") or "") == "stanley"
+        )
+    except Exception:
+        counted = 0
+    return max(n, counted)
 
 
 def _season_stats(session: FranchiseSession, player: Any) -> Dict[str, Any]:
@@ -144,11 +224,195 @@ def _season_stats(session: FranchiseSession, player: Any) -> Dict[str, Any]:
     return dict(raw) if isinstance(raw, dict) else {}
 
 
-def _career_stats(player: Any, session: FranchiseSession) -> Dict[str, Any]:
+def _num(val: Any) -> Optional[float]:
+    if val is None or isinstance(val, bool) or val == "":
+        return None
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return None
+
+
+def _season_label(year: int) -> str:
+    return f"{int(year)}-{(int(year) + 1) % 100:02d}"
+
+
+def _season_start_year(label: Any) -> int:
+    s = str(label or "").strip()
+    try:
+        return int(s[:4])
+    except (TypeError, ValueError):
+        return 0
+
+
+def _team_abbrev(team: Any) -> str:
+    if team is None:
+        return ""
+    for attr in ("abbr", "abbreviation", "code", "short_name"):
+        v = getattr(team, attr, None)
+        if v is not None and str(v).strip():
+            s = "".join(c for c in str(v).upper() if c.isalnum())
+            if 2 <= len(s) <= 4:
+                return s
+    return ""
+
+
+def _nhl_career_summary(player: Any, session: FranchiseSession, team: Any = None) -> Dict[str, Any]:
+    """Real NHL career totals: imported NHL seasons + seasons simmed in this save.
+
+    The old reader looked for top-level gp/g/a keys that career_stats never has, so every
+    retiree showed only the final season ("82 GP"). Seasons with a club split carry a TOT
+    row; we use it alone so traded seasons are not counted twice. The season that just
+    finished is folded in from the live ledger when it has not been archived yet.
+    """
+    goalie = _is_goalie(player)
+    cs = getattr(player, "career_stats", None)
+    seasons = cs.get("seasons") if isinstance(cs, dict) else None
+    rows = [
+        s for s in (seasons if isinstance(seasons, list) else [])
+        if isinstance(s, dict) and str(s.get("league") or "NHL").strip().upper() in ("", "NHL")
+    ]
+    by_season: Dict[str, List[Dict[str, Any]]] = {}
+    order: List[str] = []
+    for s in rows:
+        lbl = str(s.get("season") or "")
+        if lbl not in by_season:
+            by_season[lbl] = []
+            order.append(lbl)
+        by_season[lbl].append(s)
+
+    tot = {"gp": 0, "g": 0, "a": 0, "pts": 0, "pm": 0, "pim": 0, "w": 0, "l": 0, "otl": 0, "so": 0}
+    sv_w = 0.0
+    sv_gp = 0
+    gaa_w = 0.0
+    gaa_gp = 0
+    teams: List[str] = []
+    season_lines: List[Dict[str, Any]] = []
+
+    def _add(line: Dict[str, Any], label: str, team_label: str) -> None:
+        nonlocal sv_w, sv_gp, gaa_w, gaa_gp
+        gp = int(_num(line.get("gp")) or 0)
+        if gp <= 0:
+            return
+        tot["gp"] += gp
+        if goalie:
+            tot["w"] += int(_num(line.get("wins", line.get("w"))) or 0)
+            tot["l"] += int(_num(line.get("losses", line.get("l"))) or 0)
+            tot["otl"] += int(_num(line.get("otl")) or 0)
+            tot["so"] += int(_num(line.get("shutouts", line.get("so"))) or 0)
+            sv = _num(line.get("sv_pct", line.get("svPct", line.get("save_pct"))))
+            if sv is not None and sv > 0:
+                sv = sv / 100.0 if sv > 1.5 else sv
+                sv_w += sv * gp
+                sv_gp += gp
+            gaa = _num(line.get("gaa"))
+            if gaa is not None and gaa > 0:
+                gaa_w += gaa * gp
+                gaa_gp += gp
+        else:
+            g = int(_num(line.get("g", line.get("goals"))) or 0)
+            a = int(_num(line.get("a", line.get("assists"))) or 0)
+            tot["g"] += g
+            tot["a"] += a
+            tot["pts"] += int(_num(line.get("pts", line.get("points"))) or (g + a))
+            tot["pm"] += int(_num(line.get("plus_minus", line.get("plusMinus", line.get("pm")))) or 0)
+            tot["pim"] += int(_num(line.get("pim")) or 0)
+        season_lines.append({"season": label, "team": team_label, "gp": gp})
+
+    for lbl in order:
+        group = by_season[lbl]
+        tot_rows = [s for s in group if str(s.get("team") or s.get("team_abbrev") or "").upper() == "TOT"]
+        clubs = [s for s in group if s not in tot_rows]
+        for s in clubs:
+            t = str(s.get("team_abbrev") or s.get("team") or "").strip()
+            if t and t != "—" and t not in teams:
+                teams.append(t)
+        if tot_rows:
+            _add(tot_rows[0], lbl, "/".join(str(s.get("team_abbrev") or s.get("team") or "") for s in clubs) or "TOT")
+        else:
+            for s in clubs:
+                _add(s, lbl, str(s.get("team_abbrev") or s.get("team") or ""))
+
+    # The just-finished season, if the rollover archive has not written it yet.
+    try:
+        cur_year = int(getattr(session, "season_calendar_year", 0) or 0)
+    except (TypeError, ValueError):
+        cur_year = 0
+    cur_lbl = _season_label(cur_year) if cur_year else ""
+    ss = _season_stats(session, player)
+    if cur_lbl and cur_lbl not in by_season and int(_num(ss.get("gp")) or 0) > 0:
+        abbr = _team_abbrev(team)
+        line = dict(ss)
+        if goalie:
+            sa = _num(ss.get("sa", ss.get("shots_against")))
+            saves = _num(ss.get("saves", ss.get("sv")))
+            if sa and saves is not None:
+                line["sv_pct"] = saves / sa
+            toi = _num(ss.get("toi_sec"))
+            ga = _num(ss.get("ga"))
+            gp_ = int(_num(ss.get("gp")) or 0)
+            if ga is not None and gp_ > 0:
+                toi = toi if toi and toi >= gp_ * 1800 else gp_ * 3600
+                line["gaa"] = ga * 3600.0 / toi
+        _add(line, cur_lbl, abbr)
+        if abbr and abbr not in teams:
+            teams.append(abbr)
+        order.append(cur_lbl)
+
+    labelled = [l for l in order if l]
+    starts = [y for y in (_season_start_year(l) for l in labelled) if y > 0]
+    out: Dict[str, Any] = {
+        "gp": tot["gp"],
+        "seasons": len(labelled),
+        "first_season": _season_label(min(starts)) if starts else None,
+        "last_season": _season_label(max(starts)) if starts else None,
+        "teams": teams,
+    }
+    if goalie:
+        out.update({
+            "w": tot["w"], "l": tot["l"], "otl": tot["otl"], "so": tot["so"],
+            "sv_pct": round(sv_w / sv_gp, 3) if sv_gp else None,
+            "gaa": round(gaa_w / gaa_gp, 2) if gaa_gp else None,
+        })
+    else:
+        out.update({"g": tot["g"], "a": tot["a"], "pts": tot["pts"], "pm": tot["pm"], "pim": tot["pim"]})
+    # Best season by points (skaters) or wins (goalies) for the tribute line.
+    best = None
+    for lbl in labelled:
+        group = by_season.get(lbl) or []
+        cand = [s for s in group if str(s.get("team") or "").upper() == "TOT"] or group
+        for s in cand:
+            score = _num(s.get("wins") if goalie else s.get("pts", s.get("points"))) or 0
+            if best is None or score > best[0]:
+                best = (score, lbl, s)
+    if best is not None and best[0] > 0:
+        s = best[2]
+        bl: Dict[str, Any] = {"season": best[1], "team": str(s.get("team_abbrev") or s.get("team") or ""), "gp": int(_num(s.get("gp")) or 0)}
+        if goalie:
+            bl.update({"w": int(best[0]), "sv_pct": _num(s.get("sv_pct")), "gaa": _num(s.get("gaa"))})
+        else:
+            bl.update({"g": int(_num(s.get("g")) or 0), "a": int(_num(s.get("a")) or 0), "pts": int(best[0])})
+        out["best_season"] = bl
+    return out
+
+
+def _career_stats(player: Any, session: FranchiseSession, team: Any = None) -> Dict[str, Any]:
     ss = _season_stats(session, player)
     career = getattr(player, "career_stats", None) or getattr(player, "stats", None) or {}
     if not isinstance(career, dict):
         career = {}
+    summary = _nhl_career_summary(player, session, team)
+    if int(summary.get("gp") or 0) > 0:
+        return {
+            "games_played": int(summary.get("gp") or 0),
+            "goals": int(summary.get("g") or 0),
+            "assists": int(summary.get("a") or 0),
+            "points": int(summary.get("pts") or 0),
+            "goalie_wins": int(summary.get("w") or 0),
+            "shutouts": int(summary.get("so") or 0),
+            "seasons_played": max(1, int(summary.get("seasons") or 0)),
+            "summary": summary,
+        }
 
     def _as_int(val: Any, default: int = 0) -> int:
         if isinstance(val, bool):
@@ -185,6 +449,7 @@ def _career_stats(player: Any, session: FranchiseSession) -> Dict[str, Any]:
         "goalie_wins": _as_int(career.get("w", ss.get("w", 0)), 0),
         "shutouts": _as_int(career.get("so", ss.get("so", 0)), 0),
         "seasons_played": seasons_played,
+        "summary": None,
     }
 
 
@@ -252,13 +517,22 @@ def _build_retirement_context(
     tid = str(getattr(team, "team_id", getattr(team, "id", "")) or "")
     won_cup_this_year = bool(champ and tid and champ == tid)
 
+    # Mental fatigue used to be 1 - morale (+ wear): with the default 0.5 morale every
+    # veteran started at 0.5 "fatigue", so the engine labelled ordinary age retirements
+    # "burnout". Use the tracked psych fatigue plus only genuinely low morale.
+    tracked_fatigue = _psych_value(player, "mental_fatigue", 0.0)
+    pressure_fatigue = _psych_value(player, "pressure_fatigue", 0.0)
+    mental_fatigue = _clamp(
+        max(tracked_fatigue, pressure_fatigue * 0.8) + max(0.0, 0.42 - morale) * 1.2 + wear * 0.2
+    )
+
     return {
         "ovr": ovr,
         "no_offers": unsigned or yrs <= 0,
         "career_ending_injury": wear >= 0.92,
         "recent_major_injury": wear >= 0.65,
         "healthy_scratches": int(getattr(player, "healthy_scratches", 0) or 0),
-        "mental_fatigue": _clamp(1.0 - morale + wear * 0.35),
+        "mental_fatigue": mental_fatigue,
         "usage_heavy": float(getattr(player, "toi_share", 0.0) or 0.0),
         "won_cup_this_year": won_cup_this_year,
         "contract_years_remaining": yrs,
@@ -365,6 +639,65 @@ def _risk_to_status(risk: int, *, confirmed: bool = False, returning: bool = Fal
     return "safe"
 
 
+def _retirement_evidence(
+    player: Any,
+    session: FranchiseSession,
+    team: Any,
+    ctx: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Real signals a retirement reason may lean on (no randomness)."""
+    from services.franchise_sim import _contract_years_remaining
+
+    ss = _season_stats(session, player)
+    peak, peak_season = _rating_peak(player)
+    ovr_disp = _player_ovr_display(player)
+    life = _life_pressure_dict(player)
+    summary = _nhl_career_summary(player, session, team)
+    return {
+        "age": _player_age(player),
+        "ovr": _player_ovr_norm(player),
+        "ovr_disp": ovr_disp,
+        "peak": peak,
+        "peak_season": peak_season,
+        "drop": (float(peak) - ovr_disp) if peak is not None else 0.0,
+        "morale": _player_morale(player),
+        "fatigue": _psych_value(player, "mental_fatigue", 0.0),
+        "role_sat": min(_psych_value(player, "role_satisfaction", 0.5), _psych_value(player, "ice_time_satisfaction", 0.5)),
+        "life_family": float(life.get("family", 0.0) or 0.0),
+        "life_psych": float(life.get("psychological", 0.0) or 0.0),
+        "wear": _true_wear(player),
+        "injuries": _injury_count(player),
+        "yrs": _contract_years_remaining(player) if getattr(player, "contract", None) is not None else 0,
+        "final_gp": int(_num(ss.get("gp")) or 0),
+        "scratches": int(getattr(player, "healthy_scratches", 0) or 0),
+        "cups": _cup_wins(player),
+        "won_cup": bool(ctx.get("won_cup_this_year")),
+        "career_gp": int(summary.get("gp") or 0),
+        "career_pts": int(summary.get("pts") or 0),
+        "seasons": int(summary.get("seasons") or 0),
+        "goalie": _is_goalie(player),
+        "career_ending": _true_career_ending(player),
+    }
+
+
+def _sustained_burnout(ev: Dict[str, Any]) -> bool:
+    """Mental-health retirement needs real, sustained evidence — never the engine label alone.
+
+    Low morale *and* tracked fatigue/psych strain, a veteran age, and no elite player or
+    long remaining deal unless the evidence is overwhelming.
+    """
+    morale = float(ev["morale"])
+    strain = max(float(ev["fatigue"]), float(ev["life_psych"]))
+    if ev["age"] < 33 or morale >= 0.30 or strain < 0.55:
+        return False
+    overwhelming = morale < 0.18 and strain >= 0.75
+    if ev["ovr"] >= 0.80 and not overwhelming:
+        return False
+    if ev["yrs"] >= 2 and not overwhelming:
+        return False
+    return True
+
+
 def _classify_retirement_type(
     player: Any,
     session: FranchiseSession,
@@ -374,50 +707,104 @@ def _classify_retirement_type(
     risk: int,
     ctx: Dict[str, Any],
 ) -> str:
-    age = _player_age(player)
-    ovr = _player_ovr_norm(player)
-    wear = _injury_wear(player)
-    morale = _player_morale(player)
-    from services.franchise_sim import _contract_years_remaining
-
-    yrs = _contract_years_remaining(player)
+    ev = _retirement_evidence(player, session, team, ctx)
+    age = ev["age"]
+    ovr = ev["ovr"]
     pr = str(primary_reason or "").lower()
 
-    if wear >= 0.75 or "injur" in pr or ctx.get("career_ending_injury"):
+    # Injuries: the real wear value or a flagged career-ender (not the injury-count proxy).
+    if ev["career_ending"] or ev["wear"] >= 0.75 or ("injur" in pr and ev["wear"] >= 0.55):
         return "injury_retirement"
-    if ctx.get("won_cup_this_year") and age >= 34:
+    if ev["won_cup"] and age >= 34:
         return "cup_win_walkaway"
-    if _is_goalie(player) and age >= 37 and ovr >= 0.72:
+    if age >= 37 and (ovr >= 0.84 or ev["career_pts"] >= 900 or ev["cups"] >= 2):
+        return "legend_farewell"
+    if ev["goalie"] and age >= 37 and ovr >= 0.72:
         return "goalie_longevity_retirement"
-    if yrs <= 0 and age >= 33:
-        return "no_contract_retirement"
-    if morale < 0.38 or "burnout" in pr or "morale" in pr:
+    if _sustained_burnout(ev):
         return "morale_retirement"
-    if ovr < 0.58 and age >= 34:
+    if age >= 33 and (ev["life_family"] >= 0.55 or ("family" in pr and ev["life_family"] >= 0.40)):
+        return "family_retirement"
+    if ev["yrs"] <= 0 and age >= 33:
+        return "no_contract_retirement" if ovr < 0.76 else "free_agent_walkaway"
+    if age >= 33 and ev["final_gp"] and (ev["final_gp"] < 40 or ev["scratches"] >= 15) and ovr < 0.80:
+        return "role_frustration_retirement"
+    if age >= 33 and (ev["drop"] >= 4 or (ovr < 0.58 and age >= 34)):
         return "decline_retirement"
     if ovr < 0.62 and age >= 33:
         return "depth_retirement"
-    if "voluntary" in pr or "family" in pr or "identity" in pr:
-        return "role_frustration_retirement"
-    if age >= 38 and ovr >= 0.84:
-        return "legend_farewell"
     return "age_retirement"
 
 
+def _pick(options: List[str], player: Any, salt: str) -> str:
+    """Deterministic variety: same player + season always reads the same."""
+    import hashlib
+
+    key = "%s|%s" % (_player_id(player), salt)
+    idx = int(hashlib.sha256(key.encode()).hexdigest()[:8], 16) % max(1, len(options))
+    return options[idx]
+
+
 def _readable_retirement_reason(retirement_type: str, player: Any, ctx: Dict[str, Any]) -> str:
+    age = _player_age(player)
+    yrs = int(ctx.get("contract_years_remaining") or 0)
     mapping = {
-        "age_retirement": "Stepping away after long career",
-        "injury_retirement": "Recurring injuries",
-        "decline_retirement": "Age and declining role",
-        "cup_win_walkaway": "Retiring after championship run",
-        "no_contract_retirement": "No NHL contract interest",
-        "role_frustration_retirement": "Reduced ice time and morale decline",
-        "morale_retirement": "Mental fatigue and burnout",
-        "depth_retirement": "Lost NHL roster foothold",
-        "legend_farewell": "Legend hangs up the skates",
-        "goalie_longevity_retirement": "Veteran goalie ends lengthy career",
+        "age_retirement": [f"Calls it a career at {age}", "Ready to step away from the game", f"Hangs up the skates at {age}"],
+        "injury_retirement": ["Body can no longer handle the grind", "Injuries force him out", "Medical advice ends his career"],
+        "decline_retirement": ["Game has slipped with age", "Declining play at the end of the road", "Steps away as his game fades"],
+        "cup_win_walkaway": ["Goes out a Stanley Cup champion", "Retires on top after the Cup", "Leaves with a ring as his final act"],
+        "no_contract_retirement": ["No NHL offers as a free agent", "Unsigned and out of options", "Market dried up in free agency"],
+        "free_agent_walkaway": ["Turns down offers to retire", "Chooses retirement over a new contract", "Walks away instead of re-signing"],
+        "role_frustration_retirement": ["Lost his spot in the lineup", "Shrinking role pushes him out", "Not ready to be a press-box regular"],
+        "morale_retirement": ["Worn down mentally after a hard stretch", "Lost his love of the grind", "Steps away for his mental health"],
+        "family_retirement": ["Putting family first", "Heading home to his family", "Family comes first now"],
+        "depth_retirement": ["Lost his NHL roster foothold", "Squeezed out of an NHL job", "End of the road as a depth player"],
+        "legend_farewell": ["A legend takes his final bow", "Farewell to one of the greats", "An icon hangs them up"],
+        "goalie_longevity_retirement": ["Veteran goalie ends long run", "Steps out of the crease for good", "Final save of a long career"],
     }
-    return mapping.get(retirement_type, mapping["age_retirement"])
+    opts = mapping.get(retirement_type) or mapping["age_retirement"]
+    text = _pick(opts, player, retirement_type)
+    if retirement_type == "free_agent_walkaway" and yrs > 0:
+        text = "Walks away from his contract"
+    return text
+
+
+def _retirement_detail(retirement_type: str, ev: Dict[str, Any]) -> str:
+    """One factual sentence built only from the evidence."""
+    bits: List[str] = []
+    age = ev["age"]
+    if ev["career_gp"]:
+        bits.append(f"{ev['career_gp']:,} NHL games over {ev['seasons']} season{'s' if ev['seasons'] != 1 else ''}")
+    rt = retirement_type
+    if rt == "injury_retirement":
+        lead = f"{ev['injuries']} injuries on record and heavy wear" if ev["injuries"] else "Heavy physical wear"
+    elif rt == "cup_win_walkaway":
+        lead = f"Won the Cup this spring at {age}"
+    elif rt == "legend_farewell":
+        lead = f"Still a {int(round(ev['ovr_disp']))} OVR at {age}"
+    elif rt == "decline_retirement":
+        lead = (f"Down from a {ev['peak']} peak to {int(round(ev['ovr_disp']))} OVR" if ev["peak"] and ev["drop"] >= 1
+                else f"{int(round(ev['ovr_disp']))} OVR at {age}")
+    elif rt == "no_contract_retirement":
+        lead = f"Unsigned at {age} with a {int(round(ev['ovr_disp']))} OVR"
+    elif rt == "free_agent_walkaway":
+        lead = f"Free agent at {age}, still a {int(round(ev['ovr_disp']))} OVR"
+    elif rt == "role_frustration_retirement":
+        lead = f"Played {ev['final_gp']} games last season" + (f" with {ev['scratches']} scratches" if ev["scratches"] else "")
+    elif rt == "morale_retirement":
+        lead = f"Morale {int(round(ev['morale'] * 100))}/100 with sustained fatigue"
+    elif rt == "family_retirement":
+        lead = f"Family pressure weighed on him at {age}"
+    elif rt == "goalie_longevity_retirement":
+        lead = f"Still a {int(round(ev['ovr_disp']))} OVR goalie at {age}"
+    elif rt == "depth_retirement":
+        lead = f"{int(round(ev['ovr_disp']))} OVR at {age}"
+    else:
+        lead = f"Final season at {int(round(ev['ovr_disp']))} OVR, age {age}"
+    out = lead + (" · " + bits[0] if bits else "")
+    if ev["cups"] and rt != "cup_win_walkaway":
+        out += f" · {ev['cups']}x Stanley Cup champion"
+    return out
 
 
 def _legacy_tier(ovr: float, age: int, cups: int, pts: int) -> str:
@@ -522,7 +909,7 @@ def _serialize_retirement_row(
     )
 
     tid = str(getattr(team, "team_id", getattr(team, "id", "")) or "")
-    career = _career_stats(player, session)
+    career = _career_stats(player, session, team)
     ovr = _player_ovr_norm(player)
     ovr_disp = _player_ovr_display(player)
     prev = float(getattr(player, "_pre_retirement_ovr", ovr_disp) or ovr_disp)
@@ -572,12 +959,98 @@ def _serialize_retirement_row(
         "confirmed": confirmed,
     }
     try:
+        row.update(_tribute_fields(session, player, team, career, retirement_type, cap))
+    except Exception:
+        _swallowed_log.debug("retirement tribute fields failed", exc_info=True)
+    try:
         from app.sim_engine.generation.player_headshots import merge_headshot_into_row
 
         row = merge_headshot_into_row(row, player)
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
     return row
+
+
+def _tribute_fields(
+    session: FranchiseSession,
+    player: Any,
+    team: Any,
+    career: Dict[str, Any],
+    retirement_type: str,
+    cap: float,
+) -> Dict[str, Any]:
+    """Extra, real-data fields for the Retirements tribute screen (all optional on the wire)."""
+    from services.franchise_sim import _contract_years_remaining
+
+    pid = _player_id(player)
+    out: Dict[str, Any] = {
+        "team_abbrev": _team_abbrev(team) or None,
+        "is_user_team": bool(team is not None and str(getattr(team, "team_id", getattr(team, "id", "")) or "") == str(getattr(session, "user_team_id", "") or "")),
+    }
+    summary = career.get("summary") if isinstance(career, dict) else None
+    if isinstance(summary, dict) and int(summary.get("gp") or 0) > 0:
+        out["career_totals"] = {k: v for k, v in summary.items() if k != "best_season"}
+        if summary.get("best_season"):
+            out["best_season"] = summary["best_season"]
+        out["career_source"] = "nhl"
+    else:
+        out["career_source"] = "estimate"
+
+    # Final season (the one that just ended) — regular season and playoffs.
+    try:
+        from services.franchise_sim import _compact_season_stats_for_player
+
+        fs = _compact_season_stats_for_player(session, pid) or {}
+        if int(fs.get("gp") or 0) > 0:
+            keep = ("gp", "g", "a", "pts", "plusMinus", "pim", "wins", "losses", "otl", "svPct", "gaa", "shutouts", "war")
+            out["final_season"] = {k: fs.get(k) for k in keep if fs.get(k) is not None}
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    po = (getattr(session, "playoff_player_stats", None) or {}).get(pid)
+    if isinstance(po, dict) and int(_num(po.get("gp")) or 0) > 0:
+        out["final_playoffs"] = {
+            k: po.get(k) for k in ("gp", "g", "a", "pts", "w", "l", "so") if po.get(k) is not None
+        }
+
+    peak, peak_season = _rating_peak(player)
+    if peak is not None:
+        out["peak_overall"] = peak
+        if peak_season:
+            out["peak_season"] = _season_label(int(peak_season))
+
+    trophies = _award_list(player)
+    if trophies:
+        out["trophies"] = trophies[:24]
+
+    try:
+        from services.award_history import _draft_payload_from_player
+
+        d = _draft_payload_from_player(player)
+        if d.get("drafted") or d.get("undrafted"):
+            dtid = d.get("drafted_by_team_id") or d.get("draft_team_id")
+            dteam = (getattr(session, "team_by_id", None) or {}).get(str(dtid)) if dtid else None
+            if dteam is not None and not d.get("draft_team_abbr"):
+                d["draft_team_abbr"] = _team_abbrev(dteam) or None
+            out["draft"] = d
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+
+    contract = getattr(player, "contract", None)
+    if contract is not None and cap > 0:
+        yrs = int(_contract_years_remaining(player) or 0)
+        out["last_contract"] = {
+            "aav_millions": round(cap, 3),
+            "years_remaining": yrs,
+            "walked_away_millions": round(cap * yrs, 3) if yrs > 0 else 0.0,
+        }
+
+    try:
+        ctx = _build_retirement_context(session, player, team)
+        ev = _retirement_evidence(player, session, team, ctx)
+        out["retirement_detail"] = _retirement_detail(retirement_type, ev)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    return out
 
 
 def _archive_retired_player(session: FranchiseSession, player: Any, row: Dict[str, Any]) -> None:
@@ -1202,7 +1675,20 @@ def _run_depth_retirement_pass(session: FranchiseSession, rng: Any) -> List[Dict
             "retirement_risk": int(prob * 100),
             "confirmed": True,
             "news_headline": f"{_player_name(p)} retires from {team_name}",
+            "team_abbrev": _team_abbrev(team) or None,
+            "level": label,
+            "is_user_team": bool(team is not None and str(team_id) == str(getattr(session, "user_team_id", "") or "")),
         }
+        try:
+            summary = _nhl_career_summary(p, session, None)
+            if int(summary.get("gp") or 0) > 0:
+                row["career_totals"] = {k: v for k, v in summary.items() if k != "best_season"}
+                row["career_source"] = "nhl"
+            from app.sim_engine.generation.player_headshots import merge_headshot_into_row
+
+            row = merge_headshot_into_row(row, p)
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
         retired_rows.append(row)
         _purge_retired_from_extra_pools(session, p)
         if len(retired_rows) >= DEPTH_RETIREMENT_HARD_CAP:
@@ -1293,6 +1779,16 @@ def run_franchise_retirement_pass(session: FranchiseSession) -> Dict[str, Any]:
             if healthy_star:
                 retire_chance = 0.0
                 risk = min(risk, 24)
+            elif not _true_career_ending(player) and _true_wear(player) < 0.6 and age < 39:
+                # Players rarely walk away while still elite or with real money left on a deal.
+                yrs_left = int(ctx.get("contract_years_remaining") or 0)
+                if ovr >= elite_cut and age < 37:
+                    retire_chance *= 0.45
+                elif ovr >= 0.80 and yrs_left >= 2:
+                    retire_chance *= 0.6
+                elif yrs_left >= 3:
+                    retire_chance *= 0.7
+                risk = int(round(_clamp(retire_chance, 0.0, 1.0) * 100))
 
             primary = str(getattr(decision, "primary_reason", "age") if decision else "age")
             locked = _is_locked_retirement(risk, age, ovr, wear) and (age >= 34 or _true_career_ending(player))
@@ -1370,6 +1866,9 @@ def run_franchise_retirement_pass(session: FranchiseSession) -> Dict[str, Any]:
     user_tid = str(session.user_team_id)
 
     for c in candidates:
+        # Only retirees and borderline (your club) rows are shown; skip building the rest.
+        if not c["retire"] and not c["borderline"]:
+            continue
         player = c["player"]
         team = c["team"]
         rtype = _classify_retirement_type(

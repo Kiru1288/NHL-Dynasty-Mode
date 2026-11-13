@@ -953,6 +953,29 @@ def _retained_slots_used(team: Any, season_label: Optional[str] = None) -> int:
     return 1
 
 
+def team_sanction_cap_penalty_millions(team: Any, season_start_year: Optional[int]) -> float:
+    """League-imposed cap penalties (storyline sanctions) charged to one season.
+
+    Rows live on ``team.sanction_cap_penalties`` as ``{"sanction_id", "season",
+    "amount_m"}``. A penalty only counts against the season it was issued for and
+    expires when the season rolls, so opening-day (next season) books ignore it.
+    """
+    rows = _get(team, "sanction_cap_penalties", None) or []
+    if not isinstance(rows, list) or season_start_year is None:
+        return 0.0
+    total = 0.0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            if int(row.get("season")) != int(season_start_year):
+                continue
+            total += max(0.0, float(row.get("amount_m") or 0.0))
+        except (TypeError, ValueError):
+            continue
+    return round(min(total, 25.0), 3)
+
+
 def calculate_team_cap_snapshot(
     team: Any,
     league: Any = None,
@@ -1019,6 +1042,8 @@ def calculate_team_cap_snapshot(
     ltir_pool_m += ltir_relief_m
 
     other_dead_m = max(0.0, normalize_money_to_millions(_get(team, "other_dead_cap_m", _get(team, "other_dead_cap", 0.0))))
+    # League sanction penalties apply to the season they were issued for only.
+    sanction_m = team_sanction_cap_penalty_millions(team, season_y)
     # A bonus ledger that picked up raw dollars, or a reserve funded once per
     # player and never released, was charging a second full payroll. Real clubs
     # do not carry a nine-figure bonus cushion.
@@ -1037,6 +1062,7 @@ def calculate_team_cap_snapshot(
         + bonus_overage_m
         + bonus_reserve_m
         + other_dead_m
+        + sanction_m
         + ltir_charge_m
     )
 
@@ -1062,7 +1088,7 @@ def calculate_team_cap_snapshot(
     retained_slots_max = 3
 
     is_using_ltir = bool(ltir_pool_m > 0 and total_m > upper_limit_m)
-    dead_cap_total = buried_m + retained_m + buyout_m + other_dead_m
+    dead_cap_total = buried_m + retained_m + buyout_m + other_dead_m + sanction_m
 
     warnings: List[str] = []
     if usable_cap_space_m < 0:
@@ -1093,6 +1119,7 @@ def calculate_team_cap_snapshot(
         "bonusOverage": round(float(bonus_overage_m), 3),
         "performanceBonusReserve": round(float(bonus_reserve_m), 3),
         "otherDeadCap": round(float(other_dead_m), 3),
+        "sanctionCapPenalty": round(float(sanction_m), 3),
         "ltirPool": round(float(ltir_pool_m), 3),
         "ltirCapHit": round(float(ltir_charge_m), 3),
         "ltirRelief": round(float(ltir_relief_m), 3),

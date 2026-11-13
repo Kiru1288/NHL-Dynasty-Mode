@@ -2135,6 +2135,7 @@ def _get_team_cap_snapshot_full_uncached(
         "bonus_overage_m": float(raw.get("bonusOverage") or 0),
         "bonus_reserve_m": float(raw.get("performanceBonusReserve") or 0),
         "other_dead_cap_m": float(raw.get("otherDeadCap") or 0),
+        "sanction_cap_penalty_m": float(raw.get("sanctionCapPenalty") or 0),
         "ltir_pool_m": float(raw.get("ltirPool") or 0),
         "real_cap_space_m": float(raw.get("realCapSpace") or 0),
         "usable_cap_space_m": float(raw.get("usableCapSpace") or raw.get("capSpace") or 0),

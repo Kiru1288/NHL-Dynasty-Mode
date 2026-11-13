@@ -1415,7 +1415,7 @@ def _gen_injuries(F: _Pass) -> None:
         out = "week-to-week" if games <= 10 else "month-to-month" if games <= 30 else "out long-term"
         major = games >= 15 or sev in ("major", "severe", "season_ending")
         acct = _insider("lee") if major or info["ovr"] >= 82 else _beat_writer(F, tid)
-        _add_post(F, acct, f"{F.team(tid).get('abbr')} injury update: {info['name']} is {out} (est. {games} games). {_season_line(info) if info['gp'] else ''}".strip(),
+        _add_post(F, acct, f"{F.team(tid).get('abbr')} injury update: {info['name']} is {out} (est. {games} {'game' if str(games) == '1' else 'games'}). {_season_line(info) if info['gp'] else ''}".strip(),
                   kind="injury", cat="injury", when=F.stamp(F.iso, 10 * 60, 18 * 60, rng), team_ids=[tid], player_id=pid, player_name=info["name"],
                   mag=1.0 + major, star=F.star(info), sentiment=-0.5, knowledge="confirmed")
         if major and info["ovr"] >= 78:
@@ -1598,6 +1598,17 @@ def _gen_trades(F: _Pass) -> None:
                     mag=mag, sentiment=0.0, knowledge="confirmed", source_trade_id=key)
 
 
+def _echoes_headline(head: str, line: str) -> bool:
+    """True when a summary sentence just restates the headline ("X spends a day on a
+    hospital visit. X spent time on a hospital visit.") so the post shows it once."""
+    def words(t: str) -> set:
+        return {w for w in re.findall(r"[\w']+", str(t or "").lower()) if len(w) > 3}
+    lw = words(line)
+    if not lw:
+        return True
+    return len(lw & words(head)) / float(len(lw)) >= 0.6
+
+
 def _gen_storylines(F: _Pass) -> None:
     rows, seen = _seen(F.st, "story")
     n = 0
@@ -1612,13 +1623,40 @@ def _gen_storylines(F: _Pass) -> None:
         head = str(ev.get("headline") or "").strip()
         if heat < 28 or len(head) < 12:
             continue
+        # one beat per storyline template every few days: "The value behind X's stat line" five times in a day reads as a bot
+        pname = str(ev.get("player_name") or "").strip()
+        tpl = (head.replace(pname, "{p}") if pname else head).lower()
+        tpls = F.st.setdefault("story_tpl", {})
+        if pname and str(tpls.get(tpl) or "") >= _iso_shift(F.iso, -4):
+            continue
+        tpls[tpl] = F.iso
+        if len(tpls) > 400:
+            for k_ in sorted(tpls, key=lambda k: tpls[k])[:200]:
+                tpls.pop(k_, None)
         n += 1
         tid = str(ev.get("team_id") or ev.get("team") or "")
         rng = F.rand("story", key)
         acct = {"id": f"rep_{ev.get('reporter_id')}", "name": str(ev.get("reporter_name") or "League Wire"), "handle": f"@{_slug(ev.get('reporter_name') or 'LeagueWire')}",
                 "type": "beat", "badge": "media", "outlet": str(ev.get("outlet_name") or ""), "verified": True} if ev.get("reporter_name") else _beat_writer(F, tid)
-        _add_post(F, acct, head[:280], kind="story", cat="rumor" if str(ev.get("knowledge_type")) in ("rumor", "speculation", "claim") else "news",
-                  when=F.stamp(F.iso, 8 * 60, 21 * 60, rng), team_ids=[tid], player_id=str(ev.get("player_id") or ""), player_name=str(ev.get("player_name") or ""),
+        # the post carries the story, not just its headline: the first line of the report, and his numbers when he has played
+        summ = str(ev.get("summary") or "").strip()
+        first = summ.split(". ")[0].strip().rstrip(".") if summ else ""
+        text = head if not first or first.lower() in head.lower() or _echoes_headline(head, first) else f"{head.rstrip('.')}. {first}."
+        pid = str(ev.get("player_id") or "")
+        attach = None
+        row = F.pss.get(pid) if (pid and isinstance(F.pss, dict)) else None
+        if isinstance(row, dict) and _si(row.get("gp")) > 0:
+            info = F.pinfo(pid, pname, tid)
+            if str(info.get("pos") or "").upper().startswith("G"):
+                line = f"{_si(row.get('gp'))} GP · {_si(row.get('w'))}-{_si(row.get('l'))}"
+            else:
+                line = f"{_si(row.get('gp'))} GP · {_si(row.get('g'))}-{_si(row.get('a'))}-{_si(row.get('pts'))}"
+            try:
+                attach = _statline_attach(F, info, line, label="This season")
+            except Exception:
+                attach = None
+        _add_post(F, acct, text[:280], kind="story", cat="rumor" if str(ev.get("knowledge_type")) in ("rumor", "speculation", "claim") else "news",
+                  when=F.stamp(F.iso, 8 * 60, 21 * 60, rng), team_ids=[tid], player_id=pid, player_name=pname, attach=attach,
                   mag=0.6 + heat / 50.0, knowledge=str(ev.get("knowledge_type") or "report"), storyline_id=str(ev.get("storyline_id") or ""), related=head)
 
 

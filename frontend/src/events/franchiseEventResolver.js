@@ -25,7 +25,7 @@ const FreeAgencyEventMenu = lazyNamed(loadOffseason, "FreeAgencyEventMenu");
 const SalaryCapEventMenu = lazyNamed(loadOffseason, "SalaryCapEventMenu");
 const DevelopmentReportEventMenu = lazyNamed(loadOffseason, "DevelopmentReportEventMenu");
 const RosterCleanupEventMenu = lazyNamed(loadOffseason, "RosterCleanupEventMenu");
-const NextSeasonRevealEventMenu = lazyNamed(loadOffseason, "NextSeasonRevealEventMenu");
+const TrainingCampMenu = React.lazy(() => import("./trainingCamp/TrainingCamp"));
 
 const EVENT_MAP = {
   playoffs_start: {
@@ -131,9 +131,9 @@ const EVENT_MAP = {
   },
   next_season_reveal: {
     key: "next_season_reveal",
-    title: "New Season",
-    component: wrapMenu(NextSeasonRevealEventMenu),
-    ctaLabel: "Enter Preseason",
+    title: "Training Camp",
+    component: wrapMenu(TrainingCampMenu),
+    ctaLabel: "Open Training Camp",
     getEventData: (fs) => ({ next_season: fs?.next_season }),
   },
   opening_night: {
@@ -228,7 +228,7 @@ export function getFranchisePhaseCta(franchiseState) {
     if (stage === "re_sign") return "Resume Offseason Timeline";
     if (stage === "free_agency") return "Resume Offseason Timeline";
     if (stage === "free_agency" || next === "generate_next_season") return "Generate Next Season";
-    if (stage === "next_season_reveal" || next === "preseason_start") return "Enter Preseason";
+    if (stage === "next_season_reveal" || next === "preseason_start") return "Open Training Camp";
     return "Resume Offseason Timeline";
   }
   if (phase === "preseason" || phase === "regular") return "Advance Day";

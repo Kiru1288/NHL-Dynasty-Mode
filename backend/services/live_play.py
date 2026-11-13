@@ -28,6 +28,7 @@ SIDES = ("home", "away")
 BLUE = 25.0
 NET_X = 89.0
 R_MIN, R_MAX, R_BURST = 0.75, 1.35, 1.6
+R_READY = 2.4   # clock rate while the engine's shooter is set in his spot waiting for the scheduled shot
 ANTIC = 1.0   # seconds of look-ahead for the units' positioning
 PASS_V, DUMP_V, CARRY_V, RUSH_V = 66.0, 58.0, 14.0, 19.0
 
@@ -244,19 +245,23 @@ class PlaySim:
 
     def _rate_step(self, dt: float, R: float) -> float:
         eta = self._eta()
+        rdy = False
         if self.B is not None and self.B.get("type") in ("attempt", "goal"):
             if self.ready():
-                want = min(R_MAX, max(1.0, R / 0.8))      # shooter waiting: let the clock catch up (protect meanwhile)
+                rdy = True
+                # shooter set in his spot: the clock hurries to his shot instead of him standing there with it
+                want = min(R_READY, max(1.0, R / 0.55))
             elif eta + 0.5 > R:
                 want = R / max(0.4, eta + 0.5)            # late: slow the clock, the director pushes
             else:
                 want = 1.0
         else:
             want = 1.0
-        want = max(R_MIN, min(R_MAX, want))
-        lim = 0.5 * dt                             # smooth: at most 0.5 per second change
+        top = R_READY if rdy else R_MAX
+        want = max(R_MIN, min(top, want))
+        lim = (2.4 if rdy or self.rate > R_MAX else 0.5) * dt   # smooth: at most 0.5 per second change (faster for a set shooter)
         self.rate += max(-lim, min(lim, want - self.rate))
-        self.rate = max(R_MIN, min(R_MAX, self.rate))
+        self.rate = max(R_MIN, min(top if rdy else max(R_MAX, self.rate), self.rate))
         return self.rate
 
     # ── decisions
@@ -339,6 +344,13 @@ class PlaySim:
                 if cu < BLUE:
                     tu, tv = (BLUE - 3.0 if self._teammate_offside(T) else BLUE + 6.0), max(-30.0, min(30.0, tv))
                 return self.ab(T, tu, tv)
+        if T == X and own != S and S and cu >= BLUE + 2.0 and self._final_approach():
+            # the feeder for the engine's chance works the wall or the goal line, not the slot: an open man
+            # in the slot passing it away is exactly what doesn't happen in a real game
+            side_ = math.copysign(1.0, cv if abs(cv) > 3.0 else lane)
+            if cu > 70.0:
+                return self.ab(T, 82.0, side_ * 27.0)
+            return self.ab(T, max(48.0, min(64.0, cu)), side_ * 31.0)
         if T == X and self._final_approach() and cu < BLUE + 2.0:   # direct line to the zone
             if self._teammate_offside(T):
                 return self.ab(T, min(cu + 12.0, BLUE - 3.0), lane * 0.6)
@@ -451,6 +463,8 @@ class PlaySim:
             return
         if self.changing == self.owner:
             self.changing = None
+            if self._open_look(pt, T, X, S, pressure, held, force=True):
+                return                              # open in the slot at the end of his shift: he shoots, then changes
             if cands:
                 self._do_pass(cands[0][1], pt)      # gives it up before heading to the bench
             elif -BLUE < pu and not self._teammate_offside(T) and pu < BLUE:
@@ -470,6 +484,9 @@ class PlaySim:
                     self._do_pass(S, pt)    # the shooter is in his spot: find him
                     return
             R = float(self.B["t"]) - self.gc if self.B is not None else 99.0
+            if cands and self._wide_open(cands[0], held) and (R > 1.6 or cands[0][1] == S):
+                self._do_pass(cands[0][1], pt)      # a teammate all alone with a clear lane: he gets it now
+                return
             if cands and (pressure < 7.0 or held > self.rng.uniform(2.0, 3.5)) and cands[0][0] > 6.0 and (R > 1.6 or cands[0][1] == S):
                 self._do_pass(cands[0][1], pt)
                 return
@@ -496,45 +513,87 @@ class PlaySim:
             else:
                 self._do_dump(pt, chip=True)    # off the glass and out
             return
-        if cands and (pressure < 6.0 or held > self.rng.uniform(1.8, 3.2)) and cands[0][0] > 5.0:
+        if cands and (self._wide_open(cands[0], held) or ((pressure < 6.0 or held > self.rng.uniform(1.8, 3.2)) and cands[0][0] > 5.0)):
             self._do_pass(cands[0][1], pt)
             return
         if -BLUE < pu < BLUE and pressure < 7.0 and self.rng.random() < 0.3 and not self._teammate_offside(T):
             self._do_dump(pt)
 
-    def _open_look(self, pt: float, T: str, X: Optional[str], S: Optional[str], pressure: float, held: float) -> bool:
-        """A carrier left alone in the slot shoots instead of passing it away.
+    def _wide_open(self, cand: Tuple[float, str], held: float) -> bool:
+        """The best option is a teammate with nobody near him, a clean lane and a better spot than the carrier's."""
+        if held < 0.45:
+            return False
+        q = cand[1]
+        st = self.mt.pos.get(q)
+        if st is None:
+            return False
+        T = self.side
+        if self._nearest_opp_dist(T, st[0], st[1]) < 13.0:
+            return False
+        own = self.mt.pos.get(self.owner)
+        if own is not None:
+            ou, ov = self.rel(T, own[0], own[1])
+            if 54.0 <= ou < 86.0 and abs(ov) < 24.0 and self._nearest_opp_dist(T, own[0], own[1]) > 7.5:
+                # he is open in the slot himself: only a tap-in at the far post beats his own shot
+                qu_, qv_ = self.rel(T, st[0], st[1])
+                if math.hypot(89.0 - qu_, qv_) > 14.0:
+                    return False
+        lane = min((self._seg_dist(self.puck[0], self.puck[1], st[0], st[1], self.mt.pos[o][0], self.mt.pos[o][1])
+                    for o in self._skaters(_opp(T))), default=30.0)
+        if lane < 6.0:
+            return False
+        qu, qv = self.rel(T, st[0], st[1])
+        pu, pv = self.rel(T, *self.puck)
+        better = qu > pu + 6.0 or (qu >= BLUE and math.hypot(89.0 - qu, qv) + 8.0 < math.hypot(89.0 - pu, pv))
+        return better or cand[0] > 22.0
+
+    def _open_look(self, pt: float, T: str, X: Optional[str], S: Optional[str], pressure: float, held: float, force: bool = False) -> bool:
+        """A carrier with time and a lane shoots instead of passing it away.
 
         The engine decides which shots count, so a look the engine did not schedule is shown as an attempt that
         misses the net or is blocked: nothing reaches the goalie and the box score is unchanged. The engine's own
         shooter, close to his scheduled shot, is left to the director."""
-        if self.owner == S and T == X:
-            return False
         st = self.mt.pos.get(self.owner)
         if st is None:
             return False
         u, v = self.rel(T, st[0], st[1])
-        if not (60.0 < u < 86.0 and abs(v) < 24.0):
+        dist_net = math.hypot(89.0 - u, v)
+        slot = 54.0 <= u < 86.0 and abs(v) < 24.0 and dist_net < 34.0
+        point = BLUE + 2.0 <= u < 54.0 and abs(v) < 30.0
+        if not (slot or point):
             return False
-        # not while the real chance for this team is about to happen (the puck must come back in time for it)
         R = float(self.B["t"]) - self.gc if self.B is not None else 99.0
-        if T == X and (R < 7.0 or self._final_approach()):
-            return False
+        if T == X:
+            if self.owner == S:
+                if R < 8.0 or self._final_approach():
+                    return False          # his real shot is coming: the director has him
+            elif R < 4.0 or (self._final_approach() and R < 6.0):
+                return False              # the puck has to reach the engine's shooter in time
         last = self.__dict__.setdefault("_look_gc", {}).get(T, -99.0)
-        if self.gc - last < 14.0:
+        if force:
+            if not slot or pressure <= 6.0:
+                return False
+        elif self.gc - last < (2.5 if slot else 12.0):
             return False
         tr = self._tr(self.owner)
         oiq, hands = float(tr.get("oiq", 0.5)), float(tr.get("hands", 0.5))
-        dist_net = math.hypot(89.0 - u, v)
-        open_ = pressure > 8.5
-        if not open_ or held < 0.35:
-            return False
-        p = 0.22 + 0.3 * oiq + (0.18 if dist_net < 25.0 else 0.0) + (0.12 if pressure > 14.0 else 0.0)
+        if force:
+            p = 1.0
+        elif slot:
+            if pressure <= 7.5 or held < 0.3:
+                return False
+            p = (0.72 if dist_net < 25.0 else 0.5) + 0.2 * oiq + (0.08 if pressure > 14.0 else 0.0)
+        else:
+            if pressure <= 12.0 or held < 1.0:
+                return False
+            p = 0.18 + 0.15 * hands
         if self.rng.random() > p:
-            # he holds it and walks in rather than giving it up while he's open
-            self.held_since = min(self.held_since, pt - 0.2)
-            self.next_decide = pt + self.rng.uniform(0.35, 0.6)
-            return True
+            if slot:
+                # he holds it and walks in rather than giving it up while he's open
+                self.held_since = min(self.held_since, pt - 0.2)
+                self.next_decide = pt + self.rng.uniform(0.3, 0.5)
+                return True
+            return False
         self._look_gc[T] = self.gc
         # aim just outside a post; a defender in the lane gets a piece of it
         side_ = 1.0 if self.rng.random() < 0.5 else -1.0
@@ -682,7 +741,7 @@ class PlaySim:
         # clock
         rate = self._rate_step(dt, R)
         is_shot = B is not None and B.get("type") in ("attempt", "goal")
-        if is_shot and self.ready() and R <= R_BURST * dt + 1e-9:
+        if is_shot and self.ready() and R <= max(R_BURST, rate) * dt + 1e-9:
             self.gc = tB
             self._release(pt, forced=False)
             return

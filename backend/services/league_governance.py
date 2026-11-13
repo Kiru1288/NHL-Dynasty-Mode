@@ -45,10 +45,12 @@ LOBBY_SWING = 0.18
 LOBBY_TARGETS = 4
 #: Franchise value growth per point of fan confidence above 55 (x/100 per season).
 FAN_VALUE_COEF = 0.15
-#: Proposals reach the Board after committee vetting, so a neutral governor sits a
-#: little above whatever bar the proposal needs — the same head start for every
-#: category. Lean, the rule's popularity and personality decide the close ones.
-VETTING_MARGIN = 0.04
+#: A neutral governor sits right at whatever bar the proposal needs — the same for
+#: every category. The rule's popularity (base), what its effects do to each club
+#: (EFFECT_INTEREST + lean) and owner personality decide it. At +0.04 (before effect
+#: interest existed) ~3 in 4 proposals passed and whole meetings went 5-for-5; now
+#: roughly 3 in 5 pass, by margins that follow club interest.
+VETTING_MARGIN = 0.0
 #: Owners lean slightly toward keeping a rule they already operate under.
 REPEAL_STATUS_QUO = -0.03
 #: Chance a meeting includes a repeal vote once the rulebook has this many rules.
@@ -696,6 +698,89 @@ def _taste(session: Any, tid: str, pid: str) -> float:
     return (_unit(_salt(session), "gov-taste", tid, pid) * 2.0 - 1.0) * 0.12
 
 
+#: How each kind of club values one (scaled) unit of an effect: {effect: {trait: weight}}.
+#: Most catalog rules carry no hand-written lean, so without this every governor
+#: voted the same coin (committee head start + a random owner taste) and almost every
+#: proposal passed. Interest makes votes follow what the rule actually does to a club:
+#: revenue sharing splits big and small markets, playoff-gate rules split contenders
+#: and rebuilders, floor and cap moves split rich and money-losing clubs.
+EFFECT_INTEREST: Dict[str, Dict[str, float]] = {
+    "rev_all": {"all": 0.03, "poor": 0.02},
+    "rev_small": {"small": 0.05, "large": -0.015},
+    "rev_large": {"large": 0.05, "small": -0.015},
+    "revenue_share": {"small": 0.08, "poor": 0.05, "large": -0.09, "rich": -0.03},
+    "opex": {"all": -0.03, "poor": -0.04},
+    "star_rev": {"large": 0.007, "contender": 0.006, "small": -0.002},
+    "fan": {"all": 0.012},
+    "playoff_rev": {"contender": 0.006, "rebuilder": -0.003},
+    "value_growth": {"all": 0.06, "rich": 0.03},
+    "cap_growth": {"cap_tight": 0.08, "poor": -0.07, "small": -0.03},
+    "cap_adjust_m": {"cap_tight": 0.05, "contender": 0.015, "poor": -0.045, "small": -0.015},
+    "floor_ratio": {"poor": -5.0, "small": -3.0, "rich": 1.5, "large": 1.0},
+    "max_salary_pct": {"contender": 2.5, "rich": 2.0, "large": 1.5, "small": -2.5, "poor": -2.5},
+    "bonus_pct": {"rich": 1.2, "large": 0.6, "poor": -1.2, "small": -0.6},
+    "bonus_floor_m": {"rich": 0.002, "poor": -0.003},
+    "min_salary_m": {"poor": -0.5, "cap_tight": -0.4},
+    "fa_bonus_demand": {"poor": -0.008, "small": -0.004, "rich": 0.003},
+    "retention_slots": {"contender": 0.04, "cap_tight": 0.03},
+    "retention_max_pct": {"contender": 0.003, "cap_tight": 0.002},
+    "trade_volume": {"contender": 0.0015, "rebuilder": 0.0015},
+    "trade_demand_rate": {"all": -0.002, "small": -0.003},
+    "scouting_budget": {"rebuilder": 0.004, "rich": 0.001, "poor": -0.002},
+    "injury_rate": {"all": -0.006, "contender": -0.02},
+    "relocation_ease": {"small": -1.2, "large": -0.3, "poor": 0.4},
+    "expansion_pressure": {"poor": 0.003, "large": -0.002},
+    "scoring_pace": {"contender": 0.004, "rebuilder": -0.002},
+    "penalty_rate": {"all": -0.001},
+    "home_ice": {"contender": 0.001},
+}
+#: Total effect-driven interest is capped so one huge number can't decide a club alone.
+INTEREST_CAP = 0.32
+
+_INTEREST_GROUP_COPY = {
+    "small": "Small markets", "medium": "Mid markets", "large": "Large markets",
+    "rich": "Profitable clubs", "poor": "Money-losing clubs",
+    "contender": "Contenders", "rebuilder": "Rebuilders",
+    "cap_tight": "Cap-tight clubs", "cap_room": "Clubs with cap room",
+}
+
+
+def _effect_short(key: str, v_scaled: float) -> str:
+    """'Playoff revenue −30%' style phrase for one effect (value already scaled)."""
+    row = _effect_rows({key: v_scaled}, scaled=True)[0]
+    return f"{row['label']} {row['text']}"
+
+
+def effect_interest(effects: Dict[str, float], traits: Any, *, sign: float = 1.0) -> Tuple[float, List[Tuple[str, str, float]]]:
+    """Sum of what a rule's effects are worth to a club with ``traits``.
+
+    Returns (total, terms) where each term is (trait, effect_key, weight); 'all' terms
+    move every club equally and are not a club-specific reason."""
+    tset = set(traits or ())
+    tset.add("all")
+    total = 0.0
+    terms: List[Tuple[str, str, float]] = []
+    for k, raw in (effects or {}).items():
+        if k in ABSOLUTE_EFFECTS:
+            continue
+        spec = EFFECT_INTEREST.get(k)
+        if not spec:
+            continue
+        v = _scaled(k, float(raw)) * sign
+        for trait, w in spec.items():
+            if trait in tset:
+                d = w * v
+                if abs(d) < 1e-4:
+                    continue
+                total += d
+                terms.append((trait, k, d))
+    if abs(total) > INTEREST_CAP:
+        f = INTEREST_CAP / abs(total)
+        terms = [(a, b, c * f) for a, b, c in terms]
+        total = math.copysign(INTEREST_CAP, total)
+    return total, terms
+
+
 def _rule_probability(rule: Dict[str, Any], t: Dict[str, Any], session: Any, tid: str, pid: str, *, repeal: bool = False) -> Tuple[float, Dict[str, str]]:
     """P(yes) and the reason each way. A repeal flips the rule's lean."""
     # A repeal reverses the rule's lean, but owners are less dug in on undoing a rule
@@ -720,19 +805,48 @@ def _rule_probability(rule: Dict[str, Any], t: Dict[str, Any], session: Any, tid
                 pos = (_TRAIT_COPY.get(trait, trait), w)
             if -w > neg[1]:
                 neg = (_TRAIT_COPY.get(trait, trait), -w)
+    # What the effects themselves do to this club (half weight when the catalog already
+    # wrote a club-type lean, so the two don't double count).
+    has_lean = any(k != "all" for k in (rule.get("lean") or {}))
+    eff_sign = sign if repeal else 1.0
+    interest, terms = effect_interest(rule.get("effects") or {}, t["traits"], sign=eff_sign)
+    iw = 0.5 if has_lean else 1.0
+    p += interest * iw
+    pos_e, neg_e, all_e = ("", 0.0), ("", 0.0), ("", 0.0)
+    for trait, key, d in terms:
+        d *= iw
+        v_scaled = _scaled(key, float(rule["effects"][key])) * eff_sign
+        if trait == "all":
+            if abs(d) > abs(all_e[1]):
+                all_e = (_effect_tone(key, v_scaled)[1], d)
+            continue
+        short = _effect_short(key, v_scaled)
+        short = short[:1].lower() + short[1:]
+        if d > pos_e[1]:
+            pos_e = (f"{_TRAIT_COPY.get(trait, trait)}: gains from {short}", d)
+        if -d > neg_e[1]:
+            neg_e = (f"{_TRAIT_COPY.get(trait, trait)}: loses out on {short}", -d)
     taste = _taste(session, tid, pid)
     p += taste
     pop = sign * base
-    if pos[0]:
+    if pos_e[0] and pos_e[1] >= pos[1]:
+        yes_r = pos_e[0]
+    elif pos[0]:
         yes_r = f"{pos[0]} — helps them"
+    elif all_e[0] and all_e[1] > 0.01:
+        yes_r = all_e[0]
     elif pop >= 0.08:
         yes_r = "Popular around the league"
     elif taste > 0.03:
         yes_r = "Owner likes it"
     else:
         yes_r = "Backs the committee"
-    if neg[0]:
+    if neg_e[0] and neg_e[1] >= neg[1]:
+        no_r = neg_e[0]
+    elif neg[0]:
         no_r = f"{neg[0]} — hurts them"
+    elif all_e[0] and all_e[1] < -0.01:
+        no_r = all_e[0]
     elif pop <= -0.05:
         no_r = "Unpopular with owners"
     elif taste < -0.03:
@@ -2526,6 +2640,358 @@ def run_europe_moves(session: Any) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Proposal analysis (Board screen): who a rule helps or hurts, what it does to the
+# user's club in dollars, and the projected vote by club.
+# ---------------------------------------------------------------------------
+
+#: Playoff gate the revenue model pays (league_operations._playoff_revenue_bonus):
+#: $6M for a playoff club, +$22M more for the champion.
+PLAYOFF_RUN_M = 6.0
+CUP_RUN_M = 28.0
+
+_GROUP_ORDER = ("large", "medium", "small", "contender", "rebuilder", "rich", "poor", "cap_tight", "cap_room")
+
+
+def _analysis_context(session: Any, rows: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """Everything the per-proposal analysis needs about the user's club, computed once."""
+    uid = str(getattr(session, "user_team_id", "") or "")
+    team = (getattr(session, "team_by_id", None) or {}).get(uid)
+    if rows is None:
+        rows = _safe(lambda: _team_rows(session), {})
+    row = rows.get(uid) or {}
+    sy = _season(session)
+    try:
+        traits = set(_user_traits_cache(session))
+    except Exception:
+        traits = {"all", str(row.get("market_tier_key") or "medium")}
+    large = [r for r in rows.values() if r.get("market_tier_key") == "large"]
+    small = [r for r in rows.values() if r.get("market_tier_key") == "small"]
+    cap_upper = lower = None
+    try:
+        from app.sim_engine.economy.cap_engine import nhl_lower_limit_millions, nhl_upper_limit_millions
+
+        cap_upper = float(nhl_upper_limit_millions(sy + 1, _league(session)))
+        lower = float(nhl_lower_limit_millions(sy + 1, _league(session)))
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
+    try:
+        from services.franchise_scouting import _ensure_scouting_state
+
+        scouting = float(_ensure_scouting_state(session).get("budget") or 0)
+    except Exception:
+        scouting = 0.0
+    vrow = (ensure_governance(session).get("franchise_values") or {}).get(uid) or {}
+    revs = [_sf(r.get("revenue")) for r in rows.values() if r.get("revenue") is not None]
+    return {
+        "uid": uid,
+        "abbr": _team_abbr(team) if team is not None else "",
+        "name": _team_name(team) if team is not None else "Your club",
+        "traits": traits,
+        "tier": str(row.get("market_tier_key") or "medium"),
+        "revenue": _sf(row.get("revenue")),
+        "profit": _sf(row.get("profit")),
+        "payroll": _sf(row.get("payroll_m")),
+        "fan": _sf(row.get("fan_sentiment"), 55.0),
+        "star_m": _sf(row.get("superstar_revenue_boost")),
+        "value_b": _sf(vrow.get("value_b") or row.get("franchise_value_b")),
+        "scouting": scouting,
+        "cap_upper": cap_upper,
+        "cap_lower": lower,
+        "cap_space": _safe(lambda: _cap_space(session, team), None) if team is not None else None,
+        "large_rev": sum(_sf(r.get("revenue")) for r in large),
+        "n_large": len(large),
+        "n_small": len(small),
+        "avg_rev": (sum(revs) / len(revs)) if revs else 0.0,
+        "on_ice": _safe(lambda: _on_ice_summary(session), {}),
+        "mods": (ensure_governance(session).get("modifiers") or {}),
+    }
+
+
+def _money_txt(m: float, unit: str = "M") -> str:
+    return f"{'+' if m >= 0 else '−'}${abs(m):.1f}{unit}"
+
+
+def _club_effect(key: str, v: float, ctx: Dict[str, Any]) -> Tuple[Optional[str], Optional[float]]:
+    """What one (scaled) effect does to the user's club: (sentence, $M a year or None)."""
+    rev = ctx["revenue"]
+    tier = ctx["tier"]
+    if key == "rev_all" and rev:
+        d = rev * v / 100.0
+        return f"{_money_txt(d)} a year on your ${rev:.0f}M revenue", d
+    if key in ("rev_small", "rev_large"):
+        want = "small" if key == "rev_small" else "large"
+        if tier != want:
+            return f"No direct effect: you are a {'mid' if tier == 'medium' else tier}-market club", 0.0
+        d = rev * v / 100.0
+        return f"{_money_txt(d)} a year on your ${rev:.0f}M revenue", d
+    if key == "revenue_share":
+        pool = ctx["large_rev"] * v / 100.0
+        if tier == "small" and ctx["n_small"]:
+            d = pool / ctx["n_small"]
+            return f"You receive {_money_txt(d)} a year from the big-market pool", d
+        if tier == "large" and ctx["n_large"]:
+            d = -pool / ctx["n_large"]
+            return f"You pay {_money_txt(abs(d))[1:]} a year into the pool" if d < 0 else f"You get back {_money_txt(d)} a year", d
+        return "Mid markets neither pay into nor draw from the pool", 0.0
+    if key == "opex" and rev:
+        d = -rev * v / 100.0
+        return f"Operating costs {_money_txt(-d)} a year ({v:+.2f} pts of revenue)", d
+    if key == "star_rev":
+        if ctx["star_m"] > 0:
+            d = ctx["star_m"] * v / 100.0
+            return f"{_money_txt(d)} a year on your ${ctx['star_m']:.1f}M of star revenue", d
+        return "You have no superstar revenue right now, so nothing yet", 0.0
+    if key == "fan" and rev:
+        cur = 0.70 + 0.45 * _clamp(ctx["fan"], 0, 100) / 100.0
+        new = 0.70 + 0.45 * _clamp(ctx["fan"] + v, 0, 100) / 100.0
+        d = rev * (new - cur) / max(0.1, cur)
+        return f"Fan sentiment {v:+.1f} is worth about {_money_txt(d)} a year at the gate", d
+    if key == "playoff_rev":
+        return (f"A playoff run pays {_money_txt(PLAYOFF_RUN_M * v / 100.0)}, a Cup run "
+                f"{_money_txt(CUP_RUN_M * v / 100.0)} (gate on ${PLAYOFF_RUN_M:.0f}M / ${CUP_RUN_M:.0f}M)"), (
+                    PLAYOFF_RUN_M * v / 100.0 if "contender" in ctx["traits"] else None)
+    if key == "value_growth" and ctx["value_b"]:
+        d = ctx["value_b"] * 1000.0 * v / 100.0
+        return f"{_money_txt(d)} a season on your ${ctx['value_b']:.2f}B franchise value", None
+    if key == "cap_growth" and ctx["cap_upper"]:
+        d = ctx["cap_upper"] * v / 100.0
+        return f"The cap grows {_money_txt(d)} more each season (on ${ctx['cap_upper']:.1f}M)", None
+    if key == "cap_adjust_m":
+        cs = ctx.get("cap_space")
+        if cs is not None:
+            return f"Your cap space next season: ${cs:.1f}M → ${cs + v:.1f}M", None
+        return f"Next season's cap {_money_txt(v)}", None
+    if key == "floor_ratio" and ctx["cap_upper"]:
+        d = ctx["cap_upper"] * v
+        floor = ctx.get("cap_lower")
+        tail = f" to ${floor + d:.1f}M" if floor else ""
+        pay = f"; your payroll is ${ctx['payroll']:.1f}M" if ctx["payroll"] else ""
+        return f"Payroll floor moves {_money_txt(d)}{tail}{pay}", None
+    if key == "max_salary_pct" and ctx["cap_upper"]:
+        return f"Top contract ceiling becomes ${ctx['cap_upper'] * (0.20 + v):.1f}M (was ${ctx['cap_upper'] * 0.20:.1f}M)", None
+    if key == "min_salary_m":
+        return f"Every depth contract costs {_money_txt(v * 1000, 'K')} more" if v >= 0 else f"Depth contracts {_money_txt(v * 1000, 'K')} cheaper", None
+    if key == "scouting_budget" and ctx["scouting"]:
+        d = ctx["scouting"] * v / 100.0
+        return f"Your scouting budget {'+' if d >= 0 else '−'}${abs(d) / 1e6:.2f}M (now ${ctx['scouting'] / 1e6:.2f}M)", None
+    if key in ("scoring_pace", "penalty_rate", "pp_efficiency"):
+        cur_key = {"scoring_pace": "scoring_pct", "penalty_rate": "penalty_pct", "pp_efficiency": "pp_pct"}[key]
+        cur = _sf((ctx.get("on_ice") or {}).get(cur_key))
+        what = {"scoring_pace": "League scoring", "penalty_rate": "Penalty calls", "pp_efficiency": "Power-play scoring"}[key]
+        return f"{what}: {cur:+.1f}% → {cur + v:+.1f}% vs. the standard game", None
+    if key == "home_ice":
+        cur = _sf((ctx.get("mods") or {}).get("home_ice"))
+        return f"Home-ice edge {cur:+.0f}% → {cur + v:+.0f}% of normal, for you and every rival", None
+    if key == "injury_rate":
+        cur = _sf((ctx.get("mods") or {}).get("injury_rate"))
+        return f"Your players get hurt {abs(v):.1f}% {'less' if v < 0 else 'more'} often (league rules now {cur:+.1f}% → {cur + v:+.1f}%)", None
+    if key == "trade_demand_rate":
+        return f"Your players ask out {abs(v):.0f}% {'less' if v < 0 else 'more'} often", None
+    if key == "trade_volume":
+        return f"CPU clubs make {abs(v):.0f}% {'more' if v > 0 else 'fewer'} trades: {'more' if v > 0 else 'fewer'} offers reach you", None
+    if key == "fa_bonus_demand":
+        return f"{abs(v):.0f} pts {'more' if v > 0 else 'fewer'} free agents demand a signing bonus", None
+    if key == "ot_minutes":
+        cur = int((ctx.get("on_ice") or {}).get("ot_minutes") or 5)
+        return f"Overtime {cur} → {int(v)} minutes", None
+    if key == "ties_allowed":
+        return ("Games tied after overtime end as ties" if v >= 0.5 else "The shootout settles tied games again"), None
+    if key in ("pts_reg_win", "pts_ot_win", "pts_otl"):
+        what = {"pts_reg_win": "Regulation win", "pts_ot_win": "OT / shootout win", "pts_otl": "OT / shootout loss"}[key]
+        return f"{what} worth {int(v)} point{'s' if int(v) != 1 else ''} (now {(ctx.get('on_ice') or {}).get('points', '2-2-1-0')})", None
+    return None, None
+
+
+def _group_effects(effects: Dict[str, float], lean: Dict[str, float], sign: float = 1.0) -> List[Dict[str, Any]]:
+    """Who a rule helps / hurts, by club type, with the effect that drives it."""
+    base_total, _ = effect_interest(effects, set(), sign=sign)
+    out = []
+    for g in _GROUP_ORDER:
+        total, terms = effect_interest(effects, {g}, sign=sign)
+        spec = total - base_total + sign * float(lean.get(g, 0.0))
+        g_terms = [t for t in terms if t[0] == g]
+        if abs(spec) < 0.015:
+            continue
+        driver = ""
+        if g_terms:
+            k = max(g_terms, key=lambda t: abs(t[2]))[1]
+            driver = _effect_short(k, _scaled(k, float(effects[k])) * sign)
+        out.append({
+            "group": g,
+            "label": _INTEREST_GROUP_COPY.get(g, g),
+            "score": round(spec, 3),
+            "tone": "pro" if spec > 0 else "con",
+            "driver": driver,
+        })
+    out.sort(key=lambda r: -abs(r["score"]))
+    return out
+
+
+def _poisson_binomial_at_least(ps: List[float], need: int) -> float:
+    dist = [1.0]
+    for p in ps:
+        nxt = [0.0] * (len(dist) + 1)
+        for k, q in enumerate(dist):
+            nxt[k] += q * (1.0 - p)
+            nxt[k + 1] += q * p
+        dist = nxt
+    if need <= 0:
+        return 1.0
+    return float(sum(dist[need:])) if need < len(dist) else 0.0
+
+
+def _lean_bucket(p: float) -> str:
+    if p >= 0.7:
+        return "for"
+    if p >= 0.55:
+        return "lean_for"
+    if p > 0.45:
+        return "undecided"
+    if p > 0.3:
+        return "lean_against"
+    return "against"
+
+
+_BLOC_GROUPS = ("large", "medium", "small", "contender", "rebuilder", "poor", "cap_tight")
+
+
+def _projection(prop: Dict[str, Any]) -> Dict[str, Any]:
+    raw = prop.get("_ballots") or []
+    need = int(prop.get("votes_needed") or 0)
+    teams = []
+    ps = []
+    for b in raw:
+        p = _clamp(float(b.get("p") or 0) + float(b.get("lobbied") or 0), 0.01, 0.99)
+        ps.append(p)
+        reason = b.get("reason") or {}
+        teams.append({
+            "team_id": b.get("team_id"),
+            "abbr": b.get("abbr"),
+            "name": b.get("name"),
+            "p": round(p, 3),
+            "lean": _lean_bucket(p),
+            "reason": (reason.get("yes") if p >= 0.5 else reason.get("no")) if isinstance(reason, dict) else reason,
+            "lobbied": bool(b.get("lobbied")),
+            "traits": [_TRAIT_COPY.get(t, t) for t in (b.get("traits") or []) if t != "all"],
+        })
+    teams.sort(key=lambda t: -t["p"])
+    counts: Dict[str, int] = {}
+    for t in teams:
+        counts[t["lean"]] = counts.get(t["lean"], 0) + 1
+    exp = sum(ps)
+    sd = math.sqrt(sum(p * (1 - p) for p in ps)) if ps else 0.0
+    blocs = []
+    for g in _BLOC_GROUPS:
+        mem = [(b, p) for b, p in zip(raw, ps) if g in (b.get("traits") or [])]
+        if not mem:
+            continue
+        blocs.append({
+            "group": g,
+            "label": _INTEREST_GROUP_COPY.get(g, g),
+            "n": len(mem),
+            "expected_yes": round(sum(p for _b, p in mem), 1),
+            "share": round(sum(p for _b, p in mem) / len(mem), 3),
+        })
+    return {
+        "teams": teams,
+        "counts": counts,
+        "expected_yes": round(exp, 1),
+        "sd": round(sd, 1),
+        "votes_needed": need,
+        "n_voters": len(raw) + 1,
+        "p_pass_if_yes": round(_poisson_binomial_at_least(ps, need - 1), 3),
+        "p_pass_if_no": round(_poisson_binomial_at_least(ps, need), 3),
+        "blocs": blocs,
+    }
+
+
+def _result_blocs(prop: Dict[str, Any]) -> List[Dict[str, Any]]:
+    traits_by = {str(b.get("team_id")): set(b.get("traits") or ()) for b in prop.get("_ballots") or []}
+    out = []
+    for g in _BLOC_GROUPS:
+        mem = [b for b in prop.get("ballots") or [] if not b.get("is_user") and g in traits_by.get(str(b.get("team_id")), ())]
+        if not mem:
+            continue
+        y = sum(1 for b in mem if b.get("vote") == "yes")
+        out.append({"group": g, "label": _INTEREST_GROUP_COPY.get(g, g), "n": len(mem), "yes": y, "no": len(mem) - y})
+    return out
+
+
+def proposal_analysis(prop: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
+    """Deep read of one proposal for the Board screen (never changes the proposal)."""
+    kind = prop.get("kind")
+    out: Dict[str, Any] = {}
+    effects: Dict[str, float] = {}
+    lean: Dict[str, float] = {}
+    sign = 1.0
+    if kind in ("rule", "repeal") and prop.get("rule_id") in RULE_BY_ID:
+        rule = RULE_BY_ID[prop["rule_id"]]
+        lean = dict(rule.get("lean") or {})
+        if kind == "repeal":
+            effects = {k: float(v) for k, v in rule["effects"].items() if k not in ABSOLUTE_EFFECTS and k != "cap_adjust_m"}
+            sign = -1.0
+        else:
+            effects = dict(rule["effects"])
+        out["popularity"] = round(float(rule.get("base") or 0.0) * (-0.6 if kind == "repeal" else 1.0), 3)
+    # Effects in full with what each does to the user's club.
+    lines = []
+    net_m = 0.0
+    has_money = False
+    for k, raw in effects.items():
+        v = float(raw) * sign if k not in ABSOLUTE_EFFECTS else float(raw)
+        v_scaled = v if k in ABSOLUTE_EFFECTS else _scaled(k, v)
+        row = _effect_rows({k: v_scaled}, scaled=True)[0]
+        club, m = _club_effect(k, v_scaled, ctx)
+        if m is not None:
+            net_m += m
+            has_money = has_money or abs(m) >= 0.05
+        helps, hurts = [], []
+        for g, w in (EFFECT_INTEREST.get(k) or {}).items():
+            if g == "all":
+                continue
+            (helps if w * v_scaled > 0 else hurts).append(_INTEREST_GROUP_COPY.get(g, g))
+        lines.append({
+            "key": k, "label": row["label"], "text": row["text"], "tone": row["tone"], "note": row["note"],
+            "club": club, "club_m": round(m, 2) if m is not None else None,
+            "helps": helps, "hurts": hurts,
+        })
+    if kind == "expansion":
+        n = int(prop.get("_n_teams") or 32)
+        share = _sf(prop.get("fee_b")) * 1000.0 / max(1, n)
+        lines.append({"key": "fee", "label": "Fee share", "text": f"+${share:.0f}M once", "tone": "pro",
+                      "note": "Paid to every current owner next season", "club": f"{ctx['abbr'] or 'You'} receive +${share:.0f}M next season", "club_m": None, "helps": ["Money-losing clubs"], "hurts": []})
+    out["effects"] = lines
+    # Who it helps / hurts.
+    groups = _group_effects(effects, lean, sign) if effects else []
+    out["groups"] = groups
+    # The user's club.
+    if effects:
+        u_total, u_terms = effect_interest(effects, ctx["traits"], sign=sign)
+        u_total += sum(sign * float(w) for t, w in lean.items() if t in ctx["traits"])
+    else:
+        u_total, u_terms = 0.0, []
+    verdict = "good" if u_total > 0.04 else ("bad" if u_total < -0.04 else "neutral")
+    my_groups = [g for g in groups if g["group"] in ctx["traits"]]
+    out["club"] = {
+        "abbr": ctx["abbr"],
+        "name": ctx["name"],
+        "traits": [_TRAIT_COPY.get(t, t) for t in sorted(ctx["traits"]) if t != "all"],
+        "verdict": verdict,
+        "score": round(u_total, 3),
+        "net_m": round(net_m, 1) if has_money else None,
+        "because": [f"{g['label']} {'gain' if g['score'] > 0 else 'lose'}{(': ' + g['driver']) if g['driver'] else ''}" for g in my_groups][:3],
+    }
+    # Size of the change (largest club-type swing) so a 1% tweak doesn't read as a revolution.
+    mag = max([abs(g["score"]) for g in groups] + [abs(effect_interest(effects, set(), sign=sign)[0]) if effects else 0.0])
+    out["scale"] = "major" if mag >= 0.12 else ("moderate" if mag >= 0.04 else "minor")
+    if prop.get("status") == "pending":
+        out["projection"] = _projection(prop)
+    else:
+        out["result_blocs"] = _result_blocs(prop)
+    return out
+
+
 def public_proposal(prop: Dict[str, Any], *, reveal: bool) -> Dict[str, Any]:
     out = {k: v for k, v in prop.items() if not k.startswith("_")}
     if not reveal or prop.get("status") == "pending":
@@ -2533,11 +2999,11 @@ def public_proposal(prop: Dict[str, Any], *, reveal: bool) -> Dict[str, Any]:
     return out
 
 
-def _user_impact(session: Any) -> Dict[str, Any]:
+def _user_impact(session: Any, rows: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, Any]:
     uid = str(getattr(session, "user_team_id", "") or "")
     out: Dict[str, Any] = {}
     try:
-        fin = _team_rows(session).get(uid) or {}
+        fin = (rows if rows is not None else _team_rows(session)).get(uid) or {}
         out["annual_revenue_m"] = fin.get("revenue")
         out["annual_profit_m"] = fin.get("profit")
     except Exception:
@@ -2763,6 +3229,16 @@ def build_governance_payload(session: Any) -> Dict[str, Any]:
         for rid, row in (gov.get("rulebook") or {}).items()
     ]
     rulebook.sort(key=lambda r: (-int(r.get("season") or 0), r["rule_id"]))
+    rows = _safe(lambda: _team_rows(session), None)
+    ctx = _safe(lambda: _analysis_context(session, rows), None)
+    public_props = []
+    for p in meeting.get("proposals") or []:
+        pub = public_proposal(p, reveal=True)
+        if ctx is not None:
+            a = _safe(lambda p=p: proposal_analysis(p, ctx), None)
+            if a is not None:
+                pub["analysis"] = a
+        public_props.append(pub)
     return {
         "season": sy,
         "season_label": f"{sy}-{(sy + 1) % 100:02d}",
@@ -2770,7 +3246,7 @@ def build_governance_payload(session: Any) -> Dict[str, Any]:
             "status": meeting.get("status") or "none",
             "n_teams": meeting.get("n_teams"),
             "lobby_tokens": meeting.get("lobby_tokens", 0),
-            "proposals": [public_proposal(p, reveal=True) for p in meeting.get("proposals") or []],
+            "proposals": public_props,
         },
         "modifiers": _effect_rows({k: v for k, v in mods.items() if k in EFFECT_SPECS}, scaled=True),
         "rulebook": rulebook,
@@ -2786,7 +3262,7 @@ def build_governance_payload(session: Any) -> Dict[str, Any]:
             "drafts": (gov.get("expansion", {}).get("drafts") or [])[-2:],
         },
         "pending_cap_adjust_m": round(_sf(gov.get("pending_cap_adjust_m")), 2),
-        "user_impact": _user_impact(session),
+        "user_impact": _user_impact(session, rows),
         "catalog_size": len(RULES),
         "rules_never_proposed": sum(1 for r in RULES if r["id"] not in (gov.get("proposed_log") or {})),
         "expansion_draft": _safe_protection_payload(session),

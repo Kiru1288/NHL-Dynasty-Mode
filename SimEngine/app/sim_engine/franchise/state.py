@@ -17,6 +17,42 @@ def _storyline_dedupe_key(ev: Dict[str, Any]) -> str:
     if sk:
         return sk
     return f"{ev.get('type')}|{ev.get('date')}|{str(ev.get('headline') or '')[:200]}"
+def _storyline_is_recent_reprint(session: FranchiseSession, ev: Dict[str, Any], window_days: int = 14) -> bool:
+    """Same headline about the same player/team within two weeks = a reprint, not news.
+
+    The stable-key dedupe missed reprints that came through a second path with its own
+    key (a reporter clash re-published as a CPU locker-room rumour, a life beat bridged
+    onto the wire again), so the Stories feed showed the same card twice."""
+    head = str(ev.get("headline") or "").strip().lower()
+    if not head:
+        return False
+    who = str(ev.get("player_id") or ev.get("team_id") or ev.get("team") or "")
+    key = f"{head}|{who}"
+    seen = getattr(session, "_storyline_headline_seen", None)
+    if not isinstance(seen, dict):
+        seen = {}
+    iso = str(ev.get("calendar_iso") or ev.get("date") or "")[:10]
+    prev = seen.get(key)
+    if prev and iso:
+        try:
+            from datetime import date as _date  # noqa: WPS433
+
+            gap = abs((_date.fromisoformat(iso) - _date.fromisoformat(prev)).days)
+            if gap < window_days:
+                return True
+        except (TypeError, ValueError):
+            pass
+    if iso:
+        seen[key] = iso
+        if len(seen) > 900:
+            seen = dict(list(seen.items())[-700:])
+    try:
+        session._storyline_headline_seen = seen
+    except Exception:
+        pass
+    return False
+
+
 def _merge_simengine_league_news_into_storylines(session: FranchiseSession) -> None:
     """One-time merge of latest SimEngine league season news_events into the franchise feed."""
     sim = getattr(session, "sim", None)
@@ -80,6 +116,8 @@ def _record_storyline(session: FranchiseSession, event: Dict[str, Any]) -> None:
         session._storyline_dedupe = dq
     dk = _storyline_dedupe_key(ev)
     if dk in dq:
+        return
+    if _storyline_is_recent_reprint(session, ev):
         return
     dq.append(dk)
     if len(dq) > 500:

@@ -294,7 +294,7 @@ class MotionV2:
                 tp, tn = float(prev["t"]), float(nxt["t"])
                 sw = max(tp + 0.35 * (tn - tp), tn - 16.0)  # the shooting unit is out early enough to set up at broadcast pace
                 if self.live_mode:
-                    sw = min(sw, max(tp + 0.5, tn - 7.0))   # and early enough to skate into the play from the bench
+                    sw = min(sw, max(tp + 0.5, tn - 13.0))  # early enough that the bench can wait for a good moment to change
                 if (prev.get("att") or {}).get("outcome") == "GOAL":
                     sw = min(sw, tp + 0.5)
                 for r in self._anchors:
@@ -1795,9 +1795,10 @@ class MotionV2:
                 spot.update(self._assign(side, gc, [p for p in D_ids if p != car], [(max(-86.0, pu - 28.0), 16.0), (max(-86.0, pu - 30.0), -16.0)]))
             else:
                 # breakout: wingers on the walls at the hash marks, C swinging low, D to D
-                f_pts = [(-66.0, 37.0 * s), (-60.0, -36.0 * s), (-78.0, -12.0 * s)]
+                # the support moves up with the puck as it comes out: the outlet stays a pass ahead of the carrier
+                f_pts = [(min(-30.0, max(-66.0, pu + 16.0)), 37.0 * s), (min(-28.0, max(-60.0, pu + 22.0)), -34.0 * s), (max(-84.0, min(-40.0, pu + 6.0)), -12.0 * s)]
                 spot.update(self._assign(side, gc, [p for p in F_ids if p != car], f_pts))
-                spot.update(self._assign(side, gc, [p for p in D_ids if p != car], [(-84.0, -16.0 * s), (-70.0, 18.0 * s)]))
+                spot.update(self._assign(side, gc, [p for p in D_ids if p != car], [(max(-86.0, min(-50.0, pu - 12.0)), -16.0 * s), (max(-84.0, min(-46.0, pu - 6.0)), 18.0 * s)]))
             if seg.get("rush"):
                 for pid in list(spot):
                     u, v = spot[pid]
@@ -1841,7 +1842,7 @@ class MotionV2:
                     att = [q for q in opp_ids if q in self.pos and self.loop.book.pos(q) != "G" and q != car_]
                     rel_att = {q: self.rel(side, gc, *self.pos[q][:2]) for q in att}
                     # attackers standing in the slot get a body on them, goal side and tight
-                    slot_att = sorted([q for q in att if rel_att[q][0] < -60.0 and abs(rel_att[q][1]) < 20.0],
+                    slot_att = sorted([q for q in att if rel_att[q][0] < -58.0 and abs(rel_att[q][1]) < 26.0],
                                       key=lambda q: math.hypot(rel_att[q][0] + 89.0, rel_att[q][1]))
                     def _front(q: str) -> Tuple[float, float]:
                         return toward(rel_att[q][0], rel_att[q][1], -89.0, 0.0, 2.8)
@@ -1890,8 +1891,31 @@ class MotionV2:
                 else:            # neutral-zone trap
                     f_pts = [(pu - 8.0, pv * 0.8), (min(pu - 22.0, 5.0), 20.0), (min(pu - 22.0, 5.0), -20.0)]
                     d_pts = [(min(pu - 42.0, -28.0), 14.0), (min(pu - 42.0, -28.0), -14.0)]
-                spot.update(self._assign(side, gc, F_ids, f_pts))
-                spot.update(self._assign(side, gc, D_ids, d_pts))
+                if poss == opp(side) and n >= 4 and n == n_opp:
+                    # they're carrying it up ice: the D keep their gap goal side of the most advanced attackers and
+                    # the backcheckers pick up the lanes, so nobody gets in behind or sits open at the blue line
+                    car_n = seg.get("car") if k in ("carry", "hold") else None
+                    att_n = [q for q in opp_ids if q in self.pos and self.loop.book.pos(q) != "G" and q != car_n]
+                    ra_n = {q: self.rel(side, gc, *self.pos[q][:2]) for q in att_n}
+                    order_n = sorted(att_n, key=lambda q: ra_n[q][0])
+                    if len(order_n) >= 2:
+                        d_pts = [(max(-82.0, min(ra_n[q][0] - 13.0, pu - 10.0)), max(-30.0, min(30.0, ra_n[q][1] * 0.8))) for q in order_n[:2]]
+                        lanes_n = order_n[2:4]
+                        f_keep = f_pts[:1]   # F1 still pressures the carrier
+                        f_pts = f_keep + [(ra_n[q][0] - 5.0, ra_n[q][1] * 0.9) for q in lanes_n] + f_pts[1 + len(lanes_n):]
+                        got_f = self._assign(side, gc, F_ids, f_pts)
+                        spot.update(got_f)
+                        for p_, uv_ in got_f.items():
+                            for j_, q in enumerate(lanes_n):
+                                if uv_ == f_pts[1 + j_]:
+                                    self._marks[p_] = q
+                        spot.update(self._assign(side, gc, D_ids, d_pts))
+                    else:
+                        spot.update(self._assign(side, gc, F_ids, f_pts))
+                        spot.update(self._assign(side, gc, D_ids, d_pts))
+                else:
+                    spot.update(self._assign(side, gc, F_ids, f_pts))
+                    spot.update(self._assign(side, gc, D_ids, d_pts))
             else:
                 # forecheck in their end: F1 on the puck, F2 cuts off the strong wall, F3 high, D hold the line
                 if t_fc == "aggressive":      # 2-1-2: two forwards hunt below the dots, D pinch down the wall
@@ -1950,9 +1974,17 @@ class MotionV2:
                     t0 = cw.get((side, busy))
                     if t0 is None or gc - t0 > 8.0:
                         t0 = cw[(side, busy)] = gc
-                    if gc - t0 < 3.0:
+                    # in the attacking zone he keeps it longer: nobody changes with the puck in the slot
+                    st_b = self.pos.get(busy)
+                    oz = st_b is not None and self.rel(side, gc, st_b[0], st_b[1])[0] > BLUE
+                    nt_ = self._next_att_t(gc)
+                    wait = 6.0 if oz and (nt_ is None or nt_ - gc > 6.0) else 3.0
+                    if gc - t0 < wait:
                         want[side] = list(self.onice[side])
-                        pl.changing = busy
+                        if gc - t0 >= wait - 1.0 or not oz:
+                            pl.changing = busy
+        if self.live_mode:
+            self._change_timing(gc, seg, want, pl)
         for side in SIDES:
             if self.onice[side] and any(a_ <= gc <= b_ for a_, b_ in self._freeze.get(side, [])):
                 want[side] = [p for p in self.onice[side] if p in want[side] or True][:len(want[side]) or 5]
@@ -1962,6 +1994,83 @@ class MotionV2:
                 if pool:
                     want[side].append(pool[0])
         return want
+
+    def _next_att_t(self, gc: float) -> Optional[float]:
+        for r in self._atts:
+            if float(r["t"]) > gc + 1e-9:
+                return float(r["t"])
+        return None
+
+    def _next_shooter(self, gc: float) -> Optional[str]:
+        for r in self._atts:
+            if float(r["t"]) > gc + 1e-9:
+                return (r.get("att") or {}).get("shooter_id")
+        return None
+
+    def _change_timing(self, gc: float, seg: Dict[str, Any], want: Dict[str, List[str]], pl: Any) -> None:
+        """When a bench changes. NHL benches change at whistles when they can, and on the fly only when the puck is
+        going the right way (own possession heading up ice, or a dump deep into the other end), forwards first and
+        the D pair a couple of seconds later. The engine's unit is always on before its next attempt."""
+        dead = seg["k"] in DEAD_KINDS
+        early = self.__dict__.setdefault("_early_chg", {})
+        hold = self.__dict__.setdefault("_chg_hold", {})
+        since = self.__dict__.setdefault("_unit_since", {})
+        nt = self._next_att_t(gc)
+        pens = self.loop._cap.penalties if self.loop._cap is not None else []
+        for side in SIDES:
+            cur = list(self.onice[side])
+            if not cur or gc >= 3600.0:
+                continue
+            # a change made at the last whistle stays made until the engine's own switch time catches up
+            e = early.get(side)
+            if e is not None:
+                if gc >= e["until"] or set(want[side]) == e["to"]:
+                    early.pop(side, None)
+                elif set(want[side]) == e["from"]:
+                    want[side] = list(e["want"])
+            if dead:
+                hold.pop(side, None)
+                if set(want[side]) != set(cur) or nt is None or gc - since.get(side, -99.0) < 18.0:
+                    continue
+                # the clock is stopped: a change due in the next ~25 s of play happens now instead of on the fly
+                for d in (3.0, 6.0, 9.0, 12.0, 15.0, 18.0, 21.0, 25.0):
+                    tf = gc + d
+                    if tf >= nt - 0.5 or any(gc - 2.0 <= pen["start"] <= tf + 2.0 or pen["start"] <= gc < pen["start"] + pen["dur"] + 2.0 for pen in pens):
+                        break
+                    fut = list(self.lineup_at(tf)[side])
+                    if set(fut) != set(cur):
+                        if len(fut) == len(cur):
+                            early[side] = {"from": set(cur), "to": set(fut), "want": fut, "until": tf + 0.5}
+                            want[side] = fut
+                        break
+                continue
+            leave = [p for p in cur if p not in want[side]]
+            enter = [p for p in want[side] if p not in cur]
+            if not leave and not enter:
+                hold.pop(side, None)
+                continue
+            if len(leave) != len(enter) or pl is None:
+                continue            # a penalty or the goalie: no waiting
+            h = hold.setdefault(side, {"t0": gc, "f": None})
+            deadline = h["t0"] + 9.0 if nt is None else min(h["t0"] + 9.0, nt - 3.5)
+            if nt is not None and self._next_shooter(gc) in enter:
+                deadline = min(deadline, h["t0"] + 2.0, nt - 9.0)   # the man the next chance is for needs time to get into it
+            if gc >= deadline:
+                continue
+            pu = pl.rel(side, *pl.puck)[0]
+            own = pl.side == side and pl.mode in ("carry", "pass")
+            good = (own and pu > -BLUE + 5.0) or (pl.mode == "loose" and pu > BLUE + 12.0) or (not own and pl.mode != "loose" and pu > BLUE + 20.0)
+            if not good and h["f"] is None:
+                want[side] = cur
+                continue
+            if h["f"] is None:
+                h["f"] = gc
+            isd = lambda q: self._book_pos(q) == "D"
+            lf = [q for q in leave if not isd(q)]
+            ef = [q for q in enter if not isd(q)]
+            if gc - h["f"] < 2.5 and lf and len(lf) == len(ef) and len(lf) < len(leave):
+                # forwards go first; the D pair waits for them to get on, then goes
+                want[side] = [q for q in cur if q not in lf] + ef
 
     def _sync(self, gc: float, seg: Dict[str, Any], dead: bool) -> None:
         if seg.get("to_bench"):
@@ -1993,6 +2102,8 @@ class MotionV2:
             leave = [p for p in cur if p not in want[side]]
             enter = [p for p in want[side] if p not in cur]
             if leave or enter:
+                if len(enter) >= 2:
+                    self.__dict__.setdefault("_unit_since", {})[side] = gc
                 if cur and len(enter) >= 3 and gc - self._last_change_ev[side] > 20.0:
                     self._last_change_ev[side] = gc
                     roles = {r: p for p, r in assign_roles(want[side], self._book_pos)}
@@ -2920,7 +3031,8 @@ class MotionV2:
             if seg["k"] not in DEAD_KINDS and seg["k"] != "live" and gc > gc_end + 1e-9:
                 # A play that straddles the horn (a shot in the last half-second, its loose puck running past 20:00)
                 # must not hold the clock short of it forever: the horn is reached and the period ends.
-                if seg["g0"] <= gc_end + 1e-9 and self.gc_last < gc_end - 1e-9 and any(
+                # (the straddling segment may already be behind us: the next one starts past the horn)
+                if (seg["g0"] <= gc_end + 1e-9 or self.gc_last >= gc_end - 1.0) and self.gc_last < gc_end - 1e-9 and any(
                         r.get("type") in ("period_end", "final") and abs(float(r["t"]) - gc_end) < 1e-6 for r in self._anchors):
                     self.gc_last = float(gc_end)
                 break

@@ -328,12 +328,177 @@ function resolvePlayer(player, index, label) {
   return full || player || null;
 }
 
+/* ─────────────── season lines + finalist case (real stats from the award rows) ─────────────── */
+
+const SKATER_POS = /^(C|LW|RW|W|F|D|LD|RD)$/;
+
+function rawRow(card) {
+  const p = card?.player;
+  return p && typeof p === "object" ? p : card || {};
+}
+
+function rowPos(card) {
+  return String(cardPosition(card) || rawRow(card)?.position || "").toUpperCase();
+}
+
+function numOf(row, ...keys) {
+  for (const k of keys) {
+    const v = toNum(row?.[k]);
+    if (v !== null) return v;
+  }
+  return null;
+}
+
+function isGoalieCard(card) {
+  const pos = rowPos(card);
+  if (pos === "G") return true;
+  const r = rawRow(card);
+  return !pos && numOf(r, "sv_pct") !== null && numOf(r, "w", "wins") !== null;
+}
+
+function isSkaterCard(card) {
+  return SKATER_POS.test(rowPos(card));
+}
+
+const POS_NAME = { C: "Centre", LW: "Left wing", RW: "Right wing", W: "Wing", F: "Forward", D: "Defence", LD: "Defence", RD: "Defence", G: "Goaltender" };
+
+const AWARD_EXTRAS = {
+  norris: [["toi_pg", "TOI", "toi"], ["blk", "BLK", "int"]],
+  selke: [["takeaways", "TK", "int"], ["blk", "BLK", "int"]],
+  rocket: [["sog", "SOG", "int"]],
+  lady_byng: [["pim", "PIM", "int"]],
+  hart: [["gp", "GP", "int"]],
+  art_ross: [["gp", "GP", "int"]],
+  calder: [["gp", "GP", "int"]],
+  ted_lindsay: [["gp", "GP", "int"]],
+  conn_smythe: [["gp", "GP", "int"]],
+};
+
+/** Season line straight from the award candidate row (goalies: record / SV% / GAA / SO). */
+function seasonLine(card, awardKey) {
+  const r = rawRow(card);
+  const out = [];
+  const add = (key, label, value) => {
+    if (value !== null && value !== undefined && value !== "") out.push({ key, label, value: String(value) });
+  };
+  if (isGoalieCard(card)) {
+    const w = numOf(r, "w", "wins");
+    if (w !== null) add("rec", "W-L-OT", [w, numOf(r, "l", "losses") ?? 0, numOf(r, "otl") ?? 0].join("-"));
+    add("sv", "SV%", formatStat(numOf(r, "sv_pct", "save_pct"), "sv3"));
+    add("gaa", "GAA", formatStat(numOf(r, "gaa"), "dec2"));
+    add("so", "SO", formatStat(numOf(r, "so", "shutouts"), "int"));
+    add("gp", "GP", formatStat(numOf(r, "gp", "games_played"), "int"));
+    return out;
+  }
+  const pts = numOf(r, "pts", "points");
+  if (isSkaterCard(card) || (pts !== null && pts > 0)) {
+    add("g", "G", formatStat(numOf(r, "g", "goals"), "int"));
+    add("a", "A", formatStat(numOf(r, "a", "assists"), "int"));
+    add("pts", "PTS", formatStat(pts, "int"));
+    add("pm", "+/-", formatStat(numOf(r, "plus_minus", "pm"), "signed"));
+    (AWARD_EXTRAS[awardKey] || []).forEach(([k, label, fmt]) => add(k, label, formatStat(numOf(r, k), fmt)));
+    return out;
+  }
+  const dv = formatStat(card?.displayValue ?? r?.display_value);
+  if (dv) add("dv", r?.display_metric || card?.displayMetric || "Score", dv);
+  return out;
+}
+
+function lineFor(card, slide, ev) {
+  const own = seasonLine(card, slide?.awardKey);
+  if (own.length) return own;
+  return finalistStatRows(card, ev).map((row) => ({ key: row.key, label: row.label, value: row.value }));
+}
+
+const CASE_DEFS = {
+  pts: ["points", "int", 1],
+  g: ["goals", "int", 1],
+  a: ["assists", "int", 1],
+  plus_minus: ["plus-minus", "signed", 1],
+  toi_pg: ["ice time per game", "toi", 1],
+  blk: ["blocked shots", "int", 1],
+  takeaways: ["takeaways", "int", 1],
+  sog: ["shots", "int", 1],
+  pim: ["penalty minutes", "int", -1],
+  sv_pct: ["save percentage", "sv3", 1],
+  gaa: ["goals-against average", "dec2", -1],
+  w: ["wins", "int", 1],
+  so: ["shutouts", "int", 1],
+};
+
+const CASE_ORDER = {
+  norris: ["pts", "toi_pg", "blk", "plus_minus"],
+  selke: ["takeaways", "plus_minus", "blk", "pts"],
+  rocket: ["g", "sog", "pts"],
+  lady_byng: ["pim", "pts", "a"],
+  skater: ["pts", "g", "a", "plus_minus"],
+  goalie: ["sv_pct", "gaa", "w", "so"],
+};
+
+/** One short "why he's here" line per finalist, measured against the other finalists only. */
+function finalistCases(cards, awardKey) {
+  const out = new Map();
+  const groups = { goalie: [], skater: [] };
+  cards.forEach((card) => {
+    if (isGoalieCard(card)) groups.goalie.push(card);
+    else if (isSkaterCard(card) || numOf(rawRow(card), "pts", "points") !== null) groups.skater.push(card);
+  });
+  Object.entries(groups).forEach(([role, list]) => {
+    if (!list.length) return;
+    const keys = role === "goalie" ? CASE_ORDER.goalie : CASE_ORDER[awardKey] || CASE_ORDER.skater;
+    list.forEach((card) => {
+      const r = rawRow(card);
+      if (list.length === 1) {
+        const line = seasonLine(card, awardKey).slice(0, 3).map((s) => `${s.value} ${s.label}`).join(" · ");
+        if (cards.length > 1 && line) out.set(card, `Only ${role === "goalie" ? "goaltender" : "skater"} among the finalists: ${line}`);
+        return;
+      }
+      const leads = [];
+      let fallback = null;
+      keys.forEach((key) => {
+        const [noun, fmt, dir] = CASE_DEFS[key];
+        const mine = numOf(r, key);
+        if (mine === null) return;
+        const vals = list.map((c) => numOf(rawRow(c), key)).filter((v) => v !== null);
+        if (vals.length < 2) return;
+        const better = vals.filter((v) => (dir > 0 ? v > mine : v < mine)).length;
+        const ties = vals.filter((v) => v === mine).length;
+        const shown = formatStat(mine, fmt);
+        if (better === 0 && ties === 1) leads.push(dir > 0 ? `Leads the finalists in ${noun} (${shown})` : `Lowest ${noun} of the finalists (${shown})`);
+        else if (better === 0) leads.push(`Tied for the finalist lead in ${noun} (${shown})`);
+        else if (!fallback) fallback = `${ordinal(better + 1)} among the finalists in ${noun} (${shown})`;
+      });
+      const text = leads.length ? leads.slice(0, 2).join(". ") : fallback;
+      if (text) out.set(card, text);
+    });
+  });
+  return out;
+}
+
+function fitStyle(text, max) {
+  return { "--aw2-len": Math.max(8, String(text || "").length), ...(max ? { "--aw2-max": `${max}px` } : {}) };
+}
+
+function isUserCard(card, userTeam) {
+  if (!card || !userTeam) return false;
+  const name = cardTeam(card);
+  if (userTeam.name && name && name === userTeam.name) return true;
+  const tid = rawRow(card)?.team_id;
+  return Boolean(userTeam.id && tid !== undefined && tid !== null && String(tid) === String(userTeam.id));
+}
+
+function posLine(card, player) {
+  const pos = rowPos(card) || String(player?.position || "").toUpperCase();
+  const age = numOf(rawRow(card), "age") ?? numOf(player, "age");
+  return [POS_NAME[pos] || pos, age ? `age ${age}` : ""].filter(Boolean).join(" · ");
+}
+
 /* ─────────────── small components ─────────────── */
 
-function TeamLogo({ src, size = "sm" }) {
+function TeamLogo({ src, size = 32, className = "" }) {
   if (!src) return null;
   return (
-    <span className={`an-logo ${size}`} aria-hidden="true">
+    <span className={`aw2-logo ${className}`} style={{ "--aw2-logo": `${size}px` }} aria-hidden="true">
       <img
         src={src}
         alt=""
@@ -345,37 +510,26 @@ function TeamLogo({ src, size = "sm" }) {
   );
 }
 
-function Headshot({ player, size = "md" }) {
+function Headshot({ player, size = 120 }) {
   if (!player) return null;
   return (
-    <div className="an-headshot">
-      <PlayerHeadshot player={player} size={size} variant="hero" mood="neutral" animate="in" />
+    <div className="aw2-face" style={{ "--aw2-face": `${size}px` }}>
+      <PlayerHeadshot player={player} size="lg" mood="neutral" animate="in" preferPhoto showFlag={false} />
     </div>
   );
 }
 
-function StatTable({ rows }) {
-  if (!rows.length) return null;
-  const withRank = rows.some((row) => row.rank);
+function StatLine({ items, size = "md" }) {
+  if (!items.length) return null;
   return (
-    <table className="an-stat-table">
-      <thead>
-        <tr>
-          <th>Stat</th>
-          <th>Value</th>
-          {withRank ? <th>Rank</th> : null}
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((row) => (
-          <tr key={row.key}>
-            <td>{row.label}</td>
-            <td className="an-num">{row.value}</td>
-            {withRank ? <td className="an-rank">{row.rank}</td> : null}
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <dl className={`aw2-line is-${size}`}>
+      {items.map((s) => (
+        <div key={s.key || s.label}>
+          <dd>{s.value}</dd>
+          <dt>{s.label}</dt>
+        </div>
+      ))}
+    </dl>
   );
 }
 
@@ -383,86 +537,85 @@ function BallotRail({ points, leader, fpv }) {
   if (points === null || !leader) return null;
   const width = Math.max(2, Math.min(100, (points / leader) * 100));
   return (
-    <div className="an-ballot">
-      <div className="an-rail">
-        <i className="an-rail__fill" style={{ width: `${width}%` }} />
+    <div className="aw2-ballot">
+      <div className="aw2-rail">
+        <i style={{ width: `${width}%` }} />
       </div>
-      <div className="an-ballot__cap an-num">
-        {formatPoints(points)} pts{fpv !== null ? ` · ${fpv} first-place` : ""}
-      </div>
+      <span>
+        {formatPoints(points)} ballot points{fpv !== null ? ` · ${fpv} first-place votes` : ""}
+      </span>
     </div>
   );
 }
 
-function ComponentList({ items }) {
+function Bars({ items }) {
   return (
-    <div className="an-facts">
-      {items.map((c) => {
-        const value = formatStat(c.value, c.fmt);
-        const rank = c.rank && c.of ? `${ordinal(c.rank)} of ${c.of}` : "";
-        const pct = Math.max(0, Math.min(1, Number(c.pct)));
-        return (
-          <div key={c.key || c.label}>
-            <div className="an-fact-head">
-              <span>{c.label}</span>
-              <strong className="an-num">{[value, rank].filter(Boolean).join(" · ")}</strong>
-            </div>
-            <div className="an-track">
-              <i style={{ width: `${pct * 100}%` }} />
-            </div>
+    <div className="aw2-bars">
+      {items.map((c) => (
+        <div key={c.key || c.label}>
+          <div className="aw2-bars-head">
+            <span>{c.label}</span>
+            <b>{c.text}</b>
           </div>
-        );
-      })}
+          <div className="aw2-rail">
+            <i style={{ width: `${Math.max(0, Math.min(100, c.pct))}%` }} />
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
 
-/* ─────────────── columns ─────────────── */
+/* ─────────────── left rail: ceremony order ─────────────── */
 
 function CeremonyLog({ groups, slidesCount, activeIndex, revealedIds, onSelect }) {
+  const presented = groups.reduce(
+    (n, g) => n + safeArray(g?.items).filter(({ slide }) => slide && revealedIds.has(slide.id)).length,
+    0
+  );
   return (
-    <aside className="an-log" aria-label="Ceremony order">
-      <div className="an-section-head">
-        <div>
-          <h3 className="an-section-title">Ceremony Order</h3>
-          <p className="an-section-meta">{slidesCount} awards</p>
+    <aside className="aw2-log" aria-label="Ceremony order">
+      <div className="aw2-railhead">
+        <div className="aw2-railhead-name" role="heading" aria-level={2}>
+          Ceremony order
         </div>
+        <p>
+          {presented} of {slidesCount} presented
+        </p>
       </div>
-      <div className="an-log-scroll">
+      <div className="aw2-log-scroll">
         {groups.map((group, g) => (
-          <div key={group?.id || group?.label || g}>
-            {group?.label ? <div className="an-log-round">{group.label}</div> : null}
+          <div key={group?.id || group?.label || g} className="aw2-log-group">
+            {group?.label ? <div className="aw2-log-grouplabel">{group.label}</div> : null}
             {safeArray(group?.items).map(({ slide, index, offRail }) => {
               if (!slide) return null;
               const clickable = !offRail && Number.isInteger(index);
               const revealed = Boolean(offRail) || revealedIds.has(slide.id);
               const selected = clickable && index === activeIndex;
-              const sub = revealed ? (isRosterSlide(slide) ? "Lineup named" : slide.winnerLabel) : selected ? "On stage" : "Sealed";
+              const sub = revealed
+                ? isRosterSlide(slide)
+                  ? "Lineup named"
+                  : slide.winnerLabel
+                : selected
+                  ? "On stage now"
+                  : "";
               const classes = [
-                "an-log-row",
-                selected ? "is-selected" : "",
-                revealed ? "is-revealed" : "",
-                selected && revealed ? "is-live" : "",
-                isCupSlide(slide) ? "is-cup" : "",
+                "aw2-log-row",
+                selected ? "is-on" : "",
+                revealed ? "is-done" : "",
                 isMajorSlide(slide) ? "is-major" : "",
               ]
                 .filter(Boolean)
                 .join(" ");
               return (
-                <button
-                  key={slide.id}
-                  type="button"
-                  className={classes}
-                  disabled={!clickable}
-                  onClick={() => onSelect(index)}
-                >
-                  <span className="an-log-num">{clickable ? pad2(index + 1) : ""}</span>
-                  <span className="an-log-logo">
-                    {revealed && !isRosterSlide(slide) ? <TeamLogo src={winnerLogo(slide)} size="sm" /> : null}
-                  </span>
-                  <span className="an-log-body">
+                <button key={slide.id} type="button" className={classes} disabled={!clickable} onClick={() => onSelect(index)}>
+                  <span className="aw2-log-num">{clickable ? pad2(index + 1) : ""}</span>
+                  <span className="aw2-log-body">
                     <strong>{slide.awardLabel}</strong>
-                    <span>{sub}</span>
+                    {sub ? <span>{sub}</span> : null}
+                  </span>
+                  <span className="aw2-log-mark">
+                    {revealed && !isRosterSlide(slide) ? <TeamLogo src={winnerLogo(slide)} size={30} /> : null}
                   </span>
                 </button>
               );
@@ -522,21 +675,24 @@ function buildPulse({ stage, slide, slides, ev }) {
     const cup = slides.find(isCupSlide);
     push("news", `Awards Night is here. ${slides.length} honours will be handed out tonight.`);
     if (cup?.winnerLabel) push("news", `The ${cup.winnerLabel} arrive as Stanley Cup champions.`, { logo: winnerLogo(cup) });
-    MAJOR_KEYS.forEach((key) => {
+    const offset = hashOf(`gate-${slides.length}-${cup?.winnerLabel || ""}`);
+    MAJOR_KEYS.forEach((key, k) => {
       const sl = slides.find((x) => x.awardKey === key);
       if (!sl) return;
       const cards = slideFinalists(sl);
       if (cards.length < 2) return;
       const fav = cards[hashOf(`${key}-fav`) % cards.length];
-      push(
-        "fan",
-        pickOne(key, [
-          `${sl.awardLabel} finalists are ${joinNames(cards.map((c) => c.label))}. I'd give it to ${lastName(fav.label)}.`,
-          `If ${lastName(fav.label)} doesn't win the ${sl.awardLabel} tonight I'm going to be annoyed.`,
-          `${joinNames(cards.map((c) => lastName(c.label)))} for the ${sl.awardLabel}. Any of the three would be a fair winner.`,
-        ]),
-        { who: fanOf(cardTeam(fav)), logo: cardLogo(fav) }
-      );
+      const other = cards.find((c) => c !== fav) || cards[0];
+      const favLine = seasonLine(fav, key).slice(0, 3).map((s) => `${s.value} ${s.label}`).join(", ");
+      const options = [
+        `${sl.awardLabel} finalists are ${joinNames(cards.map((c) => c.label))}. I'd give it to ${lastName(fav.label)}.`,
+        `${lastName(fav.label)} for the ${sl.awardLabel}.${favLine ? ` ${favLine}. Next question.` : ""}`,
+        `${joinNames(cards.map((c) => lastName(c.label)))} for the ${sl.awardLabel}. Any of the three would be a fair winner.`,
+        `If ${lastName(fav.label)} doesn't win the ${sl.awardLabel} tonight I'm going to be annoyed.`,
+        `People are sleeping on ${lastName(fav.label)} in the ${sl.awardLabel} race.${favLine ? ` ${favLine}.` : ""}`,
+        `${lastName(fav.label)} or ${lastName(other.label)} for the ${sl.awardLabel}? Too close to call for me.`,
+      ];
+      push("fan", options[(offset + k) % options.length], { who: fanOf(cardTeam(fav)), logo: cardLogo(fav) });
     });
     return out;
   }
@@ -607,16 +763,18 @@ function buildPulse({ stage, slide, slides, ev }) {
       push("stat", `The ${award} is settled by the numbers. There is no ballot for this one.`);
       return out;
     }
-    cards.forEach((card) => {
-      const row = finalistStatRows(card, ev)[0];
+    const start = hashOf(award);
+    cards.forEach((card, ci) => {
+      const lineRows = lineFor(card, slide, ev);
+      const row = lineRows.find((r) => r.key === "pts" || r.key === "sv") || lineRows[0];
       const num = row ? ` ${row.value} ${row.label} speaks for itself.` : "";
       push(
         "fan",
-        pickOne(`${award}-${card.label}`, [
+        [
           `${card.label} should win the ${award}.${num}`,
           `Put me down for ${lastName(card.label)}.${num}`,
           `It has to be ${lastName(card.label)} tonight.${num}`,
-        ]),
+        ][(start + ci) % 3],
         { who: fanOf(cardTeam(card)), logo: cardLogo(card) }
       );
     });
@@ -675,40 +833,40 @@ const PULSE_TAG = { news: "News", stat: "By the numbers", debate: "Debate" };
 
 function FanPulse({ mode, items, emptyText, feedKey }) {
   return (
-    <aside className="an-board" aria-label="Fan Pulse">
-      <div className="an-section-head">
-        <div>
-          <h3 className="an-section-title">Fan Pulse</h3>
-          <p className="an-section-meta">{mode === "reactions" ? "Reactions" : "Before the envelope"}</p>
+    <aside className="aw2-pulse" aria-label="Fan Pulse">
+      <div className="aw2-railhead">
+        <div className="aw2-railhead-name" role="heading" aria-level={2}>
+          Fan Pulse
         </div>
+        <p>{mode === "reactions" ? "Reactions around the league" : "Before the envelopes open"}</p>
       </div>
-      <div className="an-pulse-lane an-pulse-list" key={feedKey}>
+      <div className="aw2-pulse-list" key={feedKey}>
         {items.length ? (
           items.map((item, i) => (
-            <article key={`${item.kind}-${i}`} className={`an-pulse is-${item.kind}`} style={{ animationDelay: `${i * 90}ms` }}>
+            <article key={`${item.kind}-${i}`} className={`aw2-post is-${item.kind}`} style={{ animationDelay: `${i * 90}ms` }}>
               {item.kind === "fan" || item.kind === "debate" ? (
                 <>
-                  <header className="an-pulse-head">
-                    {item.logo ? <TeamLogo src={item.logo} size="sm" /> : <span className="an-pulse-dot" aria-hidden="true" />}
+                  <header>
+                    {item.logo ? <TeamLogo src={item.logo} size={26} /> : <span className="aw2-post-dot" aria-hidden="true" />}
                     <b>{item.who || "Around the league"}</b>
                     {item.kind === "debate" ? <em>{PULSE_TAG.debate}</em> : null}
                   </header>
                   <p>{item.text}</p>
-                  <footer className="an-pulse-foot">{item.likes.toLocaleString()} likes</footer>
+                  <footer>{item.likes.toLocaleString()} likes</footer>
                 </>
               ) : (
                 <>
-                  <header className="an-pulse-head">
+                  <header>
+                    {item.logo ? <TeamLogo src={item.logo} size={26} /> : null}
                     <em>{PULSE_TAG[item.kind]}</em>
-                    {item.logo ? <TeamLogo src={item.logo} size="sm" /> : null}
                   </header>
-                  <p>{item.text}</p>
+                  <p className="aw2-post-headline">{item.text}</p>
                 </>
               )}
             </article>
           ))
         ) : (
-          <p className="an-muted">{emptyText}</p>
+          <p className="aw2-muted">{emptyText}</p>
         )}
       </div>
     </aside>
@@ -722,84 +880,163 @@ const isMajorSlide = (slide) => MAJOR_KEYS.includes(String(slide?.awardKey || ""
 // Decided on the ice or in the standings: nobody votes on these, so they are shown as results, not sealed envelopes.
 const isDecidedSlide = (slide) => isCupSlide(slide) || /president|conference/i.test(String(slide?.awardKey || ""));
 
-function GateBody({ slides, playerIndex, userTeamName, onPick }) {
+/** One nominee column: headshot, full name, logo + full team name, season line, case. */
+function Nominee({ card, slide, ev, playerIndex, userTeam, caseText, faceSize = 112, team = false }) {
+  const player = team ? null : resolvePlayer(card?.player, playerIndex, card?.label);
+  const mine = isUserCard(card, userTeam);
+  const line = team ? [] : lineFor(card, slide, ev);
+  const meta = team ? "" : posLine(card, player);
+  return (
+    <div className={`aw2-nominee${mine ? " is-mine" : ""}`}>
+      {team ? <TeamLogo src={cardLogo(card)} size={faceSize} /> : <Headshot player={player} size={faceSize} />}
+      <div className="aw2-nominee-name">{card?.label}</div>
+      {!team && cardTeam(card) ? (
+        <div className="aw2-nominee-team">
+          <TeamLogo src={cardLogo(card)} size={26} />
+          <span>{cardTeam(card)}</span>
+        </div>
+      ) : null}
+      {meta ? <div className="aw2-nominee-meta">{meta}{mine ? " · your club" : ""}</div> : mine ? <div className="aw2-nominee-meta">Your club</div> : null}
+      <StatLine items={line.slice(0, 5)} size="sm" />
+      {caseText ? <p className="aw2-nominee-case">{caseText}</p> : null}
+    </div>
+  );
+}
+
+function GateBody({ slides, playerIndex, userTeam, onPick, evidenceByKey }) {
   const indexOf = (slide) => slides.findIndex((x) => x.id === slide.id);
   const majors = MAJOR_KEYS.map((k) => slides.find((x) => x.awardKey === k)).filter(Boolean);
   const decided = slides.filter(isDecidedSlide);
+  const cup = decided.find(isCupSlide) || null;
+  const others = decided.filter((s) => !isCupSlide(s));
   const rest = slides.filter((x) => !isMajorSlide(x) && !isDecidedSlide(x));
   const mine = [];
-  if (userTeamName) {
-    slides.forEach((slide) => {
-      if (isRosterSlide(slide) || isTeamSlide(slide)) return;
-      slideFinalists(slide).forEach((card) => {
-        if (cardTeam(card) && cardTeam(card) === userTeamName) mine.push({ slide, card });
-      });
+  slides.forEach((slide) => {
+    if (isRosterSlide(slide) || isTeamSlide(slide)) return;
+    slideFinalists(slide).forEach((card) => {
+      if (isUserCard(card, userTeam)) mine.push({ slide, card });
     });
-  }
+  });
+  const pickKeys = (slide) => ({
+    role: "button",
+    tabIndex: 0,
+    onClick: () => onPick?.(indexOf(slide)),
+    onKeyDown: (e) => {
+      if (e.key === "Enter") onPick?.(indexOf(slide));
+    },
+  });
+
   return (
-    <div className="an-card an-gate">
-      {decided.length ? (
-        <div className="an-gate-decided">
-          {decided.map((slide) => (
-            <div key={slide.id} className={`an-decided${isCupSlide(slide) ? " is-cup" : ""}`}>
-              <TeamLogo src={winnerLogo(slide)} size={isCupSlide(slide) ? "hero" : "md"} />
-              <div>
-                <small>{isCupSlide(slide) ? "Stanley Cup champions" : slide.awardLabel}</small>
-                <strong>{slide.winnerLabel}</strong>
+    <div className="aw2-gate">
+      {cup || others.length || mine.length ? (
+        <section className="aw2-marquee">
+          {cup ? (
+            <div className="aw2-champ">
+              <TeamLogo src={winnerLogo(cup)} size={150} />
+              <div className="aw2-champ-text">
+                <span>Stanley Cup champions</span>
+                <div className="aw2-display aw2-fit" style={fitStyle(cup.winnerLabel, 58)}>
+                  {cup.winnerLabel}
+                </div>
+                {cup.stageLine ? <p>{cup.stageLine}</p> : null}
               </div>
             </div>
-          ))}
-        </div>
+          ) : null}
+          <div className="aw2-marquee-side">
+            {others.map((slide) => (
+              <div key={slide.id} className="aw2-decided">
+                <TeamLogo src={winnerLogo(slide)} size={52} />
+                <div>
+                  <span>{slide.awardLabel}</span>
+                  <b>{slide.winnerLabel}</b>
+                </div>
+              </div>
+            ))}
+            {mine.length ? (
+              <div className="aw2-mine">
+                <span className="aw2-mine-label">Your club tonight</span>
+                {mine.map(({ slide, card }) => (
+                  <button key={`${slide.id}-${card.label}`} type="button" onClick={() => onPick?.(indexOf(slide))}>
+                    <Headshot player={resolvePlayer(card?.player, playerIndex, card?.label)} size={56} />
+                    <span>
+                      <b>{card.label}</b>
+                      <i>{slide.awardLabel} finalist</i>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </section>
       ) : null}
 
-      {mine.length ? (
-        <div className="an-gate-mine">
-          <span className="an-gate-kicker">Your club tonight</span>
-          {mine.map(({ slide, card }) => (
-            <button key={`${slide.id}-${card.label}`} type="button" className="an-mine-chip" onClick={() => onPick?.(indexOf(slide))}>
-              <b>{card.label}</b>
-              <i>{slide.awardLabel} finalist</i>
-            </button>
-          ))}
+      {majors.length ? (
+        <div className="aw2-sectionhead">
+          <div role="heading" aria-level={3}>The major awards</div>
+          <p>Three finalists each, ballots sealed. Pick an award to open it on stage.</p>
         </div>
       ) : null}
-
-      {majors.length ? <h4 className="an-gate-head">The major awards</h4> : null}
-      <div className="an-gate-majors">
+      <div className="aw2-majors">
         {majors.map((slide) => {
           const team = isTeamSlide(slide);
+          const ev = slideEvidence(slide) || evidenceByKey?.[slide.awardKey] || null;
           const finalists = slideFinalists(slide);
+          const cases = team ? new Map() : finalistCases(finalists, slide.awardKey);
+          const mineHere = finalists.some((c) => isUserCard(c, userTeam));
           return (
-            <button key={slide.id} type="button" className="an-major" onClick={() => onPick?.(indexOf(slide))}>
-              <span className="an-major-name">{slide.awardLabel}</span>
-              {slide.stageLine ? <span className="an-major-line">{slide.stageLine}</span> : null}
-              <span className="an-major-faces">
+            <section key={slide.id} className={`aw2-award${mineHere ? " is-mine" : ""}`} {...pickKeys(slide)}>
+              <div className="aw2-award-head">
+                <div className="aw2-display aw2-fit" style={fitStyle(slide.awardLabel, 34)}>
+                  {slide.awardLabel}
+                </div>
+                {slide.stageLine ? <p>{slide.stageLine}</p> : null}
+              </div>
+              <div className="aw2-nominees" style={{ "--aw2-cols": Math.max(1, finalists.length) }}>
                 {finalists.map((card) => (
-                  <span key={card.label} className="an-major-face">
-                    {team ? (
-                      <TeamLogo src={cardLogo(card)} size="md" />
-                    ) : (
-                      <Headshot player={resolvePlayer(card?.player, playerIndex, card?.label)} size="sm" />
-                    )}
-                    <b>{lastName(card.label)}</b>
-                    <i>{cardTeam(card)}</i>
-                  </span>
+                  <Nominee
+                    key={card.label}
+                    card={card}
+                    slide={slide}
+                    ev={ev}
+                    playerIndex={playerIndex}
+                    userTeam={userTeam}
+                    caseText={cases.get(card)}
+                    team={team}
+                    faceSize={104}
+                  />
                 ))}
-              </span>
-              <span className="an-major-seal">{finalists.length > 1 ? `${finalists.length} finalists · sealed` : "Sealed"}</span>
-            </button>
+              </div>
+            </section>
           );
         })}
       </div>
 
-      {rest.length ? <h4 className="an-gate-head">Also tonight</h4> : null}
-      <div className="an-gate-rest">
+      {rest.length ? (
+        <div className="aw2-sectionhead">
+          <div role="heading" aria-level={3}>Also tonight</div>
+          <p>{rest.length} more honours, from the scoring races to the All-Star teams.</p>
+        </div>
+      ) : null}
+      <div className="aw2-rest">
         {rest.map((slide) => {
-          const names = isRosterSlide(slide) ? [] : slideFinalists(slide).map((c) => lastName(c.label));
+          const cards = isRosterSlide(slide) ? [] : slideFinalists(slide);
+          const mineHere = cards.some((c) => isUserCard(c, userTeam));
+          const names = cards.map((c) => lastName(c.label));
           return (
-            <button key={slide.id} type="button" className="an-rest-row" onClick={() => onPick?.(indexOf(slide))}>
-              <b>{slide.awardLabel}</b>
-              <i>{isRosterSlide(slide) ? "Six-man lineup" : names.length > 1 ? names.join(" · ") : names.length === 1 ? "Decided by the numbers" : categoryLabel(slide)}</i>
+            <button key={slide.id} type="button" className={`aw2-rest-row${mineHere ? " is-mine" : ""}`} onClick={() => onPick?.(indexOf(slide))}>
+              <span className="aw2-rest-num">{pad2(indexOf(slide) + 1)}</span>
+              <span>
+                <b>{slide.awardLabel}</b>
+                <i>
+                  {isRosterSlide(slide)
+                    ? "Six-man lineup"
+                    : names.length > 1
+                      ? `Finalists: ${names.join(", ")}`
+                      : names.length === 1
+                        ? "Decided by the numbers"
+                        : slide.stageLine || categoryLabel(slide)}
+                </i>
+              </span>
             </button>
           );
         })}
@@ -808,192 +1045,159 @@ function GateBody({ slides, playerIndex, userTeamName, onPick }) {
   );
 }
 
-function TitleBody({ slide, ev, finalistsCount, rule = "" }) {
+function TitleBody({ slide, ev, finalists, rule = "", playerIndex, userTeam }) {
   const criteria = safeArray(ev?.criteria).filter((c) => c?.label && toNum(c.weight) !== null);
   const excluded = safeArray(ev?.excluded_criteria).filter((c) => c?.label);
-  const eligibility =
-    cleanLines([ev?.eligibility, slide?.eligibilitySummary, slide?.eligibility_summary])[0] || "";
+  const eligibility = cleanLines([ev?.eligibility, slide?.eligibilitySummary, slide?.eligibility_summary])[0] || "";
   const method = METHOD_LABEL[ev?.method] || (isRosterSlide(slide) ? METHOD_LABEL.selection : "");
   const voters = toNum(ev?.winner?.ballot?.voter_count);
   const poolSize = toNum(ev?.pool?.size);
   const facts = [
-    method ? ["Format", method] : null,
-    voters !== null ? ["Voters", String(voters)] : null,
-    poolSize !== null ? ["Eligible", `${poolSize}${ev?.pool?.noun ? ` ${ev.pool.noun}` : ""}`] : null,
-    finalistsCount ? ["Finalists", String(finalistsCount)] : null,
+    method ? { key: "f", label: "Format", value: method } : null,
+    voters !== null ? { key: "v", label: "Voters", value: String(voters) } : null,
+    poolSize !== null ? { key: "p", label: ev?.pool?.noun ? `Eligible ${ev.pool.noun}` : "Eligible", value: String(poolSize) } : null,
+    finalists.length ? { key: "n", label: "Finalists", value: String(finalists.length) } : null,
   ].filter(Boolean);
   const maxWeight = Math.max(0, ...criteria.map((c) => Number(c.weight))) || 1;
+  const team = isTeamSlide(slide);
 
   return (
-    <div className="an-card">
-      <div className={`an-card-grid${facts.length ? "" : " is-two"}`}>
-        <section className="an-z-identity">
-          <p className="an-pos">{categoryLabel(slide)}</p>
-          <h2 className="an-name">{slide?.awardLabel}</h2>
-          {slide?.stageLine ? <p className="an-club">{slide.stageLine}</p> : null}
-        </section>
-
-        <section className="an-z-eval">
-          <div>
-            <h4>How it's decided</h4>
-            {criteria.length ? (
-              <div className="an-facts">
-                {criteria.map((c) => (
-                  <div key={c.key || c.label}>
-                    <div className="an-fact-head">
-                      <span>{c.label}</span>
-                      <strong className="an-num">{Math.round(Number(c.weight) * 100)}%</strong>
-                    </div>
-                    <div className="an-track">
-                      <i style={{ width: `${(Number(c.weight) / maxWeight) * 100}%` }} />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : eligibility && !rule ? (
-              <p className="an-club">{eligibility}</p>
-            ) : !rule ? (
-              <p className="an-muted">Voting criteria weren't published with this season's results.</p>
-            ) : null}
-            {rule ? (
-              <p className="an-criteria">
-                <b>How you win it</b>
-                {rule}
-              </p>
-            ) : null}
-            {rule && eligibility ? <p className="an-club">This season: {eligibility}</p> : null}
-            {excluded.map((c) => (
-              <p key={c.key || c.label} className="an-excluded">
-                {c.label} — not tracked this season
-              </p>
-            ))}
-          </div>
-        </section>
-
-        {facts.length ? (
-          <section className="an-z-result">
-            <p className="an-result-title">Format</p>
-            <div className="an-result-meta">
-              {facts.map(([label, value]) => (
-                <div key={label}>
-                  <span>{label}</span>
-                  <strong>{value}</strong>
+    <div className="aw2-title">
+      <section className="aw2-title-main">
+        <span className="aw2-label">{categoryLabel(slide)}</span>
+        {rule ? <p className="aw2-rule">{rule}</p> : slide?.stageLine ? <p className="aw2-rule">{slide.stageLine}</p> : null}
+        {eligibility ? <p className="aw2-copy">This season: {eligibility}</p> : null}
+        {!rule && !eligibility && !criteria.length ? (
+          <p className="aw2-muted">Voting criteria weren't published with this season's results.</p>
+        ) : null}
+        {facts.length ? <StatLine items={facts} size="lg" /> : null}
+      </section>
+      <section className="aw2-title-side">
+        {criteria.length ? (
+          <>
+            <span className="aw2-label">How the ballot weighs it</span>
+            <Bars
+              items={criteria.map((c) => ({
+                key: c.key || c.label,
+                label: c.label,
+                text: `${Math.round(Number(c.weight) * 100)}%`,
+                pct: (Number(c.weight) / maxWeight) * 100,
+              }))}
+            />
+          </>
+        ) : null}
+        {excluded.map((c) => (
+          <p key={c.key || c.label} className="aw2-muted">
+            {c.label}: not tracked this season
+          </p>
+        ))}
+        {finalists.length && !isRosterSlide(slide) ? (
+          <div className="aw2-title-who">
+            <span className="aw2-label">In the envelope</span>
+            <div className="aw2-title-faces">
+              {finalists.map((card) => (
+                <div key={card.label} className={isUserCard(card, userTeam) ? "is-mine" : ""}>
+                  {team ? (
+                    <TeamLogo src={cardLogo(card)} size={64} />
+                  ) : (
+                    <Headshot player={resolvePlayer(card?.player, playerIndex, card?.label)} size={64} />
+                  )}
+                  <b>{card.label}</b>
+                  {!team ? <i>{cardTeam(card)}</i> : null}
                 </div>
               ))}
             </div>
-          </section>
+          </div>
         ) : null}
-      </div>
+      </section>
     </div>
   );
 }
 
-function FinalistsBody({ slide, ev, finalists, phase, shown, playerIndex }) {
+function FinalistsBody({ slide, ev, finalists, phase, shown, playerIndex, userTeam }) {
   const revealed = isRevealedPhase(phase);
   const team = isTeamSlide(slide);
   const ballots = finalists.map((card) => ballotFor(card, ev));
   const leader = Math.max(0, ...ballots.map((b) => toNum(b?.points) ?? 0));
+  const cases = team ? new Map() : finalistCases(finalists, slide?.awardKey);
 
   return (
-    <div className="an-card">
-      <div
-        className="an-finalists"
-        style={{ gridTemplateColumns: `repeat(${Math.max(1, finalists.length)}, minmax(0, 1fr))` }}
-      >
-        {finalists.map((card, i) => {
-          const winner = revealed && isWinnerCard(card, slide);
-          const classes = [
-            "an-finalist",
-            phase === PHASE.FINALISTS && i >= shown ? "is-pending" : "is-in",
-            phase === PHASE.SEAL ? "is-sealed" : "",
-            winner ? "is-winner" : "",
-            revealed && !winner ? "is-dim" : "",
-          ]
-            .filter(Boolean)
-            .join(" ");
-          const player = team ? null : resolvePlayer(card?.player, playerIndex, card?.label);
-          const rows = finalistStatRows(card, ev).slice(0, 3);
-          const ballot = ballots[i];
-          const teamName = cardTeam(card);
-          const position = cardPosition(card) || player?.position || "";
-          const extra = rows.length ? null : formatStat(card?.stat) || formatStat(card?.subline);
+    <div className="aw2-finalists" style={{ "--aw2-cols": Math.max(1, finalists.length) }}>
+      {finalists.map((card, i) => {
+        const winner = revealed && isWinnerCard(card, slide);
+        const mine = isUserCard(card, userTeam);
+        const classes = [
+          "aw2-finalist",
+          phase === PHASE.FINALISTS && i >= shown ? "is-pending" : "is-in",
+          phase === PHASE.SEAL ? "is-sealed" : "",
+          winner ? "is-winner" : "",
+          revealed && !winner ? "is-dim" : "",
+          mine ? "is-mine" : "",
+        ]
+          .filter(Boolean)
+          .join(" ");
+        const player = team ? null : resolvePlayer(card?.player, playerIndex, card?.label);
+        const line = team ? [] : lineFor(card, slide, ev);
+        const ballot = ballots[i];
+        const teamName = cardTeam(card);
+        const meta = team ? "" : posLine(card, player);
+        const extra = line.length ? null : formatStat(card?.stat) || formatStat(card?.subline);
 
-          return (
-            <article key={`${card?.label}-${i}`} className={classes}>
-              <div className="an-finalist__label">{winner ? "Winner" : "Finalist"}</div>
-              {team ? <TeamLogo src={cardLogo(card)} size="xl" /> : <Headshot player={player} size="md" />}
-              <h3 className="an-name is-sm">{card?.label}</h3>
-              {!team && teamName ? (
-                <p className="an-vitals">
-                  <TeamLogo src={cardLogo(card)} size="sm" />
-                  <span>{teamName}</span>
-                </p>
-              ) : null}
-              {position ? <p className="an-pos">{position}</p> : null}
-              {rows.length ? <StatTable rows={rows} /> : extra ? <p className="an-club">{extra}</p> : null}
-              {revealed && ballot && leader > 0 ? (
-                <BallotRail
-                  points={toNum(ballot.points)}
-                  leader={leader}
-                  fpv={toNum(ballot.first_place_votes)}
-                />
-              ) : null}
-            </article>
-          );
-        })}
-      </div>
+        return (
+          <article key={`${card?.label}-${i}`} className={classes}>
+            <span className="aw2-finalist-state">{winner ? "Winner" : mine ? "Finalist · your club" : "Finalist"}</span>
+            {team ? <TeamLogo src={cardLogo(card)} size={168} /> : <Headshot player={player} size={176} />}
+            <div className="aw2-finalist-name">{card?.label}</div>
+            {!team && teamName ? (
+              <div className="aw2-nominee-team is-lg">
+                <TeamLogo src={cardLogo(card)} size={36} />
+                <span>{teamName}</span>
+              </div>
+            ) : null}
+            {meta ? <div className="aw2-nominee-meta">{meta}</div> : null}
+            {line.length ? <StatLine items={line.slice(0, 6)} size="md" /> : extra ? <p className="aw2-copy">{extra}</p> : null}
+            {cases.get(card) ? <p className="aw2-nominee-case">{cases.get(card)}</p> : null}
+            {revealed && ballot && leader > 0 ? (
+              <BallotRail points={toNum(ballot.points)} leader={leader} fpv={toNum(ballot.first_place_votes)} />
+            ) : null}
+          </article>
+        );
+      })}
     </div>
   );
 }
 
-function RosterBody({ slide, ev, phase }) {
+function RosterBody({ slide, ev, phase, playerIndex }) {
   const revealed = isRevealedPhase(phase);
   const slots = rosterSlotsFor(slide, ev);
   if (!slots.length) {
-    return (
-      <div className="an-card">
-        <p className="an-muted">Selections weren't recorded for this season.</p>
-      </div>
-    );
+    return <p className="aw2-muted aw2-pad">Selections weren't recorded for this season.</p>;
   }
   return (
-    <div className="an-card">
-      <div
-        className="an-table"
-        style={{ "--an-cols": "44px minmax(0, 1.4fr) minmax(0, 1.3fr) minmax(0, 0.9fr)" }}
-      >
-        <div className="an-table-head">
-          <span>Pos</span>
-          <span>Player</span>
-          <span>Team</span>
-          <span>Line</span>
-        </div>
-        <div className="an-table-body">
-          {slots.map((slot, i) => (
-            <div
-              key={`${slot.slot}-${i}`}
-              className={`an-table-row${revealed ? " is-in" : ""}`}
-              style={phase === PHASE.REVEAL ? { animationDelay: `${i * 220}ms` } : undefined}
-            >
-              <span className="an-cell-muted">{slot.slot}</span>
-              <span className={revealed ? "an-cell-name" : "an-cell-muted"}>
-                {revealed ? slot.label : "Sealed"}
-              </span>
-              <span className="an-cell-team">
-                {revealed ? (
-                  <>
-                    <TeamLogo src={slot.teamLogoSrc} size="sm" />
-                    <span>{slot.teamName || ""}</span>
-                  </>
-                ) : null}
-              </span>
-              <span className="an-num">
-                {revealed && slot.stat ? `${slot.stat.value} ${slot.stat.label}` : ""}
-              </span>
-            </div>
-          ))}
-        </div>
-      </div>
+    <div className="aw2-roster">
+      {slots.map((slot, i) => {
+        const who = revealed ? resolvePlayer({ name: slot.label }, playerIndex, slot.label) : null;
+        return (
+          <div
+            key={`${slot.slot}-${i}`}
+            className={`aw2-roster-row${revealed ? " is-in" : ""}`}
+            style={phase === PHASE.REVEAL ? { animationDelay: `${i * 220}ms` } : undefined}
+          >
+            <span className="aw2-roster-pos">{slot.slot}</span>
+            <span className="aw2-roster-face">{who ? <Headshot player={who} size={64} /> : null}</span>
+            <span className="aw2-roster-name">{revealed ? slot.label : "Envelope sealed"}</span>
+            <span className="aw2-nominee-team">
+              {revealed ? (
+                <>
+                  <TeamLogo src={slot.teamLogoSrc} size={30} />
+                  <span>{slot.teamName || ""}</span>
+                </>
+              ) : null}
+            </span>
+            <span className="aw2-roster-stat">{revealed && slot.stat ? `${slot.stat.value} ${slot.stat.label}` : ""}</span>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -1007,16 +1211,14 @@ function VoteTable({ table, format, playerIndex, team }) {
   const hasFirst = rows.some((r) => (toNum(r?.first_place_votes) ?? 0) > 0);
   const curve = safeArray(format?.points).map((p) => formatPoints(Number(p))).join("-");
   return (
-    <div className="an-order an-votes">
-      <h4>{ballot ? (hasFirst ? "Voting results" : "How the race finished") : "Final order"}</h4>
+    <div className="aw2-votes">
+      <span className="aw2-label">{ballot ? (hasFirst ? "Voting results" : "How the race finished") : "Final order"}</span>
       {ballot && hasFirst && format ? (
-        <p className="an-votes__fmt">
-          {[format.voters ? `${format.voters} ballots` : "", format.body || "", curve ? `${curve} points` : ""]
-            .filter(Boolean)
-            .join(" · ")}
+        <p className="aw2-muted">
+          {[format.voters ? `${format.voters} ballots` : "", format.body || "", curve ? `${curve} points` : ""].filter(Boolean).join(" · ")}
         </p>
       ) : null}
-      <div className="an-votes__row an-votes__head">
+      <div className="aw2-votes-row is-head">
         <span>#</span>
         <span>Player</span>
         <span>{ballot && hasFirst ? "1st" : ""}</span>
@@ -1024,21 +1226,19 @@ function VoteTable({ table, format, playerIndex, team }) {
       </div>
       {rows.map((r, i) => {
         const who = team ? null : resolvePlayer({ ...r, player_id: r.player_id ?? r.entity_id }, playerIndex, r.name);
-        const sub = [r.team_abbr || r.team_name, r.position, r.summary].filter(Boolean).join(" · ");
+        const sub = [r.team_name || r.team_abbr, r.position, r.summary].filter(Boolean).join(" · ");
         return (
-          <div key={`${r.entity_id || r.name}-${i}`} className={`an-votes__row${r.is_winner ? " is-winner" : ""}`}>
-            <span className="an-num">{toNum(r.rank) ?? i + 1}</span>
-            <span className="an-votes__who">
-              {who ? <PlayerHeadshot player={who} size="xs" mood="neutral" showFlag={false} /> : null}
-              <span className="an-votes__name">
+          <div key={`${r.entity_id || r.name}-${i}`} className={`aw2-votes-row${r.is_winner ? " is-winner" : ""}`}>
+            <span className="aw2-num">{toNum(r.rank) ?? i + 1}</span>
+            <span className="aw2-votes-who">
+              {who ? <Headshot player={who} size={40} /> : null}
+              <span>
                 <strong>{r.name}</strong>
                 {sub ? <small>{sub}</small> : null}
               </span>
             </span>
-            <em className="an-num">{ballot && hasFirst ? toNum(r.first_place_votes) ?? 0 : ""}</em>
-            <em className="an-num">
-              {ballot ? formatPoints(toNum(r.points) ?? 0) : formatStat(r.value) || ""}
-            </em>
+            <em className="aw2-num">{ballot && hasFirst ? toNum(r.first_place_votes) ?? 0 : ""}</em>
+            <em className="aw2-num">{ballot ? formatPoints(toNum(r.points) ?? 0) : formatStat(r.value) || ""}</em>
           </div>
         );
       })}
@@ -1046,20 +1246,17 @@ function VoteTable({ table, format, playerIndex, team }) {
   );
 }
 
-function CitationBody({ slide, ev, finalists, playerIndex, rule = "" }) {
+function CitationBody({ slide, ev, finalists, playerIndex, rule = "", userTeam }) {
   const team = isTeamSlide(slide);
   const winnerCard = finalists.find((card) => isWinnerCard(card, slide)) || null;
-  const player = team
-    ? null
-    : resolvePlayer(slide?.winnerPlayer || winnerCard?.player, playerIndex, slide?.winnerLabel);
+  const player = team ? null : resolvePlayer(slide?.winnerPlayer || winnerCard?.player, playerIndex, slide?.winnerLabel);
   const logo = winnerLogo(slide) || cardLogo(winnerCard);
   const teamName = slide?.winnerTeamName || cardTeam(winnerCard);
-  const position = cardPosition(winnerCard) || player?.position || "";
+  const meta = team ? "" : posLine(winnerCard, player);
   const why = cleanLines(safeArray(ev?.why).length ? ev.why : slide?.whyTheyWon);
-  const stats = winnerStatRows(slide, ev);
-  const components = safeArray(ev?.winner?.components).filter(
-    (c) => c?.label && toNum(c.pct) !== null
-  );
+  const own = winnerCard && !team ? seasonLine(winnerCard, slide?.awardKey) : [];
+  const stats = own.length ? own : winnerStatRows(slide, ev).map((r) => ({ key: r.key, label: r.label, value: r.value }));
+  const components = safeArray(ev?.winner?.components).filter((c) => c?.label && toNum(c.pct) !== null);
   const ballot = ev?.winner?.ballot || null;
   const race = ev?.race || null;
   const order = [...finalists].sort((a, b) => (toNum(a?.rank) ?? 99) - (toNum(b?.rank) ?? 99));
@@ -1068,144 +1265,111 @@ function CitationBody({ slide, ev, finalists, playerIndex, rule = "" }) {
   const voteTable = safeArray(ev?.voting_table).filter((r) => r && r.name);
   const hasResult = hasBallot || hasRace || order.length > 1 || voteTable.length > 0;
   const hasCase = why.length || stats.length || components.length;
+  const mine = (userTeam?.name && teamName === userTeam.name) || isUserCard(winnerCard, userTeam);
+  const peak = hasBallot
+    ? [
+        { key: "fpv", label: toNum(ballot.voter_count) !== null ? `First-place votes of ${toNum(ballot.voter_count)}` : "First-place votes", value: String(toNum(ballot.first_place_votes)) },
+        toNum(ballot.points) !== null ? { key: "pts", label: "Ballot points", value: formatPoints(toNum(ballot.points)) } : null,
+        toNum(ballot.margin) !== null ? { key: "m", label: ballot.runner_up_name ? `Margin over ${lastName(ballot.runner_up_name)}` : "Margin", value: `+${formatPoints(toNum(ballot.margin))}` } : null,
+      ].filter(Boolean)
+    : hasRace
+      ? [
+          { key: "lv", label: race.metric_label || "Leader", value: formatStat(race.leader_value) },
+          toNum(race.margin) !== null ? { key: "m", label: "Lead", value: `+${formatStat(race.margin)}` } : null,
+          toNum(race.runner_up_value) !== null ? { key: "ru", label: "Runner-up", value: formatStat(race.runner_up_value) } : null,
+        ].filter(Boolean)
+      : [];
 
   return (
-    <div className="an-card">
-      <div className={`an-card-grid${hasResult ? "" : " is-two"}`}>
-        <section className="an-z-identity">
-          {team ? <TeamLogo src={logo} size="hero" /> : <Headshot player={player} size="lg" />}
-          <p className="an-pos">{slide?.awardLabel}</p>
-          <h2 className="an-name">{slide?.winnerLabel}</h2>
-          {!team && teamName ? (
-            <p className="an-vitals">
-              <TeamLogo src={logo} size="sm" />
-              <span>{teamName}</span>
-            </p>
-          ) : null}
-          {!team && position ? <p className="an-club">{position}</p> : null}
-        </section>
-
-        <section className="an-z-eval">
-          {why.length ? (
-            <div className="an-why">
-              <h4>Why they won</h4>
-              {why.slice(0, 5).map((line) => (
-                <p key={line}>{line}</p>
-              ))}
-            </div>
-          ) : null}
-          {stats.length ? (
-            <div>
-              <h4>Season line</h4>
-              <StatTable rows={stats} />
-            </div>
-          ) : null}
-          {components.length ? (
-            <div>
-              <h4>Against the field</h4>
-              <ComponentList items={components} />
-            </div>
-          ) : null}
-          {!hasCase ? (
-            <p className="an-muted">Detailed results weren't recorded for this season.</p>
-          ) : null}
-          {rule ? (
-            <p className="an-criteria">
-              <b>How you win it</b>
-              {rule}
-            </p>
-          ) : null}
-        </section>
-
-        {hasResult ? (
-          <section className="an-z-result">
-            <p className="an-result-title">Result</p>
-
-            {hasBallot ? (
-              <>
-                <div className="an-result-peak">
-                  <span>First-place votes</span>
-                  <strong className="an-num">
-                    {toNum(ballot.first_place_votes)}
-                    {toNum(ballot.voter_count) !== null ? <small>/ {toNum(ballot.voter_count)}</small> : null}
-                  </strong>
-                </div>
-                <div className="an-result-meta">
-                  {toNum(ballot.points) !== null ? (
-                    <div>
-                      <span>Ballot points</span>
-                      <strong className="an-num">{formatPoints(toNum(ballot.points))}</strong>
-                    </div>
-                  ) : null}
-                  {toNum(ballot.margin) !== null ? (
-                    <div>
-                      <span>Margin</span>
-                      <strong className="an-num">+{formatPoints(toNum(ballot.margin))}</strong>
-                    </div>
-                  ) : null}
-                  {ballot.runner_up_name ? (
-                    <div>
-                      <span>Runner-up</span>
-                      <strong>{ballot.runner_up_name}</strong>
-                    </div>
-                  ) : null}
-                </div>
-                {ev?.closest_of_night ? <p className="an-result-note">Closest vote of the night.</p> : null}
-              </>
-            ) : hasRace ? (
-              <>
-                <div className="an-result-peak">
-                  <span>{race.metric_label || "Leader"}</span>
-                  <strong className="an-num">{formatStat(race.leader_value)}</strong>
-                </div>
-                <div className="an-result-meta">
-                  {toNum(race.margin) !== null ? (
-                    <div>
-                      <span>Lead</span>
-                      <strong className="an-num">+{formatStat(race.margin)}</strong>
-                    </div>
-                  ) : null}
-                  {toNum(race.runner_up_value) !== null ? (
-                    <div>
-                      <span>Runner-up</span>
-                      <strong className="an-num">{formatStat(race.runner_up_value)}</strong>
-                    </div>
-                  ) : null}
-                </div>
-              </>
-            ) : null}
-
-            {voteTable.length ? (
-              <VoteTable table={voteTable} format={ev?.ballot_format} playerIndex={playerIndex} team={team} />
-            ) : order.length > 1 ? (
-              <div className="an-order">
-                <h4>Final order</h4>
-                {order.map((card, i) => {
-                  const b = ballotFor(card, ev);
-                  const tail = b
-                    ? `${formatPoints(toNum(b.points))} pts`
-                    : formatStat(card?.displayValue ?? card?.display_value) || "";
-                  return (
-                    <div
-                      key={`${card?.label}-${i}`}
-                      className={`an-order-row${isWinnerCard(card, slide) ? " is-winner" : ""}`}
-                    >
-                      <span>{toNum(card?.rank) ?? i + 1}</span>
-                      <strong>{card?.label}</strong>
-                      <em className="an-num">{tail}</em>
-                    </div>
-                  );
-                })}
-              </div>
-            ) : null}
-          </section>
+    <div className={`aw2-cite${hasResult ? "" : " is-two"}`}>
+      <section className={`aw2-cite-id${mine ? " is-mine" : ""}`}>
+        {team ? <TeamLogo src={logo} size={190} /> : <Headshot player={player} size={210} />}
+        <span className="aw2-label is-gold">{slide?.awardLabel}</span>
+        <div className="aw2-display aw2-fit" style={fitStyle(slide?.winnerLabel, 46)}>
+          {slide?.winnerLabel}
+        </div>
+        {!team && teamName ? (
+          <div className="aw2-nominee-team is-lg">
+            <TeamLogo src={logo} size={36} />
+            <span>{teamName}</span>
+          </div>
         ) : null}
-      </div>
+        {meta ? <div className="aw2-nominee-meta">{meta}{mine ? " · your club" : ""}</div> : null}
+      </section>
+
+      <section className="aw2-cite-case">
+        {stats.length ? (
+          <div>
+            <span className="aw2-label">{slide?.awardKey === "conn_smythe" ? "Playoff line" : "Season line"}</span>
+            <StatLine items={stats.slice(0, 7)} size="lg" />
+          </div>
+        ) : null}
+        {why.length ? (
+          <div className="aw2-why">
+            <span className="aw2-label">Why they won</span>
+            {why.slice(0, 5).map((line) => (
+              <p key={line}>{line}</p>
+            ))}
+          </div>
+        ) : null}
+        {components.length ? (
+          <div>
+            <span className="aw2-label">Against the field</span>
+            <Bars
+              items={components.map((c) => ({
+                key: c.key || c.label,
+                label: c.label,
+                text: [formatStat(c.value, c.fmt), c.rank && c.of ? `${ordinal(c.rank)} of ${c.of}` : ""].filter(Boolean).join(" · "),
+                pct: Math.max(0, Math.min(1, Number(c.pct))) * 100,
+              }))}
+            />
+          </div>
+        ) : null}
+        {!hasCase ? <p className="aw2-muted">Detailed results weren't recorded for this season.</p> : null}
+        {rule ? (
+          <p className="aw2-copy">
+            <b>How you win it. </b>
+            {rule}
+          </p>
+        ) : null}
+      </section>
+
+      {hasResult ? (
+        <section className="aw2-cite-result">
+          {peak.length ? <StatLine items={peak} size="md" /> : null}
+          {hasBallot && ev?.closest_of_night ? <p className="aw2-copy is-gold">Closest vote of the night.</p> : null}
+          {voteTable.length ? (
+            <VoteTable table={voteTable} format={ev?.ballot_format} playerIndex={playerIndex} team={team} />
+          ) : order.length > 1 ? (
+            <div className="aw2-votes">
+              <span className="aw2-label">Final order</span>
+              {order.map((card, i) => {
+                const b = ballotFor(card, ev);
+                const tail = b ? `${formatPoints(toNum(b.points))} pts` : formatStat(card?.displayValue ?? card?.display_value) || "";
+                const who = team ? null : resolvePlayer(card?.player, playerIndex, card?.label);
+                return (
+                  <div key={`${card?.label}-${i}`} className={`aw2-votes-row is-3${isWinnerCard(card, slide) ? " is-winner" : ""}`}>
+                    <span className="aw2-num">{toNum(card?.rank) ?? i + 1}</span>
+                    <span className="aw2-votes-who">
+                      {who ? <Headshot player={who} size={40} /> : <TeamLogo src={cardLogo(card)} size={34} />}
+                      <span>
+                        <strong>{card?.label}</strong>
+                        {!team && cardTeam(card) ? <small>{cardTeam(card)}</small> : null}
+                      </span>
+                    </span>
+                    <em className="aw2-num">{tail}</em>
+                  </div>
+                );
+              })}
+            </div>
+          ) : null}
+        </section>
+      ) : null}
     </div>
   );
 }
 
-function SummaryBody({ slides, playerIndex }) {
+function SummaryBody({ slides, playerIndex, userTeam }) {
   const cup = slides.find(isCupSlide) || null;
   const honours = slides.filter((x) => !isCupSlide(x));
   const firstPick = honours.find((x) => x.awardKey === "hart") || honours.find((x) => !isTeamSlide(x) && !isRosterSlide(x)) || honours[0] || null;
@@ -1217,11 +1381,10 @@ function SummaryBody({ slides, playerIndex }) {
   const finalists = pick && !roster ? slideFinalists(pick) : [];
   const winnerCard = finalists.find((card) => isWinnerCard(card, pick)) || null;
   const player = pick && !team && !roster ? resolvePlayer(pick?.winnerPlayer || winnerCard?.player, playerIndex, pick?.winnerLabel) : null;
-  const stats = pick && !roster ? winnerStatRows(pick, ev).slice(0, 5) : [];
+  const own = winnerCard && !team && !roster ? seasonLine(winnerCard, pick?.awardKey) : [];
+  const stats = pick && !roster ? (own.length ? own : winnerStatRows(pick, ev).map((r) => ({ key: r.key, label: r.label, value: r.value }))).slice(0, 6) : [];
   const why = pick ? cleanLines(safeArray(ev?.why).length ? ev.why : pick?.whyTheyWon).slice(0, 2) : [];
-  const runnersUp = [...finalists]
-    .filter((card) => !isWinnerCard(card, pick))
-    .sort((a, b) => (toNum(a?.rank) ?? 99) - (toNum(b?.rank) ?? 99));
+  const runnersUp = [...finalists].filter((card) => !isWinnerCard(card, pick)).sort((a, b) => (toNum(a?.rank) ?? 99) - (toNum(b?.rank) ?? 99));
   const slots = roster ? rosterSlotsFor(pick, ev) : [];
   const voteRows = safeArray(ev?.voting_table).filter((r) => r && r.name).slice(0, 5);
   const groups = [
@@ -1229,56 +1392,73 @@ function SummaryBody({ slides, playerIndex }) {
     ["More honours", honours.filter((x) => !isMajorSlide(x) && !isRosterSlide(x))],
     ["League selections", honours.filter(isRosterSlide)],
   ].filter(([, list]) => list.length);
+  const mineWins = honours.filter((x) => !isRosterSlide(x) && userTeam?.name && (x.winnerTeamName === userTeam.name || (isTeamSlide(x) && x.winnerLabel === userTeam.name)));
 
   return (
-    <div className="an-card an-recap">
+    <div className="aw2-summary">
+      {cup ? (
+        <section className="aw2-champ is-summary">
+          <TeamLogo src={winnerLogo(cup)} size={120} />
+          <div className="aw2-champ-text">
+            <span>Stanley Cup champions</span>
+            <div className="aw2-display aw2-fit" style={fitStyle(cup.winnerLabel, 52)}>
+              {cup.winnerLabel}
+            </div>
+            {mineWins.length ? (
+              <p className="is-gold">
+                Your club took home {mineWins.length === 1 ? "one honour" : `${mineWins.length} honours`}: {mineWins.map((x) => x.awardLabel).join(", ")}.
+              </p>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
+
       {pick ? (
-        <section className={`an-spot${roster ? " is-roster" : ""}`} key={pick.id}>
+        <section className={`aw2-spot${roster ? " is-roster" : ""}`} key={pick.id}>
           {roster ? null : (
-            <div className="an-spot-face">
-              {team ? <TeamLogo src={winnerLogo(pick)} size="hero" /> : <Headshot player={player} size="lg" />}
+            <div className="aw2-spot-face">
+              {team ? <TeamLogo src={winnerLogo(pick)} size={170} /> : <Headshot player={player} size={180} />}
             </div>
           )}
-          <div className="an-spot-main">
-            <small className="an-spot-award">{roster ? "League selection" : pick.awardLabel}</small>
-            {pick.stageLine ? <span className="an-spot-line">{pick.stageLine}</span> : null}
-            <strong className="an-spot-name">{roster ? pick.awardLabel : pick.winnerLabel}</strong>
+          <div className="aw2-spot-main">
+            <span className="aw2-label is-gold">{roster ? "League selection" : pick.awardLabel}</span>
+            <div className="aw2-display aw2-fit" style={fitStyle(roster ? pick.awardLabel : pick.winnerLabel, 42)}>
+              {roster ? pick.awardLabel : pick.winnerLabel}
+            </div>
             {!team && !roster && pick.winnerTeamName ? (
-              <span className="an-spot-team">
-                <TeamLogo src={winnerLogo(pick)} size="sm" />
-                {pick.winnerTeamName}
-              </span>
-            ) : null}
-            {stats.length ? (
-              <div className="an-spot-stats">
-                {stats.map((row) => (
-                  <div key={row.key}>
-                    <b>{row.value}</b>
-                    <i>{row.label}</i>
-                  </div>
-                ))}
+              <div className="aw2-nominee-team is-lg">
+                <TeamLogo src={winnerLogo(pick)} size={32} />
+                <span>{pick.winnerTeamName}</span>
               </div>
             ) : null}
-            {why.length ? <p className="an-spot-why">{why.join(" ")}</p> : null}
+            {pick.stageLine ? <p className="aw2-muted">{pick.stageLine}</p> : null}
+            <StatLine items={stats} size="md" />
+            {why.length ? <p className="aw2-copy">{why.join(" ")}</p> : null}
             {runnersUp.length ? (
-              <p className="an-spot-runners">
-                <i>Also in the running</i> {runnersUp.map((c) => `${c.label}${cardTeam(c) ? ` (${cardTeam(c)})` : ""}`).join(" · ")}
+              <p className="aw2-copy">
+                <b>Also in the running: </b>
+                {runnersUp.map((c) => `${c.label}${cardTeam(c) ? ` (${cardTeam(c)})` : ""}`).join(", ")}
               </p>
             ) : null}
             {slots.length ? (
-              <div className="an-spot-lineup">
+              <div className="aw2-spot-lineup">
                 {slots.map((slot, i) => (
-                  <span key={`${slot?.slot || i}-${slot?.label || i}`}>
+                  <div key={`${slot?.slot || i}-${slot?.label || i}`}>
                     <i>{slot?.slot || ""}</i>
                     <b>{slot?.label || ""}</b>
-                    {slot?.teamName ? <em>{slot.teamName}</em> : null}
-                  </span>
+                    {slot?.teamName ? (
+                      <span className="aw2-nominee-team">
+                        <TeamLogo src={slot.teamLogoSrc} size={22} />
+                        <span>{slot.teamName}</span>
+                      </span>
+                    ) : null}
+                  </div>
                 ))}
               </div>
             ) : null}
           </div>
           {!roster && voteRows.length > 1 ? (
-            <div className="an-spot-votes">
+            <div className="aw2-spot-votes">
               <VoteTable table={voteRows} format={ev?.ballot_format} playerIndex={playerIndex} team={team} />
             </div>
           ) : null}
@@ -1286,38 +1466,32 @@ function SummaryBody({ slides, playerIndex }) {
       ) : null}
 
       {groups.map(([label, list]) => (
-        <section key={label} className="an-honours">
-          <h4 className="an-gate-head">{label}</h4>
-          <div className={`an-honour-grid${label === "Major awards" ? " is-major" : ""}`}>
-            {list.map((slide) => (
-              <button
-                key={slide.id}
-                type="button"
-                className={`an-honour${pick && slide.id === pick.id ? " is-on" : ""}`}
-                aria-pressed={Boolean(pick && slide.id === pick.id)}
-                onClick={() => setPickId(slide.id)}
-              >
-                {isRosterSlide(slide) ? null : <TeamLogo src={winnerLogo(slide)} size="sm" />}
-                <span>
-                  <i>{slide.awardLabel}</i>
-                  <b>{isRosterSlide(slide) ? "See the lineup" : slide.winnerLabel}</b>
-                </span>
-              </button>
-            ))}
+        <section key={label} className="aw2-honours">
+          <div className="aw2-sectionhead">
+            <div role="heading" aria-level={3}>{label}</div>
+          </div>
+          <div className="aw2-honour-grid">
+            {list.map((slide) => {
+              const mine = !isRosterSlide(slide) && userTeam?.name && (slide.winnerTeamName === userTeam.name || slide.winnerLabel === userTeam.name);
+              return (
+                <button
+                  key={slide.id}
+                  type="button"
+                  className={`aw2-honour${pick && slide.id === pick.id ? " is-on" : ""}${mine ? " is-mine" : ""}`}
+                  aria-pressed={Boolean(pick && slide.id === pick.id)}
+                  onClick={() => setPickId(slide.id)}
+                >
+                  {isRosterSlide(slide) ? <span className="aw2-honour-blank" /> : <TeamLogo src={winnerLogo(slide)} size={40} />}
+                  <span>
+                    <i>{slide.awardLabel}</i>
+                    <b>{isRosterSlide(slide) ? "See the lineup" : slide.winnerLabel}</b>
+                  </span>
+                </button>
+              );
+            })}
           </div>
         </section>
       ))}
-
-      {cup ? (
-        <section className="an-champ">
-          <span className="an-champ-rays" aria-hidden="true" />
-          <TeamLogo src={winnerLogo(cup)} size="hero" />
-          <div>
-            <small>Stanley Cup champions</small>
-            <strong>{cup.winnerLabel}</strong>
-          </div>
-        </section>
-      ) : null}
     </div>
   );
 }
@@ -1363,6 +1537,8 @@ export default function AwardsNight({ franchiseState = {}, eventData = {}, onCon
       franchiseState?.team?.name ||
       ""
   );
+  const userTeamId = franchiseState?.user_team_id ?? franchiseState?.userTeamId ?? franchiseState?.user_team?.team_id ?? null;
+  const userTeam = useMemo(() => ({ name: userTeamName, id: userTeamId }), [userTeamName, userTeamId]);
   const fanPool = useMemo(() => buildFallbackAwardFans(24, "awards-night-live"), []);
 
   const preShowPool = useMemo(
@@ -1724,9 +1900,17 @@ export default function AwardsNight({ franchiseState = {}, eventData = {}, onCon
   } else if (phase === PHASE.GATE) {
     headNum = pad2(slides.length);
     headState = PHASE_LABEL[PHASE.GATE];
-    headTitle = "Awards Night";
-    headMeta.push({ text: `${slides.length} awards on tonight's card`, tone: "strong" });
+    headTitle = "Tonight's card";
+    const majorCount = slides.filter(isMajorSlide).length;
+    const userNods = slides
+      .filter((sl) => !isRosterSlide(sl) && !isTeamSlide(sl))
+      .reduce((n, sl) => n + slideFinalists(sl).filter((c) => isUserCard(c, userTeam)).length, 0);
+    headMeta.push({
+      text: majorCount ? `${majorCount} major awards on media ballots, ${slides.length - majorCount} more honours` : `${slides.length} honours`,
+      tone: "strong",
+    });
     headMeta.push({ text: seasonLabel(franchiseState) });
+    if (userNods) headMeta.push({ text: `Your club: ${userNods} finalist nod${userNods === 1 ? "" : "s"}`, tone: "gold" });
   } else if (phase === PHASE.SUMMARY) {
     headNum = pad2(slides.length);
     headState = PHASE_LABEL[PHASE.SUMMARY];
@@ -1752,28 +1936,30 @@ export default function AwardsNight({ franchiseState = {}, eventData = {}, onCon
   let body;
   if (!slides.length) {
     body = (
-      <div className="an-card">
-        <p className="an-muted">
-          No award results were found. Complete the playoffs to reveal the season's hardware.
-        </p>
-      </div>
+      <p className="aw2-muted aw2-pad">
+        No award results were found. Complete the playoffs to reveal the season's hardware.
+      </p>
     );
   } else if (phase === PHASE.GATE) {
-    body = <GateBody slides={slides} playerIndex={playerIndex} userTeamName={userTeamName} onPick={jumpToAward} />;
+    body = (
+      <GateBody slides={slides} playerIndex={playerIndex} userTeam={userTeam} onPick={jumpToAward} evidenceByKey={evidenceByKey} />
+    );
   } else if (phase === PHASE.SUMMARY) {
-    body = <SummaryBody slides={slides} playerIndex={playerIndex} />;
+    body = <SummaryBody slides={slides} playerIndex={playerIndex} userTeam={userTeam} />;
   } else if (phase === PHASE.TITLE || (phase === PHASE.SEAL && !hasFinalistPhase && !roster)) {
     body = (
       <TitleBody
         key={`title-${activeSlide.id}`}
         slide={activeSlide}
         ev={ev}
-        finalistsCount={roster ? 0 : finalists.length}
+        finalists={roster ? [] : finalists}
         rule={ruleByKey[activeSlide?.awardKey] || ""}
+        playerIndex={playerIndex}
+        userTeam={userTeam}
       />
     );
   } else if (roster) {
-    body = <RosterBody key={`roster-${activeSlide.id}`} slide={activeSlide} ev={ev} phase={phase} />;
+    body = <RosterBody key={`roster-${activeSlide.id}`} slide={activeSlide} ev={ev} phase={phase} playerIndex={playerIndex} />;
   } else if (hasFinalistPhase && phase !== PHASE.CITATION) {
     body = (
       <FinalistsBody
@@ -1784,6 +1970,7 @@ export default function AwardsNight({ franchiseState = {}, eventData = {}, onCon
         phase={phase}
         shown={finalistShown}
         playerIndex={playerIndex}
+        userTeam={userTeam}
       />
     );
   } else {
@@ -1795,6 +1982,7 @@ export default function AwardsNight({ franchiseState = {}, eventData = {}, onCon
         rule={ruleByKey[activeSlide?.awardKey] || ""}
         finalists={finalists}
         playerIndex={playerIndex}
+        userTeam={userTeam}
       />
     );
   }
@@ -1808,151 +1996,176 @@ export default function AwardsNight({ franchiseState = {}, eventData = {}, onCon
   const displayRevealed =
     phase === PHASE.SUMMARY ? new Set(slides.map((s) => s.id)) : revealedIds;
   const isLast = activeIndex >= slides.length - 1;
+  const steps = !inCeremony
+    ? []
+    : roster
+      ? [PHASE.TITLE, PHASE.REVEAL, PHASE.CITATION]
+      : hasFinalistPhase
+        ? [PHASE.TITLE, PHASE.FINALISTS, PHASE.SEAL, PHASE.REVEAL, PHASE.CITATION]
+        : [PHASE.TITLE, PHASE.SEAL, PHASE.REVEAL, PHASE.CITATION];
+  const phaseForSteps = roster && phase === PHASE.SEAL ? PHASE.TITLE : phase;
+  const stepAt = steps.indexOf(phaseForSteps);
+  const presentedCount = slides.filter((s) => displayRevealed.has(s.id)).length;
 
   return (
-    <section className="an-root an-broadcast an-dd" aria-label="Awards Night">
-      <header className="an-topbar">
-        <div className="an-topbar-main">
-          <h1 className="an-page-title">Awards Night</h1>
-          <span className="an-season">{seasonLabel(franchiseState)}</span>
+    <section className="aw2-root" aria-label="Awards Night">
+      <header className="aw2-top">
+        <div className="aw2-top-id">
+          <div className="aw2-display aw2-top-name" role="heading" aria-level={1}>
+            Awards Night
+          </div>
+          <span>{seasonLabel(franchiseState)}</span>
         </div>
-        <nav className="an-milestones" aria-label="Offseason timeline">
-          {safeArray(SEASON_MILESTONES).map((milestone) => (
-            <span key={milestone.id} className={milestone.id === "awards" ? "is-current" : ""}>
-              {milestone.label}
-            </span>
-          ))}
+        <nav className="aw2-steps" aria-label="Offseason timeline">
+          {safeArray(SEASON_MILESTONES).map((milestone, i, list) => {
+            const at = list.findIndex((m) => m.id === "awards");
+            const state = milestone.id === "awards" ? "is-now" : i < at ? "is-past" : "";
+            return (
+              <span key={milestone.id} className={state} aria-current={milestone.id === "awards" ? "step" : undefined}>
+                {milestone.label}
+              </span>
+            );
+          })}
         </nav>
-        <div className="an-topbar-actions">
-          {typeof onBack === "function" ? (
-            <button type="button" className="an-ghost-btn an-back-btn" onClick={onBack}>
-              Leave to Hub
-            </button>
-          ) : null}
-{null}
-          <button
-            type="button"
-            className={`an-ghost-btn${paused ? " is-on" : ""}`}
-            onClick={() => setPaused((v) => !v)}
-            disabled={!inCeremony}
-          >
-            {paused ? "Play" : "Pause"}
+        <div className="aw2-top-actions">
+          <button type="button" className="aw2-quiet" onClick={() => setPaused((v) => !v)} disabled={!inCeremony}>
+            {paused ? "Resume" : "Pause"}
           </button>
           {phase !== PHASE.SUMMARY && slides.length ? (
-            <button type="button" className="an-ghost-btn" onClick={goToSummary}>
+            <button type="button" className="aw2-quiet" onClick={goToSummary}>
               Skip to summary
+            </button>
+          ) : null}
+          {typeof onBack === "function" ? (
+            <button type="button" className="aw2-quiet" onClick={onBack}>
+              Leave to Hub
             </button>
           ) : null}
         </div>
       </header>
 
-      <div className="an-floor">
-        <div className="an-floor-grid">
-          <CeremonyLog
-            groups={indexGroups}
-            slidesCount={slides.length}
-            activeIndex={inCeremony ? activeIndex : -1}
-            revealedIds={displayRevealed}
-            onSelect={jumpToAward}
-          />
+      <div className="aw2-floor">
+        <CeremonyLog
+          groups={indexGroups}
+          slidesCount={slides.length}
+          activeIndex={inCeremony ? activeIndex : -1}
+          revealedIds={displayRevealed}
+          onSelect={jumpToAward}
+        />
 
-          <section className="an-stage" aria-live="polite">
-            <header className="an-stagehead">
-              <span className="an-stagehead-num">{headNum}</span>
-              <div className="an-stagehead-identity">
-                <div className={`an-stagehead-state${headLive ? " is-live" : ""}`}>{headState}</div>
-                <h2 className="an-stagehead-title">{headTitle}</h2>
-                {headMeta.length ? (
-                  <div className="an-stagehead-meta">
-                    {headMeta.map((item) => (
-                      <span
-                        key={item.text}
-                        className={item.tone === "gold" ? "is-gold" : item.tone === "strong" ? "is-strong" : ""}
-                      >
-                        {item.text}
-                      </span>
-                    ))}
-                  </div>
-                ) : null}
+        <section className="aw2-stage" aria-live="polite">
+          <header className={`aw2-head${headLive ? " is-live" : ""}`}>
+            <div className="aw2-head-num">
+              <b>{headNum}</b>
+              {inCeremony ? <span>of {pad2(slides.length)}</span> : <span>{phase === PHASE.SUMMARY ? "presented" : "awards"}</span>}
+            </div>
+            <div className="aw2-head-main">
+              <span className="aw2-head-state">{headState}</span>
+              <div className="aw2-display aw2-fit" style={fitStyle(headTitle, 44)} role="heading" aria-level={2}>
+                {headTitle}
               </div>
-              {upNext.length ? (
-                <div className="an-stagehead-next">
-                  <span className="an-order-label">Up next</span>
-                  {upNext.map((slide, i) => (
-                    <span key={slide.id} className="an-next-item">
-                      <b>{pad2(upNextStart + i + 1)}</b>
-                      {slide.awardLabel}
+              {headMeta.length ? (
+                <div className="aw2-head-meta">
+                  {headMeta.map((item) => (
+                    <span key={item.text} className={item.tone === "gold" ? "is-gold" : item.tone === "strong" ? "is-strong" : ""}>
+                      {item.text}
                     </span>
                   ))}
                 </div>
               ) : null}
-            </header>
+            </div>
+            {steps.length ? (
+              <ol className="aw2-phases" aria-label="Award progress">
+                {steps.map((s, i) => (
+                  <li key={s} className={i < stepAt ? "is-done" : i === stepAt ? "is-now" : ""}>
+                    {PHASE_LABEL[s]}
+                  </li>
+                ))}
+              </ol>
+            ) : upNext.length ? (
+              <div className="aw2-next">
+                <span>Opening the night</span>
+                {upNext.map((slide, i) => (
+                  <button key={slide.id} type="button" onClick={() => jumpToAward(upNextStart + i)}>
+                    <b>{pad2(upNextStart + i + 1)}</b>
+                    {slide.awardLabel}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </header>
 
-            <div className="an-stage-body">{body}</div>
+          <div className="aw2-body">{body}</div>
 
-            <div className="an-dock">
+          <footer className="aw2-dock">
+            <div className="aw2-dock-progress">
+              <div className="aw2-dock-text">
+                {phase === PHASE.SUMMARY || !slides.length ? (
+                  <>
+                    <b>{slides.length ? `All ${slides.length} awards presented` : "Nothing to present"}</b>
+                  </>
+                ) : phase === PHASE.GATE ? (
+                  <>
+                    <b>Ceremony ready</b>
+                    <span>{slides.length} awards tonight · space bar starts the show</span>
+                  </>
+                ) : (
+                  <>
+                    <b>
+                      Award {activeIndex + 1} of {slides.length}: {PHASE_LABEL[phase]}
+                    </b>
+                    <span>
+                      {paused ? "Paused · " : ""}
+                      {presentedCount} presented
+                      {upNext.length ? ` · Next: ${upNext[0].awardLabel}` : ""}
+                    </span>
+                  </>
+                )}
+              </div>
+              {slides.length ? (
+                <div className="aw2-segs" aria-hidden="true">
+                  {slides.map((s, i) => (
+                    <i
+                      key={s.id}
+                      className={[
+                        displayRevealed.has(s.id) ? "is-done" : "",
+                        inCeremony && i === activeIndex ? "is-now" : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" ")}
+                    />
+                  ))}
+                </div>
+              ) : null}
+              {continueError ? <p className="aw2-dock-error">{continueError}</p> : null}
+            </div>
+            <div className="aw2-dock-actions">
               {phase === PHASE.SUMMARY || !slides.length ? (
-                <>
-                  <div className="an-dock-state">
-                    {slides.length ? `All ${slides.length} awards presented` : "Nothing to present"}
-                  </div>
-                  <div className="an-dock-actions">
-                    <button
-                      type="button"
-                      className="an-cta-btn an-dock-primary"
-                      onClick={handleContinue}
-                      disabled={continuing}
-                    >
-                      {continuing ? "Continuing…" : slides.length ? "Continue to Retirements" : "Continue"}
-                    </button>
-                  </div>
-                  {continueError ? <p className="an-dock-error">{continueError}</p> : null}
-                </>
+                <button type="button" className="aw2-go" onClick={handleContinue} disabled={continuing}>
+                  {continuing ? "Continuing…" : slides.length ? "Continue to Retirements" : "Continue"}
+                </button>
               ) : phase === PHASE.GATE ? (
-                <>
-                  <div className="an-dock-state">
-                    <b>Ceremony ready</b> · {slides.length} awards
-                  </div>
-                  <div className="an-dock-actions">
-                    <button type="button" className="an-cta-btn an-dock-primary" onClick={beginCeremony}>
-                      Begin ceremony
-                    </button>
-                  </div>
-                </>
+                <button type="button" className="aw2-go" onClick={beginCeremony}>
+                  Begin ceremony
+                </button>
               ) : (
                 <>
-                  <div className="an-dock-state">
-                    <b>{PHASE_LABEL[phase]}</b> · Award {activeIndex + 1} of {slides.length}
-                    {paused ? " · Paused" : ""}
-                  </div>
-                  <div className="an-dock-actions">
-                    <button
-                      type="button"
-                      className="an-ghost-btn"
-                      onClick={revealNow}
-                      disabled={isRevealedPhase(phase)}
-                    >
-                      Reveal now
-                    </button>
-                    <button type="button" className="an-ghost-btn" onClick={skipAward}>
-                      Skip award
-                    </button>
-                    <button type="button" className="an-cta-btn an-dock-primary" onClick={advancePhase}>
-                      {phase === PHASE.CITATION ? (isLast ? "Finish ceremony" : "Next award") : "Continue"}
-                    </button>
-                  </div>
+                  <button type="button" className="aw2-quiet" onClick={revealNow} disabled={isRevealedPhase(phase)}>
+                    Reveal now
+                  </button>
+                  <button type="button" className="aw2-quiet" onClick={skipAward}>
+                    Skip award
+                  </button>
+                  <button type="button" className="aw2-go" onClick={advancePhase}>
+                    {phase === PHASE.CITATION ? (isLast ? "Finish ceremony" : "Next award") : "Continue"}
+                  </button>
                 </>
               )}
             </div>
-          </section>
+          </footer>
+        </section>
 
-          <FanPulse
-            mode={pulseMode}
-            items={pulseItems}
-            emptyText={pulseEmpty}
-            feedKey={`${pulseStage}-${activeSlide?.id || "gate"}`}
-          />
-        </div>
+        <FanPulse mode={pulseMode} items={pulseItems} emptyText={pulseEmpty} feedKey={`${pulseStage}-${activeSlide?.id || "gate"}`} />
       </div>
     </section>
   );

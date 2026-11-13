@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
-TOP_N = 10
+TOP_N = 21  # #1 cover + a full two-column board of 20
 
 QUALITATIVE = [
     ("best_player", "Best player", "Highest overall rating in the league."),
@@ -186,10 +186,10 @@ def _fmt_toi(sec: float) -> str:
 def build_rankings(session: Any, *, team_id: Optional[str] = None) -> Dict[str, Any]:
     key = (int(getattr(session, "season_calendar_year", 0) or 0), int(getattr(session, "_stats_revision", 0) or 0),
            int(getattr(session, "calendar_cursor", 0) or 0), str(team_id or ""))
-    if not getattr(session, "_rankings_elc_v3", False):
+    if not getattr(session, "_rankings_bbb_v4", False):
         session._rankings_cache = None
         try:
-            session._rankings_elc_v3 = True
+            session._rankings_bbb_v4 = True
         except Exception:
             pass
     cache = getattr(session, "_rankings_cache", None)
@@ -230,11 +230,14 @@ def _build(session: Any, team_id: Optional[str]) -> Dict[str, Any]:
         if not gp(p):
             return "no games yet"
         r = L(p)
+        g_p = gp(p)
         if _pos(p) == "G":
             sa = _i(r.get("shots_against") or r.get("goalie_shots_against"))
-            sv = f", {1 - _i(r.get('ga') or r.get('goalie_ga')) / sa:.3f} sv%" if sa else ""
-            return f"{_i(r.get('w'))} wins in {gp(p)} GP{sv}"
-        return f"{_i(r.get('pts'))} pts in {gp(p)} GP"
+            rec = f"{_i(r.get('w'))}-{_i(r.get('l'))}-{_i(r.get('otl') or r.get('ot'))}"
+            sv = f" · {1 - _i(r.get('ga') or r.get('goalie_ga')) / sa:.3f} SV%".replace(" 0.", " .") if sa else ""
+            return f"{rec} in {g_p} GP{sv}"
+        pts = _i(r.get("pts"))
+        return f"{_i(r.get('g'))}G {_i(r.get('a'))}A · {pts} PTS in {g_p} GP"
 
     q["best_player"] = lambda p, t: (_ovr(p), f"{_ovr(p):.0f} OVR", season_line(p))
     q["worst_player"] = lambda p, t: None if _pos(p) == "G" or gp(p) < 20 else (-_ovr(p), f"{_ovr(p):.0f} OVR", f"still dressed for {gp(p)} games")
@@ -438,11 +441,25 @@ def _build(session: Any, team_id: Optional[str]) -> Dict[str, Any]:
                    "most_underrated", "best_rookie", "most_useful", "least_useful", "most_important", "most_ice_time", "most_hits",
                    "most_blocks", "most_pim", "sniper_pct"}
 
+    by_pid = {str(getattr(p, "id", "")): p for p, _ in allp}
+
     def section(defs: List[Tuple[str, str, str]], fns: Dict[str, Callable[..., Any]]) -> List[Dict[str, Any]]:
         res = []
         for key, label, how in defs:
             pool = skaters if key in ("best_rookie", "worst_player") else players
             rows = _board(session, pool, fns[key])
+            for r in rows:
+                pl = by_pid.get(r["player_id"])
+                if pl is None:
+                    continue
+                # Season line + OVR trend so every row carries context beyond its board stat.
+                r["line"] = season_line(pl)
+                start = getattr(pl, "_season_start_ovr", None)
+                if start is not None:
+                    try:
+                        r["ovr_delta"] = round(_ovr(pl) - float(start), 1)
+                    except (TypeError, ValueError):
+                        pass
             res.append({"key": key, "label": label, "method": how, "rows": rows,
                         "source": source if key in stat_boards else "current ratings",
                         "empty_reason": None if rows else ("Not enough games played yet." if key in stat_boards else "No player qualifies.")})

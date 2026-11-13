@@ -252,15 +252,22 @@ def test_catalog_storyline_names_the_player_instead_of_player():
     assert _name_storyline_text("Players-only meeting called", "Nick Suzuki") == "Players-only meeting called"
 
 
-def test_life_event_summary_has_name_numbers_and_applied_effect():
+def test_life_event_summary_is_prose_and_effects_are_structured():
     from app.sim_engine.franchise.storyline_procedural import (
         LIFE_EVENT_DRAMA,
         _compose_life_summary,
+        life_effect_days,
+        life_effect_lines,
     )
 
     entity = {"player_name": "Chris Tanev", "life": {}, "state": {}, "personality": {}}
     rule = {"profile": {"state.personal_stress": 2.0, "state.energy": -1.0}, "days": 4}
     text = _compose_life_summary("housing_instability", entity, {"home_stability": 48.0}, False, rule)
-    assert "Chris Tanev" in text and "48/100" in text
-    assert f"stress +{2.0 * LIFE_EVENT_DRAMA:g}" in text
+    assert "Chris Tanev" in text
+    # Newspaper copy: no raw readings or effect receipts in the prose.
+    assert "/100" not in text and "Effect:" not in text
     assert "Life-state" not in text and "Profile tags" not in text
+    lines = life_effect_lines(rule)
+    stress = next(row for row in lines if row["key"] == "personal_stress")
+    assert stress["value"] == round(2.0 * LIFE_EVENT_DRAMA, 1)
+    assert life_effect_days(rule) >= 4

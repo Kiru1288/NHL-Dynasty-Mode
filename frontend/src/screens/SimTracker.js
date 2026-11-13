@@ -1778,10 +1778,13 @@ function Rink({ apiRef, onIce, roster, colors, teams, period, shots, headPt, cel
             No tracking data
           </span>
         )}
+        <div className="st-deadveil" aria-hidden="true" />
         <div className="st-deadbar" aria-hidden="true">
           <span className="st-deadbar__whistle" />
-          <b>Whistle</b>
-          <small>{stop && STOP_LABEL[stop.reason] ? STOP_LABEL[stop.reason] : "play is dead"}</small>
+          <span className="st-deadbar__txt">
+            <b>{stop && STOP_LABEL[stop.reason] ? STOP_LABEL[stop.reason] : "Whistle"}</b>
+            <small>{stop && stop.reason === "goal" ? "play is dead" : "Play stopped · faceoff next"}</small>
+          </span>
         </div>
         {replay ? (
           <div className="st-replayframe" aria-hidden="true">
@@ -3300,6 +3303,13 @@ export default function SimTracker({ sessionId: sessionIdProp, onExit }) {
     clearTimeout(timers.current[key]);
     timers.current[key] = setTimeout(fn, ms);
   }, []);
+  // A chance tag never outlives its moment (one got stuck on the net for a whole period).
+  useEffect(() => {
+    if (!danger) return undefined;
+    const k = danger.key;
+    const id = setTimeout(() => setDanger((d) => (d && d.key === k ? null : d)), 1900);
+    return () => clearTimeout(id);
+  }, [danger]);
   useEffect(
     () => () => {
       Object.values(timers.current).forEach(clearTimeout);
