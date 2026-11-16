@@ -1767,6 +1767,13 @@ def continue_offseason(
             _swallowed_log.debug("suppressed exception", exc_info=True)
 
     if current == "retirements":
+        waiting = [
+            d for d in list(getattr(session, "pending_decisions", None) or [])
+            if isinstance(d, dict) and str(d.get("kind") or d.get("type") or "") == "retirement_decision"
+        ]
+        if waiting:
+            name = str(waiting[0].get("player_name") or (waiting[0].get("meta") or {}).get("player_name") or "your veteran")
+            raise ValueError(f"Talk to {name} about his future before leaving the retirements screen.")
         _legacy_stage(session, "retirements")
 
     if current == "draft" and not session.draft_completed:

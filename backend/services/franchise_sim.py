@@ -20524,12 +20524,15 @@ def _auto_resolve_pending_decisions(session: FranchiseSession) -> None:
             continue
         if str(d.get("kind") or d.get("type") or "") == "retirement_decision":
             # Silence is not "let him retire": a veteran you never answered plays on.
-            stay = next(
-                (o for o in opts if isinstance(o, dict) and str(o.get("id") or "") == "one_more_year"),
-                None,
-            )
-            if stay is not None:
-                first = stay
+            session.pending_decisions.pop(0)
+            try:
+                from services.franchise_retirement import apply_retirement_decision as _keep_playing
+
+                _keep_playing(session, d, "one_more_year")
+                session.timeline.append(f"AUTO-RESOLVE: {d.get('player_name') or 'veteran'} plays on (no answer given).")
+            except Exception as exc:
+                session.timeline.append(f"AUTO-RESOLVE failed ({d.get('id')}): {exc}")
+            continue
         # Decisions that carry a staff recommendation (WJC loans) follow it on auto-sim.
         rec_opt = next((o for o in opts if isinstance(o, dict) and o.get("recommended")), None)
         if rec_opt is not None:
@@ -21253,6 +21256,7 @@ def _advance_blocked_result(
         "calendar_index": int(getattr(session, "calendar_cursor", 0) or 0),
         "iso": _calendar_iso_for_day(session, int(getattr(session, "calendar_cursor", 0) or 0)),
         "pending_decisions": _pending_decision_snapshot(session),
+        "retirement_talks": dict(getattr(session, "retirement_talks", None) or {}),
     }
 def auto_resolve_franchise_decisions(session: FranchiseSession) -> None:
     """Public alias for API use before a single manual advance."""
@@ -21575,6 +21579,7 @@ def advance_franchise_day(session: FranchiseSession) -> Dict[str, Any]:
         "league_game_summaries": league_lines,
         "games_simulated": int(len(slots)),
         "pending_decisions": _pending_decision_snapshot(session),
+        "retirement_talks": dict(getattr(session, "retirement_talks", None) or {}),
     }
 def _days_until_user_game_inclusive(session: FranchiseSession, *, max_lookahead: int = 82) -> int:
     """Calendar days to advance so the user's next scheduled game is simulated."""
@@ -21961,6 +21966,7 @@ def advance_franchise_bulk(
             else "Nothing advanced."
         ),
         "pending_decisions": _pending_decision_snapshot(session),
+        "retirement_talks": dict(getattr(session, "retirement_talks", None) or {}),
     }
 
     tail = steps[-20:] if len(steps) > 20 else steps
@@ -21974,6 +21980,7 @@ def advance_franchise_bulk(
         "last_step": last,
         "recent_steps": tail,
         "pending_decisions": _pending_decision_snapshot(session),
+        "retirement_talks": dict(getattr(session, "retirement_talks", None) or {}),
         "calendar_index": int(getattr(session, "calendar_cursor", 0) or 0),
         "iso": _calendar_iso_for_day(session, int(getattr(session, "calendar_cursor", 0) or 0)),
     }
@@ -22458,6 +22465,12 @@ def apply_decision(session: FranchiseSession, decision_id: str, choice_id: str) 
 
         # Remove the decision first so retry loops do not double-apply it.
         session.pending_decisions.pop(i)
+        # The light state payload is cached; without this the answer comes back with the
+        # decision still on it and the prompt never goes away.
+        try:
+            invalidate_session_payload_caches(session, "decision")
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
 
         effects: Dict[str, Any] = {}
 
@@ -22542,9 +22555,10 @@ def apply_decision(session: FranchiseSession, decision_id: str, choice_id: str) 
             effects.update(_apply_legal_conduct_decision_effect(session, d, chosen))
 
         elif kind == "retirement_decision":
-            from app.sim_engine.franchise.retirement import apply_retirement_decision  # noqa: WPS433
+            # A conversation: a turned-down pitch puts the decision back on the desk.
+            from services.retirement_talk import resolve_retirement_talk  # noqa: WPS433
 
-            effects.update(apply_retirement_decision(session, d, cid) or {})
+            effects.update(resolve_retirement_talk(session, d, cid) or {})
 
         else:
             effects.update(_apply_generic_storyline_choice_effect(session, d, chosen))
@@ -27277,6 +27291,7 @@ def _build_lean_core_section(
         "scouting_as_of_iso": _scouting_calendar_iso(session),
         "season_anchor_events": season_anchor_event_markers(int(session.season_calendar_year)),
         "pending_decisions": pending_snap,
+        "retirement_talks": dict(getattr(session, "retirement_talks", None) or {}),
         "pendingDecisions": pending_snap,
         "pending_ui_popups": _popups_with_cards(session),
         "timeline": list(session.timeline[-80:]),
@@ -27823,6 +27838,7 @@ def _build_state_payload_impl(session: FranchiseSession, *, include_heavy: bool 
             )(_get_team_fan_profile(session, str(session.user_team_id or ""))),
         },
         "pending_decisions": pending_snap,
+        "retirement_talks": dict(getattr(session, "retirement_talks", None) or {}),
         "pendingDecisions": pending_snap,
         # Oldest-first pending queue: never hide older undismissed items behind a newest-only tail.
         "pending_ui_popups": _popups_with_cards(session),

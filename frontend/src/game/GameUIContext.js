@@ -430,6 +430,7 @@ function mergeFranchisePayload(prev, incoming) {
       ...prior,
       trade_demand_crisis: incoming.trade_demand_crisis ?? prior.trade_demand_crisis,
       pending_decisions: incoming.pending_decisions ?? prior.pending_decisions,
+      retirement_talks: incoming.retirement_talks ?? prior.retirement_talks,
       pendingDecisions: incoming.pendingDecisions ?? prior.pendingDecisions,
       pending_ui_popups: incoming.pending_ui_popups ?? prior.pending_ui_popups,
       narrative_summary: incoming.narrative_summary ?? prior.narrative_summary,

@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import RetirementTalk, { isRetirementDecision } from "../../events/retirements/RetirementTalk";
 import { useGameUI } from "../../game/GameUIContext";
 import { SCREENS } from "../../game/constants";
 import { isFranchiseCinematicPopup } from "../../events/franchiseEventKinds";
@@ -1231,7 +1232,8 @@ function PermissionDecisionCard({ decision, onResolve }) {
   const options = Array.isArray(decision?.options) ? decision.options : [];
   return (
     <div className="showcase-popup showcase-popup--v2" role="dialog" aria-label="Permission needed">
-      <div className="showcase-popup__sheet">
+      <div className="showcase-popup__backdrop showcase-popup__backdrop--v2" aria-hidden="true" />
+      <div className="showcase-popup__panel showcase-popup__panel--v2 showcase-popup__sheet">
         <p className="showcase-popup__kicker">Permission needed</p>
         <h2 className="showcase-popup__title">{decision?.title || "Decision required"}</h2>
         <p className="showcase-popup__summary">{decision?.message || decision?.description || "Choose before the day can advance."}</p>
@@ -1260,7 +1262,7 @@ export function ShowcasePopupLayer() {
     window.addEventListener("nhl-live-sim", on);
     return () => window.removeEventListener("nhl-live-sim", on);
   }, []);
-  const { franchiseState, onDismissShowcasePopups, setScreen, resumeInterruptedSim, cancelSimResume, setStatsCentralTab, onResolveDecision, refreshFranchise } = useGameUI();
+  const { franchiseState, onDismissShowcasePopups, setScreen, resumeInterruptedSim, cancelSimResume, setStatsCentralTab, onResolveDecision, refreshFranchise, mergeFranchiseState } = useGameUI();
   const userTeamId = franchiseState?.user_team_id || franchiseState?.team?.team_id || "";
   const rawQueue = (franchiseState?.pending_ui_popups || []).filter(
     (p) => p && !isFranchiseCinematicPopup(p) && isImportantPopup(p, userTeamId)
@@ -1325,10 +1327,32 @@ export function ShowcasePopupLayer() {
 
   const pendingDecisions = (Array.isArray(franchiseState?.pending_decisions) ? franchiseState.pending_decisions : [])
     .filter((d) => d && Array.isArray(d.options) && d.options.length);
+  // A retirement talk stays on screen after he answers, until the GM closes it.
+  const topDecision = pendingDecisions[0] || null;
+  const topTalk = isRetirementDecision(topDecision) ? topDecision : null;
+  const [heldTalk, setHeldTalk] = useState(null);
+  useEffect(() => {
+    if (topTalk && (!heldTalk || heldTalk.id !== topTalk.id)) setHeldTalk(topTalk);
+  }, [topTalk, heldTalk]);
   if (liveOn) return null;
 
+  const onRetirementScreen = typeof document !== "undefined" && !!document.querySelector(".ret2-root");
+  if (heldTalk && !onRetirementScreen) {
+    return (
+      <RetirementTalk
+        key={heldTalk.id}
+        decision={topTalk && topTalk.id === heldTalk.id ? topTalk : heldTalk}
+        talks={franchiseState?.retirement_talks || {}}
+        franchiseState={franchiseState}
+        mergeFranchiseState={mergeFranchiseState}
+        onClose={() => setHeldTalk(null)}
+      />
+    );
+  }
+
   if (pendingDecisions.length) {
-    return <PermissionDecisionCard decision={pendingDecisions[0]} onResolve={onResolveDecision} />;
+    if (topTalk) return null;
+    return <PermissionDecisionCard decision={topDecision} onResolve={onResolveDecision} />;
   }
 
   if (!first) {

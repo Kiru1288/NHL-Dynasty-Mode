@@ -92776,3 +92776,88 @@ html:not(#_):not(#__) .sl-app .bbe-boardlist__rate small { font: 400 9px/1.2 var
   html:not(#_):not(#__) .sl-app .bbe-ledger-strip { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   html:not(#_):not(#__) .sl-app .bbe-ledger-strip p { grid-column: 1 / -1; }
 }
+
+/* ══ Retirement talk (2026-11-14): sit-down with a veteran weighing retirement ══ */
+html:not(#_):not(#__) .rtk-shade {
+  --rtk-ink: #060d2e; --rtk-cream: #f6ecd2; --rtk-gold: #ffcf3f; --rtk-navy: #0b1840; --rtk-surf: #142a66;
+  --rtk-step: polygon(0 8px, 4px 8px, 4px 4px, 8px 4px, 8px 0, calc(100% - 8px) 0, calc(100% - 8px) 4px, calc(100% - 4px) 4px, calc(100% - 4px) 8px, 100% 8px, 100% calc(100% - 8px), calc(100% - 4px) calc(100% - 8px), calc(100% - 4px) calc(100% - 4px), calc(100% - 8px) calc(100% - 4px), calc(100% - 8px) 100%, 8px 100%, 8px calc(100% - 4px), 4px calc(100% - 4px), 4px calc(100% - 8px), 0 calc(100% - 8px));
+  position: fixed; inset: 0; z-index: 13500; display: flex; align-items: center; justify-content: center; padding: 24px;
+  background: rgba(4, 9, 30, 0.78); backdrop-filter: blur(4px); font-family: "Inter", system-ui, sans-serif;
+  animation: rtk-fade 0.2s ease both;
+}
+html:not(#_):not(#__) .rtk-shade *, html:not(#_):not(#__) .rtk-shade *::before, html:not(#_):not(#__) .rtk-shade *::after { box-sizing: border-box; }
+html:not(#_):not(#__) .rtk-shade button {
+  appearance: none; margin: 0; border: 0; background: none; box-shadow: none; text-shadow: none; font: inherit; color: inherit;
+  cursor: pointer; min-height: 0; min-width: 0; padding: 0; text-transform: none; letter-spacing: normal;
+}
+html:not(#_):not(#__) .rtk-sheet {
+  display: grid; grid-template-columns: 340px minmax(0, 1fr); width: min(1240px, 96vw); height: min(780px, 92vh);
+  background: var(--rtk-navy); clip-path: var(--rtk-step); box-shadow: inset 0 0 0 4px #2a3f86, inset 0 -8px 0 rgba(0,0,0,.3);
+  animation: rtk-rise 0.32s cubic-bezier(0.2, 1.3, 0.4, 1) both; color: #e7ebf7;
+}
+html:not(#_):not(#__) .rtk-who {
+  display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 26px 22px; text-align: center;
+  background: linear-gradient(180deg, #1a3479, #0f2259); border-right: 4px solid #2a3f86;
+}
+html:not(#_):not(#__) .rtk-sup { font-family: "Silkscreen", monospace; font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: #6ccaff; }
+html:not(#_):not(#__) .rtk-face { width: 200px; height: 200px; border-radius: 50%; overflow: hidden; background: rgba(255,255,255,.08); box-shadow: 0 0 0 6px var(--rtk-gold), 0 8px 0 6px rgba(0,0,0,.35); }
+html:not(#_):not(#__) .rtk-face > * { width: 100% !important; height: 100% !important; }
+html:not(#_):not(#__) .rtk-name { font-family: "Luckiest Guy", cursive; font-size: 36px; line-height: 1; color: var(--rtk-cream); letter-spacing: .02em; text-shadow: 0 4px 0 var(--rtk-ink), 3px 0 0 var(--rtk-ink), -3px 0 0 var(--rtk-ink); margin-top: 6px; }
+html:not(#_):not(#__) .rtk-line { font-size: 15px; color: #a9b3d6; line-height: 1.4; }
+html:not(#_):not(#__) .rtk-why { width: 100%; display: flex; flex-direction: column; gap: 4px; padding: 12px; background: var(--rtk-cream); color: var(--rtk-ink); clip-path: var(--rtk-step); }
+html:not(#_):not(#__) .rtk-why span, html:not(#_):not(#__) .rtk-risk > span, html:not(#_):not(#__) .rtk-patience > span { font-family: "Silkscreen", monospace; font-size: 12px; text-transform: uppercase; }
+html:not(#_):not(#__) .rtk-why span { color: rgba(6,13,46,.6); }
+html:not(#_):not(#__) .rtk-why strong { font-family: "Luckiest Guy", cursive; font-weight: 400; font-size: 24px; letter-spacing: .02em; }
+html:not(#_):not(#__) .rtk-risk, html:not(#_):not(#__) .rtk-patience { width: 100%; display: flex; flex-direction: column; gap: 6px; align-items: stretch; color: #a9b3d6; }
+html:not(#_):not(#__) .rtk-risk-bar { height: 14px; background: #060d2e; box-shadow: inset 0 0 0 2px #2a3f86; }
+html:not(#_):not(#__) .rtk-risk-bar i { display: block; height: 100%; background: repeating-linear-gradient(90deg, #ff7a59 0 10px, #ff9a7c 10px 14px); }
+html:not(#_):not(#__) .rtk-patience div { display: flex; gap: 8px; justify-content: center; }
+html:not(#_):not(#__) .rtk-patience i { width: 26px; height: 26px; display: block; }
+html:not(#_):not(#__) .rtk-patience i.is-left { background: var(--rtk-gold); box-shadow: inset -4px -4px 0 rgba(0,0,0,.2); }
+html:not(#_):not(#__) .rtk-patience i.is-used { border: 3px dashed #ff7a59; }
+html:not(#_):not(#__) .rtk-room { display: flex; flex-direction: column; gap: 14px; min-height: 0; padding: 24px 26px; }
+html:not(#_):not(#__) .rtk-head { font-family: "Luckiest Guy", cursive; font-size: 40px; line-height: 1; color: var(--rtk-gold); letter-spacing: .02em; text-shadow: 0 4px 0 var(--rtk-ink); }
+html:not(#_):not(#__) .rtk-log { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; padding: 6px 4px 6px 0; }
+html:not(#_):not(#__) .rtk-say { max-width: 78%; display: flex; flex-direction: column; gap: 4px; animation: rtk-pop 0.3s cubic-bezier(0.2, 1.4, 0.4, 1) both; }
+html:not(#_):not(#__) .rtk-say p { margin: 0; padding: 14px 18px; font-size: 18px; line-height: 1.45; font-weight: 600; clip-path: var(--rtk-step); }
+html:not(#_):not(#__) .rtk-say.is-player { align-self: flex-start; }
+html:not(#_):not(#__) .rtk-say.is-player p { background: var(--rtk-cream); color: var(--rtk-ink); }
+html:not(#_):not(#__) .rtk-say.is-gm { align-self: flex-end; align-items: flex-end; }
+html:not(#_):not(#__) .rtk-say.is-gm p { background: var(--rtk-gold); color: var(--rtk-ink); }
+html:not(#_):not(#__) .rtk-who-tag { font-family: "Silkscreen", monospace; font-size: 12px; text-transform: uppercase; color: #a9b3d6; }
+html:not(#_):not(#__) .rtk-say.is-typing p { display: flex; gap: 6px; }
+html:not(#_):not(#__) .rtk-say.is-typing i { width: 10px; height: 10px; background: var(--rtk-ink); display: block; animation: rtk-dot 0.9s ease-in-out infinite; }
+html:not(#_):not(#__) .rtk-say.is-typing i:nth-child(2) { animation-delay: .15s; }
+html:not(#_):not(#__) .rtk-say.is-typing i:nth-child(3) { animation-delay: .3s; }
+html:not(#_):not(#__) .rtk-pitches { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+html:not(#_):not(#__) .rtk-pitch {
+  display: flex !important; flex-direction: column; gap: 5px; text-align: left; padding: 12px 14px !important;
+  background: var(--rtk-surf) !important; clip-path: var(--rtk-step); box-shadow: inset 0 -5px 0 rgba(0,0,0,.25) !important;
+  transition: transform .12s ease, background .12s ease;
+}
+html:not(#_):not(#__) .rtk-pitch:hover:not(:disabled) { transform: translateY(-3px); background: #1d3a85 !important; }
+html:not(#_):not(#__) .rtk-pitch:disabled { opacity: .5; cursor: default; }
+html:not(#_):not(#__) .rtk-pitch strong { font-family: "Luckiest Guy", cursive; font-weight: 400; font-size: 20px; letter-spacing: .02em; color: var(--rtk-cream); }
+html:not(#_):not(#__) .rtk-pitch span { font-size: 13px; line-height: 1.35; color: #a9b3d6; }
+html:not(#_):not(#__) .rtk-pitch.is-let { background: #3a1f2e !important; }
+html:not(#_):not(#__) .rtk-pitch.is-let strong { color: #ff9a7c; }
+html:not(#_):not(#__) .rtk-error { margin: 0; padding: 10px 14px; background: #3a1f2e; color: #ffb3a1; font-weight: 700; }
+html:not(#_):not(#__) .rtk-end { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+html:not(#_):not(#__) .rtk-stamp { font-family: "Luckiest Guy", cursive; font-size: 34px; padding: 8px 18px 4px; transform: rotate(-4deg); color: var(--rtk-ink); }
+html:not(#_):not(#__) .rtk-stamp.is-returning { background: #7be38a; }
+html:not(#_):not(#__) .rtk-stamp.is-retired { background: #ff9a7c; }
+html:not(#_):not(#__) .rtk-go { padding: 14px 34px !important; font-family: "Luckiest Guy", cursive !important; font-size: 28px !important; color: var(--rtk-ink) !important; background: var(--rtk-gold) !important; clip-path: var(--rtk-step); box-shadow: inset 0 -6px 0 rgba(0,0,0,.2) !important; }
+html:not(#_):not(#__) .rtk-queue { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+html:not(#_):not(#__) .rtk-queue-sup { font-family: "Silkscreen", monospace; font-size: 12px; text-transform: uppercase; color: #ffcf3f; }
+html:not(#_):not(#__) .rtk-queue-item { padding: 8px 14px; font-weight: 800; font-size: 14px; color: #060d2e; background: #f6ecd2; border: 0; cursor: pointer; clip-path: polygon(0 4px, 4px 4px, 4px 0, calc(100% - 4px) 0, calc(100% - 4px) 4px, 100% 4px, 100% calc(100% - 4px), calc(100% - 4px) calc(100% - 4px), calc(100% - 4px) 100%, 4px 100%, 4px calc(100% - 4px), 0 calc(100% - 4px)); }
+html:not(#_):not(#__) .ret2-root .ret2-go:disabled { opacity: .55; cursor: not-allowed; filter: grayscale(.4); }
+@keyframes rtk-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes rtk-rise { from { opacity: 0; transform: translateY(30px) scale(.97); } to { opacity: 1; transform: none; } }
+@keyframes rtk-pop { from { opacity: 0; transform: translateY(10px) scale(.96); } to { opacity: 1; transform: none; } }
+@keyframes rtk-dot { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
+@media (max-width: 1100px) {
+  html:not(#_):not(#__) .rtk-sheet { grid-template-columns: 1fr; height: auto; max-height: 94vh; }
+  html:not(#_):not(#__) .rtk-who { flex-direction: row; flex-wrap: wrap; border-right: 0; border-bottom: 4px solid #2a3f86; }
+  html:not(#_):not(#__) .rtk-face { width: 110px; height: 110px; }
+  html:not(#_):not(#__) .rtk-pitches { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

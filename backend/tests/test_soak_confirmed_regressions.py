@@ -110,9 +110,9 @@ def test_continue_offseason_advances_past_retirements_without_from_stage():
     with patch.object(fo, "_stage_handler", fake_handler), patch.object(fo, "_sync_phase_fields", lambda s: None):
         out = continue_offseason(session)
 
-    assert session.offseason_stage == "salary_cap", session.offseason_stage
-    assert out.get("offseason_stage") == "salary_cap"
-    assert "salary_cap" in calls
+    assert session.offseason_stage == "board_of_governors", session.offseason_stage
+    assert out.get("offseason_stage") == "board_of_governors"
+    assert "board_of_governors" in calls
 
 
 def test_second_continue_from_prospect_rights_replays_resign_desk():

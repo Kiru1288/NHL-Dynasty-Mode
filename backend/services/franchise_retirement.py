@@ -1346,6 +1346,12 @@ def _enqueue_borderline_decision(session: FranchiseSession, row: Dict[str, Any])
             ],
         }
     )
+    try:
+        from services.retirement_talk import ensure_talk
+
+        ensure_talk(session.pending_decisions[-1], row)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
 
 
 def _find_player_in_org(team: Any, player_id: str) -> Any:

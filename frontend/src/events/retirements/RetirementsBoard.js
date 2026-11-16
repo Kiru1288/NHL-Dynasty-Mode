@@ -1,8 +1,10 @@
-import React, { useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import PlayerHeadshot from "../../components/PlayerHeadshot";
 import TeamLogoBadge from "../../components/ui/TeamLogoBadge";
 import { ensurePlayerHeadshotFields } from "../../utils/playerHeadshots";
 import { resolveFranchiseTeamLogo } from "../../utils/teamLogos";
+import { useGameUI } from "../../game/GameUIContext";
+import RetirementTalk, { isRetirementDecision } from "./RetirementTalk";
 import {
   contractLine,
   draftLine,
@@ -317,6 +319,27 @@ function Pager({ page, pages, onPage }) {
 export default function RetirementsBoard({ franchiseState = {}, retirees = [], onContinue, onBack }) {
   const userTeamId = franchiseState?.user_team_id ?? franchiseState?.userTeamId ?? null;
   const all = useMemo(() => normalizeRetireesPayload(retirees), [retirees]);
+  const { mergeFranchiseState } = useGameUI();
+  // Veterans on your club who are weighing retirement: talk to each before moving on.
+  const talks = useMemo(
+    () => (Array.isArray(franchiseState?.pending_decisions) ? franchiseState.pending_decisions : []).filter(isRetirementDecision),
+    [franchiseState?.pending_decisions]
+  );
+  const [talkId, setTalkId] = useState(null);
+  const [talkOpen, setTalkOpen] = useState(false);
+  const openedOnce = useRef(false);
+  useEffect(() => {
+    if (!openedOnce.current && talks.length) {
+      openedOnce.current = true;
+      setTalkId(talks[0].id);
+      setTalkOpen(true);
+    }
+  }, [talks]);
+  const activeTalk = talks.find((d) => d.id === talkId) || null;
+  const [lastTalk, setLastTalk] = useState(null);
+  useEffect(() => {
+    if (activeTalk) setLastTalk(activeTalk);
+  }, [activeTalk]);
   const [filter, setFilter] = useState("all");
   const [sortId, setSortId] = useState("ovr");
 
@@ -519,11 +542,50 @@ export default function RetirementsBoard({ franchiseState = {}, retirees = [], o
       </main>
 
       <footer className="ret2-foot">
-        <span className="ret2-foot-note">Next: Board of Governors</span>
-        <button type="button" className="ret2-go" onClick={onContinue}>
-          Continue to Board of Governors
+        {talks.length ? (
+          <div className="rtk-queue">
+            <span className="rtk-queue-sup">Waiting on your answer</span>
+            {talks.map((d) => (
+              <button
+                key={d.id}
+                type="button"
+                className="rtk-queue-item"
+                onClick={() => {
+                  setTalkId(d.id);
+                  setTalkOpen(true);
+                }}
+              >
+                Talk to {d.player_name || d.meta?.player_name || "him"}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <span className="ret2-foot-note">Next: Board of Governors</span>
+        )}
+        <button type="button" className="ret2-go" onClick={onContinue} disabled={talks.length > 0}>
+          {talks.length
+            ? `Talk to ${(talks[0].player_name || talks[0].meta?.player_name || "your veteran").split(" ").slice(-1)[0]} first`
+            : "Continue to Board of Governors"}
         </button>
       </footer>
+      {talkOpen && (activeTalk || lastTalk) ? (
+        <RetirementTalk
+          key={(activeTalk || lastTalk).id}
+          decision={activeTalk || lastTalk}
+          talks={franchiseState?.retirement_talks || {}}
+          franchiseState={franchiseState}
+          mergeFranchiseState={mergeFranchiseState}
+          onClose={() => {
+            setTalkOpen(false);
+            setLastTalk(null);
+            const next = talks.find((d) => d.id !== talkId);
+            if (next) {
+              setTalkId(next.id);
+              setTalkOpen(true);
+            }
+          }}
+        />
+      ) : null}
     </section>
   );
 }
