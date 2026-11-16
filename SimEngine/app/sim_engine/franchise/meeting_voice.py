@@ -189,9 +189,9 @@ _ASKS: Dict[str, Sequence[str]] = {
     "discuss_line_assignment": ("Where do you actually see me in this lineup?", "I'd like to know which line you think I belong on.", "Am I a top-six guy to you or not?"),
     "discuss_promotion": ("I think I've outgrown the line I'm on.", "I'm ready for more. I think the tape shows it.", "Move me up. I'll make it work."),
     "discuss_demotion": ("Getting bumped down a line stings. I'd like to understand it.", "I saw the new lines. Not going to lie, that hurt.", "Why'd I get dropped?"),
-    "offer_pp_opportunity": ("Give me a real look on the power play and I'll produce.", "I can help the power play. I just need the chance.", "I see the half-wall open on the PP every night. Let me take it."),
+    "offer_pp_opportunity": ("The power play? I've been waiting for that.", "I can help that unit. I see the half-wall open every night.", "Really? I'd love a shot on the power play."),
     "explain_pp_removal": ("I lost my spot on the power play. What happened?", "I'd like to know why I'm off the PP.", "One bad stretch and I'm off the power play?"),
-    "offer_pk_opportunity": ("I can help on the kill if you trust me with it.", "Put me on the PK. I'll block anything.", "I want penalty-kill minutes. I think I can be good at it."),
+    "offer_pk_opportunity": ("The kill? Yeah, I'd like that.", "PK minutes? I can do that. I'll block anything.", "I've wanted a shot on the penalty kill."),
     "discuss_healthy_scratch": ("Sitting in the press box in a suit is killing me. What's the message?", "I got scratched and I don't know what I'm supposed to fix.", "What do I have to do to get back in the lineup?"),
     "discuss_return_lineup": ("I'm ready to come back. What's the plan for me?", "Trainers cleared me. Where do I slot in?", "I'm healthy. Let's talk about getting me back out there."),
     "discuss_goalie_workload": ("I want clarity on the crease.", "Who's the guy? I'd like to know.", "Rotations are fine, but I want to know where I stand."),
@@ -199,7 +199,7 @@ _ASKS: Dict[str, Sequence[str]] = {
     "request_pp_time": ("Give me a real look on the power play. I think I can help us there.", "Our power play's stuck. I think I can unstick it.", "I'd like a shot on the first unit. Even a few games."),
     "request_starting_role": ("I want the net more often. I think I've earned the chance to run with it.", "I'm ready to be the starter. Give me a run of games.", "I play better when I play a lot. Let me prove it."),
     # performance
-    "praise_performance": ("Appreciate you noticing — that means something.", "Thanks. It's been fun lately, honestly.", "Glad it's showing. I've been putting the work in."),
+    "praise_performance": ("Appreciate you noticing. That means something.", "Thanks. It's been fun lately, honestly.", "Glad it's showing. I've been putting the work in."),
     "challenge_performance": ("I know I haven't been good enough.", "Yeah, I've seen the tape. It's not great.", "I know why I'm here. I've been bad."),
     "ask_struggles": ("Honestly? A few things are off.", "It's a bunch of little things. I'm squeezing the stick.", "I don't totally know. Confidence, maybe."),
     "discuss_scoring_drought": ("The points aren't coming. Believe me, I know.", "I'm getting chances. They're just not going in.", "I'm snakebit. I hit three posts last week."),
@@ -346,13 +346,35 @@ def _context_clause(mc: Dict[str, Any], topic: str, itype: str, seed: str) -> st
     return opts[r.randrange(len(opts))]
 
 
+# Leads that only make sense when he asked for the meeting, or only when you called him in.
+_REQUEST_ONLY = ("wanted to ask you", "dad said", "don't usually come up here", "bringing things upstairs", "thought about how to say this", "I've been biting my tongue")
+_CALLED_ONLY = ("call me in eventually", "know a check-in when", "Am I in trouble", "where you tell me I'm getting a raise", "You've got the serious face on")
+_GOOD_NEWS = {
+    "offer_increased_ice_time", "offer_pp_opportunity", "offer_pk_opportunity", "praise_performance",
+    "discuss_improvement", "explain_ovr_rising", "long_term_plans", "reassure_not_shopped", "discuss_call_up",
+    "discuss_return_lineup", "discuss_leadership", "ask_mentor_younger", "personal_wellbeing_check", "discuss_promotion",
+}
+
+
+def _lead_ok(line: str, requested: bool) -> bool:
+    if requested:
+        return not any(k in line for k in _CALLED_ONLY)
+    return not any(k in line for k in _REQUEST_ONLY)
+
+
 def opening_line(mc: Dict[str, Any], topic: str, seed: str, base_line: str = "") -> str:
     """His first line. Voice lead + specific ask + one true fact + voice tag."""
     voice = mc.get("voice") or voice_of(mc)
     mc["voice"] = voice
     itype = str(mc.get("itype") or "")
+    requested = bool(mc.get("requested"))
+    good_news = itype in _GOOD_NEWS and not requested
     bucket = _bucket(_f(mc.get("tension"), 35))
-    lead = _pick((_LEADS.get(voice) or _LEADS["pro"])[bucket], seed, "lead", voice)
+    if good_news and bucket in ("tense", "hot"):
+        bucket = "uneasy" if bucket == "hot" else "calm"
+    leads = [ln for ln in (_LEADS.get(voice) or _LEADS["pro"])[bucket] if _lead_ok(ln, requested)
+             and not (itype in ("discuss_retirement", "discuss_aging_decline") and "not going anywhere" in ln)] or list(_LEADS["pro"]["calm"])
+    lead = _pick(leads, seed, "lead", voice)
     ask_pool = _ASKS.get(itype)
     if ask_pool is None and itype.startswith("habit_"):
         try:
@@ -375,9 +397,11 @@ def opening_line(mc: Dict[str, Any], topic: str, seed: str, base_line: str = "")
             ask_pool = _TOPIC_ASK_FALLBACK.get(topic) or _TOPIC_ASK_FALLBACK["room"]
     ask = _pick(ask_pool, seed, "ask", itype)
     clause = _context_clause(mc, topic, itype, seed)
+    if itype == "discuss_retirement" and "contract year" in clause:
+        clause = ""
     tag = ""
-    if _rng(seed, "tag").random() < 0.45 and bucket != "calm" or (voice in ("kid", "joker") and _rng(seed, "tag2").random() < 0.35):
-        tag = _pick(_TAGS.get(voice) or (), seed, "tagp")
+    if not good_news and (_rng(seed, "tag").random() < 0.45 and bucket != "calm" or (voice in ("kid", "joker") and _rng(seed, "tag2").random() < 0.35)):
+        tag = _pick([t for t in (_TAGS.get(voice) or ()) if t and (requested or "dumb" not in t)], seed, "tagp")
     # Hot players lead with the grievance; calm ones with the greeting.
     parts = [lead, ask, clause, tag] if bucket != "hot" else [ask, lead, clause, tag]
     out = " ".join(p for p in parts if p)

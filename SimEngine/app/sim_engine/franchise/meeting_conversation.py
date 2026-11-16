@@ -372,7 +372,7 @@ def _gm_open_line(mc: Dict[str, Any], title: str, tension: float, seed: str, *, 
         greet = _pick((f"Come in, {first}. Shut the door.", f"{first}. Sit down, please.", f"Close the door, {first}."), seed, "gmo")
     else:
         greet = _pick((f"Thanks for coming by, {first}.", f"Come on in, {first}.", f"Got a minute, {first}?"), seed, "gmo")
-    body_pool = _GM_OPENERS.get(itype)
+    body_pool = _GM_OPENERS.get(itype) or _ms.HABIT_OPENERS.get(itype)
     if not body_pool and itype.startswith("habit_"):
         body_pool = ("I want to talk about a change in how you play.", "I've got an adjustment I want you to make to your game.")
     if not body_pool and itype.startswith("rolepact_"):
@@ -537,12 +537,7 @@ _GM_SAY_BY_APPROACH: Dict[str, Tuple[str, ...]] = {
 def _gm_say(mc: Dict[str, Any], choice: Dict[str, Any], approach: str, seed: str) -> str:
     """Spoken line for a GM choice: the template's own line if we wrote one, else a natural
     line for the approach. Never the menu label."""
-    cid = str(choice.get("id") or "")
-    itype = str(mc.get("itype") or "")
-    pool = _GM_SAY.get(f"{itype}:{cid}") or _GM_SAY.get(cid)
-    if not pool:
-        pool = _GM_SAY_BY_APPROACH.get(approach) or _GM_SAY_BY_APPROACH["honest"]
-    return _pick(pool, seed, "say", cid).format(first=mc.get("first") or "")
+    return _gm_say_scripted(mc, choice, approach, seed)
 
 
 _SELF_VERBS = (("is", "I'm"), ("has been", "I've been"), ("has", "I have"), ("was", "I was"), ("wants", "I want"), ("needs", "I need"),
@@ -712,7 +707,8 @@ def _extra_choices(mc: Dict[str, Any], topic: str, base: List[Dict[str, Any]]) -
     first = mc["first"]
     out: List[Dict[str, Any]] = []
     tier = mc["tier"]
-    if tier in ("franchise", "core"):
+    itype = str(mc.get("itype") or "")
+    if tier in ("franchise", "core") and topic in ("role", "performance", "trade") and itype not in _WHAT_HE_MEANS_BLOCK and not itype.startswith(("habit_", "rolepact_")):
         out.append({
             "id": "ctx_what_he_means",
             "label": f"Tell {first} what he means to this team",
@@ -720,7 +716,7 @@ def _extra_choices(mc: Dict[str, Any], topic: str, base: List[Dict[str, Any]]) -
             "outcome": {"profile_changes": {"actor": {"state.morale": 3, "state.belonging": 3, "state.gm_trust": 2}}, "relationship": {"loyalty": 3}},
             "approach": "support",
         })
-    elif tier == "depth":
+    elif tier == "depth" and itype in _EARN_IT_OK:
         out.append({
             "id": "ctx_earn_it",
             "label": "Earn it or watch from the press box",
@@ -728,7 +724,7 @@ def _extra_choices(mc: Dict[str, Any], topic: str, base: List[Dict[str, Any]]) -
             "outcome": {"profile_changes": {"actor": {"state.focus": 4, "state.morale": -3, "state.gm_trust": -1}}, "relationship": {"respect": 2}},
             "approach": "firm",
         })
-    elif tier == "prospect":
+    elif tier == "prospect" and topic in ("role", "performance") and not itype.startswith(("habit_", "rolepact_")):
         out.append({
             "id": "ctx_development_path",
             "label": f"Lay out {first}'s development path",
@@ -760,6 +756,7 @@ def _cast_label(mc: Dict[str, Any], choice: Dict[str, Any], approach: str) -> st
     """Re-cut the button text for who's in the chair."""
     label = str(choice.get("label") or "")
     tier, first = mc["tier"], mc["first"]
+    return label  # the risk read under the button already says how he'll take it
     if approach == "firm" and tier == "franchise":
         return f"{label} — even for {first}"
     if approach == "firm" and tier == "depth":
@@ -853,9 +850,10 @@ def dress_opening(session: Any, ctx: Dict[str, Any], meeting: Dict[str, Any], to
         # Multi-party scene (two teammates, a reporter): keep every voice, set the mood first.
         meeting["dialogue"] = [narration] + [ln for ln in dialogue if isinstance(ln, dict)]
     else:
-        opener = own_voice(_opening_line(mc, base_line, topic, seed), mc)
-        gm_line = next((ln for ln in dialogue if isinstance(ln, dict) and str(ln.get("speaker") or "") == "GM"), None)
         requested = str(meeting.get("initiator") or "") != "gm"
+        mc["requested"] = requested
+        opener = own_voice(_dedupe_sentences(_opening_line(mc, base_line, topic, seed)), mc)
+        gm_line = next((ln for ln in dialogue if isinstance(ln, dict) and str(ln.get("speaker") or "") == "GM"), None)
         new_dialogue: List[Dict[str, Any]] = []
         if gm_line or requested:
             new_dialogue.append({"speaker": "GM", "text": _gm_open_line(
@@ -960,7 +958,7 @@ def _context_jab(mc: Dict[str, Any], topic: str, reaction: str, seed: str, appro
         options.append("I'm playing hurt, for what it's worth.")
     if warm and mc["trust"] >= 65:
         options.append("You've always been straight with me. I appreciate that.")
-    if warm and mc["tier"] == "depth" and approach in ("support", "honest", "promise"):
+    if warm and mc["tier"] == "depth" and approach in ("support", "promise"):
         options.append("Not every GM makes time for the guys at the bottom of the lineup.")
     if warm and mc["age"] <= 22:
         options.append("I just want to get better. Tell me what to work on and I'll do it.")
@@ -1090,7 +1088,20 @@ def react(session: Any, ctx: Dict[str, Any], meeting: Dict[str, Any], choice: Di
     dialogue = list(meeting.get("dialogue") or [])
     dialogue.append({"speaker": "GM", "text": str(choice.get("say") or _gm_say(mc, choice, approach, seed))})
     dialogue.append({"speaker": "narration", "text": _pick(_REACTION_NARRATION[reaction], seed, "rn")})
-    dialogue.append({"speaker": name, "text": own_voice(_reaction_line(mc, topic, reaction, seed, approach), mc), "mood": mood_label(tension), "reaction": reaction})
+    reply = _scripted_reply(mc, choice, reaction, seed)
+    spec = _ask_spec(mc) if reaction in ("opens_up", "receptive", "guarded") else None
+    if reply:
+        text = reply
+        if spec:
+            text = f"{reply} {_pick(tuple(spec.get('ask') or ()), seed, 'ask')}"
+        elif reaction == "bristles":
+            jab = _context_jab(mc, topic, reaction, seed, approach)
+            text = f"{reply} {jab}".strip()
+    else:
+        text = _reaction_line(mc, topic, reaction, seed, approach)
+        if spec:
+            text = f"{text} {_pick(tuple(spec.get('ask') or ()), seed, 'ask')}"
+    dialogue.append({"speaker": name, "text": own_voice(_dedupe_sentences(text), mc), "mood": mood_label(tension), "reaction": reaction})
     conv.update({
         "tension": tension,
         "mood": mood_label(tension),
@@ -1102,7 +1113,7 @@ def react(session: Any, ctx: Dict[str, Any], meeting: Dict[str, Any], choice: Di
     conv.setdefault("history", []).append({"beat": 1, "tension": tension, "reaction": reaction})
     meeting["dialogue"] = dialogue
     meeting["conversation"] = conv
-    meeting["choices"] = _followups(mc, choice, reaction, topic, tension)
+    meeting["choices"] = _ask_followups(mc, choice, reaction, spec) if spec else _followups(mc, choice, reaction, topic, tension)
     meeting["beat"] = 1
     meeting["status"] = "pending"
     return meeting
@@ -1155,7 +1166,7 @@ def finalize(session: Any, ctx: Dict[str, Any], meeting: Dict[str, Any], choice:
             "bristles": ("Yeah. Okay.", "Sure. We'll see.", "Message received."),
             "boils_over": ("This isn't over.", "Don't expect me to forget this.", "Unbelievable."),
         }[reaction]
-        closing_line = _pick(closing_line, seed, "cl")
+        closing_line = _closing_for(mc, choice, reaction, seed) or _pick(closing_line, seed, "cl")
     verdict = {
         "opens_up": f"{mc['first']} left believing you.",
         "receptive": f"{mc['first']} is on board — for now.",
@@ -1183,3 +1194,239 @@ def finalize(session: Any, ctx: Dict[str, Any], meeting: Dict[str, Any], choice:
         "stature": mc["tier"],
     }
     return final, scene
+
+
+# ---------------------------------------------------------------------------
+# Written script layer (meeting_script.py): replies to what was said, his ask,
+# answers to the ask, and goodbyes that name the deal.
+# ---------------------------------------------------------------------------
+
+import re as _re_script  # noqa: E402
+import string as _string  # noqa: E402
+
+from app.sim_engine.franchise import meeting_script as _ms  # noqa: E402
+
+# Meetings that bring him good news: no threats, no rehearsed grievances in his opener.
+GOOD_NEWS = {
+    "offer_increased_ice_time", "offer_pp_opportunity", "offer_pk_opportunity", "praise_performance",
+    "discuss_improvement", "explain_ovr_rising", "long_term_plans", "reassure_not_shopped", "discuss_call_up",
+    "discuss_return_lineup", "discuss_leadership", "ask_mentor_younger", "personal_wellbeing_check",
+    "discuss_promotion",
+}
+# Where the tier-based bonus answers make sense.
+_EARN_IT_OK = {
+    "discuss_ice_time", "explain_reduced_ice_time", "discuss_line_assignment", "discuss_demotion",
+    "discuss_healthy_scratch", "challenge_performance", "discuss_consistency", "discuss_defensive_struggles",
+    "explain_ovr_falling", "explain_pp_removal", "discuss_scoring_drought", "discuss_conditioning",
+}
+_WHAT_HE_MEANS_BLOCK = {
+    "discuss_retirement", "personal_wellbeing_check", "ask_mentor_younger", "repair_relationship",
+    "address_social_post", "ask_coaching_relationship", "contract_expectations", "hometown_discount",
+}
+
+_SLOT_F = {1: "top line", 2: "second line", 3: "third line", 4: "fourth line"}
+_SLOT_D = {1: "top pair", 2: "second pair", 3: "third pair"}
+
+
+def _slots(mc: Dict[str, Any]) -> Dict[str, str]:
+    out: Dict[str, str] = {"first": str(mc.get("first") or "")}
+    f = dict(mc.get("facts") or {})
+    gp = int(_f(f.get("gp"), 0))
+    if gp >= 3 and not f.get("goalie"):
+        out.update({"gp": str(gp), "pts": str(int(_f(f.get("pts"), 0))), "g": str(int(_f(f.get("g"), 0)))})
+        if f.get("toi_txt"):
+            out["toi"] = str(f["toi_txt"])
+    lr = int(_f(mc.get("line_rank"), 0))
+    pos = str(mc.get("position") or "").upper()
+    word = (_SLOT_D if pos.startswith("D") else _SLOT_F).get(lr)
+    if word and not mc.get("is_goalie"):
+        out["line"] = word
+    itype = str(mc.get("itype") or "")
+    if itype in _ms.HABIT_TASK:
+        out["task"] = _ms.HABIT_TASK[itype]
+        gm = _ms.HABIT_GM.get(itype, ("", ""))
+        out["task_gm"], out["task_ing"] = gm
+    if itype in _ms.ROLE_NAME:
+        out["role"] = _ms.ROLE_NAME[itype]
+    return out
+
+
+def _fill(line: str, slots: Dict[str, str]) -> Optional[str]:
+    try:
+        keys = {k for _, k, _, _ in _string.Formatter().parse(line) if k}
+    except ValueError:
+        return None
+    if any(k not in slots or not slots[k] for k in keys):
+        return None
+    out = line.format(**slots)
+    return out[0].upper() + out[1:] if out else out
+
+
+def _pick_filled(pool: Any, slots: Dict[str, str], *seed: Any, prefer_facts: bool = True) -> str:
+    lines = [ln for ln in (pool or ()) if ln]
+    filled = [(ln, _fill(ln, slots)) for ln in lines]
+    good = [(ln, f) for ln, f in filled if f]
+    if not good:
+        return ""
+    if prefer_facts:
+        with_facts = [f for ln, f in good if _re_script.search(r"\{(toi|line|pts|gp|g)\}", ln)]
+        if with_facts:
+            return _rng(*seed).choice(with_facts)
+    return _rng(*seed).choice([f for _, f in good])
+
+
+def _dedupe_sentences(text: str) -> str:
+    parts = _re_script.split(r"(?<=[.!?])\s+", str(text or "").strip())
+    seen, out = set(), []
+    for p in parts:
+        key = _re_script.sub(r"[^a-z ]", "", p.lower()).strip()
+        if not key or key in seen or any(key in s or s in key for s in seen if len(s) > 12 and len(key) > 12):
+            continue
+        seen.add(key)
+        out.append(p)
+    return " ".join(out)
+
+
+def _script_key(mc: Dict[str, Any], cid: str) -> List[str]:
+    itype = str(mc.get("itype") or "")
+    base = cid.split("__")[0]
+    keys = [f"{itype}:{base}", base]
+    if itype.startswith("habit_"):
+        keys.insert(0, f"habit:{base}")
+    if itype.startswith("rolepact_"):
+        keys.insert(0, f"rolepact:{base}")
+        keys.insert(0, f"{itype}:{base}")
+    return keys
+
+
+# GM lines that used to promise detail they never gave ("Here's what would change it").
+_GM_SAY_FIX: Dict[str, Tuple[str, ...]] = {
+    "discuss_ice_time:honest": (
+        "You're at {toi} a night on the {line}. Win more battles below the dots and be reliable without the puck, and that number goes up.",
+        "Honestly? You're where you are because the guys ahead of you are winning more battles. Win those and the minutes come.",
+    ),
+    "discuss_line_assignment:top_six": (
+        "I see you in the top six. Right now you're on the {line}. Keep driving play and you'll move up.",
+        "I see a top-six path for you. Win more battles and keep driving play, and you'll get there.",
+    ),
+    "discuss_line_assignment:depth": (
+        "Right now you're a depth guy for us, on the {line}. That's a real job, and I need you to own it.",
+        "Right now you're a depth guy for us, and that's a real job. I need you to own it.",
+    ),
+    "ctx_development_path": ("Here's your path: one thing to work on with the skills coach, a check-in every month, and more minutes when it shows up in games.",),
+    "discuss_development_plan:clear_plan": ("Here's the plan: your skating and your reads, three mornings a week with the skills coach, and we check in every month.",),
+    "discuss_conditioning:expect": ("I need you ready every night. Full practices, no skipped gym sessions, and you check in with the trainers weekly.",),
+    "discuss_goalie_workload:platoon": ("We're splitting the net for now. Whoever has the better week gets the big games.",),
+    "tell_being_shopped:context": ("It's the business side of the game. It doesn't change how we see you as a person.",),
+}
+
+
+def _gm_say_scripted(mc: Dict[str, Any], choice: Dict[str, Any], approach: str, seed: str) -> str:
+    cid = str(choice.get("id") or "")
+    slots = _slots(mc)
+    for key in _script_key(mc, cid):
+        pool = _GM_SAY_FIX.get(key) or _ms.GM_SAY_EXTRA.get(key) or _GM_SAY.get(key)
+        if pool:
+            line = _pick_filled(pool, slots, seed, "say", cid)
+            if line:
+                return line
+    pool = _GM_SAY_BY_APPROACH.get(approach) or _GM_SAY_BY_APPROACH["honest"]
+    return _pick_filled(pool, slots, seed, "say", cid) or "Here's where I stand."
+
+
+def _scripted_reply(mc: Dict[str, Any], choice: Dict[str, Any], reaction: str, seed: str) -> str:
+    """His answer to what was actually said. '' if nothing is written for this answer."""
+    if reaction == "boils_over":
+        return ""
+    cid = str(choice.get("id") or "")
+    slots = _slots(mc)
+    for key in _script_key(mc, cid):
+        pair = _ms.REPLIES.get(key) or _ms.STYLE_REPLIES.get(key)
+        if pair:
+            warm, cold = pair
+            pool = warm if reaction in ("opens_up", "receptive") else cold
+            line = _pick_filled(pool, slots, seed, "reply", cid, prefer_facts=False)
+            if line and mc.get("voice") == "quiet":
+                line = _re_script.split(r"(?<=[.!?])\s+", line)[0]
+            return line
+    return ""
+
+
+def _ask_spec(mc: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    itype = str(mc.get("itype") or "")
+    if itype in _ms.ASKS:
+        return _ms.ASKS[itype]  # type: ignore[return-value]
+    if itype.startswith("habit_"):
+        return _ms.HABIT_ASK  # type: ignore[return-value]
+    if itype.startswith("rolepact_"):
+        return _ms.ROLEPACT_ASK  # type: ignore[return-value]
+    return None
+
+
+_PROMISE_FOR = {
+    "discuss_ice_time": ("role_opportunity", 5, "More ice time within five games."),
+    "offer_increased_ice_time": ("role_opportunity", 5, "Moved up the lineup with real minutes."),
+    "discuss_promotion": ("role_opportunity", 4, "Promotion to a higher line."),
+    "discuss_demotion": ("role_opportunity", 8, "Back up the lineup within two weeks."),
+    "praise_performance": ("role_opportunity", 6, "A bigger role."),
+    "explain_ovr_rising": ("role_opportunity", 6, "More minutes."),
+    "discuss_stalled_development": ("role_opportunity", 5, "More minutes to break through."),
+    "request_more_ice": ("role_opportunity", 5, "More ice time next week."),
+    "offer_pp_opportunity": ("power_play_opportunity", 4, "Second-unit power-play minutes."),
+    "explain_pp_removal": ("power_play_opportunity", 4, "Second-unit power play."),
+    "discuss_improvement": ("power_play_opportunity", 4, "A look on the second power-play unit."),
+    "discuss_scoring_drought": ("power_play_opportunity", 5, "Power-play time to break the drought."),
+    "request_pp_time": ("power_play_opportunity", 6, "Second-unit power play."),
+    "discuss_goalie_workload": ("goalie_start_opportunity", 6, "Six straight starts."),
+    "request_starting_role": ("goalie_start_opportunity", 6, "The next home stand in net."),
+    "winning_concern_meeting": ("winning_commitment", 12, "Buyers at the deadline."),
+}
+
+
+def _ask_followups(mc: Dict[str, Any], base_choice: Dict[str, Any], reaction: str, spec: Dict[str, Any]) -> List[Dict[str, Any]]:
+    base = copy.deepcopy(base_choice.get("outcome") or {})
+    pm, nm, _ = REACTION_EFFECT[reaction]
+    base = scale_outcome(base, pm, nm)
+    cid = str(base_choice.get("id") or "c")
+    sens = mc["sensitivity"]
+    guarded = reaction == "guarded"
+    out: List[Dict[str, Any]] = []
+    for kind, label, say, close in spec.get("opts") or []:
+        if kind == "yes":
+            oc = scale_outcome(copy.deepcopy(base), 1.15, 0.9)
+            _add(oc, "profile_changes", "state.morale", 2)
+            _add(oc, "relationship", "trust", 2)
+            prom = _PROMISE_FOR.get(str(mc.get("itype") or ""))
+            if prom and not oc.get("promise") and mc.get("player_id"):
+                oc["promise"] = {"type": prom[0], "player_id": mc["player_id"], "due_games": prom[1], "description": prom[2],
+                                 "success_readiness": 0.4, "failure_readiness": -2.0}
+            td, read, risk = (-12 if guarded else -8), ("You'll have to deliver" if prom else "He'll like that"), "safe"
+        elif kind == "part":
+            oc = copy.deepcopy(base)
+            _add(oc, "relationship", "trust", 1)
+            td, read, risk = (-6 if guarded else -3), "Should land", "safe"
+        else:
+            oc = scale_outcome(copy.deepcopy(base), 1.0, 1.15)
+            _add(oc, "relationship", "respect", 1)
+            _add(oc, "relationship", "trust", -2)
+            td = (9 if guarded else 5) * sens
+            read, risk = ("He won't love it", "risky") if sens >= 1.2 else ("He'll accept it", "uncertain")
+        detail = {"yes": "Give him what he asked for.", "part": "Meet him halfway.", "no": "Hold firm."}[kind]
+        if kind == "yes" and _PROMISE_FOR.get(str(mc.get("itype") or "")):
+            detail = "Give him what he asked for. It becomes a promise you have to keep."
+        out.append({
+            "id": f"{cid}__{kind}", "label": label, "say": _fill(say, _slots(mc)) or say, "detail": detail,
+            "outcome": oc, "tension_delta": round(td, 1), "read": read, "risk": risk, "tone": kind, "close": close,
+        })
+    return out
+
+
+def _closing_for(mc: Dict[str, Any], choice: Dict[str, Any], reaction: str, seed: str) -> str:
+    close = str(choice.get("close") or "")
+    tone = str(choice.get("tone") or "")
+    good = reaction in ("opens_up", "receptive")
+    if close:
+        return close
+    if tone in _ms.HOT_CLOSE:
+        return _pick(_ms.HOT_CLOSE[tone]["good" if good or reaction == "guarded" else "bad"], seed, "hot")
+    return ""

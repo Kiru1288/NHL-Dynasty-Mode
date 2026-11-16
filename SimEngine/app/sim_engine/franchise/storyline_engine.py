@@ -13529,6 +13529,21 @@ def _gm_apply_meeting_outcome(session: Any, ctx: Dict[str, Any], interaction_typ
     }
 
 
+def _dev_priority_extra(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """More development priorities than skating and hockey sense, cut for his position."""
+    def mk(cid: str, label: str, detail: str, attribute: str) -> Dict[str, Any]:
+        return _gm_choice(cid, label, detail, {"profile_changes": {"actor": {"state.focus": 2}}, "attributes": [{"who": "actor", "attribute": attribute, "delta": 0.6, "permanent": True, "reason": f"{label[11:].capitalize()} priority"}], "relationship": {"communication": 2}})
+    if ctx.get("is_goalie"):
+        return [mk("rebounds", "Prioritize rebound control", "Kill second chances.", "rebound_control"),
+                mk("positioning", "Prioritize positioning", "Square to the shooter.", "positioning")]
+    out = [mk("shooting", "Prioritize shooting", "Quicker, more accurate release.", "shot_accuracy"),
+           mk("defence", "Prioritize defence", "Own-zone reads and coverage.", "defensive_awareness"),
+           mk("strength", "Prioritize strength", "Win more battles.", "checking")]
+    if str(ctx.get("position") or "").upper() == "C":
+        out.append(mk("faceoffs", "Prioritize faceoffs", "Start with the puck.", "faceoffs"))
+    return out
+
+
 def _gm_build_interaction(session: Any, ctx: Dict[str, Any], interaction_type: str) -> Optional[Dict[str, Any]]:
     """Build one GM-initiated meeting template with player response + GM choices."""
     entity = ctx["entity"]
@@ -13667,7 +13682,7 @@ def _gm_build_interaction(session: Any, ctx: Dict[str, Any], interaction_type: s
     _reg("set_development_priority", "development", "Set development priority", "Which part of my game should I prioritize?", [
         _gm_choice("skating", "Prioritize skating", "Skating focus.", {"profile_changes": {"actor": {"state.energy": 2, "state.focus": 2}}, "attributes": [{"who": "actor", "attribute": "skating", "delta": 0.6, "permanent": True, "reason": "Skating priority"}], "relationship": {"communication": 2}}),
         _gm_choice("hockey_sense", "Prioritize hockey sense", "IQ focus.", {"profile_changes": {"actor": {"state.focus": 3}}, "attributes": [{"who": "actor", "attribute": "hockey_sense", "delta": 0.6, "permanent": True, "reason": "Hockey sense priority"}], "relationship": {"communication": 2}}),
-    ], float(ctx["age"]) <= 26)
+    ] + _dev_priority_extra(ctx), float(ctx["age"]) <= 26)
     _reg("discuss_stalled_development", "development", "Discuss stalled development", "I feel like I've plateaued.", [
         _gm_choice("patience", "Explain patience", "Timeline.", {"profile_changes": {"actor": {"state.gm_trust": 1}}, "relationship": {"honesty": 2}}),
         _gm_choice("opportunity", "Promise opportunity to break through", "Chance to grow.", {"profile_changes": {"actor": {"state.morale": 3}}, "promise": {"type": "role_opportunity", "player_id": ctx["player_id"], "due_games": 10, "description": "Development opportunity in lineup.", "success_potential_delta": 0.3}, "relationship": {"trust": 3}}),
@@ -13726,7 +13741,7 @@ def _gm_build_interaction(session: Any, ctx: Dict[str, Any], interaction_type: s
     ], ctx["struggling"] or float(ctx["state"].get("role_satisfaction") or 55) <= 45)
     _reg("tell_being_shopped", "trade", "Tell player they are being shopped", "So it's true — you're shopping me.", [
         _gm_choice("honest", "Confirm with honesty", "Transparency.", {"profile_changes": {"actor": {"state.morale": -5, "state.gm_trust": -6}}, "relationship": {"trust": -8, "grievance": 6}}),
-        _gm_choice("context", "Explain baseball context", "Business framing.", {"profile_changes": {"actor": {"state.morale": -3, "state.gm_trust": -3}}, "relationship": {"trust": -4}}),
+        _gm_choice("context", "It's the business side", "Business framing.", {"profile_changes": {"actor": {"state.morale": -3, "state.gm_trust": -3}}, "relationship": {"trust": -4}}),
     ], ctx["trade_attempts"] >= 1 or ctx["trade_rumor_heat"] >= 20)
     _reg("reassure_not_shopped", "trade", "Reassure player they are not being shopped", "Good — I needed to hear that.", [
         _gm_choice("firm", "Firm reassurance", "Trust rebuild.", {"profile_changes": {"actor": {"state.morale": 3, "state.gm_trust": 4}}, "relationship": {"trust": 5, "loyalty": 3}}),
