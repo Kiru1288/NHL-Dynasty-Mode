@@ -7212,7 +7212,58 @@ def _u_apply_profile_delta(entity: Dict[str, Any], dotted_key: str, delta: float
     return {"field": dotted_key, "before": before, "after": after, "delta": round(after - before, 2)}
 
 
+# Meeting outcomes name skills loosely ("skating", "passing"); Player.ratings uses detailed keys.
+_UNIVERSE_RATING_GROUPS: Dict[str, Tuple[str, ...]] = {
+    "skating": ("skg_speed", "skg_acceleration", "skg_agility", "skg_edge_work", "skg_explosiveness"),
+    "speed": ("skg_speed", "skg_acceleration", "skg_top_speed_control"),
+    "agility": ("skg_agility", "skg_edge_work", "skg_pivot_speed"),
+    "hockey_sense": ("iqm_hockey_iq", "iqm_game_sense", "iqm_awareness", "pm_offensive_anticipation"),
+    "offensive_awareness": ("off_offensive_awareness", "pm_offensive_read", "pm_offensive_anticipation"),
+    "defensive_awareness": ("def_defensive_awareness", "def_defensive_reads", "def_gap_control"),
+    "passing": ("pm_passing_accuracy", "pm_passing_vision", "pm_puck_distribution"),
+    "puck_control": ("pc_puck_control", "pc_stickhandling", "pc_puck_protection"),
+    "shot_accuracy": ("off_wrist_shot_accuracy", "off_puck_placement", "off_finishing"),
+    "faceoffs": ("def_faceoffs",),
+    "discipline": ("iqm_discipline",),
+    "checking": ("phy_checking", "phy_strength", "def_board_battles"),
+    "shot_blocking": ("def_shot_blocking",),
+    "stick_checking": ("def_stick_checking", "def_interception_skill"),
+    "stamina": ("phy_stamina", "phy_endurance"),
+    "rebound_control": ("g_rebound_control_g",),
+    "positioning": ("g_positioning",),
+}
+
+
+def _u_write_rating_group(player: Any, attribute: str, delta: float) -> Tuple[Optional[float], Optional[float], str]:
+    ratings = getattr(player, "ratings", None)
+    keys = [k for k in _UNIVERSE_RATING_GROUPS.get(attribute, ()) if isinstance(ratings, dict) and k in ratings]
+    if not keys:
+        return None, None, "ledger_only"
+    befores, afters = [], []
+    for k in keys:
+        try:
+            v = float(ratings[k])
+        except (TypeError, ValueError):
+            continue
+        unit = 0.01 if v <= 1.5 else 1.0
+        lo, hi = (0.0, 1.0) if unit == 0.01 else (1.0, 99.0)
+        nv = max(lo, min(hi, v + float(delta) * unit))
+        ratings[k] = nv
+        befores.append(v / unit)
+        afters.append(nv / unit)
+    inv = getattr(player, "_invalidate_ovr_memo", None)
+    if callable(inv):
+        inv()
+    if not befores:
+        return None, None, "ledger_only"
+    return round(sum(befores) / len(befores), 2), round(sum(afters) / len(afters), 2), f"ratings[{','.join(keys)}]"
+
+
 def _u_write_actual_attribute(player: Any, attribute: str, delta: float) -> Tuple[Optional[float], Optional[float], str]:
+    if attribute in _UNIVERSE_RATING_GROUPS:
+        res = _u_write_rating_group(player, attribute, delta)
+        if res[2] != "ledger_only":
+            return res
     aliases = _UNIVERSE_ATTRIBUTE_ALIASES.get(attribute, (attribute,))
     containers: List[Tuple[str, Any]] = [
         ("attributes", getattr(player, "attributes", None)),
@@ -12117,6 +12168,12 @@ def narrative_universe_v2_daily_pass(session: Any, calendar_idx: int, day_meta: 
         tick_minds(session, elapsed_days)
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
+    try:
+        from app.sim_engine.franchise.development_goals import tick as _tick_goals  # noqa: WPS433
+
+        _tick_goals(session, elapsed_days)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     minor_life =_u_generate_minor_life_events(session, local_rng, elapsed_days)
     try:
         _u_cpu_morale_management(session, local_rng)
@@ -13818,6 +13875,14 @@ def _gm_build_interaction(session: Any, ctx: Dict[str, Any], interaction_type: s
                 templates[_t["id"]] = _t
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
+    if interaction_type in ("set_development_goal", "set_potential_goal"):
+        try:
+            from app.sim_engine.franchise.development_goals import build_templates as _goal_templates  # noqa: WPS433
+
+            for _t in _goal_templates(session, ctx, _gm_choice):
+                templates[_t["id"]] = _t
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
     if str(interaction_type).startswith("rolepact_"):
         try:
             from app.sim_engine.franchise.role_acceptance import build_templates as _role_templates  # noqa: WPS433
@@ -13884,6 +13949,7 @@ def get_available_gm_interactions(session: Any, player_id: str) -> List[Dict[str
         "discuss_defensive_struggles", "discuss_improvement", "discuss_consistency", "discuss_playoff_performance",
         "explain_ovr_rising", "explain_ovr_falling", "discuss_development_plan", "set_development_priority",
         "discuss_stalled_development", "discuss_aging_decline", "discuss_conditioning", "discuss_injury_recovery",
+        "set_development_goal", "set_potential_goal",
         "ask_extension_interest", "long_term_plans", "future_uncertain", "discuss_role_next_season",
         "discuss_upcoming_fa", "hometown_discount", "contract_expectations", "discuss_retirement",
         "ask_trade_welcome", "tell_being_shopped", "reassure_not_shopped", "ask_ntc_waiver",
@@ -14250,6 +14316,21 @@ def resolve_gm_player_meeting(session: Any, meeting_id: str, choice_id: str) -> 
                     imp = result.get("impact")
                     if isinstance(imp, dict):
                         imp.setdefault("notes", []).insert(0, str(dres["message"]))
+        except Exception:
+            _swallowed_log.debug("suppressed exception", exc_info=True)
+    if outcome.get("devgoal") or outcome.get("potgoal"):
+        try:
+            from app.sim_engine.franchise.development_goals import apply_from_meeting as _apply_goal  # noqa: WPS433
+
+            gres = _apply_goal(session, ctx, outcome, scene)
+            if gres:
+                result["development_goal"] = gres
+                if gres.get("message"):
+                    result["message"] = str(gres["message"])
+                    imp = result.get("impact")
+                    if isinstance(imp, dict):
+                        imp.setdefault("notes", []).insert(0, str(gres["message"]))
+            _gm_invalidate_interactions(session, str(meeting.get("player_id") or ""))
         except Exception:
             _swallowed_log.debug("suppressed exception", exc_info=True)
     if outcome.get("gm_role_pact"):
@@ -15143,8 +15224,17 @@ def get_player_meeting_detail(session: Any, player_id: str) -> Dict[str, Any]:
         "emotion": player_emotion(session, str(player_id), ctx.get("entity")),
         "life_feed": list(reversed(list(((ctx.get("entity") or {}).get("life_feed") or [])[-10:]))),
         "closest_teammates": player_closest_teammates(session, str(player_id)),
-        "directives": _gm_directives_view(ctx.get("player"), day),
+        "directives": _gm_directives_view(ctx.get("player"), day) + _gm_goals_view(session, str(player_id)),
     }
+
+
+def _gm_goals_view(session: Any, player_id: str) -> List[Dict[str, Any]]:
+    try:
+        from app.sim_engine.franchise.development_goals import goals_view  # noqa: WPS433
+
+        return goals_view(session, player_id)
+    except Exception:
+        return []
 
 
 def _gm_directives_view(player: Any, day: int) -> List[Dict[str, Any]]:

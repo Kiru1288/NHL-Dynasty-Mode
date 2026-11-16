@@ -345,6 +345,8 @@ _GM_OPENERS: Dict[str, Tuple[str, ...]] = {
     "ask_mentor_younger": ("I've got a favour to ask. One of our young guys could use someone like you.", "I'd like you to take one of the kids under your wing."),
     "personal_wellbeing_check": ("Forget hockey for a minute. How are you doing away from the rink?", "I just want to check in. How's life outside the rink?"),
     "repair_relationship": ("I think things between us got off track. I'd like to fix that.", "We haven't been on great terms. I want to clear the air."),
+    "set_development_goal": ("I want to set you a development goal. One part of your game, a real target, and a deadline.", "Let's pick one thing to get better at, and put a number on it."),
+    "set_potential_goal": ("I want to talk about how good you can be. Let's set a target for this season.", "I think there's more in your game. Let's put a goal on it for this season."),
     "development_meeting": ("Let's talk about your development and what we need you to become.", "I want to sit down and plan out your next steps."),
 }
 
@@ -1089,7 +1091,8 @@ def react(session: Any, ctx: Dict[str, Any], meeting: Dict[str, Any], choice: Di
     dialogue.append({"speaker": "GM", "text": str(choice.get("say") or _gm_say(mc, choice, approach, seed))})
     dialogue.append({"speaker": "narration", "text": _pick(_REACTION_NARRATION[reaction], seed, "rn")})
     reply = _scripted_reply(mc, choice, reaction, seed)
-    spec = _ask_spec(mc) if reaction in ("opens_up", "receptive", "guarded") else None
+    is_goal = str(mc.get("itype") or "") in GOAL_MEETINGS
+    spec = _ask_spec(mc) if (reaction in ("opens_up", "receptive", "guarded") or is_goal) else None
     if reply:
         text = reply
         if spec:
@@ -1113,7 +1116,10 @@ def react(session: Any, ctx: Dict[str, Any], meeting: Dict[str, Any], choice: Di
     conv.setdefault("history", []).append({"beat": 1, "tension": tension, "reaction": reaction})
     meeting["dialogue"] = dialogue
     meeting["conversation"] = conv
-    meeting["choices"] = _ask_followups(mc, choice, reaction, spec) if spec else _followups(mc, choice, reaction, topic, tension)
+    if is_goal:
+        meeting["choices"] = _dg.followups(mc, choice, reaction, scale_outcome, _add)
+    else:
+        meeting["choices"] = _ask_followups(mc, choice, reaction, spec) if spec else _followups(mc, choice, reaction, topic, tension)
     meeting["beat"] = 1
     meeting["status"] = "pending"
     return meeting
@@ -1205,6 +1211,9 @@ import re as _re_script  # noqa: E402
 import string as _string  # noqa: E402
 
 from app.sim_engine.franchise import meeting_script as _ms  # noqa: E402
+from app.sim_engine.franchise import development_goals as _dg  # noqa: E402
+
+GOAL_MEETINGS = ("set_development_goal", "set_potential_goal")
 
 # Meetings that bring him good news: no threats, no rehearsed grievances in his opener.
 GOOD_NEWS = {
@@ -1324,6 +1333,10 @@ _GM_SAY_FIX: Dict[str, Tuple[str, ...]] = {
 def _gm_say_scripted(mc: Dict[str, Any], choice: Dict[str, Any], approach: str, seed: str) -> str:
     cid = str(choice.get("id") or "")
     slots = _slots(mc)
+    if str(mc.get("itype") or "") in GOAL_MEETINGS:
+        line = _dg.gm_say(str(mc.get("itype")), cid.split("__")[0])
+        if line:
+            return line
     for key in _script_key(mc, cid):
         pool = _GM_SAY_FIX.get(key) or _ms.GM_SAY_EXTRA.get(key) or _GM_SAY.get(key)
         if pool:
@@ -1336,9 +1349,11 @@ def _gm_say_scripted(mc: Dict[str, Any], choice: Dict[str, Any], approach: str, 
 
 def _scripted_reply(mc: Dict[str, Any], choice: Dict[str, Any], reaction: str, seed: str) -> str:
     """His answer to what was actually said. '' if nothing is written for this answer."""
+    cid = str(choice.get("id") or "")
+    if str(mc.get("itype") or "") in GOAL_MEETINGS:
+        return _dg.reply(str(mc.get("itype")), cid.split("__")[0], reaction in ("opens_up", "receptive"), seed) or ""
     if reaction == "boils_over":
         return ""
-    cid = str(choice.get("id") or "")
     slots = _slots(mc)
     for key in _script_key(mc, cid):
         pair = _ms.REPLIES.get(key) or _ms.STYLE_REPLIES.get(key)
@@ -1354,6 +1369,8 @@ def _scripted_reply(mc: Dict[str, Any], choice: Dict[str, Any], reaction: str, s
 
 def _ask_spec(mc: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     itype = str(mc.get("itype") or "")
+    if itype in GOAL_MEETINGS:
+        return {"ask": (_dg.ask_line(itype, str(mc.get("player_id"))),), "goal": True}
     if itype in _ms.ASKS:
         return _ms.ASKS[itype]  # type: ignore[return-value]
     if itype.startswith("habit_"):
@@ -1425,6 +1442,8 @@ def _closing_for(mc: Dict[str, Any], choice: Dict[str, Any], reaction: str, seed
     close = str(choice.get("close") or "")
     tone = str(choice.get("tone") or "")
     good = reaction in ("opens_up", "receptive")
+    if not good and choice.get("close_cold"):
+        return str(choice["close_cold"])
     if close:
         return close
     if tone in _ms.HOT_CLOSE:

@@ -216,6 +216,8 @@ _ASKS: Dict[str, Sequence[str]] = {
     "discuss_aging_decline": ("I know the clock is ticking.", "I'm not the same player I was at 27. I'm not blind.", "Let's talk about what the next couple years look like for me."),
     "discuss_conditioning": ("I'll do whatever it takes to be ready.", "My body's been beat up. I'm working on it.", "I'm tired. I'll be honest about that."),
     "discuss_injury_recovery": ("I'm doing everything I can to get back right.", "Rehab's slow. It's driving me nuts.", "I hate watching. I want back in."),
+    "set_development_goal": ("I'm all for it. What did you have in mind?", "Good. I want something concrete to work on.", "A real target? I like that."),
+    "set_potential_goal": ("I think I can be a lot better than I am. Let's hear it.", "I've been wanting this conversation.", "Okay. How good do you think I can be?"),
     "development_meeting": ("Tell me what the organization needs me to become. I want a real plan.", "I want to know what I'm working toward here.", "Where's my development headed? I'd like to hear it from you."),
     # contract
     "ask_extension_interest": ("I'm open to talking about staying — depending on the terms.", "I like it here. I'd like to keep liking it.", "My agent's been asking. What are you thinking?"),

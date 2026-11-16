@@ -3432,7 +3432,21 @@ function PlayerMeetingsPanel({
 
         {playerTab === "promises" ? (
           <div className="sl-stack">
-            {asArray(playerDetail?.directives).map((d) => (
+            {asArray(playerDetail?.directives).filter((d) => str(d.kind) === "goal").map((d) => (
+              <div key={`goal-${str(d.slot)}`} className={`bbg-goal is-${str(d.status)}`}>
+                <div className="bbg-goal-top">
+                  <strong>{str(d.label)}</strong>
+                  <span className="bbg-goal-state">
+                    {{ active: "In progress", hit: "Hit it", partial: "Came close", missed: "Missed", void: "Ended" }[str(d.status)] || str(d.status)}
+                  </span>
+                </div>
+                <div className="bbg-goal-bar" aria-hidden="true">
+                  <i style={{ width: `${Math.round(Math.max(0, Math.min(1, Number(d.progress) || 0)) * 100)}%` }} />
+                </div>
+                <span className="bbg-goal-note">{str(d.effect)}</span>
+              </div>
+            ))}
+            {asArray(playerDetail?.directives).filter((d) => str(d.kind) !== "goal").map((d) => (
               <div key={`dir-${str(d.slot)}`} className={`sl-promise is-directive is-${str(d.accepted || "accepted")}`}>
                 <strong>Directive: {str(d.label)}</strong>
                 <span>
