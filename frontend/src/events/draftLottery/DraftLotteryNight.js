@@ -718,9 +718,13 @@ export default function DraftLotteryNight({ franchiseState = {}, eventData = {},
 
   const currentReveal = revealSequence[revealIndex] || null;
 
+  // Keyed on stable values only. It used to depend on the currentReveal object, which is rebuilt
+  // whenever franchise state refreshes; each refresh cancelled the pending timer, so on slower speeds
+  // (or a busy state poll) the reveal never advanced and the lottery looked frozen.
+  const currentPick = currentReveal ? currentReveal.pick : null;
   useEffect(() => {
-    if (stage !== "reveal" || !currentReveal) return undefined;
-    const { sealed, hold } = revealTiming(speed, currentReveal.pick);
+    if (stage !== "reveal" || currentPick == null) return undefined;
+    const { sealed, hold } = revealTiming(speed, currentPick);
     const timer = window.setTimeout(
       () => {
         if (phase === "sealed") {
@@ -737,7 +741,12 @@ export default function DraftLotteryNight({ franchiseState = {}, eventData = {},
       phase === "sealed" ? sealed : hold
     );
     return () => window.clearTimeout(timer);
-  }, [stage, phase, speed, revealIndex, currentReveal, revealSequence.length]);
+  }, [stage, phase, speed, revealIndex, currentPick, revealSequence.length]);
+
+  // Never strand the screen: a reveal with nothing left to open drops to the results board.
+  useEffect(() => {
+    if (stage === "reveal" && !currentReveal) setStage("results");
+  }, [stage, currentReveal]);
 
   return (
     <section className={`lot2-root lot2-root--${stage}`}>
@@ -781,6 +790,13 @@ export default function DraftLotteryNight({ franchiseState = {}, eventData = {},
 
       {stage === "results" && picks.length ? (
         <Results picks={picks} fieldByRank={fieldByRank} prospects={prospects} userRow={userRow} />
+      ) : null}
+
+      {stage !== "intro" && !picks.length ? (
+        <div className="lot2-empty">
+          <strong>The lottery order isn't in yet.</strong>
+          <span>Head back to the hub and continue. The draft order will be set when the league runs the draw.</span>
+        </div>
       ) : null}
 
       <footer className="lot2-foot">

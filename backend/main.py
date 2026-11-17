@@ -397,6 +397,12 @@ def post_franchise_start(body: FranchiseStartBody, background_tasks: BackgroundT
             transcendent = _transcendent_on_league(session)
             if transcendent and int(transcendent.get("overall") or 0) == 99:
                 _mark_once_transcendent_spent()
+        try:
+            from services.franchise_command import adopt_pending
+
+            adopt_pending(session)
+        except Exception:
+            log.debug("franchise command adopt failed", exc_info=True)
     except ValueError as e:
         log.warning("POST /api/franchise/start validation: %s", e)
         return JSONResponse(
@@ -1161,6 +1167,146 @@ def post_negotiation_meeting(body: dict[str, Any] = Body(...), x_franchise_sessi
     return result
 
 
+@app.get("/api/franchise/international")
+def get_international_hub(x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    from services.international_tournaments import hub_payload
+    from services.json_safe import json_safe
+
+    s = _session_or_404(x_franchise_session)
+    return json_safe(hub_payload(s))
+
+
+@app.get("/api/franchise/international/{tournament_id}")
+def get_international_tournament(tournament_id: str, x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    from services.international_tournaments import tournament_payload
+    from services.json_safe import json_safe
+
+    s = _session_or_404(x_franchise_session)
+    return json_safe(tournament_payload(s, tournament_id))
+
+
+@app.get("/api/franchise/cap-plot/{player_id}")
+def get_cap_plot_options(player_id: str, x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    from services.cap_plot import options
+    from services.json_safe import json_safe
+
+    s = _session_or_404(x_franchise_session)
+    return json_safe(options(s, player_id))
+
+
+@app.post("/api/franchise/cap-plot/execute")
+def post_cap_plot_execute(body: dict[str, Any] = Body(...), x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    from services.cap_plot import execute
+    from services.json_safe import json_safe
+
+    s = _session_or_404(x_franchise_session)
+    b = body or {}
+    try:
+        res = execute(s, str(b.get("player_id") or ""), dict(b.get("plan") or {}), bool(b.get("confirm")))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    save_session(s)
+    return json_safe(res)
+
+
+@app.get("/api/franchise/command")
+def get_franchise_command(x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    from services.franchise_command import payload
+    from services.json_safe import json_safe
+
+    s = _session_or_404(x_franchise_session)
+    return json_safe(payload(s))
+
+
+@app.post("/api/franchise/command")
+def post_franchise_command(body: dict[str, Any] = Body(...), x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    """Slider changes apply to the save at once. body: {values:{id:v}} | {preset} | {randomize} | {reset}."""
+    from services import franchise_command as fc
+    from services.json_safe import json_safe
+
+    s = _session_or_404(x_franchise_session)
+    b = body or {}
+    try:
+        if b.get("reset"):
+            res = fc.set_values(s, {}, preset="NHL Standard", replace=True)
+        elif b.get("preset"):
+            res = fc.apply_preset(s, str(b.get("preset")))
+        elif b.get("randomize"):
+            res = fc.randomize(s, float(b.get("intensity") or 0.5))
+        else:
+            res = fc.set_values(s, dict(b.get("values") or {}))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    save_session(s)
+    return json_safe(res)
+
+
+@app.post("/api/franchise/save")
+def post_franchise_save(body: dict[str, Any] = Body(default={}), x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    from services.franchise_command import save_to_disk
+    from services.json_safe import json_safe
+
+    s = _session_or_404(x_franchise_session)
+    try:
+        return json_safe(save_to_disk(s, str((body or {}).get("name") or "")))
+    except Exception as e:
+        log.error("save failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Save failed: {e}") from e
+
+
+@app.get("/api/franchise/saves")
+def get_franchise_saves() -> dict[str, Any]:
+    from services.franchise_command import list_saves
+
+    return {"ok": True, "saves": list_saves()}
+
+
+@app.post("/api/franchise/load")
+def post_franchise_load(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    from services.franchise_command import load_from_disk
+
+    try:
+        s = load_from_disk(str((body or {}).get("slot") or ""))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        log.error("load failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Load failed: {e}") from e
+    save_session(s)
+    return {"ok": True, "session_id": s.session_id}
+
+
+@app.post("/api/franchise/new-sim")
+def post_franchise_new_sim(body: dict[str, Any] = Body(default={}), x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    """Stage (or clear) this save's sliders for the next Begin Franchise."""
+    from services.franchise_command import stage_new_sim
+
+    carry = bool((body or {}).get("carry_sliders"))
+    s = get_session(x_franchise_session) if (carry and x_franchise_session) else None
+    return stage_new_sim(s, carry)
+
+
+@app.get("/api/franchise/disaster-draft")
+def get_disaster_draft(x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    from services.disaster_draft import draft_payload
+    from services.json_safe import json_safe
+
+    s = _session_or_404(x_franchise_session)
+    return json_safe(draft_payload(s))
+
+
+@app.post("/api/franchise/disaster-draft/pick")
+def post_disaster_draft_pick(body: dict[str, Any] = Body(...), x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    from services.disaster_draft import auto_finish, make_pick
+    from services.json_safe import json_safe
+
+    s = _session_or_404(x_franchise_session)
+    b = body or {}
+    res = auto_finish(s) if b.get("auto") else make_pick(s, str(b.get("player_id") or ""))
+    save_session(s)
+    return json_safe(res)
+
+
 @app.get("/api/franchise/waivers")
 def get_waiver_wire(x_franchise_session: Optional[str] = Header(default=None)) -> dict[str, Any]:
     from services.waivers import waiver_wire_payload
@@ -1662,6 +1808,10 @@ def post_franchise_playoff_action(
     from services.franchise_playoffs import handle_playoff_action, slim_live_for_client, json_safe
 
     s = _session_or_404(x_franchise_session)
+    from services.cap_plot import game_over_payload
+
+    if game_over_payload(s):
+        raise HTTPException(status_code=409, detail="This save is over: the GM was arrested. Start a new franchise.")
     b = body or {}
     action = str(b.get("action") or b.get("mode") or "").strip()
     if not action:

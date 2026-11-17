@@ -15919,7 +15919,13 @@ def _maybe_player_death(session: FranchiseSession) -> None:
     cursor = int(getattr(session, "calendar_cursor", 0) or 0)
     rng = random.Random(f"death|{getattr(session, 'session_id', '')}|{cursor}")
     # About one death every six to eight seasons. Not a per-player roll.
-    if rng.random() > 0.0004:
+    try:
+        from app.sim_engine.tuning.command_knobs import knob as _cmd_knob
+
+        _death_p = 0.0004 * max(0.0, float(_cmd_knob("death_rate", 1.0)))
+    except Exception:
+        _death_p = 0.0004
+    if rng.random() > _death_p:
         return
     league = getattr(getattr(session, "sim", None), "league", None)
     teams = list(getattr(league, "teams", None) or [])
@@ -15940,6 +15946,13 @@ def _maybe_player_death(session: FranchiseSession) -> None:
     cause = _DEATH_CAUSES[rng.randrange(len(_DEATH_CAUSES))]
     pid = str(getattr(player, "id", "") or "")
     name = str(getattr(player, "name", None) or getattr(getattr(player, "identity", None), "name", None) or "A player")
+    mourning_fields: Dict[str, Any] = {}
+    try:
+        from services.player_mourning import on_player_death, popup_fields
+
+        mourning_fields = popup_fields(on_player_death(session, player, team, cause))
+    except Exception:
+        _swallowed_log.debug("mourning setup failed", exc_info=True)
     try:
         from app.sim_engine.trades.trade_executor import _purge_player_id_from_team_lists
 
@@ -15999,6 +16012,8 @@ def _maybe_player_death(session: FranchiseSession) -> None:
             "cause": cause,
             "team_name": team_name,
             "is_user_team": team_tid == user_tid,
+            "interrupt_sim": True,
+            **mourning_fields,
         },
     )
     try:
@@ -16177,6 +16192,24 @@ def _finalize_regular_calendar_day(
         _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         _maybe_player_death(session)
+        try:
+            from services.player_mourning import mourning_daily_tick
+
+            mourning_daily_tick(session)
+        except Exception:
+            _swallowed_log.debug("mourning tick failed", exc_info=True)
+        try:
+            from services.cap_plot import daily_tick as _plot_tick
+
+            _plot_tick(session)
+        except Exception:
+            _swallowed_log.debug("cap plot tick failed", exc_info=True)
+        try:
+            from services.disaster_draft import maybe_disaster
+
+            maybe_disaster(session)
+        except Exception:
+            _swallowed_log.debug("disaster tick failed", exc_info=True)
     except Exception:
         _swallowed_log.debug("suppressed exception", exc_info=True)
     if _franchise_narrative_should_run(session, just_idx=just_idx, light_bulk=light_bulk, bulk=bulk):
@@ -17133,6 +17166,12 @@ def _wjc_compute_performance_impact(
     pos = str(st.get("position") or row.get("position") or "F").upper()
     is_goalie = pos == "G"
     stock_delta = int(row.get("stock_delta") or 0)
+    try:
+        from app.sim_engine.tuning.command_knobs import knob as _cmd_knob
+
+        stock_delta = int(round(stock_delta * max(0.0, float(_cmd_knob("wjc_impact", 1.0)))))
+    except Exception:
+        pass
     score = float(stock_delta) * 0.35
 
     if is_goalie:
@@ -17157,12 +17196,9 @@ def _wjc_compute_performance_impact(
         score += goals * 1.8 + max(0, pts - goals) * 1.2 + plus * 0.4
 
     tier = str(medal_tier or "").lower()
-    if tier == "gold":
-        score += 6.0
-    elif tier == "silver":
-        score += 3.0
-    elif tier == "bronze":
-        score += 1.5
+    if tier and not stock_delta:
+        # Drafted prospects carry no stock delta, so the medal counts here instead.
+        score += {"gold": 4.0, "silver": 2.0, "bronze": 1.0}.get(tier, 0.0)
 
     if score >= 8.0:
         grade = "breakout"
@@ -17291,6 +17327,12 @@ def _apply_wjc_development_to_prospects(
             ovr_before = float(row.get("ovr") or 0.0) * 99.0 if float(row.get("ovr") or 0) <= 1.5 else float(row.get("ovr") or 0.0)
 
         pot_before = None
+        pot_scale01 = {}
+        for pk in ("dev_potential", "dev_ceiling"):
+            try:
+                pot_scale01[pk] = 0 < float(ratings.get(pk, 0) or 0) <= 1.5
+            except (TypeError, ValueError):
+                pot_scale01[pk] = False
         for pk in ("dev_potential", "potential", "dev_ceiling"):
             try:
                 pv = float(ratings.get(pk, 0) or 0)
@@ -17308,14 +17350,21 @@ def _apply_wjc_development_to_prospects(
                 pot_before = ovr_before + 8.0
 
         touched = False
-        for k in skill_keys:
-            if k not in ratings:
+        is_g = str(row.get("position") or "").upper() == "G"
+        # Current attribute schema (off_/pm_/skg_/pc_/iqm_ for skaters, g_/iqm_ for goalies),
+        # plus the legacy flat names for old saves. Only on-ice skill groups move.
+        prefixes = ("g_", "iqm_") if is_g else ("off_", "pm_", "skg_", "pc_", "iqm_", "def_")
+        for k in list(ratings.keys()):
+            if not (k.startswith(prefixes) or k in skill_keys):
                 continue
             try:
                 cur = float(ratings[k])
             except (TypeError, ValueError):
                 continue
-            ratings[k] = round(max(35.0, min(99.0, cur + skill_bump)), 1)
+            if cur <= 1.5:
+                ratings[k] = round(max(0.35, min(0.99, cur + skill_bump / 99.0)), 4)
+            else:
+                ratings[k] = round(max(35.0, min(99.0, cur + skill_bump)), 1)
             touched = True
 
         pot_after = float(pot_before or ovr_before)
@@ -17323,7 +17372,7 @@ def _apply_wjc_development_to_prospects(
             pot_after = round(max(40.0, min(99.0, pot_after + pot_bump)), 1)
             for pk in ("dev_potential", "dev_ceiling"):
                 if pk in ratings:
-                    ratings[pk] = pot_after
+                    ratings[pk] = round(pot_after / 99.0, 4) if pot_scale01.get(pk) else pot_after
             try:
                 pot01 = normalize_rating(pot_after)
                 setattr(player, "potential", pot01)
@@ -17515,7 +17564,8 @@ def _persist_wjc_stock_to_draft_class(
         if stock_delta == 0:
             continue
         rank_before = int(entries_before.get(key) or p.get("stock_rank_before") or 999)
-        boosts[key] = float(boosts.get(key, 0.0)) + float(stock_delta) * 1.0
+        # stock_delta is in board spots; the draft score spread is ~0.12 pts per spot. Cap the swing.
+        boosts[key] = max(-5.0, min(5.0, float(boosts.get(key, 0.0)) + float(stock_delta) * 0.12))
         rank_changes[key] = {"before": rank_before, "stock_delta": stock_delta}
 
     impacts = _apply_wjc_development_to_prospects(session, prospects_stocked, medals=medals)
@@ -19003,7 +19053,12 @@ def _apply_wjc_stock_after(
                 delta -= 8
                 reason_bits.append("Bronze medal")
 
-        delta = int(round(delta * max(1.0, float(day_multiplier))))
+        if gp >= 3 and not is_goalie and pts == 0 and base_rank <= 64:
+            delta += 6
+            reason_bits.append("held scoreless")
+        # Scale by board position: a top-5 name moves 1-3 spots, a #120 can jump 30.
+        scale = max(0.12, min(1.0, base_rank / 60.0))
+        delta = int(round(delta * scale * max(1.0, float(day_multiplier))))
         after = max(1, base_rank + delta)
         row["stock_rank_after"] = after
         row["stock_delta"] = base_rank - after
@@ -19818,6 +19873,12 @@ def _allstar_game_payload(session: FranchiseSession, rng: random.Random) -> Dict
 
 def _maybe_enqueue_showcase_popups(session: FranchiseSession, day_meta: Dict[str, Any]) -> None:
     iso = str(day_meta.get("iso") or "")
+    try:
+        from services.international_tournaments import daily_tick as _intl_daily_tick
+
+        _intl_daily_tick(session, iso)
+    except Exception:
+        _swallowed_log.debug("international tick failed", exc_info=True)
     tags = {str(x).lower() for x in (day_meta.get("tags") or [])}
     sy = int(session.season_calendar_year)
     y2 = sy + 1
@@ -21288,7 +21349,21 @@ def advance_franchise_day(session: FranchiseSession) -> Dict[str, Any]:
     - Clear only the current day after successful simulation.
     - Move cursor exactly once after successful simulation.
     """
+    try:
+        from services.cap_plot import game_over_payload
+
+        _go = game_over_payload(session)
+        if _go:
+            return {"status": "game_over", "reason": "game_over", "game_over": _go}
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     _ensure_gp_repair_v3(session)
+    try:
+        from services.franchise_command import apply_runtime as _fc_apply_runtime
+
+        _fc_apply_runtime(session)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     try:
         session.sim.season_calendar_year = int(getattr(session, "season_calendar_year", 0) or 0)
     except Exception:
@@ -21844,6 +21919,13 @@ def advance_franchise_bulk(
 
             if st != "ok":
                 stopped = st
+                break
+
+            # A death (or a plot that blew up) stops every sim, full-season included.
+            hard = getattr(session, "_sim_hard_stop", None)
+            if hard:
+                stopped = str((hard or {}).get("reason") if isinstance(hard, dict) else hard) or "hard_stop"
+                session._sim_hard_stop = None
                 break
 
             # Week / month sims stop so a waiver claim, meeting, or press availability
@@ -22553,6 +22635,16 @@ def apply_decision(session: FranchiseSession, decision_id: str, choice_id: str) 
 
         elif kind == "legal_storyline_decision":
             effects.update(_apply_legal_conduct_decision_effect(session, d, chosen))
+
+        elif kind in ("mourning_honor", "mourning_support"):
+            from services.player_mourning import resolve_mourning_decision  # noqa: WPS433
+
+            effects.update(resolve_mourning_decision(session, d, cid) or {})
+
+        elif kind.startswith("cap_plot"):
+            from services.cap_plot import resolve_plot_decision  # noqa: WPS433
+
+            effects.update(resolve_plot_decision(session, d, cid) or {})
 
         elif kind == "retirement_decision":
             # A conversation: a turned-down pitch puts the decision back on the desk.
@@ -23797,7 +23889,7 @@ def _ensure_team_fan_profile(session: FranchiseSession, team_id: str) -> Dict[st
         outlook = compute_team_playoff_outlook(session, team) if team is not None else {}
     except Exception:
         outlook = {}
-    odds = int(outlook.get("playoff_odds", 50) or 50)
+    odds = int(50 if outlook.get("playoff_odds") is None else outlook.get("playoff_odds"))
     direction = str(outlook.get("team_direction", getattr(team, "gm_window", "unknown")) or "unknown").lower()
     base_conf = _clamp_fan_score(42 + odds * 0.36, 45, 78)
     if direction in ("rebuild", "rebuilding", "tanking", "seller"):
@@ -25004,7 +25096,7 @@ def _fan_build_team_context_snapshot(session: FranchiseSession, team_id: str) ->
     if pts_pct <= 0 and gp > 0:
         pts_pct = _safe_points_pct(cal_rec)
     return {
-        "playoff_odds": int(outlook.get("playoff_odds", 50) or 50),
+        "playoff_odds": int(50 if outlook.get("playoff_odds") is None else outlook.get("playoff_odds")),
         "record": dict(cal_rec),
         "standings_rank": rank,
         "team_status": str(outlook.get("team_status") or outlook.get("outlook_label") or outlook.get("team_direction") or ""),
@@ -25124,7 +25216,7 @@ def _fan_snapshot_pick(
         "projected_value_at_trade": float(asset.get("value") or asset.get("projected_value") or 0),
         "projected_pick_range": str(asset.get("projected_range") or asset.get("projected_pick_range") or asset.get("projected_slot") or ""),
         "original_team_points_pct_at_trade": float(outlook.get("points_pace") or outlook.get("points_pct") or 0),
-        "original_team_playoff_odds_at_trade": int(outlook.get("playoff_odds", 50) or 50),
+        "original_team_playoff_odds_at_trade": int(50 if outlook.get("playoff_odds") is None else outlook.get("playoff_odds")),
         "protection": row.get("protection") or asset.get("protection"),
         "conditions": row.get("conditions") or asset.get("conditions"),
         "became_pick_number": int(overall) if overall is not None and resolved else None,
@@ -25418,8 +25510,8 @@ def _fan_review_team_outcome(
     delta = 0.0
     init_pts = float(ctx.get("points_pct") or 0)
     cur_pts = float(cur.get("points_pct") or 0)
-    init_odds = int(ctx.get("playoff_odds") or 50)
-    cur_odds = int(cur.get("playoff_odds") or 50)
+    init_odds = int(50 if ctx.get("playoff_odds") is None else ctx.get("playoff_odds"))
+    cur_odds = int(50 if cur.get("playoff_odds") is None else cur.get("playoff_odds"))
     pts_delta = cur_pts - init_pts
     odds_delta = cur_odds - init_odds
     init_gd = int(ctx.get("goal_differential") or 0)
@@ -25524,7 +25616,7 @@ def _fan_compute_legacy_review(
             if pl is None or str(cur_team) != utid:
                 rental_gone = True
                 break
-        if rental_gone and int(_fan_build_team_context_snapshot(session, utid).get("playoff_odds") or 50) < 45:
+        if rental_gone and int(50 if (_snap_odds := _fan_build_team_context_snapshot(session, utid).get("playoff_odds")) is None else _snap_odds) < 45:
             score -= 12.0
             notes.append("Rental left in free agency.")
             labels.append("Rental Gamble Failed")
@@ -26090,7 +26182,13 @@ def _decay_fan_heat_for_team(session: FranchiseSession, team_id: str, calendar_i
     baseline = 55.0
     try:
         outlook = compute_team_playoff_outlook(session, team) if team is not None else {}
-        baseline = float(_clamp_fan_score(40 + int(outlook.get("playoff_odds", 50) or 50) * 0.35))
+        odds_now = int(50 if outlook.get("playoff_odds") is None else outlook.get("playoff_odds"))
+        pace = float(outlook.get("points_pace") or 0.0)
+        pts_pct = pace / 2.0 if pace > 0 else 0.5  # no games yet (offseason / opening night): neutral
+        # Odds alone topped out at 75, so even a Presidents' Trophy club's fans were dragged back
+        # below "Loyal" and "Electric" (85+) was unreachable on results. Points % lifts real
+        # contenders to ~81 (85 with a hot week of stories); a .380 club sits around 46.
+        baseline = float(_clamp_fan_score(30 + odds_now * 0.25 + pts_pct * 40.0))
         form = float(outlook.get("recent_form_pct") or 0.5)
         if form >= 0.58:
             profile["recent_trade_heat"] = float(_clamp_fan_score(float(profile["recent_trade_heat"]) - 2.0))
@@ -27518,6 +27616,13 @@ def _build_lean_extras_section(
     except Exception:
         payload["wjc_tournament"] = None
     try:
+        from services.cap_plot import game_over_payload
+
+        payload["cap_plot_game_over"] = game_over_payload(session)
+    except Exception:
+        payload["cap_plot_game_over"] = None
+    payload["disaster_draft_pending"] = bool(getattr(session, "disaster_draft", None))
+    try:
         from services.league_operations import (
             build_franchise_pulse,
             get_cached_league_operations_payload,
@@ -27888,6 +27993,13 @@ def _build_state_payload_impl(session: FranchiseSession, *, include_heavy: bool 
         payload["wjc_tournament"] = _build_wjc_client_payload(session)
     except Exception:
         payload["wjc_tournament"] = None
+    try:
+        from services.cap_plot import game_over_payload
+
+        payload["cap_plot_game_over"] = game_over_payload(session)
+    except Exception:
+        payload["cap_plot_game_over"] = None
+    payload["disaster_draft_pending"] = bool(getattr(session, "disaster_draft", None))
 
     if include_heavy:
         payload["roster_browser"] = get_cached_roster_browser(session, sim, str(session.user_team_id))

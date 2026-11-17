@@ -1,11 +1,11 @@
 import React from "react";
-import WorldJuniorsMenu from "./WorldJuniorsMenu";
+import WorldJuniorsRevamp from "./WorldJuniorsRevamp";
 
-/** Full-screen opaque shell — calendar must not bleed through. */
+/** Full-screen opaque shell. The holiday rink village replaced the old WorldJuniorsMenu dashboard (kept in the repo). */
 export default function WorldJuniorsEvent(props) {
   return (
     <div className="wjc-event-shell">
-      <WorldJuniorsMenu {...props} />
+      <WorldJuniorsRevamp {...props} />
     </div>
   );
 }

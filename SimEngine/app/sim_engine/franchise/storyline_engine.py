@@ -12007,6 +12007,15 @@ def _u_run_major_league_event_pass(session: Any, rng: random.Random, days: int =
         else:
             headline = f"League mourns the death of {name}"
             summary = f"The organization and league have announced that {name} has died. The player is permanently removed from competition."
+            try:
+                from services.player_mourning import on_player_death  # noqa: WPS433
+
+                _tm = (getattr(session, "team_by_id", None) or {}).get(team_id)
+                if _tm is not None and player is not None:
+                    _ob = on_player_death(session, player, _tm, "a sudden illness")
+                    summary = f"{_ob.get('cause_story', summary)} {_ob.get('survived_by', '')}".strip()
+            except Exception:
+                _swallowed_log.debug("mourning setup failed", exc_info=True)
             availability = _u_set_player_availability(session, player_id, status="deceased", reason="Player deceased")
             try:
                 setattr(player, "retired", True)

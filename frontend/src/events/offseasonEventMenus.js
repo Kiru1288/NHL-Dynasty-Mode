@@ -11,6 +11,8 @@ import { ensurePlayerHeadshotFields } from "../utils/playerHeadshots";
 import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
 import CapContractNegotiation from "../components/contracts/CapContractNegotiation";
 import NegotiationMeetingPanel, { InterestFactors } from "../components/contracts/NegotiationMeetingPanel";
+import NegotiationRoom, { NegotiationTranscript, offerLine, openingLines, replyLine } from "../components/contracts/NegotiationRoom";
+import { NegotiationScoutCard, NegotiationTactics } from "../components/contracts/NegotiationExtras";
 import FaAnalyticsPanel from "../components/freeAgency/FaAnalyticsPanel";
 import { getContractOffice, qualifyRfa, releaseRfaRights, evaluateContractOffer, prospectRightsDecision, previewElcOffer, submitElcOffer, fileArbitration, settleArbitration, matchOfferSheet, declineOfferSheet, submitOfferSheet, advanceFreeAgencyDay, simFreeAgencyToSeasonStart, advanceContractNegotiationDay, signFreeAgent, getFreeAgentDetail, getFreeAgencyDesk, getSocialFeed } from "../services/franchiseService";
 import { useGameUI } from "../game/GameUIContext";
@@ -715,7 +717,7 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
             ))}
           </div>
 
-          <div className={`${prefix}-table-layout${panelMode === "negotiate" && selected ? " is-negotiating" : ""}`}>
+          <div className={`${prefix}-table-layout`}>
             <div className={`${prefix}-table-wrap`} ref={tableWrapRef}>
               {loading ? (
                 <p className={`${prefix}-empty`}>Loading organization contracts…</p>
@@ -919,7 +921,7 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
                     </button>
                   </div>
 
-                  {panelMode === "detail" ? (
+                  {(
                     <div className={`${prefix}-detail-body`}>
                       <div className={`${prefix}-dossier-grid`}>
                         <div>
@@ -1111,7 +1113,13 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
                       ) : null}
                       {error ? <p className={`${prefix}-warn`} role="alert">{error}</p> : null}
                     </div>
-                  ) : (
+                  )}
+                  {panelMode === "negotiate" ? (
+                    <NegotiationRoom
+                      kicker={`Re-sign · ${seasonLabel(franchiseState)}`}
+                      title={`Contract talks · ${String(selected.name || getPlayerName(selected) || "Player")}`}
+                      onClose={() => !busy && setPanelMode("detail")}
+                    >
                     <CapContractNegotiation
                       row={selected}
                       capSnapshot={cap}
@@ -1151,7 +1159,8 @@ export function ReSignEventMenu({ franchiseState = {}, eventData = {}, onContinu
                         }
                       }}
                     />
-                  )}
+                    </NegotiationRoom>
+                  ) : null}
                 </>
               )}
             </aside>
@@ -1488,6 +1497,13 @@ export function FreeAgencyEventMenu({
   const [offerBonus, setOfferBonus] = React.useState("0");
   const [contractCategory, setContractCategory] = React.useState("nhl_one_way");
   const [faMeetingRev, setFaMeetingRev] = React.useState(0);
+  // The negotiation opens as its own full-screen room; the side desk is a short preview.
+  const [faRoom, setFaRoom] = React.useState(false);
+  const [faChat, setFaChat] = React.useState([]);
+  React.useEffect(() => {
+    setFaChat([]);
+    if (!selectedId) setFaRoom(false);
+  }, [selectedId]);
   const [railTab, setRailTab] = React.useState("today");
   const [dayReport, setDayReport] = React.useState(null);
   const [socialRev, setSocialRev] = React.useState(0);
@@ -1944,6 +1960,24 @@ export function FreeAgencyEventMenu({
         context: "ufa",
       });
       setResponse(result);
+      {
+        const pr = result?.player_response || {};
+        const co = result?.evaluation?.counter_offer || {};
+        const cAav = pr.counter_cap_hit ?? co.aav_m ?? co.cap_hit_m;
+        const cYrs = pr.counter_term ?? co.years;
+        setFaChat((prev) => [
+          ...prev,
+          { who: "you", name: "You", text: offerLine({ aav: offerAavNum, years: offerYearsNum, clause: offerNmc ? "NMC" : offerNtc ? (offerNtcModified ? "modified no-trade" : "no-trade clause") : "", bonus: offerBonusNum }) },
+          {
+            who: "agent",
+            name: deskPlayer?.agent?.name || "His agent",
+            text: replyLine(result, {
+              counter: cAav != null && cYrs != null ? { aav_m: Number(cAav), years: Number(cYrs), nmc: Boolean(pr.counter_nmc ?? co.nmc), ntc_mode: String(pr.ntc_mode || co.ntc_mode || "").toUpperCase() } : null,
+              fallback: "We'll weigh it against the others and call you back.",
+            }),
+          },
+        ].slice(-24));
+      }
       applyMarketPayload(result);
       const popup = buildDealOutcome(result, {
         playerName: getPlayerName(selected),
@@ -2229,6 +2263,7 @@ export function FreeAgencyEventMenu({
                       type="button"
                       className={`${prefix}-fa-row${active ? " is-selected" : ""}`}
                       onClick={() => setSelectedId(id)}
+                      onDoubleClick={() => { setSelectedId(id); setFaRoom(true); }}
                     >
                       <span className={`${prefix}-fa-prev`} title={prevName || undefined}>
                         <PlayerHeadshot player={ensurePlayerHeadshotFields({ ...p, id, player_id: id })} size="xs" />
@@ -2318,6 +2353,63 @@ export function FreeAgencyEventMenu({
                     : "Select a free agent to open the signing desk."}
                 </p>
               ) : (
+                <>
+                <div className="nd2-pick">
+                  <div className="nd2-pick__face">
+                    <PlayerHeadshot
+                      player={ensurePlayerHeadshotFields({
+                        ...deskPlayer,
+                        id: deskPlayer.player_id || deskPlayer.id,
+                        player_id: deskPlayer.player_id || deskPlayer.id,
+                        name: getPlayerName(deskPlayer),
+                        position: getPlayerPosition(deskPlayer),
+                        age: deskPlayer.age,
+                        nationality: deskPlayer.nationality,
+                      })}
+                      size="md"
+                      showFlag={false}
+                    />
+                  </div>
+                  <h3>
+                    {getPlayerName(deskPlayer)} <RightsBadge prefix={prefix} row={deskPlayer} />
+                  </h3>
+                  <p>
+                    {[
+                      getPlayerPosition(deskPlayer),
+                      getPlayerOverall(deskPlayer) != null ? `${getPlayerOverall(deskPlayer)} OVR` : null,
+                      deskPlayer.age != null ? `age ${deskPlayer.age}` : null,
+                      deskPlayer.role,
+                    ].filter(Boolean).join(" · ")}
+                  </p>
+                  <dl className="nd2-pick__facts">
+                    <div>
+                      <dt>{isOfferSheet ? "Market value" : "Asking"}</dt>
+                      <dd>{formatMoney(isOfferSheet ? selected.market_value_m : deskPlayer.askingAav ?? deskPlayer.ask_aav_m)}</dd>
+                    </div>
+                    <div>
+                      <dt>Term</dt>
+                      <dd>{deskPlayer.askingTerm ?? deskPlayer.asking_term ?? "—"} yrs</dd>
+                    </div>
+                    <div>
+                      <dt>Interest in you</dt>
+                      <dd>{selected.interest_to_user_label || "—"}</dd>
+                    </div>
+                    <div>
+                      <dt>Offers in</dt>
+                      <dd>{competing.length}</dd>
+                    </div>
+                  </dl>
+                  <button type="button" className="nd-btn nd-btn--primary nd2-primary nd2-pick__go" onClick={() => setFaRoom(true)}>
+                    {isOfferSheet ? "Draft the offer sheet" : "Open negotiation"}
+                  </button>
+                  <p className="nd2-note">Opens the negotiation room: your offer, the agent's replies and his file side by side. Double-click a name to jump straight in.</p>
+                </div>
+                <NegotiationRoom
+                  open={faRoom}
+                  kicker={isOfferSheet ? "Offer sheet" : `Free agency${dayReport?.day ? ` · day ${dayReport.day}` : ""}`}
+                  title={`${isOfferSheet ? "Offer sheet" : "Contract talks"} · ${getPlayerName(deskPlayer)}`}
+                  onClose={() => !busy && setFaRoom(false)}
+                >
                 <div className="nd nd2 nd2--fa">
                   <header className="nd2-hero">
                     <span aria-hidden="true" />
@@ -2555,9 +2647,44 @@ export function FreeAgencyEventMenu({
                           </p>
                         )}
                       </div>
-                    </section>
 
-                    <section className="nd2-talk" aria-label="The market">
+                    {isOfferSheet ? null : (
+                      <NegotiationTactics
+                        playerId={selected.player_id || selected.id}
+                        disabled={busy}
+                        onTranscript={(lines) => setFaChat((prev) => [...prev, ...lines].slice(-40))}
+                        onChanged={() => setFaMeetingRev((v) => v + 1)}
+                      />
+                    )}
+                    </section>
+                    <section className="nd2-talk" aria-label="The conversation">
+                      <div className="nd2-talk__head">
+                        <span>The conversation</span>
+                        <em>{deskPlayer?.agent?.name || "His agent"}</em>
+                      </div>
+                      <NegotiationTranscript
+                        agentName={deskPlayer?.agent?.name || "Agent"}
+                        lines={[
+                          ...openingLines({
+                            kind: isOfferSheet ? "offer_sheet" : "ufa",
+                            playerName: getPlayerName(deskPlayer),
+                            agentName: deskPlayer?.agent?.name || "",
+                            agentStyle: deskPlayer?.agent?.style_label || "",
+                            askAav: deskPlayer.askingAav ?? deskPlayer.ask_aav_m ?? null,
+                            askYears: deskPlayer.askingTerm ?? deskPlayer.asking_term ?? null,
+                            clause: deskPlayer.wants_clause || "",
+                            interest: selected.interest_to_user_label || "",
+                            age: deskPlayer.age ?? null,
+                            ovr: getPlayerOverall(deskPlayer),
+                            competing: competing.filter((o) => !o.is_user).length,
+                            circling: interested.length,
+                            signLikelihood: selected.sign_likelihood ?? null,
+                            rightsTeam: selected.rights_team_name || selected.rights_team_abbrev || "",
+                            acceptCut: isOfferSheet ? null : 62,
+                          }),
+                          ...faChat,
+                        ]}
+                      />
                       {competing.length ? (
                         <div className="nd2-market">
                           <span className="nd2-market__label">Offers on the table</span>
@@ -2598,7 +2725,11 @@ export function FreeAgencyEventMenu({
                       ) : (
                         <p className="nd2-note">No other club has made an offer yet.</p>
                       )}
-                      <details className="nd2-more">
+                    </section>
+                    <aside className="nd2-file" aria-label="Player file">
+                      <div className="nd2-file__head">Player file</div>
+                      <NegotiationScoutCard playerId={selected.player_id || selected.id} fallback={deskPlayer} />
+                      <details className="nd2-more" open>
                         <summary>Why he'd sign here{isOfferSheet ? "" : ", and meeting options"}</summary>
                         <InterestFactors
                           factors={response?.evaluation?.interest_factors || selected.interest_factors}
@@ -2666,7 +2797,7 @@ export function FreeAgencyEventMenu({
                           </div>
                         ) : null}
                       </details>
-                    </section>
+                    </aside>
                   </div>
 
                   <footer className="nd2-foot">
@@ -2701,9 +2832,27 @@ export function FreeAgencyEventMenu({
                       >
                         {busy ? "Working…" : isOfferSheet ? "Tender offer sheet" : "Submit offer"}
                       </button>
+                      {isOfferSheet ? null : (
+                        <button
+                          type="button"
+                          className="nd2-text"
+                          disabled={busy}
+                          onClick={() =>
+                            setFaChat((prev) => [
+                              ...prev,
+                              { who: "you", name: "You", text: `${offerLine({ aav: offerAavNum, years: offerYearsNum, clause: offerNmc ? "NMC" : offerNtc ? (offerNtcModified ? "modified no-trade" : "no-trade clause") : "", bonus: offerBonusNum })} Would he take that?` },
+                              { who: "agent", name: deskPlayer?.agent?.name || "His agent", text: replyLine(response, { fallback: negoInterest >= 62 ? "That would get his attention." : "You're going to have to do better than that." }) },
+                            ].slice(-24))
+                          }
+                        >
+                          Talk to agent
+                        </button>
+                      )}
                     </div>
                   </footer>
                 </div>
+                </NegotiationRoom>
+                </>
               )}
             </aside>
           </div>

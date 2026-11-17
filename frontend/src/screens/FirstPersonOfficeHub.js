@@ -1585,7 +1585,7 @@ import React, {
     routes["strategy-board"] = screenRoute(SCREENS.EDIT_LINES);
     routes["stats-analytics"] = screenRoute(SCREENS.STATS, { statsTab: "overview" });
     routes["trade-hub"] = screenRoute(SCREENS.TRADE);
-    routes["command-center"] = { type: "hub" };
+    routes["command-center"] = screenRoute(SCREENS.FRANCHISE_COMMAND);
     routes[OFFICE_NAV_TARGETS.DRAFT_LOTTERY] = screenRoute(SCREENS.DRAFT_LOTTERY);
     routes[OFFICE_NAV_TARGETS.TEAM_NEEDS] = screenRoute(SCREENS.TEAM_NEEDS);
     routes[OFFICE_NAV_TARGETS.SCOUTING] = screenRoute(SCREENS.SCOUTING);

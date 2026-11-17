@@ -20,6 +20,8 @@ import {
   resolveAgentDealDifficulty,
 } from "../../utils/playerAgentDisplay";
 import NegotiationMeetingPanel, { InterestFactors } from "./NegotiationMeetingPanel";
+import { NegotiationTranscript, offerLine, openingLines, replyLine } from "./NegotiationRoom";
+import { NegotiationScoutCard, NegotiationTactics } from "./NegotiationExtras";
 
 function safeNum(v, fallback = 0) {
   const n = Number(v);
@@ -157,6 +159,7 @@ export default function CapContractNegotiation({
     setPreviewOfferKey("");
     setResponseSource(null);
     setLocalError("");
+    setDialogue([]);
   }, [row?.player_id, row?.id, ask.aav, ask.years]);
 
   const offerAavNum = safeNum(offerAav, ask.aav);
@@ -247,16 +250,6 @@ export default function CapContractNegotiation({
   const agentDiff = resolveAgentDealDifficulty(agent);
   const player = ensurePlayerHeadshotFields(row);
 
-  const agentLine = isSubmitTurn
-    ? evalSnap.feedback ||
-      evalSnap.agentMood ||
-      safeText(response?.reason, "The agent responded to your offer.")
-    : previewFresh
-      ? evalSnap.feedback || evalSnap.agentMood || ""
-      : offerStale
-        ? `${agentName}: terms changed — Talk to agent or submit again for an updated read.`
-        : `${agentName} represents ${safeText(row?.name, "the player")}. Set AAV and years, then submit or talk to agent.`;
-
   const sliderMax = useMemo(
     () =>
       maxNegotiationOfferAavM({
@@ -293,6 +286,36 @@ export default function CapContractNegotiation({
     [row, offerAavNum, offerYearsNum, offerNtcMode, offerNmc, offerBonusNum, contractCategory, nhlRoster],
   );
 
+  const currentOfferWords = useCallback(
+    () => ({
+      aav: offerAavNum,
+      years: offerYearsNum,
+      clause: offerNmc ? "NMC" : offerNtcMode === "FULL" ? "no-trade clause" : offerNtcMode === "MODIFIED" ? "modified no-trade" : "",
+      bonus: offerBonusNum,
+    }),
+    [offerAavNum, offerYearsNum, offerNmc, offerNtcMode, offerBonusNum],
+  );
+
+  const opening = useMemo(
+    () =>
+      openingLines({
+        kind: "re_sign",
+        playerName: safeText(row?.name, "the player"),
+        agentName,
+        agentStyle,
+        difficulty: agentDiff.tier,
+        askAav: ask.aav,
+        askYears: ask.years,
+        clause: clauseAsk,
+        interest: resignInterestLabel(row),
+        age: row?.age ?? null,
+        ovr: row?.overall ?? row?.ovr ?? null,
+        acceptCut: 62,
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [row?.player_id, row?.id, ask.aav, ask.years, agentName],
+  );
+
   const runPreview = useCallback(async () => {
     if (!row?.player_id && !row?.id) return;
     if (previewPending) return;
@@ -306,14 +329,12 @@ export default function CapContractNegotiation({
       setResponse(result);
       setResponseSource("preview");
       setPreviewOfferKey(offerKey);
-      const spoken =
-        result?.evaluation?.agent_dialogue ||
-        result?.player_response?.agent_dialogue ||
-        result?.player_response?.feedback ||
-        "";
-      if (spoken) {
-        setDialogue((prev) => [...prev, String(spoken)].slice(-8));
-      }
+      const spoken = replyLine(result, { fallback: "Let me think about that one." });
+      setDialogue((prev) => [
+        ...prev,
+        { who: "you", name: "You", text: `${offerLine(currentOfferWords())} Where does that land?` },
+        { who: "agent", name: agentName, text: spoken },
+       ].slice(-40));
       if (!result?.ok && result?.reason) setLocalError(result.reason);
     } catch (e) {
       if (previewSeqRef.current === seq) {
@@ -324,7 +345,19 @@ export default function CapContractNegotiation({
         setPreviewPending(false);
       }
     }
-  }, [row, buildPayload, previewPending, offerKey]);
+  }, [row, buildPayload, previewPending, offerKey, currentOfferWords, agentName]);
+
+  const runPreviewQuiet = useCallback(async () => {
+    if (!row?.player_id && !row?.id) return;
+    try {
+      const result = await evaluateContractOffer(buildPayload());
+      setResponse(result);
+      setResponseSource("preview");
+      setPreviewOfferKey(offerKey);
+    } catch {
+      /* the meter refreshes on the next change */
+    }
+  }, [row, buildPayload, offerKey]);
 
   const askHometownDiscount = useCallback(async () => {
     const playerId = row?.player_id || row?.id;
@@ -334,7 +367,11 @@ export default function CapContractNegotiation({
     try {
       const res = await runNegotiationMeeting(playerId, "hometown", "");
       const line = res?.message || res?.reason || "He didn't answer.";
-      setDialogue((prev) => [...prev, String(line)].slice(-8));
+      setDialogue((prev) => [
+        ...prev,
+        { who: "you", name: "You", text: "He grew up near here. Any chance he'd give us a hometown break?" },
+        { who: "agent", name: agentName, text: String(line) },
+       ].slice(-40));
       if (!res?.ok && res?.reason) setLocalError(res.reason);
       if (res?.ok) {
         const preview = await evaluateContractOffer(buildPayload());
@@ -347,7 +384,7 @@ export default function CapContractNegotiation({
     } finally {
       setHometownBusy(false);
     }
-  }, [row, hometownBusy, buildPayload, offerKey]);
+  }, [row, hometownBusy, buildPayload, offerKey, agentName]);
 
   useEffect(() => {
     if (!row?.player_id && !row?.id) return undefined;
@@ -407,10 +444,16 @@ export default function CapContractNegotiation({
     onBusy?.(true);
     setLocalError("");
     try {
+      const said = { who: "you", name: "You", text: offerLine(currentOfferWords()) };
       const result = await reSignContract(buildPayload());
       setResponse(result);
       setResponseSource("submit");
       setPreviewOfferKey(offerKey);
+      setDialogue((prev) => [
+        ...prev,
+        said,
+        { who: "agent", name: agentName, text: replyLine(result, { counter: extractCounter(result), fallback: "We'll get back to you." }) },
+       ].slice(-40));
       onResult?.(result, { preview: false });
       const st = normalizeNegoStatus(result);
       if (!result?.ok && result?.reason && st !== "countered" && st !== "rejected") {
@@ -443,6 +486,11 @@ export default function CapContractNegotiation({
       });
       setResponse(result);
       setResponseSource("submit");
+      setDialogue((prev) => [
+        ...prev,
+        { who: "you", name: "You", text: `Fine. ${formatMoneyM(counter.aav_m)} for ${counter.years}. Let's sign it.` },
+        { who: "agent", name: agentName, text: replyLine(result, { fallback: "Pleasure doing business." }) },
+       ].slice(-40));
       onResult?.(result, { preview: false });
       if (!result?.ok && result?.reason) setLocalError(result.reason);
     } catch (e) {
@@ -462,6 +510,7 @@ export default function CapContractNegotiation({
         ? result.signed.find((s) => String(s.player_id) === pid)
         : null;
       if (signed) {
+        setDialogue((prev) => [...prev, { who: "note", text: "A day passes." }, { who: "agent", name: agentName, text: "He's in. Let's make it official." } ].slice(-40));
         onResult?.({ ok: true, status: "accepted", ...result }, { preview: false, signed: true });
         return;
       }
@@ -469,6 +518,11 @@ export default function CapContractNegotiation({
         ? result.still_pending.find((s) => String(s.player_id) === pid)
         : null;
       const held = still?.days_held ?? 0;
+      setDialogue((prev) => [
+        ...prev,
+        { who: "note", text: "A day passes." },
+        { who: "agent", name: agentName, text: held ? "Still talking it over with his family. Give us another day." : "Your offer's on the table. We'll call you." },
+       ].slice(-40));
       const need = still?.resolve_days ?? safeNum(response?.player_response?.resolve_days, 2);
       setResponse((prev) => ({
         ...(prev || {}),
@@ -722,18 +776,21 @@ export default function CapContractNegotiation({
               <p className="nd2-note">{signingBonusElig?.label || "Signing bonuses need club revenue of $155M or more."}</p>
             )}
           </div>
+          <NegotiationTactics
+            playerId={row?.player_id || row?.id}
+            disabled={busy}
+            onTranscript={(lines) => setDialogue((prev) => [...prev, ...lines].slice(-40))}
+            onChanged={() => runPreviewQuiet()}
+          />
         </section>
 
         <section className="nd2-talk" aria-label="The agent">
-          <div className="nd2-thread" aria-live="polite">
-            <p className="nd2-bubble">{agentLine}</p>
-            {dialogue.map((line, i) => (
-              <p key={`${i}-${line.slice(0, 24)}`} className="nd2-bubble">{line}</p>
-            ))}
-            {evalSnap.agentMood && evalSnap.agentMood !== agentLine && !dialogue.includes(evalSnap.agentMood) ? (
-              <p className="nd2-bubble is-mood">{evalSnap.agentMood}</p>
-            ) : null}
+          <div className="nd2-talk__head">
+            <span>The conversation</span>
+            <em>{[agentName, agentAgency].filter(Boolean).join(" · ")}</em>
           </div>
+          <NegotiationTranscript lines={[...opening, ...dialogue]} pending={previewPending && dialogue.length > 0} agentName={agentName} />
+          {offerStale ? <p className="nd2-note nd2-stale">Terms changed. Talk to the agent or submit for a fresh answer.</p> : null}
           {isSubmitTurn ? (
             <div className={`nd2-verdict is-${negoStatus || "neutral"}`} role="status">
               <strong>
@@ -755,25 +812,44 @@ export default function CapContractNegotiation({
               {isRejected ? <p>Change the money, term or protection and try again.</p> : null}
             </div>
           ) : null}
-          <details className="nd2-more">
-            <summary>Why they'd stay, and meeting options</summary>
-            <InterestFactors
-              title="Why they'd stay"
-              factors={response?.evaluation?.interest_factors || row?.interest_factors}
-              fit={{
-                ...(response?.evaluation?.destination_fit || row?.destination_fit || {}),
-                fit_premium_pct: response?.evaluation?.fit_premium_pct,
-              }}
-            />
-            <NegotiationMeetingPanel
-              playerId={row?.player_id || row?.id}
-              compact
-              onChanged={() => {
-                runPreview();
-              }}
-            />
-          </details>
         </section>
+
+        <aside className="nd2-file" aria-label="Player file">
+          <div className="nd2-file__head">Player file</div>
+          <NegotiationScoutCard playerId={row?.player_id || row?.id} fallback={row} />
+          <dl className="nd2-file__facts">
+            {[
+              ["Current cap hit", row?.aav_m ?? row?.current_cap_hit ?? row?.previous_aav_m],
+              ["Status", row?.status_label || row?.contract_status || row?.expiry_status],
+              ["Interest in staying", resignInterestLabel(row)],
+              ["Agent", agentDiff.label],
+              ["Potential", row?.potential],
+              ["Role", row?.role || row?.roster_role],
+            ]
+              .filter(([, v]) => v != null && v !== "")
+              .map(([k, v]) => (
+                <div key={k}>
+                  <dt>{k}</dt>
+                  <dd>{k === "Current cap hit" ? formatMoneyM(v) : String(v)}</dd>
+                </div>
+              ))}
+          </dl>
+          <InterestFactors
+            title="Why they'd stay"
+            factors={response?.evaluation?.interest_factors || row?.interest_factors}
+            fit={{
+              ...(response?.evaluation?.destination_fit || row?.destination_fit || {}),
+              fit_premium_pct: response?.evaluation?.fit_premium_pct,
+            }}
+          />
+          <NegotiationMeetingPanel
+            playerId={row?.player_id || row?.id}
+            compact
+            onChanged={() => {
+              runPreview();
+            }}
+          />
+        </aside>
       </div>
 
       <footer className="nd2-foot">

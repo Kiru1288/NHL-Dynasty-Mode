@@ -24,13 +24,13 @@ const STALL_LIMIT = 3; // consecutive responses with no day change → stop
 // Sim speeds: slow/medium play one night per request with a pause so every round
 // (Round 1 included) visibly plays out; fast batches many nights per request.
 const SIM_SPEEDS = {
-  slow: { label: "Slow", daysPerCall: 1, pauseMs: 1100, popupMs: 0 },
-  medium: { label: "Medium", daysPerCall: 1, pauseMs: 380, popupMs: 0 },
+  slow: { label: "Slow", daysPerCall: 1, pauseMs: 1100, popupMs: 6500 },
+  medium: { label: "Medium", daysPerCall: 1, pauseMs: 380, popupMs: 4500 },
   // Fast still plays one night per request (every series, one game at a time); it only shortens the pause.
   fast: { label: "Fast", daysPerCall: 1, pauseMs: 140, popupMs: 2600 },
 };
 const SPEED_KEY = "po_sim_speed";
-const MAX_POPUPS = 5;
+const MAX_POPUPS = 3;
 
 function readSpeed() {
   try {
@@ -373,11 +373,6 @@ function nickOf(team) {
   return splitTeamName(team).nick || team?.abbrev || "TBD";
 }
 
-function teamAccent(team) {
-  const c = firstDefined(team?.primary_color, team?.color_primary, team?.colors?.primary, team?.color, team?.team_color);
-  return typeof c === "string" && /^#|^rgb/.test(c) ? c : null;
-}
-
 /** What is at stake in the next game of a live series. */
 function seriesStakes(series, high, low) {
   const wh = Number(series?.wins_high || 0);
@@ -455,26 +450,6 @@ function sentenceCase(text) {
     .replace(/^./, (c) => c.toUpperCase());
 }
 
-function HomeIce({ title = "Home ice for the next game" }) {
-  return (
-    <svg className="pf-home" viewBox="0 0 12 12" width="11" height="11" role="img" aria-label={title}>
-      <title>{title}</title>
-      <path d="M1.5 6 6 2l4.5 4v4.5h-3V8h-3v2.5h-3Z" fill="currentColor" />
-    </svg>
-  );
-}
-
-function TrophyGlyph({ size = 34 }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true" className="pf-trophy-glyph">
-      <path d="M9 4h14v5a7 7 0 0 1-14 0V4Z" fill="none" stroke="currentColor" strokeWidth="1.6" />
-      <path d="M9 6H5.5a3.5 3.5 0 0 0 3.8 4.4M23 6h3.5a3.5 3.5 0 0 1-3.8 4.4" fill="none" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M16 16v5M12 21h8l1.5 3h-11L12 21Z" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
-      <path d="M9 24h14v4H9z" fill="none" stroke="currentColor" strokeWidth="1.6" />
-    </svg>
-  );
-}
-
 function CupCenterpiece({ size = 86, lit }) {
   return (
     <svg width={size} height={size * 1.25} viewBox="0 0 64 80" aria-hidden="true" className={cx("pf-cup-svg", lit && "is-lit")}>
@@ -508,43 +483,8 @@ function TeamMark({ team, size = 22, dimmed }) {
   );
 }
 
-/** One cell per game: which club won it (score and OT on hover). */
-function SeriesTrack({ series, high, low }) {
-  const log = Array.isArray(series.game_log) ? series.game_log : [];
-  const hi = String(series.team_high_id || "");
-  const done = Boolean(seriesWinnerId(series));
-  const next = nextGameNumber(series);
-  return (
-    <div className="pf-track" aria-label="Game results">
-      {Array.from({ length: 7 }, (_, i) => {
-        const g = log.find((x) => Number(x.game) === i + 1);
-        if (!g) {
-          return (
-            <span key={i} className={cx("pf-track-cell", done ? "is-moot" : i + 1 === next && "is-next")}>
-              {done ? "" : `G${i + 1}`}
-            </span>
-          );
-        }
-        const hs = Number(g.home_score);
-        const as = Number(g.away_score);
-        const win = String(g.winner_id || (hs > as ? g.home_id : g.away_id));
-        const t = win === hi ? high : low;
-        return (
-          <span
-            key={i}
-            className={cx("pf-track-cell", win === hi ? "is-high" : "is-low", g.ot && "is-ot")}
-            title={`Game ${i + 1}: ${t?.abbrev || ""} won ${Math.max(hs, as)}-${Math.min(hs, as)}${g.ot ? " in overtime" : ""}`}
-          >
-            {t?.abbrev || "W"}
-          </span>
-        );
-      })}
-    </div>
-  );
-}
-
 /** Series leaders (points from per-game stars) and goalie lines (per-game saves) from the game log. */
-function seriesPlayerSummary(series) {
+function seriesPlayerSummary(series, maxLeaders = 4, maxGoalies = 2) {
   const log = Array.isArray(series?.game_log) ? series.game_log : [];
   const pts = new Map();
   const gk = new Map();
@@ -565,70 +505,41 @@ function seriesPlayerSummary(series) {
       gk.set(k, r);
     }
   }
-  const leaders = [...pts.values()].sort((a, b) => b.pts - a.pts).slice(0, 4);
-  const goalies = [...gk.values()].sort((a, b) => b.gp - a.gp).slice(0, 2);
+  const leaders = [...pts.values()].sort((a, b) => b.pts - a.pts).slice(0, maxLeaders);
+  const goalies = [...gk.values()].sort((a, b) => b.gp - a.gp).slice(0, maxGoalies);
   return { leaders, goalies };
 }
 
-/** An empty bracket row: the series that will fill it, and where that series stands. */
+/** An empty bracket row: who could fill it. Feeder status is on the feeder's own card. */
 function FeederSlot({ feeder, teamFor }) {
-  if (!feeder) {
-    return (
-      <span className="pf-feed is-tbd">
-        <span className="pf-feed-ghost" aria-hidden="true" />
-        <span className="pf-feed-copy">
-          <b>To be decided</b>
-        </span>
-      </span>
-    );
-  }
+  if (!feeder) return <span className="pf-feed is-tbd">To be decided</span>;
   const w = seriesWinnerId(feeder);
   if (w) {
     const t = teamFor(w);
     return (
       <span className="pf-feed is-set">
         <TeamMark team={t} size={30} />
-        <span className="pf-feed-copy">
-          <small>Advanced</small>
-          <b>{t?.name || t?.abbrev || "TBD"}</b>
-        </span>
+        <b>{nickOf(t)}</b>
       </span>
     );
   }
   const h = teamFor(feeder.team_high_id);
   const l = teamFor(feeder.team_low_id);
-  if (!h || !l) {
-    return (
-      <span className="pf-feed is-tbd">
-        <span className="pf-feed-ghost" aria-hidden="true" />
-        <span className="pf-feed-copy">
-          <small>Winner of</small>
-          <b>{ROUND_NAMES[feeder.round_index] || "Earlier round"}</b>
-        </span>
-      </span>
-    );
-  }
-  const wh = Number(feeder.wins_high || 0);
-  const wl = Number(feeder.wins_low || 0);
-  const status = wh + wl ? seriesLabel(feeder, h, l) : "Not started";
+  if (!h || !l) return <span className="pf-feed is-tbd">To be decided</span>;
   return (
     <span className="pf-feed">
       <span className="pf-feed-pair" aria-hidden="true">
-        <TeamMark team={h} size={22} />
-        <TeamMark team={l} size={22} />
+        <TeamMark team={h} size={24} />
+        <TeamMark team={l} size={24} />
       </span>
       <span className="pf-feed-copy">
-        <small>Winner of</small>
-        <b>
-          {h.abbrev} – {l.abbrev}
-        </b>
+        {h.abbrev} / {l.abbrev}
       </span>
-      <em className="pf-feed-state">{status}</em>
     </span>
   );
 }
 
-function TeamRow({ team, seed, wins, showWins, feeder, teamFor, isHome, isWinner, isLoser, isLeader }) {
+function TeamRow({ team, seed, wins, showWins, feeder, teamFor, isWinner, isLoser, isLeader }) {
   if (!team) {
     return (
       <div className="pf-row is-empty">
@@ -636,32 +547,37 @@ function TeamRow({ team, seed, wins, showWins, feeder, teamFor, isHome, isWinner
       </div>
     );
   }
-  const accent = teamAccent(team);
-  const city = cityOf(team);
   return (
-    <div
-      style={accent ? { "--pf-team": accent } : undefined}
-      className={cx("pf-row", isWinner && "is-winner", isLoser && "is-out", isLeader && "is-lead")}
-    >
+    <div className={cx("pf-row", isWinner && "is-winner", isLoser && "is-out", isLeader && "is-lead")}>
       <span className="pf-seed" title={seed ? `Playoff seed ${seed}` : undefined}>
         {seed ?? ""}
       </span>
-      <TeamMark team={team} size={32} dimmed={isLoser} />
-      <span className="pf-row-name">
-        <small>
-          {city}
-          {team.record ? <span className="pf-row-rec-inline"> · {team.record}</span> : null}
-          {isHome ? <HomeIce /> : null}
-        </small>
-        <strong title={team.name}>{nickOf(team)}</strong>
-      </span>
-      {showWins ? (
-        <b className="pf-row-wins">{wins}</b>
-      ) : (
-        <span className="pf-row-rec" title="Regular-season record">
-          {team.record || ""}
-        </span>
-      )}
+      <TeamMark team={team} size={34} dimmed={isLoser} />
+      <strong className="pf-row-name" title={team.name}>
+        <span className="pf-nick">{nickOf(team)}</span>
+        <span className="pf-abbr">{team.abbrev}</span>
+      </strong>
+      {showWins ? <b className="pf-row-wins">{wins}</b> : null}
+    </div>
+  );
+}
+
+/** Seven thin pips under a card: whose game each one was. Details live in the series centre. */
+function SeriesPips({ series }) {
+  const log = Array.isArray(series.game_log) ? series.game_log : [];
+  if (!log.length) return null;
+  const hi = String(series.team_high_id || "");
+  const done = Boolean(seriesWinnerId(series));
+  return (
+    <div className="pf-pips" aria-hidden="true">
+      {Array.from({ length: 7 }, (_, i) => {
+        const g = log.find((x) => Number(x.game) === i + 1);
+        if (!g) return <i key={i} className={done ? "is-moot" : ""} />;
+        const hs = Number(g.home_score);
+        const as = Number(g.away_score);
+        const win = String(g.winner_id || (hs > as ? g.home_id : g.away_id));
+        return <i key={i} className={cx(win === hi ? "is-high" : "is-low", g.ot && "is-ot")} />;
+      })}
     </div>
   );
 }
@@ -670,7 +586,6 @@ function TeamRow({ team, seed, wins, showWins, feeder, teamFor, isHome, isWinner
 
 function SeriesCard({ series, high, low, state, feeders, teamFor, selected, justSet, playoffDay, onSelect }) {
   const next = nextGameNumber(series);
-  const home = isHighSeedHome(next) ? high : low;
   const day = numOrNull(series.scheduled_day);
   const tonight = state === "live" && day !== null && day === playoffDay;
   const winner = seriesWinnerId(series);
@@ -680,22 +595,14 @@ function SeriesCard({ series, high, low, state, feeders, teamFor, selected, just
   const [fdHigh, fdLow] = state === "pending" ? pendingRowFeeders(series, feeders) : [null, null];
   const stakes = state === "live" ? seriesStakes(series, high, low) : null;
   const swept = state === "complete" && Math.min(wh, wl) === 0;
-  const intel = state === "scheduled" ? matchupIntel(high, low) : null;
-  const homeId = state === "live" || state === "scheduled" ? home?.team_id : null;
-
-  let meta;
-  if (state === "pending") meta = series.round_index === 4 ? "Awaiting conference champions" : `Awaiting ${ROUND_NAMES[series.round_index - 1] || "previous round"}`;
-  else if (state === "complete") meta = swept ? "Sweep" : `Decided in ${wh + wl}`;
-  else if (tonight) meta = `Game ${next} · Tonight`;
-  else if (state === "live") meta = day !== null ? `Game ${next} · Day ${day + 1}` : `Game ${next}`;
-  else meta = day !== null ? `Game 1 · Day ${day + 1}` : "Game 1";
-
+  let meta = "";
+  if (state === "complete") meta = swept ? "Sweep" : `In ${wh + wl}`;
+  else if (tonight) meta = `G${next} tonight`;
+  else if (state === "live") meta = `G${next}`;
+  else if (state === "scheduled") meta = "Best of 7";
   let status = "";
-  if (state === "complete") status = `${(winner === series.team_high_id ? high : low)?.abbrev || "Winner"} advances`;
-  else if (stakes) status = stakes.text;
-  else if (state === "live") status = seriesLabel(series, high, low);
-  else if (state === "scheduled") status = "Best of 7";
-
+  if (state === "complete") status = `${(winner === series.team_high_id ? high : low)?.abbrev || "Winner"} advance`;
+  else if (stakes) status = stakes.kind === "g7" ? "Game 7" : "Elimination";
   return (
     <button
       type="button"
@@ -706,22 +613,22 @@ function SeriesCard({ series, high, low, state, feeders, teamFor, selected, just
         series.is_user_series && "is-user",
         tonight && "is-tonight",
         justSet && "is-just-set",
-        stakes && `is-${stakes.kind}`,
-        `is-round-${series.round_index}`
+        stakes && `is-${stakes.kind}`
       )}
       disabled={state === "pending"}
       aria-pressed={selected}
       aria-label={`${roundName(series.round_index)}: ${high?.name || "TBD"} vs ${low?.name || "TBD"}`}
       onClick={() => onSelect?.(series.series_id)}
     >
-      {series.is_user_series ? <span className="pf-series-mine">Your franchise</span> : null}
-      <div className="pf-series-head">
-        <span className="pf-series-meta">
-          {tonight ? <i className="pf-live-dot" aria-hidden="true" /> : null}
-          {meta}
-        </span>
-        {status ? <span className={cx("pf-series-status", stakes && `is-${stakes.kind}`, state === "complete" && "is-done")}>{status}</span> : null}
-      </div>
+      {meta || status ? (
+        <div className="pf-series-head">
+          <span className="pf-series-meta">
+            {tonight ? <i className="pf-live-dot" aria-hidden="true" /> : null}
+            {meta}
+          </span>
+          {status ? <span className={cx("pf-series-status", stakes && `is-${stakes.kind}`, state === "complete" && "is-done")}>{status}</span> : null}
+        </div>
+      ) : null}
       <TeamRow
         team={high}
         seed={firstDefined(series.seed_high, high?.seed)}
@@ -729,7 +636,6 @@ function SeriesCard({ series, high, low, state, feeders, teamFor, selected, just
         showWins={showWins}
         feeder={fdHigh}
         teamFor={state === "pending" ? teamFor : null}
-        isHome={Boolean(homeId) && homeId === high?.team_id}
         isWinner={Boolean(winner) && winner === series.team_high_id}
         isLoser={Boolean(winner) && winner !== series.team_high_id}
         isLeader={state === "live" && wh > wl}
@@ -741,18 +647,11 @@ function SeriesCard({ series, high, low, state, feeders, teamFor, selected, just
         showWins={showWins}
         feeder={fdLow}
         teamFor={state === "pending" ? teamFor : null}
-        isHome={Boolean(homeId) && homeId === low?.team_id}
         isWinner={Boolean(winner) && winner === series.team_low_id}
         isLoser={Boolean(winner) && winner !== series.team_low_id}
         isLeader={state === "live" && wl > wh}
       />
-      {showWins ? <SeriesTrack series={series} high={high} low={low} /> : null}
-      {intel ? (
-        <div className={cx("pf-series-intel", `is-${intel.kind}`)}>
-          <b>{intel.text}</b>
-          {intel.detail ? <span>{intel.detail}</span> : null}
-        </div>
-      ) : null}
+      {showWins ? <SeriesPips series={series} /> : null}
     </button>
   );
 }
@@ -763,33 +662,35 @@ function SeriesCard({ series, high, low, state, feeders, teamFor, selected, just
 const PREVIEW_CACHE = new Map();
 
 function useSeriesPreview(highId, lowId, day) {
-  const key = highId && lowId ? `${highId}|${lowId}|${day ?? ""}` : "";
-  const [data, setData] = useState(() => (key ? PREVIEW_CACHE.get(key) || null : null));
+  const pair = highId && lowId ? `${highId}|${lowId}` : "";
+  const key = pair ? `${pair}|${day ?? ""}` : "";
+  const [held, setHeld] = useState(() => (key && PREVIEW_CACHE.has(key) ? { pair, d: PREVIEW_CACHE.get(key) } : null));
   useEffect(() => {
     if (!key) {
-      setData(null);
+      setHeld(null);
       return undefined;
     }
     const hit = PREVIEW_CACHE.get(key);
     if (hit) {
-      setData(hit);
+      setHeld({ pair, d: hit });
       return undefined;
     }
     let alive = true;
-    setData(null);
+    // Same series refreshing after a game: keep the old report on screen until the new one lands.
+    setHeld((cur) => (cur && cur.pair === pair ? cur : null));
     playoffSeriesPreview(highId, lowId)
       .then((d) => {
         if (!d) return;
         if (PREVIEW_CACHE.size > 40) PREVIEW_CACHE.clear();
         PREVIEW_CACHE.set(key, d);
-        if (alive) setData(d);
+        if (alive) setHeld({ pair, d });
       })
       .catch(() => {});
     return () => {
       alive = false;
     };
-  }, [key, highId, lowId]);
-  return data;
+  }, [key, pair, highId, lowId]);
+  return held && held.pair === pair ? held.d : null;
 }
 
 function Block({ title, aside, children, className }) {
@@ -898,7 +799,7 @@ function PreviewLoading() {
   );
 }
 
-function OverviewTab({ p, high, low, part = "story" }) {
+function PreviewTab({ p, high, low }) {
   if (!p) return <PreviewLoading />;
   const H = p.teams?.high || {};
   const L = p.teams?.low || {};
@@ -908,8 +809,6 @@ function OverviewTab({ p, high, low, part = "story" }) {
   if (met) h2hAside = h2h.high === h2h.low ? "Split" : `${(h2h.high > h2h.low ? high : low)?.abbrev} advantage`;
   return (
     <div className="pf-tab-body">
-      {part === "story" ? (
-        <>
       <article className="pf-story">
         {p.tags?.length ? <p className="pf-story-tags">{p.tags.join(" · ")}</p> : null}
         <h4>{sentenceCase(p.headline)}</h4>
@@ -974,10 +873,6 @@ function OverviewTab({ p, high, low, part = "story" }) {
         )}
       </Block>
 
-        </>
-      ) : null}
-      {part === "history" ? (
-        <>
       <Block title="Cup history">
         <div className="pf-history">
           {[
@@ -1028,13 +923,11 @@ function OverviewTab({ p, high, low, part = "story" }) {
           </ul>
         </Block>
       ) : null}
-        </>
-      ) : null}
     </div>
   );
 }
 
-function MatchupTab({ p, high, low, part = "matchup" }) {
+function MatchupTab({ p, high, low }) {
   if (!p) return <PreviewLoading />;
   const H = p.teams?.high || {};
   const L = p.teams?.low || {};
@@ -1048,8 +941,6 @@ function MatchupTab({ p, high, low, part = "matchup" }) {
   const signed = (v) => (v > 0 ? `+${v}` : `${v}`);
   return (
     <div className="pf-tab-body">
-      {part === "matchup" ? (
-        <>
       <Block title="Recent form" aside="Last 10 games">
         {[
           [high, H],
@@ -1084,9 +975,7 @@ function MatchupTab({ p, high, low, part = "matchup" }) {
         <CompareRow label="Goal differential" a={(H.gf || 0) - (H.ga || 0)} b={(L.gf || 0) - (L.ga || 0)} fmt={signed} bar={false} />
       </Block>
 
-        </>
-      ) : null}
-      {part === "players" && duels.length ? (
+      {duels.length ? (
         <Block title="Key matchups">
           {duels.map(([role, a, b]) => (
             <PlayerDuel key={role} role={role} a={a} b={b} high={high} low={low} />
@@ -1100,7 +989,7 @@ function MatchupTab({ p, high, low, part = "matchup" }) {
 function TeamSide({ team, seed, align, mine }) {
   return (
     <div className={cx("pf-board-team", `is-${align}`)}>
-      <TeamMark team={team} size={60} />
+      <TeamMark team={team} size={68} />
       <span className="pf-board-name">
         <small>{cityOf(team)}</small>
         <b>{nickOf(team)}</b>
@@ -1110,62 +999,16 @@ function TeamSide({ team, seed, align, mine }) {
         {team?.pts !== null && team?.pts !== undefined ? ` · ${team.pts} pts` : ""}
         {seed ? ` · Seed ${seed}` : ""}
       </span>
-      {mine ? <span className="pf-board-mine">Your franchise</span> : null}
+      {mine ? <span className="pf-board-mine">Your club</span> : null}
     </div>
   );
 }
 
-function OverviewDesk({ o, onCollapse }) {
-  return (
-    <aside className="pf-desk is-overview">
-      <header className="pf-desk-top">
-        <div>
-          <p className="pf-lead-in">Series centre</p>
-          <div className="pf-desk-head">{o.title || "The road to the Cup"}</div>
-        </div>
-        <button type="button" className="pf-icon-act" aria-label="Collapse series centre" title="Collapse" onClick={onCollapse}>
-          ⟩
-        </button>
-      </header>
-      <dl className="pf-strip">
-        <div>
-          <dt>Teams alive</dt>
-          <dd>{o.alive ?? 16}</dd>
-        </div>
-        <div>
-          <dt>Series in play</dt>
-          <dd>{o.active ?? 0}</dd>
-        </div>
-        <div>
-          <dt>Eliminated</dt>
-          <dd>{o.out ?? 0}</dd>
-        </div>
-      </dl>
-      {[
-        ["Tonight", o.tonight, ""],
-        ["Facing elimination", o.watch, "is-hot"],
-        ["Decided", o.done, "is-done"],
-      ].map(([label, rows, tone]) =>
-        rows?.length ? (
-          <Block key={label} title={label}>
-            {rows.map((t) => (
-              <button key={t.id} type="button" className={cx("pf-ov-line", tone)} onClick={() => o.onPick?.(t.id)}>
-                <span>{t.label}</span>
-                <em>{t.note}</em>
-              </button>
-            ))}
-          </Block>
-        ) : null
-      )}
-      <p className="pf-note">Select any series in the bracket for its scouting report, game log and sim controls.</p>
-    </aside>
-  );
-}
-
-function SeriesDesk({ series, high, low, state, canAct, busy, playoffDay, uid, onClear, onAction, overview, onCollapse }) {
-  const [tab, setTab] = useState("auto");
+/** The series pop-up: scoreboard and game log on the left, preview and matchup on the right. */
+function SeriesModal({ series, high, low, state, canAct, busy, playoffDay, uid, onAction, onClose }) {
+  const [tab, setTab] = useState("preview");
   const sidKey = series?.series_id || "";
-  useEffect(() => setTab("auto"), [sidKey]);
+  useEffect(() => setTab("preview"), [sidKey]);
   const wh = Number(series?.wins_high || 0);
   const wl = Number(series?.wins_low || 0);
   const p = useSeriesPreview(
@@ -1173,8 +1016,7 @@ function SeriesDesk({ series, high, low, state, canAct, busy, playoffDay, uid, o
     state !== "pending" ? series?.team_low_id : "",
     `${wh}-${wl}`
   );
-  if (!series) return <OverviewDesk o={overview || {}} onCollapse={onCollapse} />;
-
+  if (!series) return null;
   const games = Array.isArray(series.game_log) ? series.game_log : [];
   const next = nextGameNumber(series);
   const day = numOrNull(series.scheduled_day);
@@ -1191,202 +1033,170 @@ function SeriesDesk({ series, high, low, state, canAct, busy, playoffDay, uid, o
   const scheduleDates = Array.isArray(series.schedule_dates) ? series.schedule_dates : [];
   const summary = seriesPlayerSummary(series);
   const conf = confKey(series);
-
+  const intel = state === "scheduled" ? matchupIntel(high, low) : null;
   let boardState;
   if (state === "pending") boardState = "Matchup not set";
-  else if (winTeam) boardState = `${winTeam.abbrev} wins the series`;
-  else if (wh === wl) boardState = wh ? "Series tied" : "Series tied · not started";
-  else boardState = `${(wh > wl ? high : low)?.abbrev} leads the series`;
-
+  else if (winTeam) boardState = `${winTeam.abbrev} win the series`;
+  else if (wh === wl) boardState = wh ? "Series tied" : "Not started";
+  else boardState = `${(wh > wl ? high : low)?.abbrev} lead`;
   let nextLine;
   if (state === "pending") nextLine = "Waiting on the previous round.";
   else if (winTeam) nextLine = series.round_index >= 4 ? `${winTeam.name} win the Stanley Cup.` : `${winTeam.name} advance to the ${roundName(series.round_index + 1)}.`;
-  else if (state === "scheduled") nextLine = `Game 1 in ${cityOf(home)}${day !== null ? ` · Day ${day + 1}` : ""}. Puck drops when the round opens.`;
-  else if (tonight) nextLine = `Tonight: Game ${next} in ${cityOf(home)}.`;
-  else nextLine = `Next: Game ${next} in ${cityOf(home)}${day !== null ? ` · Day ${day + 1}` : ""}.`;
-
-  const hasLeaders = summary.leaders.length || summary.goalies.length;
-  const tabs = [
-    state !== "pending" ? ["overview", "Story"] : null,
-    state !== "pending" ? ["history", "History"] : null,
-    state !== "pending" ? ["matchup", "Matchup"] : null,
-    state !== "pending" ? ["players", "Players"] : null,
-    ["games", "Game log"],
-    hasLeaders ? ["leaders", "Leaders"] : null,
-  ].filter(Boolean);
-  const cur = tab !== "auto" && tabs.some(([k]) => k === tab) ? tab : games.length ? "games" : tabs[0][0];
-
+  else if (state === "scheduled") nextLine = `Game 1 in ${cityOf(home)}${day !== null ? ` · Day ${day + 1}` : ""}`;
+  else if (tonight) nextLine = `Tonight · Game ${next} in ${cityOf(home)}`;
+  else nextLine = `Next · Game ${next} in ${cityOf(home)}${day !== null ? ` · Day ${day + 1}` : ""}`;
+  const tabs = [["preview", "Preview"], ["matchup", "Matchup"]];
   return (
-    <aside className={cx("pf-desk", series.is_user_series && "is-user")}>
-      <header className="pf-desk-top">
-        <div>
-          <p className="pf-lead-in">Series centre</p>
-          <div className="pf-desk-head">
+    <div className="pf-modal-wrap" role="presentation">
+      <button type="button" className="pf-modal-scrim" aria-label="Close" onClick={onClose} />
+      <section className={cx("pf-modal", series.is_user_series && "is-user")} role="dialog" aria-modal="true" aria-label={`${roundName(series.round_index)} series`}>
+        <header className="pf-modal-top">
+          <span className="pf-modal-round">
             {roundName(series.round_index)}
             {series.round_index === 4 || conf === "League" ? "" : <small> · {conf}ern Conference</small>}
-          </div>
-        </div>
-        <div className="pf-desk-acts">
-          <button type="button" className="pf-text-act" onClick={onClear} title="Show every series">
-            All series
+          </span>
+          <button type="button" className="pf-icon-act" aria-label="Close" onClick={onClose}>
+            ×
           </button>
-          <button type="button" className="pf-icon-act" aria-label="Collapse series centre" title="Collapse" onClick={onCollapse}>
-            ⟩
-          </button>
-        </div>
-      </header>
-
-      <div className="pf-board">
-        <TeamSide team={high} seed={series.seed_high} align="l" mine={series.is_user_series && Boolean(uid) && high?.team_id === uid} />
-        <div className="pf-board-mid">
-          <span className="pf-board-lab">Series</span>
-          <div className="pf-board-score">
-            <b className={wh > wl ? "is-lead" : ""}>{state === "pending" ? "–" : wh}</b>
-            <i>–</i>
-            <b className={wl > wh ? "is-lead" : ""}>{state === "pending" ? "–" : wl}</b>
-          </div>
-          <span className={cx("pf-board-state", winTeam && "is-done")}>{boardState}</span>
-        </div>
-        <TeamSide team={low} seed={series.seed_low} align="r" mine={series.is_user_series && Boolean(uid) && low?.team_id === uid} />
-      </div>
-
-      <p className={cx("pf-desk-next", tonight && "is-tonight")}>{nextLine}</p>
-
-      {state !== "pending" ? (
-        <dl className="pf-strip">
-          <div>
-            <dt>Home ice</dt>
-            <dd>{cityOf(high) || high?.abbrev}</dd>
-          </div>
-          <div>
-            <dt>Format</dt>
-            <dd>Best of 7</dd>
-          </div>
-          <div>
-            <dt>Games played</dt>
-            <dd>{wh + wl}</dd>
-          </div>
-        </dl>
-      ) : null}
-
-      {canAct && state === "live" ? (
-        <div className="pf-desk-run">
-          {series.is_user_series ? (
-            <button
-              type="button"
-              className="pf-act is-primary"
-              disabled={busy}
-              onClick={() => onAction("play_user_game", { series_id: series.series_id }, "Playing your game…")}
-            >
-              Play Game {next}
-            </button>
-          ) : null}
-          <button
-            type="button"
-            className={cx("pf-act", series.is_user_series ? "is-quiet" : "is-primary")}
-            disabled={busy}
-            onClick={() => onAction("sim_series", { series_id: series.series_id }, "Simming series…")}
-          >
-            Sim this series
-          </button>
-        </div>
-      ) : null}
-
-      <div className="pf-tabs" role="tablist" aria-label="Series details">
-        {tabs.map(([k, l]) => (
-          <button key={k} type="button" role="tab" aria-selected={cur === k} className={cx("pf-tab", cur === k && "is-on")} onClick={() => setTab(k)}>
-            {l}
-            {k === "games" && games.length ? <em>{games.length}</em> : null}
-          </button>
-        ))}
-      </div>
-
-      {cur === "overview" ? <OverviewTab p={p} high={high} low={low} part="story" /> : null}
-      {cur === "history" ? <OverviewTab p={p} high={high} low={low} part="history" /> : null}
-      {cur === "matchup" ? <MatchupTab p={p} high={high} low={low} part="matchup" /> : null}
-      {cur === "players" ? <MatchupTab p={p} high={high} low={low} part="players" /> : null}
-      {cur === "games" ? (
-        <div className="pf-tab-body">
-          <ol className="pf-games">
-            {Array.from({ length: 7 }, (_, i) => {
-              const n = i + 1;
-              const g = games.find((x) => Number(x.game) === n);
-              const hIsHome = isHighSeedHome(n);
-              const schedHome = hIsHome ? high : low;
-              const schedAway = hIsHome ? low : high;
-              const tipDay = numOrNull(scheduleDates[i]);
-              const isTonightGame = state === "live" && n === next && tonight;
-              const moot = !g && (state === "complete" || Boolean(winTeam));
-              if (g) {
-                const hs = Number(g.home_score);
-                const as = Number(g.away_score);
+        </header>
+        <div className="pf-modal-body">
+          <div className="pf-modal-side">
+            <div className="pf-board">
+              <TeamSide team={high} seed={series.seed_high} align="l" mine={series.is_user_series && Boolean(uid) && high?.team_id === uid} />
+              <div className="pf-board-mid">
+                <div className="pf-board-score">
+                  <b className={wh > wl ? "is-lead" : ""}>{state === "pending" ? "–" : wh}</b>
+                  <i>–</i>
+                  <b className={wl > wh ? "is-lead" : ""}>{state === "pending" ? "–" : wl}</b>
+                </div>
+                <span className={cx("pf-board-state", winTeam && "is-done")}>{boardState}</span>
+              </div>
+              <TeamSide team={low} seed={series.seed_low} align="r" mine={series.is_user_series && Boolean(uid) && low?.team_id === uid} />
+            </div>
+            <div className={cx("pf-desk-next", tonight && "is-tonight")}>
+              <span>
+                {nextLine}
+                {intel ? <em className={cx("pf-intel", `is-${intel.kind}`)}> · {intel.text}{intel.detail ? ` (${intel.detail})` : ""}</em> : null}
+              </span>
+              {canAct && state === "live" && series.is_user_series ? (
+                <button
+                  type="button"
+                  className="pf-act is-primary is-sm"
+                  disabled={busy}
+                  onClick={() => onAction("play_user_game", { series_id: series.series_id }, "Playing your game…")}
+                >
+                  Play Game {next}
+                </button>
+              ) : null}
+            </div>
+            <ol className="pf-games">
+              {Array.from({ length: 7 }, (_, i) => {
+                const n = i + 1;
+                const g = games.find((x) => Number(x.game) === n);
+                const hIsHome = isHighSeedHome(n);
+                const schedHome = hIsHome ? high : low;
+                const schedAway = hIsHome ? low : high;
+                const tipDay = numOrNull(scheduleDates[i]);
+                const isTonightGame = state === "live" && n === next && tonight;
+                const moot = !g && (state === "complete" || Boolean(winTeam));
+                if (g) {
+                  const hs = Number(g.home_score);
+                  const as = Number(g.away_score);
+                  return (
+                    <li key={n} className={cx("pf-game", "is-played", g.ot && "is-ot")}>
+                      <span className="pf-game-n">G{n}</span>
+                      <span className="pf-game-line">
+                        <b className={as > hs ? "w" : ""}>
+                          {abbrFor(g.away_id)} {as}
+                        </b>
+                        <i>at</i>
+                        <b className={hs > as ? "w" : ""}>
+                          {abbrFor(g.home_id)} {hs}
+                        </b>
+                      </span>
+                      <span className="pf-game-note">{g.ot ? "OT" : "Final"}</span>
+                    </li>
+                  );
+                }
+                if (moot) return null;
+                const ifNeeded = n > wh + wl + 4 - Math.max(wh, wl);
                 return (
-                  <li key={n} className={cx("pf-game", "is-played", g.ot && "is-ot")}>
-                    <span className="pf-game-n">Game {n}</span>
+                  <li key={n} className={cx("pf-game", isTonightGame && "is-tonight", ifNeeded && "is-ifneeded")}>
+                    <span className="pf-game-n">G{n}</span>
                     <span className="pf-game-line">
-                      <b className={as > hs ? "w" : ""}>
-                        {abbrFor(g.away_id)} {as}
-                      </b>
-                      <i>at</i>
-                      <b className={hs > as ? "w" : ""}>
-                        {abbrFor(g.home_id)} {hs}
-                      </b>
+                      {state === "pending" ? (
+                        "—"
+                      ) : (
+                        <>
+                          {schedAway?.abbrev || "TBD"} <i>at</i> {schedHome?.abbrev || "TBD"}
+                        </>
+                      )}
                     </span>
-                    <span className="pf-game-tag">{g.ot ? "Final · OT" : "Final"}</span>
+                    <span className="pf-game-note">
+                      {isTonightGame ? "Tonight" : tipDay !== null ? `Day ${tipDay + 1}` : ""}
+                      {ifNeeded ? (isTonightGame || tipDay !== null ? " · if needed" : "If needed") : ""}
+                    </span>
                   </li>
                 );
-              }
-              return (
-                <li key={n} className={cx("pf-game", isTonightGame && "is-tonight", moot && "is-moot", n > 4 && !moot && "is-ifneeded")}>
-                  <span className="pf-game-n">Game {n}</span>
-                  <span className="pf-game-line">
-                    {state === "pending" ? (
-                      "—"
-                    ) : (
-                      <>
-                        {schedAway?.abbrev || "TBD"} <i>at</i> {schedHome?.abbrev || "TBD"}
-                      </>
-                    )}
-                  </span>
-                  <span className="pf-game-tag">
-                    {moot ? "Not needed" : isTonightGame ? "Tonight" : tipDay !== null ? `Day ${tipDay + 1}${n > 4 ? " · if needed" : ""}` : n > 4 ? "If needed" : ""}
-                  </span>
-                </li>
-              );
-            })}
-          </ol>
-        </div>
-      ) : null}
-      {cur === "leaders" && hasLeaders ? (
-        <div className="pf-tab-body">
-          {summary.leaders.length ? (
-            <Block title="Series scoring" aside="Points">
-              {summary.leaders.map((r) => (
-                <div key={r.name + r.team_id} className="pf-leader">
-                  <span className="pf-leader-team">{abbrFor(r.team_id)}</span>
-                  <span className="pf-leader-name">{r.name}</span>
-                  <b>{r.pts}</b>
+              })}
+            </ol>
+          </div>
+          <div className="pf-modal-main">
+            {state === "pending" ? (
+              <p className="pf-note">This matchup isn't set yet. The preview opens once both clubs are known.</p>
+            ) : (
+              <>
+                <div className="pf-tabs" role="tablist" aria-label="Series details">
+                  {tabs.map(([k, l]) => (
+                    <button key={k} type="button" role="tab" aria-selected={tab === k} className={cx("pf-tab", tab === k && "is-on")} onClick={() => setTab(k)}>
+                      {l}
+                    </button>
+                  ))}
+                  {summary.leaders.length || summary.goalies.length ? (
+                    <button type="button" role="tab" aria-selected={tab === "leaders"} className={cx("pf-tab", tab === "leaders" && "is-on")} onClick={() => setTab("leaders")}>
+                      Leaders
+                    </button>
+                  ) : null}
                 </div>
-              ))}
-            </Block>
-          ) : null}
-          {summary.goalies.length ? (
-            <Block title="Goaltending" aside="SV% · GAA">
-              {summary.goalies.map((r) => (
-                <div key={r.name + r.team_id} className="pf-leader">
-                  <span className="pf-leader-team">{abbrFor(r.team_id)}</span>
-                  <span className="pf-leader-name">{r.name}</span>
-                  <b>
-                    {r.sa ? (r.sv / r.sa).toFixed(3).replace(/^0/, "") : "—"}
-                    <small> {(r.ga / Math.max(1, r.gp)).toFixed(2)}</small>
-                  </b>
+                <div className="pf-modal-scroll">
+                  {tab === "preview" ? <PreviewTab p={p} high={high} low={low} /> : null}
+                  {tab === "matchup" ? <MatchupTab p={p} high={high} low={low} /> : null}
+                  {tab === "leaders" ? (
+                    <div className="pf-tab-body">
+                      {summary.leaders.length ? (
+                        <Block title="Series scoring" aside="Points">
+                          {summary.leaders.map((r) => (
+                            <div key={r.name + r.team_id} className="pf-leader">
+                              <span className="pf-leader-team">{abbrFor(r.team_id)}</span>
+                              <span className="pf-leader-name">{r.name}</span>
+                              <b>{r.pts}</b>
+                            </div>
+                          ))}
+                        </Block>
+                      ) : null}
+                      {summary.goalies.length ? (
+                        <Block title="Goaltending" aside="SV% · GAA">
+                          {summary.goalies.map((r) => (
+                            <div key={r.name + r.team_id} className="pf-leader">
+                              <span className="pf-leader-team">{abbrFor(r.team_id)}</span>
+                              <span className="pf-leader-name">{r.name}</span>
+                              <b>
+                                {r.sa ? (r.sv / r.sa).toFixed(3).replace(/^0/, "") : "—"}
+                                <small> {(r.ga / Math.max(1, r.gp)).toFixed(2)}</small>
+                              </b>
+                            </div>
+                          ))}
+                        </Block>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
-              ))}
-            </Block>
-          ) : null}
+              </>
+            )}
+          </div>
         </div>
-      ) : null}
-    </aside>
+      </section>
+    </div>
   );
 }
 
@@ -1409,7 +1219,8 @@ export default function PlayoffStartMenu({
   const [speed, setSpeedState] = useState(readSpeed);
   const [popups, setPopups] = useState([]);
   const [confirm, setConfirm] = useState(null); // { key, text, run }
-  const [deskCollapsed, setDeskCollapsed] = useState(false);
+  const [modalId, setModalId] = useState(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const speedRef = useRef(speed);
   const popupTimersRef = useRef(new Map());
 
@@ -1621,7 +1432,7 @@ export default function PlayoffStartMenu({
         if (!copy) continue;
         const id = `${ev.id || ev.kind}-${Math.random().toString(36).slice(2, 7)}`;
         fresh.push({ id, user: Boolean(ev.involves_user), ...copy });
-        // User elimination always waits for a click; everything else auto-dismisses in fast mode.
+        // User elimination always waits for a click; everything else clears itself at every speed.
         if (ttl && ev.kind !== "user_eliminated") {
           popupTimersRef.current.set(id, window.setTimeout(() => dismissPopup(id), ttl));
         }
@@ -1730,6 +1541,8 @@ export default function PlayoffStartMenu({
           if (!isLive && !cupComplete) await enterRaw();
           let lastDay = null;
           let stalls = 0;
+          let nights = 0;
+          const what = stopAt === "round_end" ? "Simming the round" : stopAt === "user_game" ? "Simming to your game" : "Simming to the Cup";
           for (let i = 0; i < MAX_FF_DAYS; i += 1) {
             if (abortRef.current) {
               if (mountedRef.current) setNotice({ tone: "info", text: "Sim stopped." });
@@ -1753,7 +1566,8 @@ export default function PlayoffStartMenu({
               return res;
             }
             const day = numOrNull(res?.state?.playoff_live?.playoff_day);
-            if (day !== null && mountedRef.current) setBusyLabel(`Simming playoffs · Day ${day + 1}`);
+            nights += 1;
+            if (mountedRef.current) setBusyLabel(`${what} · night ${nights}${day !== null ? ` · Day ${day + 1}` : ""}`);
             if (day !== null && day === lastDay) {
               stalls += 1;
               if (stalls >= STALL_LIMIT) {
@@ -1879,6 +1693,41 @@ export default function PlayoffStartMenu({
 
   const totalTeams = counts.r1.West + counts.r1.East || 16;
 
+  /* Side drawer: everything worth knowing that doesn't need to sit on the bracket. */
+  const around = useMemo(() => {
+    let ot = 0;
+    let game7s = 0;
+    let sweeps = 0;
+    let upsets = 0;
+    const results = [];
+    const allGames = [];
+    for (const s of seriesList) {
+      const log = Array.isArray(s.game_log) ? s.game_log : [];
+      allGames.push(...log);
+      ot += log.filter((g) => g.ot).length;
+      if (log.some((g) => Number(g.game) === 7)) game7s += 1;
+      const w = seriesWinnerId(s);
+      if (!w) continue;
+      const hiWon = w === String(s.team_high_id);
+      const wh = Number(s.wins_high || 0);
+      const wl = Number(s.wins_low || 0);
+      if (Math.min(wh, wl) === 0) sweeps += 1;
+      if (!hiWon) upsets += 1;
+      const win = teamFor(w);
+      const lose = teamFor(hiWon ? s.team_low_id : s.team_high_id);
+      results.push({
+        id: s.series_id,
+        round: Number(s.round_index) || 1,
+        text: `${win?.abbrev || "TBD"} def. ${lose?.abbrev || "TBD"}`,
+        score: `${Math.max(wh, wl)}–${Math.min(wh, wl)}`,
+        upset: !hiWon,
+      });
+    }
+    results.sort((a, b) => b.round - a.round);
+    const leaders = seriesPlayerSummary({ game_log: allGames }, 6, 3);
+    return { ot, game7s, sweeps, upsets, results, leaders };
+  }, [seriesList, teamFor]);
+
   let headline;
   let subline;
   if (champion) {
@@ -1888,25 +1737,12 @@ export default function PlayoffStartMenu({
     headline = "The Cup has been decided";
     subline = `${counts.games} playoff games played`;
   } else if (isLive) {
-    headline = `${roundName(currentRound)} · Day ${playoffDay + 1}`;
-    subline = `${overview.alive} teams remaining · ${counts.decided} of 15 series decided · ${counts.games} games played`;
+    headline = "Stanley Cup Playoffs";
+    subline = `Day ${playoffDay + 1}`;
   } else {
     headline = "The road to the Cup";
-    subline = r1Filled ? `${totalTeams} teams · ${r1Filled} opening-round series · one champion` : "The bracket is being set";
+    subline = r1Filled ? `${totalTeams} teams · one champion` : "The bracket is being set";
   }
-
-  const userChip = (() => {
-    if (!me) return null;
-    if (championId && championId === uid) return { tone: "gold", text: "Stanley Cup champions" };
-    if (!userCurrent) return r1Filled >= 8 ? { tone: "muted", text: "Missed the playoffs" } : null;
-    if (userEliminated) return { tone: "muted", text: `Out in the ${roundName(userCurrent.round_index)}` };
-    const st = seriesState(userCurrent, isLive);
-    const opp = teamFor(userCurrent.team_high_id === uid ? userCurrent.team_low_id : userCurrent.team_high_id);
-    if (st === "complete") return { tone: "live", text: `Advanced past ${opp?.abbrev || "opponent"}` };
-    if (st === "scheduled") return { tone: "live", text: `vs ${opp?.abbrev || "TBD"} · ${roundName(userCurrent.round_index)}` };
-    const label = seriesLabel(userCurrent, teamFor(userCurrent.team_high_id), teamFor(userCurrent.team_low_id));
-    return { tone: userGameTonight ? "gold" : "live", text: `${label}${userGameTonight ? " · tonight" : ""}` };
-  })();
 
   /* ── bracket helpers ── */
 
@@ -1943,34 +1779,13 @@ export default function PlayoffStartMenu({
         selected={selected?.series_id === series.series_id}
         justSet={justSetIds.has(series.series_id)}
         playoffDay={playoffDay}
-        onSelect={setSelectedId}
+        onSelect={(id) => openSeries(id)}
       />
     );
   };
 
-  const roundStatus = (round, conf) => {
-    const c = conf ? counts.conf[conf]?.[round] : null;
-    const done = c ? c.done : counts.per[round]?.done || 0;
-    const total = c ? c.total : counts.per[round]?.total || 1;
-    if (done >= total) return { tone: "done", text: total === 1 ? "Decided" : "Complete" };
-    if (isLive && currentRound === round) return { tone: "current", text: `In progress · ${done} of ${total} decided` };
-    if (!isLive && round === 1 && !cupComplete) return { tone: "next", text: "Opens next" };
-    return { tone: "locked", text: "Locked" };
-  };
-
   const sideRounds = (conf) => (conf === "East" ? [3, 2, 1] : [1, 2, 3]);
   const roundLabel = (round) => (round === 3 ? "Conference Final" : ROUND_NAMES[round]);
-
-  const renderHeads = (conf) =>
-    sideRounds(conf).map((round) => {
-      const st = roundStatus(round, conf);
-      return (
-        <div key={`h-${conf}-${round}`} className={cx("pf-colhead", `is-${st.tone}`, conf === "East" && "is-east")}>
-          <b>{roundLabel(round)}</b>
-          <small>{st.text}</small>
-        </div>
-      );
-    });
 
   const renderSideColumns = (conf) => {
     const side = bracket[conf];
@@ -2016,35 +1831,16 @@ export default function PlayoffStartMenu({
     });
   };
 
-  const cupLine = (() => {
-    if (currentRound === 4 && isLive) return "The Final is on. Best of seven for the Cup.";
-    if (isLive) return `${overview.alive} teams left · ${15 - counts.decided} series to go`;
-    return "Four rounds. Sixteen teams. One champion.";
-  })();
-
   const renderCupColumn = () => (
     <div className="pf-col is-cup">
       <div className="pf-cup-anchor">
         <div className={cx("pf-cup-hero", champion && "is-won", currentRound === 4 && isLive && "is-final")}>
-          <span className="pf-cup-light" aria-hidden="true" />
-          <CupCenterpiece size={champion ? 140 : 118} lit={Boolean(champion) || currentRound === 4} />
-          <div className="pf-cup-name">{champion ? nickOf(champion) : "The Stanley Cup"}</div>
-          <p className="pf-cup-line">{champion ? `${champion.name} · champions${seasonLabel ? ` ${seasonLabel}` : ""}` : cupLine}</p>
+          <CupCenterpiece size={champion ? 92 : 76} lit={Boolean(champion) || currentRound === 4} />
+          <div className="pf-cup-name">{champion ? nickOf(champion) : "Stanley Cup"}</div>
+          {champion ? <p className="pf-cup-line">Champions{seasonLabel ? ` · ${seasonLabel}` : ""}</p> : null}
         </div>
         <div className={cx("pf-slot", "is-final", "has-in", pathIds.has(bracket.cup.series_id) && "is-path", seriesState(bracket.cup, isLive) === "complete" && "is-lit")}>
           {renderCard(bracket.cup, getFeeders(4))}
-        </div>
-        <div className="pf-cup-progress" aria-label={`${counts.decided} of 15 series decided`}>
-          <div className="pf-ticks">
-            {[1, 2, 3, 4].flatMap((r) =>
-              Array.from({ length: counts.per[r].total }, (_, i) => (
-                <i key={`${r}-${i}`} className={cx(`is-r${r}`, i < counts.per[r].done && "is-on")} />
-              ))
-            )}
-          </div>
-          <span>
-            {counts.decided} of 15 series decided
-          </span>
         </div>
       </div>
     </div>
@@ -2056,12 +1852,11 @@ export default function PlayoffStartMenu({
     if (!isLive && round === 1) return "next";
     return "locked";
   };
-
-  // The featured series: the Final once it is set, else your club, else the biggest game tonight.
+  // The featured series: your club while it's alive, else the Final once set, else the biggest game tonight.
   const featured = (() => {
     const cup = bracket.structured ? bracket.cup : seriesList.find((s) => s.round_index === 4);
+    if (userCurrent && !userEliminated && !cupComplete) return userCurrent;
     if (cup && cup.team_high_id && cup.team_low_id) return cup;
-    if (userCurrent && !userEliminated) return userCurrent;
     const liveRows = seriesList.filter((s) => seriesState(s, isLive) === "live");
     return (
       liveRows.find((s) => Number(s.wins_high) === 3 || Number(s.wins_low) === 3) ||
@@ -2069,7 +1864,6 @@ export default function PlayoffStartMenu({
       null
     );
   })();
-
   // Your path to the Cup: who stands in each round still ahead.
   const userRoad = (() => {
     if (!userCurrent || !bracket.structured || userEliminated || cupComplete) return [];
@@ -2098,121 +1892,413 @@ export default function PlayoffStartMenu({
     }
     return steps;
   })();
-
   const askConfirm = useCallback((key, text, run) => setConfirm({ key, text, run }), []);
 
+  useEffect(() => {
+    if (!drawerOpen && !modalId) return undefined;
+    const onKey = (e) => {
+      if (e.key !== "Escape") return;
+      if (modalId) setModalId(null);
+      else setDrawerOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [drawerOpen, modalId]);
+
+  // The one recommended action. The dock holds every other sim control.
   const nextUp = (() => {
     if (cupComplete) {
       return {
-        tone: "gold",
         over: "Season complete",
         head: champion ? `${champion.name} win the Stanley Cup` : "The Cup has been decided",
-        sub: champion && champion.team_id === uid ? "Your club are champions." : "The awards are next.",
         cta: { label: "Continue to awards", onClick: handleContinue },
       };
     }
     if (!isLive) {
-      const home = userCurrent ? teamFor(userCurrent.team_high_id) : null;
       return {
-        tone: "live",
-        over: userCurrent ? "Featured series · Your franchise" : "Opening round",
-        head: userCurrent ? "" : `${r1Filled} opening-round series are set`,
-        sub: userCurrent
-          ? `First Round · Game 1 in ${cityOf(home)} · ${nickOf(home)} hold home ice`
-          : "Your club missed the playoffs. Watch it play out or sim to the Cup.",
+        over: userCurrent ? "Your first-round series" : "Opening round",
+        head: userCurrent ? "" : `${r1Filled} series are set`,
+        sub: userCurrent ? "" : "Your club missed the playoffs.",
         cta: { label: "Start Round 1", onClick: handleEnter },
-        note: "Opens the round. Games are then played one night at a time.",
-        alt: userCurrent ? null : { label: "Sim entire playoffs", onClick: () => askConfirm("all", "Sim every round through the Stanley Cup Final? You can stop it at any time.", handleFastForward) },
       };
     }
     if (userGameTonight && userActive) {
       const n = nextGameNumber(userActive);
-      const home = isHighSeedHome(n) ? teamFor(userActive.team_high_id) : teamFor(userActive.team_low_id);
       return {
-        tone: "gold",
-        over: `Tonight · ${roundName(currentRound)}`,
-        head: "",
-        sub: `Game ${n} in ${cityOf(home)} · ${seriesLabel(userActive, teamFor(userActive.team_high_id), teamFor(userActive.team_low_id))}`,
+        over: "Tonight · your game",
         cta: { label: `Play Game ${n}`, onClick: () => runAction("play_user_game", { series_id: userActive.series_id }, "Playing your game…") },
-        note: "Other series wait until your game is played or simmed.",
       };
     }
     if (userActive) {
-      const n = nextGameNumber(userActive);
-      const d = numOrNull(userActive.scheduled_day);
-      const home = isHighSeedHome(n) ? teamFor(userActive.team_high_id) : teamFor(userActive.team_low_id);
       return {
-        tone: "live",
-        over: `Featured series · Your franchise`,
-        head: "",
-        sub: `Next: Game ${n} in ${cityOf(home)}${d !== null ? ` on Day ${d + 1}` : ""} · ${seriesLabel(userActive, teamFor(userActive.team_high_id), teamFor(userActive.team_low_id))}`,
-        cta: { label: "Sim to my next game", onClick: handleFastForward },
-        note: "Plays the other series night by night until your club is up.",
+        over: "Your series",
+        cta: { label: "Sim to my game", onClick: handleFastForward },
       };
     }
     const tonightCount = overview.tonight.length;
-    const fs = featured;
+    if (userEliminated) {
+      return {
+        over: featured ? (featured.round_index === 4 ? "Stanley Cup Final" : "Featured series") : "Your season is over",
+        head: featured ? "" : "The bracket plays on",
+        cta: { label: "Sim to the Cup", onClick: () => askConfirm("cup", "Sim the rest of the playoffs through the Final? You can stop it at any time.", handleFastForward) },
+      };
+    }
     return {
-      tone: userEliminated ? "muted" : "live",
-      over: fs ? (fs.round_index === 4 ? "Stanley Cup Final" : "Featured series") : roundName(currentRound),
-      head: fs ? "" : userEliminated ? "Your season is over" : tonightCount ? `${tonightCount} ${tonightCount === 1 ? "game" : "games"} tonight` : "Between games",
-      sub: fs
-        ? `${roundName(fs.round_index)} · ${seriesLabel(fs, teamFor(fs.team_high_id), teamFor(fs.team_low_id))}${userEliminated ? " · your season is over" : ""}`
-        : userEliminated
-          ? "The rest of the bracket plays on."
-          : `${overview.active} series still alive in this round.`,
-      cta: userEliminated
-        ? { label: "Sim to the Cup", onClick: () => askConfirm("cup", "Sim the rest of the playoffs through the Final? You can stop it at any time.", handleFastForward) }
-        : { label: "Sim next game", onClick: () => runAction("advance_day", { skip_off_days: true }, "Playing the next game in every series…") },
-      note: userEliminated ? "" : "Every live series plays its next game.",
+      over: featured ? (featured.round_index === 4 ? "Stanley Cup Final" : "Featured series") : roundName(currentRound),
+      head: featured ? "" : tonightCount ? `${tonightCount} ${tonightCount === 1 ? "game" : "games"} tonight` : "Between games",
+      cta: { label: "Sim next night", onClick: () => runAction("advance_day", { skip_off_days: true }, "Playing the next night…") },
     };
   })();
-
-  // Desk falls back to the user's own series so it is always on screen.
-  const deskSeries =
-    selected ||
-    (userCurrent ? { ...userCurrent, game_log: Array.isArray(userCurrent.game_log) ? userCurrent.game_log : [] } : null);
 
   const pair = simSeriesTarget
     ? `${teamFor(simSeriesTarget.team_high_id)?.abbrev}–${teamFor(simSeriesTarget.team_low_id)?.abbrev}`
     : "";
-
-  const stageRound = featured ? featured.round_index : cupComplete ? 4 : Math.min(4, currentRound || 1);
   const featHigh = featured ? teamFor(featured.team_high_id) : null;
   const featLow = featured ? teamFor(featured.team_low_id) : null;
   const featState = featured ? seriesState(featured, isLive) : null;
   const featNext = featured ? nextGameNumber(featured) : 1;
   const featHome = featured && featState !== "complete" ? (isHighSeedHome(featNext) ? featHigh : featLow) : null;
-  const featWinner = featured ? seriesWinnerId(featured) : "";
-
-  const renderFeatTeam = (team, seed, align, wins, otherWins) => (
-    <div
-      className={cx(
-        "pf-feat-team",
-        `is-${align}`,
-        featWinner && featWinner === team?.team_id && "is-winner",
-        featWinner && featWinner !== team?.team_id && "is-out",
-        team?.team_id === uid && "is-mine"
-      )}
-    >
-      <TeamMark team={team} size={76} dimmed={Boolean(featWinner) && featWinner !== team?.team_id} />
-      <span className="pf-feat-name">
-        <small>
-          {cityOf(team)}
-          {featHome && featHome.team_id === team?.team_id ? <HomeIce /> : null}
-        </small>
-        <b>{nickOf(team)}</b>
-        <em>
-          {seed ? `Seed ${seed} · ` : ""}
-          {team?.record || ""}
-          {team?.pts !== null && team?.pts !== undefined ? ` · ${team.pts} pts` : ""}
-        </em>
-      </span>
-    </div>
+  const featDay = featured ? numOrNull(featured.scheduled_day) : null;
+  let featLine = "";
+  if (featured && featState === "complete") featLine = seriesLabel(featured, featHigh, featLow);
+  else if (featured && featState === "scheduled") featLine = `Game 1 in ${cityOf(featHome)}`;
+  else if (featured && featHome) featLine = `Game ${featNext} in ${cityOf(featHome)}${featDay === playoffDay ? " · tonight" : featDay !== null ? ` · Day ${featDay + 1}` : ""}`;
+  function openSeries(id) {
+    setSelectedId(id);
+    setModalId(id);
+    setDrawerOpen(false);
+  }
+  const pickSeries = openSeries;
+  const modalSeries = modalId ? seriesList.find((s) => s.series_id === modalId) || null : null;
+  const featTeam = (team, align) => (
+    <span className={cx("pf-tb-team", `is-${align}`, team?.team_id === uid && "is-mine")}>
+      <TeamMark team={team} size={64} />
+      <b>{nickOf(team)}</b>
+    </span>
   );
 
+  const userStatus = (() => {
+    if (!me) return "";
+    if (championId && championId === uid) return "Stanley Cup champions";
+    if (!userCurrent) return r1Filled >= 8 ? "Missed the playoffs" : "";
+    if (userEliminated) return `Out in the ${roundName(userCurrent.round_index)}`;
+    return seriesLabel(userCurrent, teamFor(userCurrent.team_high_id), teamFor(userCurrent.team_low_id));
+  })();
+
   return (
-    <div className={cx("pf-root", champion && "is-crowned", deskCollapsed && "is-desk-collapsed")} data-round={currentRound || 1}>
+    <div className={cx("pf-root", champion && "is-crowned")} data-round={currentRound || 1}>
+      <header className="pf-top">
+        <button type="button" className="pf-hub" onClick={onBack} aria-label="Back to the franchise hub">
+          <span aria-hidden="true">←</span> Hub
+        </button>
+        <button
+          type="button"
+          className={cx("pf-menu", drawerOpen && "is-on")}
+          onClick={() => setDrawerOpen((v) => !v)}
+          aria-expanded={drawerOpen}
+          aria-controls="pf-drawer"
+          title="Around the playoffs"
+        >
+          <span className="pf-burger" aria-hidden="true">
+            <i />
+            <i />
+            <i />
+          </span>
+          Around the playoffs
+        </button>
+        <div className="pf-brand">
+          <span className="pf-brand-mark" aria-hidden="true">
+            <i className="pf-px is-trophy" />
+          </span>
+          <div className="pf-brand-copy">
+            <div className="pf-headline" role="heading" aria-level={1}>
+              {headline}
+            </div>
+            <p className="pf-season">
+              {seasonLabel ? `${seasonLabel} · ` : ""}
+              {subline}
+            </p>
+          </div>
+        </div>
+        <ol className="pf-prog" aria-label="Playoff progression">
+          {[1, 2, 3, 4].map((r) => {
+            const st = stepState(r);
+            const c = counts.per[r];
+            let note = "";
+            if (st === "current") note = `${c.done} of ${c.total} decided`;
+            else if (st === "next") note = "Opens next";
+            return (
+              <li key={r} className={cx("pf-prog-step", `is-${st}`)} aria-current={st === "current" ? "step" : undefined}>
+                <span className="pf-prog-num">{st === "done" ? "✓" : r}</span>
+                <span className="pf-prog-copy">
+                  <b>{r === 4 ? "Cup Final" : r === 3 ? "Conf. Final" : ROUND_NAMES[r]}</b>
+                  {note ? <small>{note}</small> : null}
+                </span>
+              </li>
+            );
+          })}
+        </ol>
+      </header>
+
+      <section className="pf-body">
+        {notice ? (
+          <div className={cx("pf-notice", `is-${notice.tone}`)} role={notice.tone === "error" ? "alert" : "status"}>
+            <span className="pf-notice-text">{notice.text}</span>
+            {notice.seriesId && userActive && notice.seriesId === userActive.series_id && canAct ? (
+              <button
+                type="button"
+                className="pf-act is-primary is-sm"
+                disabled={busy}
+                onClick={() => runAction("play_user_game", { series_id: userActive.series_id }, "Playing your game…")}
+              >
+                Play game
+              </button>
+            ) : null}
+            <button type="button" className="pf-icon-act" aria-label="Dismiss" onClick={() => setNotice(null)}>
+              ×
+            </button>
+          </div>
+        ) : null}
+
+        <div className="pf-arena">
+          {/* Jumbotron: hangs over centre ice. Tonight's game, the score, the one recommended action. */}
+          <section className={cx("pf-jumbo", featured?.round_index === 4 && "is-final", champion && "is-crowned", featured?.is_user_series && "is-user")}>
+            <span className="pf-jumbo-cable is-l" aria-hidden="true" />
+            <span className="pf-jumbo-cable is-r" aria-hidden="true" />
+            <div className="pf-jumbo-screen">
+              <p className="pf-jumbo-over">
+                <i className="pf-px is-star" aria-hidden="true" />
+                {isLive && !cupComplete ? <i className="pf-live-dot" aria-hidden="true" /> : null}
+                {nextUp.over}
+              </p>
+              {featured && featHigh && featLow && !cupComplete ? (
+                <button type="button" className="pf-tb-match" onClick={() => openSeries(featured.series_id)} title="Open this series">
+                  {featTeam(featHigh, "l")}
+                  <span className="pf-tb-score">
+                    <b className={featured.wins_high > featured.wins_low ? "is-lead" : ""}>{featured.wins_high}</b>
+                    <i>–</i>
+                    <b className={featured.wins_low > featured.wins_high ? "is-lead" : ""}>{featured.wins_low}</b>
+                  </span>
+                  {featTeam(featLow, "r")}
+                </button>
+              ) : (
+                <div className="pf-tb-head">{nextUp.head}</div>
+              )}
+              {featured && !cupComplete && featLine ? <p className="pf-tb-line">{featLine}</p> : nextUp.sub ? <p className="pf-tb-line">{nextUp.sub}</p> : null}
+            </div>
+            <button type="button" className="pf-go" disabled={busy} onClick={nextUp.cta.onClick}>
+              {nextUp.cta.label}
+            </button>
+          </section>
+
+          <div className="pf-rink">
+            {bracket.structured ? (
+              <>
+                {/* Ice paint: a grid matching the bracket columns, drawn under the cards. */}
+                <div className="pf-ice" aria-hidden="true">
+                  <span className="pf-ice-goal is-l" />
+                  <span className="pf-ice-goal is-r" />
+                  <span className="pf-ice-crease is-l" />
+                  <span className="pf-ice-crease is-r" />
+                  <span className="pf-ice-blue is-l" />
+                  <span className="pf-ice-blue is-r" />
+                  <span className="pf-ice-red" />
+                  <span className="pf-ice-centre" />
+                  <span className="pf-ice-dot is-tl" />
+                  <span className="pf-ice-dot is-bl" />
+                  <span className="pf-ice-dot is-tr" />
+                  <span className="pf-ice-dot is-br" />
+                  <span className="pf-ice-word is-west">West</span>
+                  <span className="pf-ice-word is-east">East</span>
+                </div>
+                <div className="pf-bracket">
+                  {renderSideColumns("West")}
+                  {renderCupColumn()}
+                  {renderSideColumns("East")}
+                  {[...sideRounds("West").map((r) => ["West", r]), ["cup", 4], ...sideRounds("East").map((r) => ["East", r])].map(([conf, r]) => (
+                    <div
+                      key={`h-${conf}-${r}`}
+                      className={cx("pf-colhead", conf === "East" && "is-east", conf === "cup" && "is-cup", isLive && currentRound === r && "is-current", (cupComplete || r < currentRound) && "is-done")}
+                    >
+                      {conf === "cup" ? "Final" : roundLabel(r)}
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <div className="pf-bracket is-flat">
+                {bracket.rounds.map((rows, i) => (
+                  <div key={i} className="pf-flat-col">
+                    <div className="pf-colhead">{roundName(i + 1)}</div>
+                    {rows.length ? (
+                      rows.map((s) => (
+                        <div key={s.series_id} className="pf-slot">
+                          {renderCard(s, null)}
+                        </div>
+                      ))
+                    ) : (
+                      <p className="pf-note">Awaiting series</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {modalSeries ? (
+          <SeriesModal
+            series={{ ...modalSeries, game_log: Array.isArray(modalSeries.game_log) ? modalSeries.game_log : [] }}
+            high={teamFor(modalSeries.team_high_id)}
+            low={teamFor(modalSeries.team_low_id)}
+            state={seriesState(modalSeries, isLive)}
+            canAct={canAct}
+            busy={busy}
+            playoffDay={playoffDay}
+            uid={uid}
+            onAction={runAction}
+            onClose={() => setModalId(null)}
+          />
+        ) : null}
+
+        {drawerOpen ? <button type="button" className="pf-scrim" aria-label="Close" onClick={() => setDrawerOpen(false)} /> : null}
+        <aside id="pf-drawer" className={cx("pf-drawer", drawerOpen && "is-open")} aria-hidden={!drawerOpen} aria-label="Around the playoffs">
+          <header className="pf-drawer-top">
+            <div className="pf-drawer-head">Around the playoffs</div>
+            <button type="button" className="pf-icon-act" aria-label="Close" onClick={() => setDrawerOpen(false)}>
+              ×
+            </button>
+          </header>
+          <div className="pf-drawer-scroll">
+            {me ? (
+              <Block title="Your club" aside={me.abbrev}>
+                <p className="pf-dr-status">{userStatus || "—"}</p>
+                {userRoad.length ? (
+                  <ol className="pf-road">
+                    {userRoad.map((st) => (
+                      <li key={st.round} className={cx(st.now && "is-now", st.done && "is-done")}>
+                        <small>{st.round === 4 ? "Final" : st.round === 3 ? "Conf. Final" : ROUND_NAMES[st.round]}</small>
+                        <b>{st.label}</b>
+                      </li>
+                    ))}
+                  </ol>
+                ) : null}
+              </Block>
+            ) : null}
+
+            <Block title="By the numbers">
+              <dl className="pf-nums">
+                <div>
+                  <dt>Teams left</dt>
+                  <dd>{overview.alive}</dd>
+                </div>
+                <div>
+                  <dt>Series decided</dt>
+                  <dd>
+                    {counts.decided}
+                    <small>/15</small>
+                  </dd>
+                </div>
+                <div>
+                  <dt>Games played</dt>
+                  <dd>{counts.games}</dd>
+                </div>
+                <div>
+                  <dt>Overtime games</dt>
+                  <dd>{around.ot}</dd>
+                </div>
+                <div>
+                  <dt>Game 7s</dt>
+                  <dd>{around.game7s}</dd>
+                </div>
+                <div>
+                  <dt>Lower seed won</dt>
+                  <dd>{around.upsets}</dd>
+                </div>
+              </dl>
+            </Block>
+
+            {[
+              ["Tonight", overview.tonight, ""],
+              ["Facing elimination", overview.watch, "is-hot"],
+            ].map(([label, rows, tone]) =>
+              rows?.length ? (
+                <Block key={label} title={label} aside={String(rows.length)}>
+                  {rows.map((t) => (
+                    <button key={t.id} type="button" className={cx("pf-ov-line", tone)} onClick={() => pickSeries(t.id)}>
+                      <span>{t.label}</span>
+                      <em>{t.note}</em>
+                    </button>
+                  ))}
+                </Block>
+              ) : null
+            )}
+
+            {around.leaders.leaders.length ? (
+              <Block title="Scoring leaders" aside="Pts from game stars">
+                {around.leaders.leaders.map((r) => (
+                  <div key={r.name + r.team_id} className="pf-leader">
+                    <span className="pf-leader-team">{teamFor(r.team_id)?.abbrev || ""}</span>
+                    <span className="pf-leader-name">{r.name}</span>
+                    <b>{r.pts}</b>
+                  </div>
+                ))}
+              </Block>
+            ) : null}
+
+            {around.leaders.goalies.length ? (
+              <Block title="Busiest goalies" aside="SV% · GP">
+                {around.leaders.goalies.map((r) => (
+                  <div key={r.name + r.team_id} className="pf-leader">
+                    <span className="pf-leader-team">{teamFor(r.team_id)?.abbrev || ""}</span>
+                    <span className="pf-leader-name">{r.name}</span>
+                    <b>
+                      {r.sa ? (r.sv / r.sa).toFixed(3).replace(/^0/, "") : "—"}
+                      <small> {r.gp}</small>
+                    </b>
+                  </div>
+                ))}
+              </Block>
+            ) : null}
+
+            {around.results.length ? (
+              <Block title="Results" aside={`${around.sweeps} sweep${around.sweeps === 1 ? "" : "s"}`}>
+                {around.results.map((r) => (
+                  <button key={r.id} type="button" className="pf-ov-line" onClick={() => pickSeries(r.id)}>
+                    <span>
+                      <small>{ROUND_SHORT[r.round]}</small> {r.text}
+                      {r.upset ? <i className="pf-upset">Upset</i> : null}
+                    </span>
+                    <em>{r.score}</em>
+                  </button>
+                ))}
+              </Block>
+            ) : null}
+
+            <Block title="Reading the bracket">
+              <ul className="pf-key">
+                <li>
+                  <i className="pf-seed">1</i> Playoff seed
+                </li>
+                <li>
+                  <i className="pf-key-pips">
+                    <b className="is-high" />
+                    <b className="is-low" />
+                  </i>
+                  One pip per game, coloured by the winner
+                </li>
+                <li>
+                  <i className="pf-key-mine" /> Your club and its path
+                </li>
+                <li>
+                  <i className="pf-live-dot" /> Plays tonight
+                </li>
+              </ul>
+            </Block>
+          </div>
+        </aside>
+      </section>
+
       {popups.length ? (
         <div className="pf-pop-stack" aria-live="polite">
           {popups.map((p) => (
@@ -2229,252 +2315,6 @@ export default function PlayoffStartMenu({
           ))}
         </div>
       ) : null}
-
-      <header className="pf-top">
-        <button type="button" className="pf-hub" onClick={onBack} aria-label="Back to the franchise hub">
-          <span aria-hidden="true">←</span> Hub
-        </button>
-        <div className="pf-brand">
-          <span className="pf-brand-mark" aria-hidden="true">
-            <TrophyGlyph size={30} />
-          </span>
-          <div className="pf-brand-copy">
-            <p className="pf-season">Stanley Cup Playoffs{seasonLabel ? ` · ${seasonLabel}` : ""}</p>
-            <div className="pf-headline" role="heading" aria-level={1}>
-              {headline}
-            </div>
-            <p className="pf-subline">{subline}</p>
-          </div>
-        </div>
-
-        <ol className="pf-prog" aria-label="Playoff progression">
-          {[1, 2, 3, 4].map((r) => {
-            const st = stepState(r);
-            const c = counts.per[r];
-            let note = "Locked";
-            if (st === "done") note = "Complete";
-            else if (st === "current") note = `${c.done} of ${c.total} decided`;
-            else if (st === "next") note = "Opens next";
-            return (
-              <li key={r} className={cx("pf-prog-step", `is-${st}`)} aria-current={st === "current" ? "step" : undefined}>
-                <span className="pf-prog-num">{st === "done" ? "✓" : String(r).padStart(2, "0")}</span>
-                <span className="pf-prog-copy">
-                  <b>{r === 4 ? "Stanley Cup Final" : r === 3 ? "Conference Finals" : ROUND_NAMES[r]}</b>
-                  <small>{note}</small>
-                </span>
-              </li>
-            );
-          })}
-        </ol>
-
-        {userChip ? (
-          <button
-            type="button"
-            className={cx("pf-mine", `is-${userChip.tone}`)}
-            disabled={!userCurrent}
-            onClick={() => {
-              if (userCurrent) {
-                setSelectedId(userCurrent.series_id);
-                setDeskCollapsed(false);
-              }
-            }}
-            title={userCurrent ? "Open your series" : undefined}
-          >
-            <TeamMark team={me} size={34} />
-            <span>
-              <small>Your franchise · {me?.abbrev}</small>
-              <b>{userChip.text}</b>
-            </span>
-          </button>
-        ) : null}
-      </header>
-
-      {notice ? (
-        <div className={cx("pf-notice", `is-${notice.tone}`)} role={notice.tone === "error" ? "alert" : "status"}>
-          <span className="pf-notice-text">{notice.text}</span>
-          {notice.seriesId && userActive && notice.seriesId === userActive.series_id && canAct ? (
-            <button
-              type="button"
-              className="pf-act is-primary is-sm"
-              disabled={busy}
-              onClick={() => runAction("play_user_game", { series_id: userActive.series_id }, "Playing your game…")}
-            >
-              Play game
-            </button>
-          ) : null}
-          <button type="button" className="pf-icon-act" aria-label="Dismiss" onClick={() => setNotice(null)}>
-            ×
-          </button>
-        </div>
-      ) : null}
-
-      <section className="pf-body">
-        <div className="pf-main">
-          <section className={cx("pf-stage", `is-${nextUp.tone}`, featured?.round_index === 4 && "is-final", champion && "is-crowned")}>
-            <div className="pf-stage-round" aria-label={`Round ${stageRound} of 4`}>
-              <small>Round</small>
-              <b>{stageRound}</b>
-              <span>of 4</span>
-            </div>
-            <div className="pf-stage-main">
-              <p className="pf-stage-over">{nextUp.over}</p>
-              {featured && featHigh && featLow ? (
-                <button
-                  type="button"
-                  className="pf-feat"
-                  onClick={() => {
-                    setSelectedId(featured.series_id);
-                    setDeskCollapsed(false);
-                  }}
-                  title="Open this series in the series centre"
-                >
-                  {renderFeatTeam(featHigh, firstDefined(featured.seed_high, featHigh?.seed), "l")}
-                  <div className="pf-feat-score">
-                    <div>
-                      <b className={featured.wins_high > featured.wins_low ? "is-lead" : ""}>{featured.wins_high}</b>
-                      <i>:</i>
-                      <b className={featured.wins_low > featured.wins_high ? "is-lead" : ""}>{featured.wins_low}</b>
-                    </div>
-                    <small>Series score</small>
-                    <em>
-                      {featState === "complete"
-                        ? "Final"
-                        : `Game ${featNext}${featState === "live" && numOrNull(featured.scheduled_day) === playoffDay ? " · Tonight" : ""}`}
-                    </em>
-                  </div>
-                  {renderFeatTeam(featLow, firstDefined(featured.seed_low, featLow?.seed), "r")}
-                </button>
-              ) : (
-                <div className="pf-stage-head">{nextUp.head}</div>
-              )}
-              <p className="pf-stage-line">{nextUp.sub}</p>
-              {userRoad.length ? (
-                <ol className="pf-path" aria-label="Your path to the Cup">
-                  <li className="pf-path-lab">Path to the Cup</li>
-                  {userRoad.map((st) => (
-                    <li key={st.round} className={cx("pf-path-step", st.now && "is-now", st.done && "is-done")}>
-                      <small>{st.round === 3 ? "Conference Final" : ROUND_NAMES[st.round]}</small>
-                      <b>{st.label}</b>
-                    </li>
-                  ))}
-                </ol>
-              ) : null}
-            </div>
-            <div className="pf-stage-side">
-              <dl className="pf-status">
-                <div>
-                  <dt>Teams remaining</dt>
-                  <dd>{overview.alive}</dd>
-                </div>
-                <div>
-                  <dt>Series decided</dt>
-                  <dd>
-                    {counts.decided}
-                    <small>/15</small>
-                  </dd>
-                </div>
-                <div>
-                  <dt>Games played</dt>
-                  <dd>{counts.games}</dd>
-                </div>
-              </dl>
-              <button type="button" className="pf-go" disabled={busy} onClick={nextUp.cta.onClick}>
-                {busy ? busyLabel || "Working…" : nextUp.cta.label}
-              </button>
-              {nextUp.note ? <small className="pf-go-note">{nextUp.note}</small> : null}
-              {nextUp.alt ? (
-                <button type="button" className="pf-text-act" disabled={busy} onClick={nextUp.alt.onClick}>
-                  {nextUp.alt.label}
-                </button>
-              ) : null}
-            </div>
-          </section>
-
-          <div className="pf-bracket-wrap">
-            {bracket.structured ? (
-              <div className="pf-bracket">
-                <div className="pf-conf is-west">
-                  <b>Western Conference</b>
-                  <span>
-                    {counts.alive.West} of {counts.r1.West || 8} teams alive
-                  </span>
-                </div>
-                <div className="pf-conf is-mid">
-                  <b>Stanley Cup Final</b>
-                  <span>{roundStatus(4).text}</span>
-                </div>
-                <div className="pf-conf is-east">
-                  <b>Eastern Conference</b>
-                  <span>
-                    {counts.alive.East} of {counts.r1.East || 8} teams alive
-                  </span>
-                </div>
-                {renderHeads("West")}
-                <div className="pf-colhead is-cup" aria-hidden="true" />
-                {renderHeads("East")}
-                {renderSideColumns("West")}
-                {renderCupColumn()}
-                {renderSideColumns("East")}
-              </div>
-            ) : (
-              <div className="pf-bracket is-flat">
-                {bracket.rounds.map((rows, i) => (
-                  <div key={i} className="pf-flat-col">
-                    <div className="pf-colhead">
-                      <b>{roundName(i + 1)}</b>
-                    </div>
-                    {rows.length ? (
-                      rows.map((s) => (
-                        <div key={s.series_id} className="pf-slot">
-                          {renderCard(s, null)}
-                        </div>
-                      ))
-                    ) : (
-                      <p className="pf-note">Awaiting series</p>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-            <p className="pf-legend">
-              <span>
-                <i className="pf-legend-seed">1</i> Playoff seed
-              </span>
-              <span>
-                <HomeIce title="Home ice" /> Home ice for the next game
-              </span>
-              <span>
-                <i className="pf-legend-mine" /> Your franchise and its path
-              </span>
-              <span>Select a series for its full report</span>
-            </p>
-          </div>
-        </div>
-
-        {deskCollapsed ? (
-          <aside className="pf-desk is-collapsed">
-            <button type="button" className="pf-rail-open" onClick={() => setDeskCollapsed(false)} aria-label="Open the series centre">
-              <span aria-hidden="true">⟨</span>
-              <b>Series centre</b>
-            </button>
-          </aside>
-        ) : (
-          <SeriesDesk
-            series={deskSeries}
-            high={teamFor(deskSeries?.team_high_id)}
-            low={teamFor(deskSeries?.team_low_id)}
-            state={seriesState(deskSeries, isLive)}
-            canAct={canAct}
-            busy={busy}
-            playoffDay={playoffDay}
-            uid={uid}
-            onClear={() => setSelectedId(null)}
-            onAction={runAction}
-            overview={overview}
-            onCollapse={() => setDeskCollapsed(true)}
-          />
-        )}
-      </section>
 
       <footer className="pf-dock">
         {confirm ? (
@@ -2495,78 +2335,7 @@ export default function PlayoffStartMenu({
               Cancel
             </button>
           </div>
-        ) : isLive && !cupComplete ? (
-          <div className="pf-dock-group" role="group" aria-label="Simulation">
-            <span className="pf-dock-lab">Simulate</span>
-            <button
-              type="button"
-              className="pf-act is-quiet"
-              disabled={busy || userGameTonight}
-              title={userGameTonight ? "Your game is tonight. Play or sim it first." : "Every live series plays its next game, on the same night"}
-              onClick={() => runAction("advance_day", { skip_off_days: true }, "Playing the next game in every series…")}
-            >
-              Next game
-            </button>
-            <button
-              type="button"
-              className="pf-act is-quiet"
-              disabled={busy || !simSeriesTarget}
-              title="Finish the selected series (or the next active one)"
-              onClick={handleSimSeries}
-            >
-              {pair ? `Finish ${pair}` : "Finish series"}
-            </button>
-            {userAlive ? (
-              <button
-                type="button"
-                className="pf-act is-quiet"
-                disabled={busy || userGameTonight}
-                title="Sim night by night until your club's next game"
-                onClick={handleFastForward}
-              >
-                To my next game
-              </button>
-            ) : null}
-            <button
-              type="button"
-              className="pf-act is-quiet"
-              disabled={busy || (userAlive && userGameTonight)}
-              title="Sim night by night until the current round is over"
-              onClick={() =>
-                askConfirm(
-                  "round",
-                  `Sim the rest of the ${roundName(currentRound)}? ${overview.active} series still in play${userAlive ? ", including yours" : ""}.`,
-                  handleSimRound
-                )
-              }
-            >
-              Rest of round
-            </button>
-            {!userAlive ? (
-              <button
-                type="button"
-                className="pf-act is-quiet"
-                disabled={busy}
-                onClick={() => askConfirm("cup", "Sim the rest of the playoffs through the Final? You can stop it at any time.", handleFastForward)}
-              >
-                To the Cup
-              </button>
-            ) : null}
-          </div>
-        ) : (
-          <span className="pf-dock-lab">{cupComplete ? "Playoffs complete" : "The round opens when you start it."}</span>
-        )}
-
-        <div className="pf-speed" role="group" aria-label="Sim speed">
-          <span className="pf-dock-lab">Sim speed</span>
-          {Object.entries(SIM_SPEEDS).map(([key, cfg]) => (
-            <button key={key} type="button" className={cx("pf-speed-opt", speed === key && "is-on")} aria-pressed={speed === key} onClick={() => setSpeed(key)}>
-              {cfg.label}
-            </button>
-          ))}
-        </div>
-
-        {busy ? (
+        ) : busy ? (
           <span className="pf-dock-status" role="status">
             <i className="pf-spinner" aria-hidden="true" />
             {busyLabel || "Working…"}
@@ -2582,7 +2351,81 @@ export default function PlayoffStartMenu({
               </button>
             ) : null}
           </span>
-        ) : null}
+        ) : isLive && !cupComplete ? (
+          <div className="pf-dock-group" role="group" aria-label="Simulation">
+            <span className="pf-dock-set">
+              <span className="pf-dock-lab">Game by game</span>
+              <button
+                type="button"
+                className="pf-act"
+                title="Every live series plays its next game tonight, yours included, then the calendar moves on"
+                onClick={() => runAction("advance_day", { skip_off_days: true }, "Playing the next night…")}
+              >
+                Next night
+              </button>
+              {userAlive ? (
+                <button type="button" className="pf-act" disabled={userGameTonight} title="Sim night by night (every series plays) until your club's next game" onClick={handleFastForward}>
+                  To my game
+                </button>
+              ) : null}
+            </span>
+            <span className="pf-dock-set">
+              <span className="pf-dock-lab">Series</span>
+              {userAlive && userActive ? (
+                <button
+                  type="button"
+                  className="pf-act"
+                  title="Sim night by night until your series is decided. Every other series plays those nights too."
+                  onClick={() => {
+                    setSelectedId(userActive.series_id);
+                    runAction("sim_series", { series_id: userActive.series_id }, "Simming your series…");
+                  }}
+                >
+                  Finish my series
+                </button>
+              ) : null}
+              {simSeriesTarget && !(userActive && simSeriesTarget.series_id === userActive.series_id) ? (
+                <button type="button" className="pf-act" title="Sim night by night until the selected series is decided. Every other series plays those nights too." onClick={handleSimSeries}>
+                  {pair ? `Finish ${pair}` : "Finish series"}
+                </button>
+              ) : null}
+            </span>
+            <span className="pf-dock-set">
+              <span className="pf-dock-lab">Round</span>
+              <button
+                type="button"
+                className="pf-act"
+                title="Sim night by night until the current round is over"
+                onClick={() =>
+                  askConfirm(
+                    "round",
+                    `Sim the rest of the ${roundName(currentRound)}? ${overview.active} series still in play${userAlive ? ", including yours" : ""}.`,
+                    handleSimRound
+                  )
+                }
+              >
+                Rest of round
+              </button>
+              <button
+                type="button"
+                className="pf-act"
+                onClick={() => askConfirm("cup", userAlive ? "Sim every remaining game through the Final, yours included? You can stop it at any time." : "Sim the rest of the playoffs through the Final? You can stop it at any time.", userAlive ? () => runSim("cup") : handleFastForward)}
+              >
+                To the Cup
+              </button>
+            </span>
+          </div>
+        ) : (
+          <span className="pf-dock-lab">{cupComplete ? "Playoffs complete" : "The round opens when you start it."}</span>
+        )}
+        <div className="pf-speed" role="group" aria-label="Sim speed">
+          <span className="pf-dock-lab">Speed</span>
+          {Object.entries(SIM_SPEEDS).map(([key, cfg]) => (
+            <button key={key} type="button" className={cx("pf-speed-opt", speed === key && "is-on")} aria-pressed={speed === key} onClick={() => setSpeed(key)}>
+              {cfg.label}
+            </button>
+          ))}
+        </div>
       </footer>
     </div>
   );

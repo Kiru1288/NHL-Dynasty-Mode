@@ -37,6 +37,7 @@ const TIPS = {
   [SCREENS.GM_WORLD]: "League ops: rules, waivers and what the other GMs are up to.",
   [SCREENS.FRANCHISE_IDENTITY]: "Your franchise's identity: colors, history and what you stand for.",
   [SCREENS.LEGACY_HALL]: "The Legacy Hall. Banners, legends and your best seasons.",
+  [SCREENS.FRANCHISE_COMMAND]: "Franchise Command. Fifty sliders. Bend the league to your will.",
   [SCREENS.SETTINGS]: "Settings. Tweak the sim and the screen to your taste.",
   [SCREENS.AHL_CENTER]: "Your farm team. Call-ups and send-downs start here.",
   [SCREENS.PROSPECT_SIGNING]: "Sign your draft picks before their rights run out!",

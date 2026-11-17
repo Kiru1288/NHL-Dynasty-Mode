@@ -245,6 +245,7 @@ def _expected_production_score_for_deployment(player: Any, ovr100: float) -> flo
     ppg = _expected_ppg_for_ovr(ovr100) * _deployment_usage_factor(player)
     if _is_defense(player):
         ppg *= float(_DEFENSE_PPG_PERF_SCALE)
+    ppg *= _scoring_env_for(player)
     score = 0.32 + ppg * 0.55
     if ppg >= 0.85:
         score = max(score, 0.82)
@@ -258,6 +259,28 @@ def _expected_production_score_for_deployment(player: Any, ovr100: float) -> flo
 # FLAG (proposed): NHL defencemen score ~72% of forward PPG at the same quality tier.
 # Anchors are forward PPG; scale D production up before inverting to perf OVR.
 _DEFENSE_PPG_PERF_SCALE = 0.72
+
+
+def _cmd_knob(name: str, default: float = 1.0) -> float:
+    """Franchise Command slider (1.0 = default). Never raises."""
+    try:
+        from app.sim_engine.tuning.command_knobs import knob
+
+        return float(knob(name, default))
+    except Exception:
+        return float(default)
+
+
+def _scoring_env_for(player: Any) -> float:
+    """League scoring level the sliders set. Expected lines scale with it, actual
+    lines are divided by it, so the same raw points are worth less in a run-and-gun
+    league than in a dead-puck one."""
+    try:
+        from app.sim_engine.tuning.command_knobs import scoring_env
+
+        return float(scoring_env(_is_defense(player)))
+    except Exception:
+        return 1.0
 
 _PERF_CHECKPOINT_GP = (20, 41, 61)
 _PERF_CHECKPOINT_CAPS = {20: 1.0, 41: 2.0, 61: 3.0}
@@ -655,6 +678,7 @@ def perf_display_ovr_from_production(
 
     if _is_defense(player):
         ppg = ppg / max(0.55, float(_DEFENSE_PPG_PERF_SCALE))
+    ppg = ppg / max(0.6, _scoring_env_for(player))
     return float(invert_ppg_to_display_ovr(ppg))
 
 
@@ -877,6 +901,7 @@ def expected_season_points_for_player(player: Any, gp: int) -> float:
     # The other team's best is on the ice against the top six and the top pair.
     if _hard_matchup_role(player):
         ppg *= 0.88
+    ppg *= _scoring_env_for(player)
     return float(ppg * gp_i)
 
 
@@ -1079,6 +1104,9 @@ def _season_counting_line(player: Any) -> Tuple[int, Optional[float], Optional[f
         if sv is None:
             sv = _goalie_save_fraction(player)
     ppg = (float(pts) / float(gp)) if gp > 0 and pts is not None else None
+    if ppg is not None and not isinstance(stats, dict):
+        # NHL line: judge it against the scoring level the sliders set.
+        ppg = ppg / max(0.6, _scoring_env_for(player))
     return gp, ppg, sv
 
 
@@ -1429,6 +1457,20 @@ def season_growth_context(player: Any, *, bucket: str = "") -> Dict[str, Any]:
         gain = 0.0
         reason = "a poor save percentage does not lower the goalie"
 
+    # Franchise Command sliders: growth speed, slump penalty, aging, prospects, goalies.
+    if gain > 0.0:
+        if _is_goalie(player):
+            gain *= _cmd_knob("goalie_growth", 1.0)
+        elif level in ("rights", "ahl"):
+            gain *= _cmd_knob("prospect_growth", 1.0)
+        else:
+            gain *= _cmd_knob("prog_growth", 1.0)
+    elif gain < 0.0:
+        gain *= _cmd_knob("prog_decline", 1.0)
+        if age >= 31:
+            gain *= _cmd_knob("aging_curve", 1.0)
+    gain = max(-8.0, min(8.0, gain))
+
     try:
         setattr(player, "_season_growth_context", {
             "level": level,
@@ -1461,7 +1503,7 @@ def offseason_growth_points(player: Any) -> float:
         extra = max(1.5, min(3.0, gain * 0.70))
     elif gain >= 0.0 and gp >= 25 and age <= 26:
         extra = 1.0
-    return float(extra)
+    return float(extra) * max(0.0, _cmd_knob("offseason_growth", 1.0))
 
 
 def season_gain_cap_points(player: Any) -> float:
@@ -1578,14 +1620,15 @@ def season_points_surplus_vs_expectation(player: Any, actual_pts: int, gp: int) 
     if _is_defense(player):
         # Scoring is a small slice of a defenceman's rating. The rest is the
         # defensive result: plus-minus, blocks, goals against, possession.
-        result = raw * _defense_point_weight(player) + defense_impact_point_credit(player, gp)
+        pw = _cmd_knob("production_weight", 1.0)
+        result = raw * _defense_point_weight(player) * _cmd_knob("defense_point_credit", 1.0) * pw + defense_impact_point_credit(player, gp)
         if result < 0.0 and _hard_matchup_role(player):
             result *= 0.50
         return result
     credit = forward_impact_point_credit(player, gp)
     # Points are one part of a forward's year. A strong two-way, power-play,
     # or penalty-kill season covers the rest, so the miss is not the whole story.
-    point_weight = 0.45 if credit >= 8.0 else 0.75
+    point_weight = (0.45 if credit >= 8.0 else 0.75) * _cmd_knob("production_weight", 1.0)
     result = raw * point_weight + credit
     # A modest miss against the hardest matchups is not a bad year.
     if result < 0.0 and _hard_matchup_role(player):

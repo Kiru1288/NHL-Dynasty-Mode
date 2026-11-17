@@ -101,20 +101,24 @@ def _month_key_from_iso(iso: str) -> Tuple[int, int]:
 
 
 def _olympic_winter_season_by_end_year(end_year: int) -> bool:
-    return int(end_year) in (2022, 2026, 2030, 2034)
+    # NHL players at the Olympics: 2026 Milano Cortina, then every four years.
+    from services.international_tournaments import olympic_year
+
+    return olympic_year(end_year)
 
 
 def _four_nations_season(season_start_year: int) -> bool:
-    end_year = _season_end_year(season_start_year)
-    if _olympic_winter_season_by_end_year(end_year):
-        return False
-    return int(season_start_year) % 2 == 1
+    # 4 Nations Face-Off: Feb 2025, then the mid-Olympic-cycle best-on-best (2028, 2032, ...).
+    from services.international_tournaments import four_nations_year
+
+    return four_nations_year(_season_end_year(season_start_year))
 
 
 def _all_star_window(season_start_year: int) -> Tuple[date, date]:
     end_year = _season_end_year(season_start_year)
 
-    if _olympic_winter_season_by_end_year(end_year):
+    # No All-Star Game in a best-on-best season (the 4 Nations replaced it in 2025).
+    if _olympic_winter_season_by_end_year(end_year) or _four_nations_season(season_start_year):
         return _empty_date_window(end_year)
 
     return date(end_year, 1, 30), date(end_year, 2, 2)
@@ -126,7 +130,9 @@ def _olympic_window(season_start_year: int) -> Tuple[date, date]:
     if not _olympic_winter_season_by_end_year(end_year):
         return _empty_date_window(end_year)
 
-    return date(end_year, 2, 7), date(end_year, 2, 22)
+    from services.international_tournaments import nhl_break_window
+
+    return nhl_break_window("olympics", end_year)
 
 
 def _four_nations_window(season_start_year: int) -> Tuple[date, date]:
@@ -135,7 +141,9 @@ def _four_nations_window(season_start_year: int) -> Tuple[date, date]:
     if not _four_nations_season(season_start_year):
         return _empty_date_window(end_year)
 
-    return date(end_year, 2, 10), date(end_year, 2, 16)
+    from services.international_tournaments import nhl_break_window
+
+    return nhl_break_window("four_nations", end_year)
 
 
 def _regular_season_bounds(season_start_year: int) -> Tuple[date, date]:
@@ -272,12 +280,23 @@ def classify_calendar_day(
         elif d.month == 6:
             tags.append("cup_final_window")
 
+        ui_note = "Series hockey · maximum stakes"
+        try:
+            from services.international_tournaments import worlds_dates
+
+            w_start, w_end = worlds_dates(season_start_year + 1)
+            if w_start <= d <= w_end:
+                tags.append("world_championship")
+                ui_note = "Series hockey · IIHF World Championship underway"
+        except Exception:
+            pass
+
         return (
             "playoffs",
             False,
             tuple(tags),
             "Stanley Cup Playoffs",
-            "Series hockey · maximum stakes",
+            ui_note,
         )
 
     # -------------------------------------------------------------------------
@@ -1207,6 +1226,15 @@ def validate_calendar_mapping(
     }
 
 
+def _international_marker_rows(season_start_year: int) -> List[Tuple[str, str, str, str, str, str]]:
+    try:
+        from services.international_tournaments import calendar_markers
+
+        return calendar_markers(season_start_year)
+    except Exception:
+        return []
+
+
 def season_anchor_event_markers(season_start_year: int) -> List[Dict[str, Any]]:
     """
     League storytelling dates for the franchise calendar UI.
@@ -1265,23 +1293,16 @@ def season_anchor_event_markers(season_start_year: int) -> List[Dict[str, Any]]:
         mk("wjc_semis", f"{y1}-01-04", "wjc_semifinals", "World Juniors Semifinals", "HIGH"),
         mk("wjc_final", f"{y1}-01-05", "wjc_final", "World Juniors Final", "HIGH"),
         mk("winter_classic", f"{y1}-01-01", "winter_classic", "Winter Classic", "HIGH"),
-        mk("allstar_weekend", f"{y1}-02-01", "all_star_weekend", "All-Star Weekend", "HIGH", "All-Star Weekend: Feb 1–3."),
-        mk("allstar_game", f"{y1}-02-03", "allstar_game", "All-Star Game", "HIGH"),
-        mk(
-            "four_nations_start",
-            f"{y1}-02-10",
-            "four_nations_tournament",
-            "4 Nations / International Tournament Start",
-            "CRITICAL",
+        *(
+            []
+            if (_olympic_winter_season_by_end_year(y1) or _four_nations_season(y))
+            else [
+                mk("allstar_weekend", f"{y1}-02-01", "all_star_weekend", "All-Star Weekend", "HIGH", "All-Star Weekend: Feb 1–3."),
+                mk("allstar_game", f"{y1}-02-03", "allstar_game", "All-Star Game", "HIGH"),
+            ]
         ),
+        *[mk(*row) for row in _international_marker_rows(y)],
         mk("heritage", f"{y1}-02-18", "heritage_classic", "Heritage Classic", "HIGH"),
-        mk(
-            "four_nations_final",
-            f"{y1}-02-20",
-            "four_nations_faceoff",
-            "4 Nations / International Final",
-            "CRITICAL",
-        ),
         mk("stadium", f"{y1}-02-24", "stadium_series", "Stadium Series", "HIGH"),
         mk("trade_deadline", f"{y1}-03-07", "trade_deadline", "Trade Deadline", "CRITICAL"),
         mk("playoff_push", f"{y1}-03-20", "playoff_push", "Playoff Push Begins", "MEDIUM"),

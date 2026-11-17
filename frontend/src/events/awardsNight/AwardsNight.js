@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import FanReactionFeed from "../../components/franchise/social/FanReactionFeed";
 import PlayerHeadshot from "../../components/PlayerHeadshot";
 import { pickHeadshotIdentityFields } from "../../utils/playerHeadshots";
 // Theme + fonts: paste the same style imports EntryDraft.jsx has at its top here
@@ -831,40 +832,30 @@ function buildPulse({ stage, slide, slides, ev }) {
 
 const PULSE_TAG = { news: "News", stat: "By the numbers", debate: "Debate" };
 
-function FanPulse({ mode, items, emptyText, feedKey }) {
+function FanPulse({ mode, items, tweets = [], emptyText, feedKey }) {
+  // The social feed is the real fan accounts (handles, avatars, likes) from the social universe.
+  // One league headline sits on top so the rail still tells you what just happened.
+  const news = items.filter((it) => it.kind !== "fan" && it.kind !== "debate").slice(0, 1);
   return (
-    <aside className="aw2-pulse" aria-label="Fan Pulse">
+    <aside className="aw2-pulse" aria-label="Social">
       <div className="aw2-railhead">
         <div className="aw2-railhead-name" role="heading" aria-level={2}>
-          Fan Pulse
+          Social
         </div>
         <p>{mode === "reactions" ? "Reactions around the league" : "Before the envelopes open"}</p>
       </div>
+      {news.map((item, i) => (
+        <article key={`news-${i}`} className={`aw2-post is-${item.kind}`}>
+          <header>
+            {item.logo ? <TeamLogo src={item.logo} size={22} /> : null}
+            <em>{PULSE_TAG[item.kind]}</em>
+          </header>
+          <p className="aw2-post-headline">{item.text}</p>
+        </article>
+      ))}
       <div className="aw2-pulse-list" key={feedKey}>
-        {items.length ? (
-          items.map((item, i) => (
-            <article key={`${item.kind}-${i}`} className={`aw2-post is-${item.kind}`} style={{ animationDelay: `${i * 90}ms` }}>
-              {item.kind === "fan" || item.kind === "debate" ? (
-                <>
-                  <header>
-                    {item.logo ? <TeamLogo src={item.logo} size={26} /> : <span className="aw2-post-dot" aria-hidden="true" />}
-                    <b>{item.who || "Around the league"}</b>
-                    {item.kind === "debate" ? <em>{PULSE_TAG.debate}</em> : null}
-                  </header>
-                  <p>{item.text}</p>
-                  <footer>{item.likes.toLocaleString()} likes</footer>
-                </>
-              ) : (
-                <>
-                  <header>
-                    {item.logo ? <TeamLogo src={item.logo} size={26} /> : null}
-                    <em>{PULSE_TAG[item.kind]}</em>
-                  </header>
-                  <p className="aw2-post-headline">{item.text}</p>
-                </>
-              )}
-            </article>
-          ))
+        {tweets.length ? (
+          <FanReactionFeed className="aw2-social-feed" reactions={tweets} placement="inline" maxTweets={8} visibleCount={8} enabled />
         ) : (
           <p className="aw2-muted">{emptyText}</p>
         )}
@@ -881,7 +872,7 @@ const isMajorSlide = (slide) => MAJOR_KEYS.includes(String(slide?.awardKey || ""
 const isDecidedSlide = (slide) => isCupSlide(slide) || /president|conference/i.test(String(slide?.awardKey || ""));
 
 /** One nominee column: headshot, full name, logo + full team name, season line, case. */
-function Nominee({ card, slide, ev, playerIndex, userTeam, caseText, faceSize = 112, team = false }) {
+function Nominee({ card, slide, ev, playerIndex, userTeam, caseText, faceSize = 112, team = false, stats = 5 }) {
   const player = team ? null : resolvePlayer(card?.player, playerIndex, card?.label);
   const mine = isUserCard(card, userTeam);
   const line = team ? [] : lineFor(card, slide, ev);
@@ -897,7 +888,7 @@ function Nominee({ card, slide, ev, playerIndex, userTeam, caseText, faceSize = 
         </div>
       ) : null}
       {meta ? <div className="aw2-nominee-meta">{meta}{mine ? " · your club" : ""}</div> : mine ? <div className="aw2-nominee-meta">Your club</div> : null}
-      <StatLine items={line.slice(0, 5)} size="sm" />
+      <StatLine items={line.slice(0, stats)} size="sm" />
       {caseText ? <p className="aw2-nominee-case">{caseText}</p> : null}
     </div>
   );
@@ -932,10 +923,10 @@ function GateBody({ slides, playerIndex, userTeam, onPick, evidenceByKey }) {
         <section className="aw2-marquee">
           {cup ? (
             <div className="aw2-champ">
-              <TeamLogo src={winnerLogo(cup)} size={150} />
+              <TeamLogo src={winnerLogo(cup)} size={92} />
               <div className="aw2-champ-text">
                 <span>Stanley Cup champions</span>
-                <div className="aw2-display aw2-fit" style={fitStyle(cup.winnerLabel, 58)}>
+                <div className="aw2-display aw2-fit" style={fitStyle(cup.winnerLabel, 44)}>
                   {cup.winnerLabel}
                 </div>
                 {cup.stageLine ? <p>{cup.stageLine}</p> : null}
@@ -972,8 +963,8 @@ function GateBody({ slides, playerIndex, userTeam, onPick, evidenceByKey }) {
 
       {majors.length ? (
         <div className="aw2-sectionhead">
-          <div role="heading" aria-level={3}>The major awards</div>
-          <p>Three finalists each, ballots sealed. Pick an award to open it on stage.</p>
+          <div role="heading" aria-level={3}>The six major awards</div>
+          <p>Each shows its three finalists. The winners are still sealed. Click an award to open it on stage.</p>
         </div>
       ) : null}
       <div className="aw2-majors">
@@ -981,15 +972,17 @@ function GateBody({ slides, playerIndex, userTeam, onPick, evidenceByKey }) {
           const team = isTeamSlide(slide);
           const ev = slideEvidence(slide) || evidenceByKey?.[slide.awardKey] || null;
           const finalists = slideFinalists(slide);
-          const cases = team ? new Map() : finalistCases(finalists, slide.awardKey);
           const mineHere = finalists.some((c) => isUserCard(c, userTeam));
           return (
             <section key={slide.id} className={`aw2-award${mineHere ? " is-mine" : ""}`} {...pickKeys(slide)}>
               <div className="aw2-award-head">
-                <div className="aw2-display aw2-fit" style={fitStyle(slide.awardLabel, 34)}>
+                <div className="aw2-display aw2-fit" style={fitStyle(slide.awardLabel, 26)}>
                   {slide.awardLabel}
                 </div>
-                {slide.stageLine ? <p>{slide.stageLine}</p> : null}
+                <p>
+                  <span className="aw2-award-what">{slide.stageLine || categoryLabel(slide)}</span>
+                  <span className="aw2-award-tag">{finalists.length} finalists · sealed</span>
+                </p>
               </div>
               <div className="aw2-nominees" style={{ "--aw2-cols": Math.max(1, finalists.length) }}>
                 {finalists.map((card) => (
@@ -1000,9 +993,9 @@ function GateBody({ slides, playerIndex, userTeam, onPick, evidenceByKey }) {
                     ev={ev}
                     playerIndex={playerIndex}
                     userTeam={userTeam}
-                    caseText={cases.get(card)}
                     team={team}
-                    faceSize={104}
+                    faceSize={72}
+                    stats={3}
                   />
                 ))}
               </div>
@@ -1013,8 +1006,8 @@ function GateBody({ slides, playerIndex, userTeam, onPick, evidenceByKey }) {
 
       {rest.length ? (
         <div className="aw2-sectionhead">
-          <div role="heading" aria-level={3}>Also tonight</div>
-          <p>{rest.length} more honours, from the scoring races to the All-Star teams.</p>
+          <div role="heading" aria-level={3}>Also tonight · {rest.length} more honours</div>
+          <p>Scoring races, team honours and the All-Star teams. Click any to jump to it.</p>
         </div>
       ) : null}
       <div className="aw2-rest">
@@ -1991,7 +1984,8 @@ export default function AwardsNight({ franchiseState = {}, eventData = {}, onCon
   const pulseStage = !slides.length ? "gate" : phase === PHASE.SUMMARY ? "summary" : phase === PHASE.GATE ? "gate" : awardRevealed ? "post" : "pre";
   const pulseMode = pulseStage === "post" || pulseStage === "summary" ? "reactions" : "pre-show";
   const pulseItems = slides.length ? buildPulse({ stage: pulseStage, slide: activeSlide, slides, ev }) : [];
-  const pulseEmpty = "Reactions land once the night begins.";
+  const pulseEmpty = pulseStage === "post" ? "Reactions are coming in…" : "Reactions land once the night begins.";
+  const pulseTweets = pulseStage === "summary" ? summaryTweets : pulseStage === "post" ? reactionFeed : preShowTweets;
 
   const displayRevealed =
     phase === PHASE.SUMMARY ? new Set(slides.map((s) => s.id)) : revealedIds;
@@ -2165,7 +2159,7 @@ export default function AwardsNight({ franchiseState = {}, eventData = {}, onCon
           </footer>
         </section>
 
-        <FanPulse mode={pulseMode} items={pulseItems} emptyText={pulseEmpty} feedKey={`${pulseStage}-${activeSlide?.id || "gate"}`} />
+        <FanPulse mode={pulseMode} items={pulseItems} tweets={pulseTweets} emptyText={pulseEmpty} feedKey={`${pulseStage}-${activeSlide?.id || "gate"}`} />
       </div>
     </section>
   );

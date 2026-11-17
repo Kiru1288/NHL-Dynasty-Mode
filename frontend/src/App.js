@@ -44,6 +44,7 @@ const FreeAgency = React.lazy(() => import("./screens/FreeAgency"));
 const LeagueOperations = React.lazy(() => import("./screens/LeagueOperations"));
 const FranchiseIdentity = React.lazy(() => import("./screens/FranchiseIdentity"));
 const LegacyHall = React.lazy(() => import("./screens/LegacyHall"));
+const FranchiseCommand = React.lazy(() => import("./screens/FranchiseCommand"));
 const SimTracker = React.lazy(() => import("./screens/SimTracker"));
 
 function ScreenLoadingFallback({ label = "Loading…" }) {
@@ -233,6 +234,7 @@ function GameRoot() {
         {screen === SCREENS.GM_WORLD && <LeagueOperations />}
         {screen === SCREENS.FRANCHISE_IDENTITY && <FranchiseIdentity />}
         {screen === SCREENS.LEGACY_HALL && <LegacyHall />}
+        {screen === SCREENS.FRANCHISE_COMMAND && <FranchiseCommand />}
         {screen === SCREENS.CAP_LEDGER && <CapLedger />}
         {screen === SCREENS.FREE_AGENCY && <FreeAgency />}
         {screen === SCREENS.SETTINGS && <SettingsScreen />}

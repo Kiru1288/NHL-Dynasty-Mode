@@ -157,7 +157,18 @@ export function wjcCodeToIso(wjcCode) {
   return resolveCountryCode(wjcCode);
 }
 
-/** Convenience alias for WJC nation chips (same flagsapi.com source as Draft Class). */
+/** Neutral Olympic flag for Olympic Athletes from Russia (OAR): white field, five rings. */
+export const OAR_FLAG_URL =
+  "data:image/svg+xml;utf8," +
+  encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 90 60"><rect width="90" height="60" fill="#fff"/>' +
+      '<g fill="none" stroke-width="3.2"><circle cx="27" cy="26" r="9" stroke="#0081c8"/><circle cx="45" cy="26" r="9" stroke="#000"/>' +
+      '<circle cx="63" cy="26" r="9" stroke="#ee334e"/><circle cx="36" cy="35" r="9" stroke="#fcb131"/><circle cx="54" cy="35" r="9" stroke="#00a651"/></g></svg>'
+  );
+
+/** Convenience alias for WJC / international nation chips. Russian teams play as neutral athletes (OAR). */
 export function wjcFlagUrl(countryOrCode, size = 48, style = "flat") {
+  const raw = String(countryOrCode || "").trim().toUpperCase();
+  if (raw === "OAR" || raw === "RUS" || resolveCountryCode(countryOrCode) === "RU") return OAR_FLAG_URL;
   return flagApiUrl(countryOrCode, size, style);
 }

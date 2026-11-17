@@ -92,7 +92,13 @@ export default function RetirementTalk({ decision, talks = {}, franchiseState, m
       }
       mergeFranchiseState?.(state);
     } catch (e) {
-      setError(e?.response?.data?.detail || e?.message || "That didn't go through. Try again.");
+      const msg = String(e?.response?.data?.detail || e?.message || "");
+      // Already answered (on another screen, or auto-resolved): nothing left to decide, so close.
+      if (/not found/i.test(msg)) {
+        onClose?.();
+        return;
+      }
+      setError(msg || "That didn't go through. Try again.");
     } finally {
       setBusy(false);
     }

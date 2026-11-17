@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import RetirementTalk, { isRetirementDecision } from "../../events/retirements/RetirementTalk";
 import { useGameUI } from "../../game/GameUIContext";
+import { CapPlotGameOver } from "../contracts/CapPlotRoom";
+import DisasterDraftRoom from "./DisasterDraftRoom";
 import { SCREENS } from "../../game/constants";
 import { isFranchiseCinematicPopup } from "../../events/franchiseEventKinds";
 import { getTeamLogoSrc, resolveFranchiseTeamLogo, toLogoUrl } from "../../utils/teamLogos";
@@ -774,23 +776,69 @@ function MediaAlertShell({ pop, children, onDismiss, onAction, actions = [], que
 
 function ObituaryBody({ pop, onDismiss }) {
   const age = pop.player_age != null && pop.player_age !== "" ? `age ${pop.player_age}` : "";
-  const meta = [pop.player_position, age, pop.player_country, pop.team_name].filter(Boolean);
+  const meta = [pop.player_position, age, pop.hometown || pop.player_country, pop.team_name].filter(Boolean);
+  const car = pop.career || {};
+  const fam = pop.family || {};
+  const careerBits = [
+    car.gp ? `${car.gp} GP` : null,
+    car.g != null ? `${car.g} G` : null,
+    car.a != null ? `${car.a} A` : null,
+    car.pts != null ? `${car.pts} PTS` : null,
+    car.seasons ? `${car.seasons} seasons` : null,
+  ].filter(Boolean);
+  const tributes = Array.isArray(pop.tributes) ? pop.tributes : [];
+  const plan = Array.isArray(pop.mourning_plan) ? pop.mourning_plan : [];
   return (
-    <div className="obituary">
-      <p className="obituary__kicker">League announcement</p>
+    <div className="obituary obituary--full">
+      <p className="obituary__kicker">{pop.suspicious ? "League announcement · under investigation" : "League announcement"}</p>
       <h3 className="obituary__name" id="showcase-popup-title">
         {pop.player_name || "A player"}
+        {pop.jersey_number ? <span className="obituary__num">#{pop.jersey_number}</span> : null}
       </h3>
       {meta.length ? <p className="obituary__meta">{meta.join("   ·   ")}</p> : null}
       <div className="obituary__rule" aria-hidden />
-      <p className="obituary__lead">{pop.headline || "Has died"}</p>
-      {pop.summary ? <p className="obituary__body">{pop.summary}</p> : null}
-      {pop.cause ? <p className="obituary__cause">{pop.cause}</p> : null}
+      <p className="obituary__lead">{pop.cause_story || pop.headline || "Has died"}</p>
+      <div className="obituary__cols">
+        <section>
+          <span className="obituary__lab">Family</span>
+          <p className="obituary__body">{pop.survived_by || pop.summary}</p>
+          {fam.children && fam.children.length ? (
+            <p className="obituary__small">
+              {fam.children.length === 1 ? "One child" : `${fam.children.length} children`} · parents {fam.parents}
+            </p>
+          ) : null}
+        </section>
+        <section>
+          <span className="obituary__lab">His career</span>
+          {careerBits.length ? <p className="obituary__stats">{careerBits.join("  ·  ")}</p> : <p className="obituary__body">His career numbers are being compiled.</p>}
+          {car.awards && car.awards.length ? <p className="obituary__small">Honours: {car.awards.join(", ")}</p> : null}
+          {car.teams && car.teams.length ? <p className="obituary__small">Clubs: {car.teams.join(" · ")}</p> : null}
+        </section>
+      </div>
+      {tributes.length ? (
+        <div className="obituary__tributes">
+          {tributes.map((t, i) => (
+            <blockquote key={i}>
+              <p>&ldquo;{t.text}&rdquo;</p>
+              <cite>
+                {t.who} · {t.role}
+              </cite>
+            </blockquote>
+          ))}
+        </div>
+      ) : null}
+      {plan.length ? (
+        <ul className="obituary__plan">
+          {plan.map((x) => (
+            <li key={x}>{x}</li>
+          ))}
+        </ul>
+      ) : null}
       <p className="obituary__note">
-        He is permanently removed from competition. His contract comes off the books and the roster spot is open.
+        His contract has been settled with his family and comes off the cap. {pop.is_user_team ? "Decide how the club honours him and supports the room before the sim continues." : ""}
       </p>
       <button type="button" className="obituary__ack" onClick={onDismiss}>
-        Acknowledge
+        Pay respects
       </button>
     </div>
   );
@@ -1331,12 +1379,27 @@ export function ShowcasePopupLayer() {
   const topDecision = pendingDecisions[0] || null;
   const topTalk = isRetirementDecision(topDecision) ? topDecision : null;
   const [heldTalk, setHeldTalk] = useState(null);
-  useEffect(() => {
-    if (topTalk && (!heldTalk || heldTalk.id !== topTalk.id)) setHeldTalk(topTalk);
-  }, [topTalk, heldTalk]);
-  if (liveOn) return null;
-
   const onRetirementScreen = typeof document !== "undefined" && !!document.querySelector(".ret2-root");
+  useEffect(() => {
+    // The Retirements screen runs its own talk. Holding a copy here as well left a stale talk
+    // behind: once the GM answered on that screen and moved on, this layer re-opened the finished
+    // talk and answering it failed with "Decision ... not found".
+    if (onRetirementScreen) {
+      if (heldTalk) setHeldTalk(null);
+      return;
+    }
+    if (topTalk && (!heldTalk || heldTalk.id !== topTalk.id)) setHeldTalk(topTalk);
+  }, [topTalk, heldTalk, onRetirementScreen]);
+  // The GM was arrested: nothing else matters, the save is over.
+  if (franchiseState?.cap_plot_game_over) {
+    return <CapPlotGameOver info={franchiseState.cap_plot_game_over} onNewGame={() => setScreen?.(SCREENS.SETUP)} />;
+  }
+  if (liveOn) return null;
+  // After a team disaster, your club rebuilds through the emergency draft before anything else.
+  if (franchiseState?.disaster_draft_pending && !first) {
+    return <DisasterDraftRoom onDone={() => refreshFranchise?.()} />;
+  }
+
   if (heldTalk && !onRetirementScreen) {
     return (
       <RetirementTalk

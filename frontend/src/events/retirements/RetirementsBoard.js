@@ -6,9 +6,6 @@ import { resolveFranchiseTeamLogo } from "../../utils/teamLogos";
 import { useGameUI } from "../../game/GameUIContext";
 import RetirementTalk, { isRetirementDecision } from "./RetirementTalk";
 import {
-  contractLine,
-  draftLine,
-  finalSeasonLine,
   fmtGaa,
   fmtInt,
   fmtMillions,
@@ -158,7 +155,6 @@ function HeroTribute({ row, rank, isMine }) {
         <p className="ret2-hero-reason">
           {row?.confirmed === false ? "Considering retirement — your decision is pending. " : ""}
           {row?.retirement_reason || "Retired"}
-          {row?.retirement_detail ? <span className="ret2-hero-detail"> — {row.retirement_detail}</span> : null}
         </p>
 
         <div className="ret2-hero-stats">
@@ -179,14 +175,13 @@ function HeroTribute({ row, rank, isMine }) {
           </div>
         </div>
 
-        <dl className="ret2-facts">
-          <Fact label="Best season">{bestSeasonLine(row, goalie)}</Fact>
-          <Fact label="Final season">{finalSeasonLine(row, goalie)}</Fact>
-          <Fact label="Clubs">{c.teams.length ? c.teams.join(" → ") : null}</Fact>
-          <Fact label="Drafted">{draftLine(row)}</Fact>
-          <Fact label="Last contract">{contractLine(row)}</Fact>
-          <Fact label="Trophies">{rest.length ? rest.map((t) => (t.n > 1 ? `${t.name} ×${t.n}` : t.name)).join(", ") : null}</Fact>
-        </dl>
+        {rank === 0 ? (
+          <dl className="ret2-facts">
+            <Fact label="Best season">{bestSeasonLine(row, goalie)}</Fact>
+            <Fact label="Clubs">{c.teams.length ? c.teams.join(" → ") : null}</Fact>
+            <Fact label="Trophies">{rest.length ? rest.map((t) => (t.n > 1 ? `${t.name} ×${t.n}` : t.name)).join(", ") : null}</Fact>
+          </dl>
+        ) : null}
       </div>
     </article>
   );
@@ -195,13 +190,9 @@ function HeroTribute({ row, rank, isMine }) {
 function ListRow({ row, isMine }) {
   const name = getRetireeName(row);
   const team = getRetireeTeam(row);
-  const goalie = isGoalieRetiree(row);
   const overall = getRetireeOverall(row);
   const logo = teamLogoFor(row);
   const { cups } = cupsAndTrophies(row);
-  const final = finalSeasonLine(row, goalie);
-  const draft = draftLine(row);
-  const contract = contractLine(row);
 
   return (
     <article className={`ret2-row${isMine ? " is-mine" : ""}`}>
@@ -217,7 +208,6 @@ function ListRow({ row, isMine }) {
         <div className="ret2-row-reason">
           {row?.confirmed === false ? <span className="ret2-pending">Decision pending · </span> : null}
           {row?.retirement_reason || "Retired"}
-          {row?.retirement_detail ? <span className="ret2-row-detail"> — {row.retirement_detail}</span> : null}
         </div>
       </div>
       <div className="ret2-row-ovr">
@@ -238,22 +228,17 @@ function ListRow({ row, isMine }) {
           ))}
         </div>
       </div>
-      <dl className="ret2-row-facts">
-        <Fact label="Final season">{final}</Fact>
-        <Fact label="Drafted">{draft}</Fact>
-        <Fact label="Contract">{contract}</Fact>
-      </dl>
     </article>
   );
 }
 
-function MinorRow({ row, isMine }) {
+function MinorRow({ row, isMine, big = false }) {
   const team = getRetireeTeam(row);
   const age = getRetireeAge(row);
   const c = getCareerTotals(row);
   return (
     <li className={`ret2-minor${isMine ? " is-mine" : ""}`}>
-      <TeamLogoBadge teamLogo={teamLogoFor(row)} teamName={team} size={34} variant="watermark" className="ret2-logo" />
+      <TeamLogoBadge teamLogo={teamLogoFor(row)} teamName={team} size={big ? 56 : 34} variant="watermark" className="ret2-logo" />
       <span className="ret2-minor-name">{getRetireeName(row)}</span>
       <span className="ret2-minor-meta">
         {[getRetireePosition(row), age != null ? `age ${age}` : null, team, c.source === "nhl" && c.gp ? `${fmtInt(c.gp)} NHL GP` : null]
@@ -366,7 +351,9 @@ export default function RetirementsBoard({ franchiseState = {}, retirees = [], o
 
   const [listModeRaw, setListMode] = useState("nhl");
   const listMode = listModeRaw === "nhl" && !rest.length ? "minors" : listModeRaw === "minors" && !minorPool.length ? "nhl" : listModeRaw;
-  const [boardRef, perPage] = useFitCount(listMode === "nhl" ? 82 : 46, listMode === "nhl" ? 1 : 3);
+  // With no tribute heroes above (the Minors tab), the minors list owns the whole stage: bigger two-column cards.
+  const roomyMinors = listMode === "minors" && !heroes.length;
+  const [boardRef, perPage] = useFitCount(listMode === "nhl" ? 82 : roomyMinors ? 96 : 46, listMode === "nhl" ? 1 : roomyMinors ? 2 : 3);
   const [page, setPage] = useState(0);
   const listRows = listMode === "nhl" ? rest : minorPool;
   const pageCount = Math.max(1, Math.ceil(listRows.length / perPage));
@@ -526,9 +513,9 @@ export default function RetirementsBoard({ franchiseState = {}, retirees = [], o
                     ) : null,
                   ]
                 : (
-                  <ul className="ret2-minor-grid">
+                  <ul className={`ret2-minor-grid${roomyMinors ? " is-roomy" : ""}`}>
                     {pageRows.map((row, index) => (
-                      <MinorRow key={`${row.player_id || row.name}-m${index}`} row={row} isMine={isUserTeamRetiree(row, userTeamId)} />
+                      <MinorRow key={`${row.player_id || row.name}-m${index}`} row={row} big={roomyMinors} isMine={isUserTeamRetiree(row, userTeamId)} />
                     ))}
                   </ul>
                 )}

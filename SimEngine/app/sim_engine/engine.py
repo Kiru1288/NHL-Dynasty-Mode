@@ -9521,10 +9521,15 @@ class SimEngine:
         """
         ctx = self.last_league_context or {}
         nudges = ctx.get("nudges") or {}
+        try:
+            from app.sim_engine.tuning.command_knobs import knob as _cmd_knob
+        except Exception:  # pragma: no cover
+            def _cmd_knob(_n, d=1.0):
+                return d
         return {
-            "chaos_mod": float(nudges.get("chaos_mod", 1.0)),
+            "chaos_mod": float(nudges.get("chaos_mod", 1.0)) * float(_cmd_knob("chaos", 1.0)),
             "injury_rate_mod": float(nudges.get("injury_rate_mod", 1.0)),
-            "morale_volatility_mod": float(nudges.get("morale_volatility_mod", 1.0)),
+            "morale_volatility_mod": float(nudges.get("morale_volatility_mod", 1.0)) * float(_cmd_knob("morale_volatility", 1.0)),
             "cap_growth_mod": float(nudges.get("cap_growth_mod", 1.0)),
         }
 

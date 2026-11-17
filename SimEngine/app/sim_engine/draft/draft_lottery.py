@@ -144,10 +144,13 @@ def run_draft_lottery(
             wid = str(won.team_id)
             winners.append(wid)
             rank = orig_rank[wid]
-            if rank - MAX_JUMP <= pick_no:
-                assigned[pick_no] = wid
-            else:
-                assigned[rank - MAX_JUMP] = wid
+            slot = pick_no if rank - MAX_JUMP <= pick_no else rank - MAX_JUMP
+            # A first-draw winner who could only jump 10 may already hold this slot
+            # (e.g. #12 wins draw 1 -> slot 2, then #2 wins draw 2). Don't overwrite
+            # them: take the next open slot so both winners keep a lottery jump.
+            while slot in assigned:
+                slot += 1
+            assigned[slot] = wid
             remaining = [t for t in remaining if str(t.team_id) != wid]
         rest = [str(t.team_id) for t in ordered if str(t.team_id) not in assigned.values()]
         final_order: list[str] = []

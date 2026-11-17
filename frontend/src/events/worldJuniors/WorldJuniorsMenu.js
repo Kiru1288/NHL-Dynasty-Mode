@@ -520,11 +520,12 @@ function WjcPageToolbar({
   canSim,
   simLabel,
 }) {
+  // Four tabs. Bracket lives under Games, Draft Rising under Prospects, Stats is Leaders.
   const sections = [
     { id: "overview", label: "Overview" },
-    { id: "games", label: "Games" },
-    { id: "prospects", label: "Prospects" },
-    { id: "playoffs", label: "Bracket" },
+    { id: "games", label: "Games & Bracket" },
+    { id: "prospects", label: "Prospects & Draft Stock" },
+    { id: "stats", label: "Leaders" },
   ];
 
   return (
@@ -549,28 +550,6 @@ function WjcPageToolbar({
             </button>
           );
         })}
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeSection === "draftRisers"}
-          className={`wjc-ops-tabs__aux${activeSection === "draftRisers" ? " is-active" : ""}`}
-          onClick={() => onSectionChange("draftRisers")}
-          title="Draft board movement and scouting notes"
-        >
-          <WjcOpsIcon name="board" size={13} tone="gold" />
-          <span>Draft Rising</span>
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeSection === "stats"}
-          className={`wjc-ops-tabs__aux${activeSection === "stats" ? " is-active" : ""}`}
-          onClick={() => onSectionChange("stats")}
-          title="Tournament stat leaders"
-        >
-          <WjcOpsIcon name="chart" size={13} tone="cyan" />
-          <span>Stats</span>
-        </button>
       </nav>
 
       <div className="wjc-page-actions wjc-ops-command__actions">
@@ -1895,6 +1874,13 @@ export default function WorldJuniorsMenu({
               </section>
             ) : null}
 
+            {activeSection === "games" || activeSection === "playoffs" ? (
+              <WjcPlayoffsSection
+                payload={payload}
+                onSelectGame={setSelectedGame}
+              />
+            ) : null}
+
             {activeSection === "prospects" ? (
               <WjcProspectsSection
                 payload={payload}
@@ -1904,7 +1890,7 @@ export default function WorldJuniorsMenu({
               />
             ) : null}
 
-            {activeSection === "draftRisers" ? (
+            {activeSection === "prospects" || activeSection === "draftRisers" ? (
               <DraftRisingPanel
                 rows={draftRiserRows}
                 onSelectPlayer={handleSelectProspect}
@@ -1932,12 +1918,6 @@ export default function WorldJuniorsMenu({
               </section>
             ) : null}
 
-            {activeSection === "playoffs" ? (
-              <WjcPlayoffsSection
-                payload={payload}
-                onSelectGame={setSelectedGame}
-              />
-            ) : null}
           </section>
 
         </div>

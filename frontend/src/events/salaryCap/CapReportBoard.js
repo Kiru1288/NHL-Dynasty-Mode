@@ -111,16 +111,6 @@ function logoFor(name, abbrev) {
 
 /* --------------------------------------------------------------- components */
 
-function Figure({ label, value, sub, tone = "" }) {
-  return (
-    <div className={`capr2-figure${tone ? ` is-${tone}` : ""}`}>
-      <span className="capr2-figure-label">{label}</span>
-      <strong className="capr2-figure-value">{value}</strong>
-      {sub ? <span className="capr2-figure-sub">{sub}</span> : null}
-    </div>
-  );
-}
-
 function SectionHead({ title, note }) {
   return (
     <div className="capr2-sechead">
@@ -877,28 +867,52 @@ export default function CapReportBoard({ franchiseState = {}, eventData = {}, on
       </header>
 
       <main className="capr2-main">
-        <section className="capr2-hero">
-          <div className="capr2-club">
-            <TeamLogoBadge teamLogo={teamLogo} teamName={teamName} size={156} variant="badge" />
-            <div className="capr2-club-text">
-              <div className="capr2-club-name" role="heading" aria-level={2}>{teamName}</div>
-              <p className={`capr2-club-status is-${tone}`}>
-                {report.userTeam.capStatus || "Cap status"}
-                {rank ? ` · ${ordinal(rank)} in cap space` : ""}
-              </p>
-              {reason ? <p className="capr2-club-reason">{reason}</p> : null}
+        <section className="capr2-hero is-v3">
+          {/* The three numbers that matter, big: what you spend, what you have left, and the ceiling. */}
+          <div className="capr2-big3">
+            <div className="capr2-big is-hit">
+              <span className="capr2-big-lab">Cap hit</span>
+              <strong className="capr2-big-val">{money(payroll)}</strong>
+              <span className="capr2-big-sub">{currentCap > 0 ? `${pct((payroll / currentCap) * 100, 0)} of the cap used` : "Payroll"}</span>
+            </div>
+            <div className={`capr2-big is-space${capSpace != null && capSpace < 0 ? " is-danger" : ""}`}>
+              <span className="capr2-big-lab">Cap space</span>
+              <strong className="capr2-big-val">{money(capSpace)}</strong>
+              <span className="capr2-big-sub">{spaceSub}</span>
+              {change != null && Math.abs(change) > 0.0001 ? (
+                <span className={`capr2-big-jump${change < 0 ? " is-down" : ""}`}>
+                  {change > 0 ? "▲" : "▼"} {formatCapChange(change)} {change > 0 ? "more room" : "less room"} from the new cap
+                </span>
+              ) : null}
+            </div>
+            <div className="capr2-big is-cap">
+              <span className="capr2-big-lab">{capSeason || "League"} salary cap</span>
+              <strong className="capr2-big-val">{money(currentCap)}</strong>
+              <span className={`capr2-big-jump${change != null && change < 0 ? " is-down" : ""}`}>
+                {change != null && change < 0 ? "▼" : "▲"} {formatCapChange(change)} ({formatCapPercent(report.capChangePercent)}) from {money(report.previousCap)}
+              </span>
             </div>
           </div>
-          <div className="capr2-figures">
-            <Figure label="Cap space" value={money(capSpace)} sub={spaceSub} tone={capSpace != null && capSpace < 0 ? "danger" : "gold"} />
-            <Figure
-              label={`${capSeason || "League"} salary cap`}
-              value={money(currentCap)}
-              sub={`${formatCapChange(change)} (${formatCapPercent(report.capChangePercent)}) from ${money(report.previousCap)}`}
-            />
-            <Figure label="Payroll" value={money(payroll)} sub={currentCap > 0 ? `${pct((payroll / currentCap) * 100, 0)} of the cap used` : ""} />
-            <Figure label="Cap floor" value={floor != null ? money(floor) : "—"} sub={floor != null && payroll ? `${formatCapChange(payroll - floor)} vs your payroll` : ""} />
-          </div>
+          <aside className="capr2-hero-side">
+            <div className="capr2-club">
+              <TeamLogoBadge teamLogo={teamLogo} teamName={teamName} size={72} variant="badge" />
+              <div className="capr2-club-text">
+                <div className="capr2-club-name" role="heading" aria-level={2}>{teamName}</div>
+                <p className={`capr2-club-status is-${tone}`}>
+                  {report.userTeam.capStatus || "Cap status"}
+                  {rank ? ` · ${ordinal(rank)} in cap space` : ""}
+                </p>
+              </div>
+            </div>
+            <dl className="capr2-side-kv">
+              <dt>Cap floor</dt>
+              <dd>
+                {floor != null ? money(floor) : "—"}
+                {floor != null && payroll ? <small> {formatCapChange(payroll - floor)} vs payroll</small> : null}
+              </dd>
+            </dl>
+            {reason ? <p className="capr2-club-reason">{reason}</p> : null}
+          </aside>
           <CapMeter cap={currentCap} floor={floor} payroll={payroll} byPosition={d.by_position} />
         </section>
 

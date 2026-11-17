@@ -38,3 +38,8 @@ backend/tmp/
 backend/services/puckgpt/.cache/
 backend/data/puckgpt/
 backend/data/headshot_cache/
+
+# Franchise Command disk saves
+backend/saves/
+frontend/_to_delete/
+_to_delete/

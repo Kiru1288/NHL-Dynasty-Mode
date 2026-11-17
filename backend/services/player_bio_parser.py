@@ -119,7 +119,7 @@ WJC_COUNTRY_CODES: Dict[str, str] = {
 WJC_COUNTRY_META: List[Tuple[str, str]] = [
     ("CAN", "Canada"),
     ("USA", "United States"),
-    ("RUS", "Russia"),
+    ("RUS", "Athletes from Russia (OAR)"),  # neutral athletes; internal code stays RUS
     ("SWE", "Sweden"),
     ("FIN", "Finland"),
     ("CZE", "Czechia"),

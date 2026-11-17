@@ -271,6 +271,12 @@ def meeting_options(session: Any, player_id: str) -> Dict[str, Any]:
             "active_discount_pct": (disc or {}).get("pct") if isinstance(disc, dict) and str((disc or {}).get("team_id")) == _uid(session) else None,
             "active_discount_m": (disc or {}).get("amount_m") if isinstance(disc, dict) and str((disc or {}).get("team_id")) == _uid(session) else None,
         }
+    try:
+        from services.negotiation_tactics import tactic_options
+
+        out["tactics"] = tactic_options(session, player, where, traits, led)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     goofy = _goofy_demand_for(session, player)
     if goofy:
         out["goofy_demand"] = {**goofy, "used": bool(led.get("goofy")), "result": led.get("goofy")}
@@ -346,6 +352,9 @@ def _interest_bonus_from_ledger(led: Dict[str, Any]) -> float:
         row = led.get(key)
         if isinstance(row, dict):
             total += float(row.get("interest_delta") or 0.0)
+    for row in (led.get("tactics") or {}).values():
+        if isinstance(row, dict):
+            total += float(row.get("interest_delta") or 0.0)
     return total
 
 
@@ -365,6 +374,10 @@ def run_meeting(session: Any, player_id: str, kind: str, option: str) -> Dict[st
         res = ask_hometown_discount(session, player_id)
     elif kind == "goofy_demand":
         res = _do_goofy_demand(session, player, where, str(option))
+    elif kind == "tactic":
+        from services.negotiation_tactics import run_tactic
+
+        res = run_tactic(session, player, where, str(option))
     else:
         return {"ok": False, "reason": f"Unknown meeting: {kind}"}
     if res.get("ok"):
@@ -783,7 +796,8 @@ def interest_adjustment(session: Any, player: Any, team: Any, context: str) -> f
         _swallowed_log.debug("suppressed exception", exc_info=True)
     # An apology repairs trust, not the memory: broken promises keep costing at the table.
     bonus -= 3.0 * min(3, _broken_promise_count(session, _player_id(player)))
-    return max(-12.0, min(18.0, bonus))
+    # Three tactics on top of a pitch and an agent meeting can stack a little higher than before.
+    return max(-18.0, min(24.0, bonus))
 
 
 def demand_multiplier(player: Any, team: Any, context: str) -> float:
@@ -804,11 +818,17 @@ def demand_multiplier(player: Any, team: Any, context: str) -> float:
     # Agent framing, a refused hometown ask, and lowballs all stack.
     # One hostile meeting plus a cheap offer can push the ask up about half.
     # A friendly meeting can take it down to about 55% before the dollar discount.
-    for attr in ("_agent_demand_shift", "_hometown_refusal_shift", "_lowball_ask_shift", "_goofy_ask_shift"):
+    for attr in ("_agent_demand_shift", "_hometown_refusal_shift", "_lowball_ask_shift", "_goofy_ask_shift", "_tactic_ask_shift"):
         shift = getattr(player, attr, None)
         if isinstance(shift, dict) and str(shift.get("team_id")) == tid and shift.get("expiry") == exp_now:
             mult *= 1.0 + float(shift.get("pct") or 0.0) / 100.0
-    return max(0.55, min(1.50, mult))
+    try:
+        from app.sim_engine.tuning.command_knobs import knob as _cmd_knob
+
+        mult *= max(0.7, min(1.4, float(_cmd_knob("contract_asks", 1.0))))
+    except Exception:
+        pass
+    return max(0.50, min(1.65, mult))
 
 
 def demand_discount_m(player: Any, team: Any, context: str) -> float:

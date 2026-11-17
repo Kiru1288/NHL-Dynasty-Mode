@@ -517,6 +517,36 @@ export async function runNegotiationMeeting(playerId, kind, option = "") {
   return data;
 }
 
+export async function getDisasterDraft() {
+  const { data } = await api.get("/api/franchise/disaster-draft");
+  return data;
+}
+
+export async function pickDisasterDraft(body) {
+  const { data } = await api.post("/api/franchise/disaster-draft/pick", body);
+  return data;
+}
+
+export async function getCapPlotOptions(playerId) {
+  const { data } = await api.get(`/api/franchise/cap-plot/${encodeURIComponent(playerId)}`);
+  return data;
+}
+
+export async function executeCapPlot(body) {
+  const { data } = await api.post("/api/franchise/cap-plot/execute", body);
+  return data;
+}
+
+export async function getInternationalHub() {
+  const { data } = await api.get("/api/franchise/international");
+  return data;
+}
+
+export async function getInternationalTournament(tournamentId) {
+  const { data } = await api.get(`/api/franchise/international/${encodeURIComponent(tournamentId)}`);
+  return data;
+}
+
 export async function getWaiverWire() {
   const { data } = await api.get("/api/franchise/waivers");
   return data;

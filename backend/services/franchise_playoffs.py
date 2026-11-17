@@ -289,6 +289,37 @@ def _due_active_series(live: Dict[str, Any], *, cpu_only: bool = False) -> List[
     return due
 
 
+def _play_full_night(
+    session: "FranchiseSession",
+    live: Dict[str, Any],
+    *,
+    first: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    """Play one playoff night: every series due tonight plays one game (both conferences),
+    then the calendar advances a day. Keeps every series in lockstep, so no series can
+    race ahead of the others. `first` (e.g. the user's series) plays first so its game is
+    returned first; if it is overdue it is pulled onto tonight."""
+    _sync_same_night_slate(live)
+    today = int(live.get("playoff_day") or 0)
+    if first is not None and first.get("status") == "active" and int(first.get("scheduled_day") or 0) < today:
+        first["scheduled_day"] = today
+    due = _due_active_series(live, cpu_only=False)
+    if first is not None and first in due:
+        due = [first] + [r for r in due if r is not first]
+    games: List[Dict[str, Any]] = []
+    for row in list(due):
+        if row.get("status") != "active":
+            continue
+        games.append({
+            "series_id": row.get("series_id"),
+            "game": _play_series_game(session, live, row, respect_schedule=True),
+        })
+    live["playoff_day"] = today + 1
+    _try_advance_bracket(session, live)
+    _sync_same_night_slate(live)
+    return games
+
+
 def _user_series_blocking(live: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     for s in live.get("series") or []:
         if s.get("is_user_series") and _series_due_today(live, s):
@@ -1175,6 +1206,12 @@ def _try_advance_bracket(session: FranchiseSession, live: Dict[str, Any]) -> Non
         live["current_round"] = min(active_rounds)
     elif live.get("completed"):
         live["current_round"] = 4
+    try:
+        from services.international_tournaments import playoff_tick
+
+        playoff_tick(session, int(live.get("current_round") or 1), bool(live.get("completed")))
+    except Exception:
+        pass
 
     live["series"] = series
     live["updated_at"] = _now_iso()
@@ -1336,19 +1373,21 @@ def _handle_playoff_action_inner(
         row = _find_series(live, series_id)
         if action in ("play_user_game", "sim_user_game") and not row.get("is_user_series"):
             raise ValueError("Not your series")
-        # User may always play/sim their own series even if slightly off calendar
-        # (missed tip while CPU day advanced). Auto-align to today.
-        respect = True
-        if row.get("is_user_series"):
-            row["scheduled_day"] = int(live.get("playoff_day") or 0)
-            respect = False
-        elif not _series_due_today(live, row):
-            raise ValueError(
-                f"That series tips on day {int(row.get('scheduled_day') or 0) + 1}; "
-                f"today is day {int(live.get('playoff_day') or 0) + 1}"
-            )
-        game = _play_series_game(session, live, row, respect_schedule=respect)
-        _try_advance_bracket(session, live)
+        if row.get("status") != "active":
+            raise ValueError("That series is not active")
+        # Your game is one game of the night: every other series due tonight plays too, then the
+        # calendar moves on. (Before, only your series played and you could sweep it in one night.)
+        # If your next game is a later night, the nights in between are played first.
+        guard = 0
+        while (
+            row.get("status") == "active"
+            and int(row.get("scheduled_day") or 0) > int(live.get("playoff_day") or 0)
+            and guard < 6
+        ):
+            guard += 1
+            _play_full_night(session, live)
+        night = _play_full_night(session, live, first=row)
+        game = next((g["game"] for g in night if g.get("series_id") == row.get("series_id")), None)
         session.playoff_live = live
         _sync_payload_from_live(session, live)
         finish = _maybe_finish(session, live)
@@ -1357,6 +1396,7 @@ def _handle_playoff_action_inner(
             "ok": True,
             "action": action,
             "game": game,
+            "games": night,
             "series": _slim_series(row),
             "playoff_day": live.get("playoff_day"),
             "finish": finish,
@@ -1386,12 +1426,13 @@ def _handle_playoff_action_inner(
             raise ValueError("Series teams not set yet")
         games = []
         safety = 0
-        while row.get("status") == "active" and safety < 7:
+        # Night by night until this series is decided. Every series due on those nights plays as
+        # well, so the rest of the bracket keeps pace instead of sitting at 0-0.
+        while row.get("status") == "active" and safety < 40:
             safety += 1
-            # Explicit Sim Series ignores calendar — finish the series now.
-            games.append(_play_series_game(session, live, row, respect_schedule=False))
-        _try_advance_bracket(session, live)
-        _sync_same_night_slate(live)
+            for g in _play_full_night(session, live, first=row):
+                if g.get("series_id") == row.get("series_id"):
+                    games.append(g["game"])
         session.playoff_live = live
         _sync_payload_from_live(session, live)
         finish = _maybe_finish(session, live)

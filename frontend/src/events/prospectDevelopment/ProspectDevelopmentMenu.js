@@ -96,12 +96,26 @@ function Logo({ player, fallbackTeam, size = 36 }) {
   return <TeamLogoBadge teamLogo={src} teamName={player.team} size={size} variant="badge" className="dev2-logo" />;
 }
 
-function DeltaBar({ delta, max }) {
-  const d = num(delta);
-  const pct = max > 0 ? Math.min(100, (Math.abs(d) / max) * 100) : 0;
+/** Ratings live between ~40 and 99. A 0-100 track made a 95 -> 99 gain a sliver at the end of a full
+ *  bar; zooming to 40-99 makes the move readable. */
+const RATING_LO = 40;
+const RATING_HI = 99;
+function ratingPct(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(100, ((n - RATING_LO) / (RATING_HI - RATING_LO)) * 100));
+}
+
+/** Overall track: last season's rating, this season's gain (or loss) as a bright segment, potential as a tick. */
+function OvrTrack({ prev, now, pot }) {
+  const a = ratingPct(Math.min(num(prev), num(now)));
+  const b = ratingPct(Math.max(num(prev), num(now)));
+  const up = num(now) >= num(prev);
   return (
-    <span className={`dev2-dbar ${d > 0 ? "is-up" : d < 0 ? "is-down" : "is-flat"}`} aria-hidden>
-      <span className="dev2-dbar-fill" style={{ width: `${Math.max(d ? 6 : 0, pct)}%` }} />
+    <span className={`dev2-otrack ${up ? "is-up" : "is-down"}`} aria-hidden>
+      <span className="dev2-otrack-base" style={{ width: `${a}%` }} />
+      <span className="dev2-otrack-move" style={{ left: `${a}%`, width: `${Math.max(b - a, num(now) !== num(prev) ? 1.5 : 0)}%` }} />
+      {pot != null ? <span className="dev2-otrack-pot" style={{ left: `${ratingPct(pot)}%` }} title={`Potential ${pot}`} /> : null}
     </span>
   );
 }
@@ -146,7 +160,7 @@ function PlayerRow({ player, selected, onSelect, maxDelta, fallbackTeam }) {
           <span className="dev2-ovr-now">{player.ovr}</span>
           <span className={`dev2-delta is-${ovrDeltaClass(d)}`}>{signed(d)}</span>
         </span>
-        <DeltaBar delta={d} max={maxDelta} />
+        <OvrTrack prev={player.previousOvr} now={player.ovr} pot={player.potential} />
       </span>
       <span className="dev2-cell is-pot">{player.potential ?? "—"}</span>
       <span className="dev2-cell is-attrs">
@@ -268,7 +282,10 @@ function DetailView({ player, fallbackTeam, franchiseLabel }) {
     );
   }
   const d = num(player.ovrDelta);
-  const attrs = (player.allAttributes?.length ? player.allAttributes : player.topAttributes) || [];
+  const allAttrs = (player.allAttributes?.length ? player.allAttributes : player.topAttributes) || [];
+  // Only the ratings that moved, biggest move first; the rest are counted, not listed.
+  const attrs = allAttrs.filter((x) => num(x.delta) !== 0).sort((x, y) => Math.abs(num(y.delta)) - Math.abs(num(x.delta)));
+  const unchanged = allAttrs.length - attrs.length;
   const stats = seasonStatCells(player);
   const drivers = player.growthDrivers || [];
   const notes = [player.primaryReason, ...(player.secondaryReasons || [])].filter(Boolean).join(" · ");
@@ -355,7 +372,9 @@ function DetailView({ player, fallbackTeam, franchiseLabel }) {
       </section>
 
       <section className="dev2-d-block">
-        <div className="dev2-d-h">Attribute changes</div>
+        <div className="dev2-d-h">
+          What grew{attrs.length ? <span className="dev2-d-hsub"> · {attrs.length} rating{attrs.length === 1 ? "" : "s"} moved{unchanged > 0 ? `, ${unchanged} held` : ""}</span> : null}
+        </div>
         {attrs.length ? (
           <ul className="dev2-attrs">
             {attrs.map((a) => (
@@ -364,10 +383,13 @@ function DetailView({ player, fallbackTeam, franchiseLabel }) {
                 <span className="dev2-attr-track" aria-hidden>
                   {a.before != null && a.after != null ? (
                     <>
-                      <span className="dev2-attr-base" style={{ width: `${Math.min(a.before, a.after)}%` }} />
+                      <span className="dev2-attr-base" style={{ width: `${ratingPct(Math.min(a.before, a.after))}%` }} />
                       <span
                         className="dev2-attr-move"
-                        style={{ left: `${Math.min(a.before, a.after)}%`, width: `${Math.abs(a.after - a.before)}%` }}
+                        style={{
+                          left: `${ratingPct(Math.min(a.before, a.after))}%`,
+                          width: `${Math.max(1.5, ratingPct(Math.max(a.before, a.after)) - ratingPct(Math.min(a.before, a.after)))}%`,
+                        }}
                       />
                     </>
                   ) : null}

@@ -245,12 +245,12 @@ function VoteMeter({ proposal, reveal, userAbbr, userName }) {
           </>
         ) : (
           <>
-            <span className="k-for">For</span>
-            <span className="k-lean_for">Leaning for</span>
+            <span className="k-for">Yes</span>
+            <span className="k-lean_for">Leaning yes</span>
             <span className="k-undecided">Undecided</span>
-            <span className="k-lean_against">Leaning against</span>
-            <span className="k-against">Against</span>
-            <span className="k-user">Your seat</span>
+            <span className="k-lean_against">Leaning no</span>
+            <span className="k-against">No</span>
+            <span className="k-user">You</span>
           </>
         )}
         <span className="k-lob">Lobbied by you</span>
@@ -289,6 +289,7 @@ function GroupBars({ groups }) {
 
 function ProposalView({ proposal, tokens, busy, onVote, onLobby, reveal, onNext, isLast, userAbbr, userName, lobbyMult, lobbyReach }) {
   const [showAllWhy, setShowAllWhy] = useState(false);
+  const [showAllCase, setShowAllCase] = useState(false);
   const a = proposal.analysis || {};
   const decided = proposal.status !== "pending";
   const forecast = proposal.forecast || {};
@@ -321,116 +322,216 @@ function ProposalView({ proposal, tokens, busy, onVote, onLobby, reveal, onNext,
   const userVoteTxt = proposal.user_vote === "yes" ? "in favour" : proposal.user_vote === "no" ? "against" : "to abstain";
   const userWon =
     (proposal.status === "passed" && proposal.user_vote === "yes") || (proposal.status === "failed" && proposal.user_vote === "no");
+  const expYes = proj ? num(proj.expected_yes) : num(forecast.expected_yes);
+  const pYes = proj ? Math.round(num(proj.p_pass_if_yes) * 100) : null;
+  const pNo = proj ? Math.round(num(proj.p_pass_if_no) * 100) : null;
+  const caseCap = showAllCase ? 99 : 2;
+  const moreCase = Math.max(0, kase.pros.length - 2) + Math.max(0, kase.cons.length - 2) + kase.trade.length;
 
   return (
     <article className={`${P}-prop`} aria-live="polite">
       <header className={`${P}-prop-head`}>
         <div className={`${P}-prop-cat`}>
-          {proposal.category_label} · {proposal.threshold_label} vote, {needed} of {nTeams} needed
+          <span>{proposal.category_label}</span>
+          <span className="is-need">Needs {needed} of {nTeams}</span>
         </div>
         <div className={`${P}-prop-name`} role="heading" aria-level={2}>
           {proposal.title}
         </div>
-        <p className={`${P}-prop-sum`}>{proposal.summary}</p>
         <p className={`${P}-prop-meta`}>
           {[a.scale ? SCALE_COPY[a.scale] : null, popularityText(a.popularity)].filter(Boolean).join(" · ")}
         </p>
-        {lobbied ? (
-          <p className={`${P}-prop-lob`}>
-            You lobbied {lobbied.side === "yes" ? "for" : "against"} it: {asArray(lobbied.teams).join(", ")}.
-          </p>
-        ) : null}
       </header>
 
-      <div className={`${P}-prop-cols`}>
-      <div className={`${P}-prop-info`}>
-      <section className={`${P}-sec`}>
-        <div className={`${P}-sec-head`}>What it changes</div>
-        {effects.length ? (
-          <div className={`${P}-fx`}>
-            {effects.map((e) => (
-              <div key={`${e.key}-${e.label}`} className={`${P}-fx-row is-${e.tone || "mixed"}`}>
-                <div className={`${P}-fx-what`}>
-                  <span className={`${P}-fx-label`}>{e.label}</span>
-                  <span className={`${P}-fx-note`}>{e.note}</span>
-                </div>
-                <div className={`${P}-fx-val`}>{e.text}</div>
-                <div className={`${P}-fx-club`}>
-                  {e.club ? (
-                    <>
-                      <span className={`${P}-fx-for`}>For {club?.abbr || "you"}</span>
-                      {e.club}
-                    </>
-                  ) : (
-                    <span className={`${P}-muted`}>{asArray(e.helps).length ? `Helps ${listText(e.helps)}` : ""}</span>
-                  )}
-                </div>
+      {/* What is actually being voted on, in plain words, before anything else. */}
+      <section className={`${P}-rulebox`}>
+        <div className={`${P}-rulebox-say`}>
+          <span className={`${P}-rulebox-lab`}>The rule on the table</span>
+          <p>{proposal.summary || "No description on file."}</p>
+        </div>
+        <div className={`${P}-rulebox-fx`}>
+          <span className={`${P}-rulebox-lab`}>{decided && proposal.status === "failed" ? "Would have changed" : "If it passes"}</span>
+          {effects.length ? (
+            effects.map((e) => (
+              <div key={`${e.key}-${e.label}`} className={`${P}-rulefx is-${e.tone || "mixed"}`}>
+                <b>{e.text}</b>
+                <span>{e.label}</span>
+                {e.club || e.note ? <small>{e.club ? `For ${club?.abbr || "you"}: ${e.club}` : e.note}</small> : null}
               </div>
-            ))}
-          </div>
-        ) : (
-          <p className={`${P}-muted`}>No measurable effect on file.</p>
-        )}
+            ))
+          ) : (
+            <p className={`${P}-muted`}>No measurable effect on file.</p>
+          )}
+        </div>
       </section>
 
-      <section className={`${P}-case`}>
-        <div>
-          <div className={`${P}-sec-head is-pro`}>The case for</div>
-          {kase.pros.map((x, i) => (
-            <div key={`p${i}`} className={`${P}-arg`}>
-              <strong>{x.head}</strong>
-              {x.body ? <span>{x.body.replace(/^\.\s*/, "")}</span> : null}
+      {/* The three things to read, left to right: what it means for you, where the room stands, your vote. */}
+      <section className={`${P}-deck`}>
+        <div className={`${P}-tile is-club ${club ? `is-${club.verdict}` : ""}`}>
+          <div className={`${P}-tile-lab`}>1 · For {club?.abbr || "your club"}</div>
+          <div className={`${P}-tile-big`}>{club ? verdictText(club) : "No direct effect"}</div>
+          {club?.net_m != null ? (
+            <div className={`${P}-tile-num`}>
+              {signedM(club.net_m)} <small>a year</small>
             </div>
-          ))}
+          ) : null}
+          {asArray(club?.because)[0] ? <p className={`${P}-tile-note`}>{asArray(club.because)[0]}</p> : null}
         </div>
-        <div>
-          <div className={`${P}-sec-head is-con`}>The case against</div>
-          {kase.cons.map((x, i) => (
-            <div key={`c${i}`} className={`${P}-arg`}>
-              <strong>{x.head}</strong>
-              {x.body ? <span>{x.body.replace(/^\.\s*/, "")}</span> : null}
-            </div>
-          ))}
-        </div>
-        {kase.trade.length ? (
-          <div className={`${P}-case-wide`}>
-            <div className={`${P}-sec-head`}>Trade-offs</div>
-            {kase.trade.map((x, i) => (
-              <div key={`t${i}`} className={`${P}-arg`}>
-                <strong>{x.head}</strong>
-                {x.body ? <span>{x.body}</span> : null}
+
+        <div className={`${P}-tile is-room`}>
+          <div className={`${P}-tile-lab`}>2 · {decided ? "The result" : "The room"}</div>
+          {decided ? (
+            <>
+              <div className={`${P}-tile-big ${revealDone ? `is-${proposal.status}` : ""}`}>
+                {revealDone ? (proposal.status === "passed" ? "Passed" : "Defeated") : "Counting…"}
               </div>
+              <div className={`${P}-tile-num`}>
+                <b className="yes">{yes}</b> – <b className="no">{no}</b>
+                <small> · {needed} needed{abst ? ` · ${abst} abstained` : ""}</small>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className={`${P}-tile-big`}>{forecast.label || "—"}</div>
+              <div className={`${P}-tile-num`}>
+                ≈{expYes.toFixed(0)} <small>of {nTeams - 1} others for · {needed} needed</small>
+              </div>
+              {pYes != null ? (
+                <div className={`${P}-odds`}>
+                  <span>
+                    <em>If you vote for</em>
+                    <i><b className="yes" style={{ width: `${pYes}%` }} /></i>
+                    <strong>{pYes}%</strong>
+                  </span>
+                  <span>
+                    <em>If you vote against</em>
+                    <i><b className="no" style={{ width: `${pNo}%` }} /></i>
+                    <strong>{pNo}%</strong>
+                  </span>
+                </div>
+              ) : null}
+            </>
+          )}
+        </div>
+
+        <div className={`${P}-tile is-act`}>
+          <div className={`${P}-tile-lab`}>3 · Your vote</div>
+          {!decided ? (
+            <>
+              <div className={`${P}-vote`}>
+                <button type="button" className={`${P}-go is-yes`} disabled={busy} onClick={() => onVote("yes")}>
+                  Vote yes
+                </button>
+                <button type="button" className={`${P}-go is-no`} disabled={busy} onClick={() => onVote("no")}>
+                  Vote no
+                </button>
+              </div>
+              <div className={`${P}-vote-sub`}>
+                <button type="button" className={`${P}-quiet`} disabled={busy} onClick={() => onVote("abstain")}>
+                  Abstain
+                </button>
+                <span className={`${P}-keys`}>A = yes · D = no</span>
+              </div>
+              <div className={`${P}-lobby`}>
+                <span className={`${P}-lobby-copy`}>
+                  {lobbied
+                    ? `You lobbied ${lobbied.side === "yes" ? "for" : "against"} it: ${asArray(lobbied.teams).join(", ")}.`
+                    : tokens > 0
+                      ? `Lobby first? Sways ${lobbyReach} like-minded governors ~${Math.round(18 * (lobbyMult || 1))} pts. ${tokens} call${tokens === 1 ? "" : "s"} left.`
+                      : "No lobbying calls left."}
+                </span>
+                {!lobbied && tokens > 0 ? (
+                  <span className={`${P}-lobby-btns`}>
+                    <button type="button" className={`${P}-chipbtn`} disabled={busy} onClick={() => onLobby("yes")}>
+                      Lobby for
+                    </button>
+                    <button type="button" className={`${P}-chipbtn`} disabled={busy} onClick={() => onLobby("no")}>
+                      Lobby against
+                    </button>
+                  </span>
+                ) : null}
+              </div>
+            </>
+          ) : revealDone ? (
+            <>
+              <p className={`${P}-tile-note`}>
+                You voted {userVoteTxt}
+                {proposal.user_vote !== "abstain" ? (userWon ? ", on the winning side." : ", on the losing side.") : "."}
+                {tally.abstain ? ` ${tally.abstain} abstained.` : ""}
+              </p>
+              <button type="button" className={`${P}-go is-next`} onClick={onNext}>
+                {isLast ? "Close the meeting" : "Next proposal →"}
+              </button>
+            </>
+          ) : (
+            <p className={`${P}-tile-note`}>The governors are casting their ballots…</p>
+          )}
+        </div>
+      </section>
+
+      <section className={`${P}-floorvote`} aria-label="Vote">
+        <div className={`${P}-sec-head`}>
+          {decided ? "How all 32 governors voted" : "Where all 32 governors stand"}
+          <span>Hover a logo for that club's reason</span>
+        </div>
+        <VoteMeter proposal={proposal} reveal={reveal} userAbbr={userAbbr} userName={userName} />
+        {revealDone && asArray(a.result_blocs).length ? (
+          <p className={`${P}-blocline`}>
+            {asArray(a.result_blocs).map((b) => (
+              <span key={b.group}>
+                {b.label} <b>{b.yes}–{b.no}</b>
+              </span>
             ))}
-          </div>
+          </p>
         ) : null}
       </section>
 
-      {a.groups || club ? (
-        <section className={`${P}-split`}>
+      <div className={`${P}-cards`}>
+        <section className={`${P}-card ${P}-case`}>
           <div>
-            <div className={`${P}-sec-head`}>Who wins, who loses</div>
-            <GroupBars groups={a.groups} />
+            <div className={`${P}-sec-head is-pro`}>Case for</div>
+            {kase.pros.slice(0, caseCap).map((x, i) => (
+              <div key={`p${i}`} className={`${P}-arg is-pro`}>
+                <strong>{x.head}</strong>
+                {x.body ? <span>{x.body.replace(/^\.\s*/, "")}</span> : null}
+              </div>
+            ))}
           </div>
-          {club ? (
-            <div className={`${P}-verdict is-${club.verdict}`}>
-              <div className={`${P}-sec-head`}>Your club</div>
-              <div className={`${P}-verdict-big`}>{verdictText(club)}</div>
-              <p className={`${P}-verdict-traits`}>{listText(club.traits)}</p>
-              {asArray(club.because).map((t) => (
-                <p key={t} className={`${P}-verdict-why`}>{t}</p>
+          <div>
+            <div className={`${P}-sec-head is-con`}>Case against</div>
+            {kase.cons.slice(0, caseCap).map((x, i) => (
+              <div key={`c${i}`} className={`${P}-arg is-con`}>
+                <strong>{x.head}</strong>
+                {x.body ? <span>{x.body.replace(/^\.\s*/, "")}</span> : null}
+              </div>
+            ))}
+          </div>
+          {showAllCase && kase.trade.length ? (
+            <div className={`${P}-case-wide`}>
+              <div className={`${P}-sec-head`}>Trade-offs</div>
+              {kase.trade.map((x, i) => (
+                <div key={`t${i}`} className={`${P}-arg`}>
+                  <strong>{x.head}</strong>
+                  {x.body ? <span>{x.body}</span> : null}
+                </div>
               ))}
-              {club.net_m != null ? (
-                <p className={`${P}-verdict-net`}>
-                  Measurable money: <strong>{signedM(club.net_m)}</strong> a year
-                </p>
-              ) : null}
             </div>
           ) : null}
+          {moreCase ? (
+            <button type="button" className={`${P}-more`} onClick={() => setShowAllCase((v) => !v)}>
+              {showAllCase ? "Show less" : `Show ${moreCase} more`}
+            </button>
+          ) : null}
         </section>
-      ) : null}
+
+        <section className={`${P}-card`}>
+          <div className={`${P}-sec-head`}>Who gains, who loses</div>
+          <GroupBars groups={a.groups} />
+        </section>
+      </div>
 
       {why.length ? (
-        <section className={`${P}-sec`}>
+        <section className={`${P}-card ${P}-whycard`}>
           <div className={`${P}-sec-head`}>Why governors voted this way</div>
           <div className={`${P}-why`}>
             {whyShown.map((g) => (
@@ -446,103 +547,12 @@ function ProposalView({ proposal, tokens, busy, onVote, onLobby, reveal, onNext,
             ))}
           </div>
           {why.length > whyShown.length ? (
-            <p className={`${P}-muted`}>Plus {why.length - whyShown.length} smaller groups; the room column lists every governor.</p>
+            <button type="button" className={`${P}-more`} onClick={() => setShowAllWhy(true)}>
+              Show {why.length - whyShown.length} smaller groups
+            </button>
           ) : null}
         </section>
       ) : null}
-      </div>
-      <div className={`${P}-prop-side`}>
-      <section className={`${P}-floorvote`} aria-label="Vote">
-        <div className={`${P}-sec-head`}>{decided ? "The vote" : "Projected vote"}</div>
-        <VoteMeter proposal={proposal} reveal={reveal} userAbbr={userAbbr} userName={userName} />
-        <p className={`${P}-count`}>
-          {decided ? (
-            <>
-              <strong className="yes">{yes} in favour</strong>
-              <strong className="no">{no} opposed</strong>
-              {abst ? <span>{abst} abstained</span> : null}
-              <span>{needed} needed of {nTeams}</span>
-            </>
-          ) : proj ? (
-            <>
-              <strong>{forecast.label || "—"}</strong>
-              <span>
-                About {num(proj.expected_yes).toFixed(1)} ± {num(proj.sd).toFixed(1)} governors in favour before your vote, {needed} needed
-              </span>
-              <span>
-                Pass chance <b className="yes">{Math.round(num(proj.p_pass_if_yes) * 100)}%</b> if you vote for,{" "}
-                <b className="no">{Math.round(num(proj.p_pass_if_no) * 100)}%</b> if you vote against
-              </span>
-            </>
-          ) : (
-            <>
-              <strong>{forecast.label || "—"}</strong>
-              <span>About {num(forecast.expected_yes).toFixed(0)} in favour, {needed} needed</span>
-              {proposal.room_mood ? <span>{proposal.room_mood}</span> : null}
-            </>
-          )}
-        </p>
-
-        {!decided ? (
-          <div className={`${P}-actions`}>
-            <div className={`${P}-actions-main`}>
-              <button type="button" className={`${P}-go`} disabled={busy} onClick={() => onVote("yes")}>
-                Vote in favour
-              </button>
-              <button type="button" className={`${P}-go is-alt`} disabled={busy} onClick={() => onVote("no")}>
-                Vote against
-              </button>
-              <button type="button" className={`${P}-quiet`} disabled={busy} onClick={() => onVote("abstain")}>
-                Abstain
-              </button>
-              <span className={`${P}-keys`}>Keys: A in favour · D against</span>
-            </div>
-            <div className={`${P}-actions-lobby`}>
-              <span className={`${P}-lobby-copy`}>
-                {lobbied
-                  ? "You've already worked the phones on this one."
-                  : tokens > 0
-                    ? `Lobbying calls the ${lobbyReach} most persuadable governors whose clubs look like yours and shifts each one's chance of voting your way by about ${Math.round(18 * (lobbyMult || 1))} points. ${tokens} call${tokens === 1 ? "" : "s"} left this meeting.`
-                    : "No lobbying calls left this meeting."}
-              </span>
-              <button type="button" className={`${P}-quiet`} disabled={busy || tokens <= 0 || Boolean(lobbied)} onClick={() => onLobby("yes")}>
-                Lobby for it
-              </button>
-              <button type="button" className={`${P}-quiet`} disabled={busy || tokens <= 0 || Boolean(lobbied)} onClick={() => onLobby("no")}>
-                Lobby against
-              </button>
-            </div>
-          </div>
-        ) : null}
-
-        {revealDone ? (
-          <div className={`${P}-outcome is-${proposal.status}`}>
-            <div>
-              <div className={`${P}-outcome-big`}>{proposal.status === "passed" ? "Passed" : "Defeated"}</div>
-              <p>
-                {tally.yes}–{tally.no}
-                {tally.abstain ? `, ${tally.abstain} abstained` : ""} · {needed} needed · you voted {userVoteTxt}
-                {proposal.user_vote !== "abstain" ? (userWon ? ", on the winning side" : ", on the losing side") : ""}
-              </p>
-              {asArray(a.result_blocs).length ? (
-                <p className={`${P}-blocline`}>
-                  {asArray(a.result_blocs).map((b) => (
-                    <span key={b.group}>
-                      {b.label} <b>{b.yes}–{b.no}</b>
-                    </span>
-                  ))}
-                </p>
-              ) : null}
-            </div>
-            <button type="button" className={`${P}-go`} onClick={onNext}>
-              {isLast ? "Close the meeting" : "Next proposal →"}
-            </button>
-          </div>
-        ) : null}
-      </section>
-
-      </div>
-      </div>
     </article>
   );
 }
@@ -1065,6 +1075,7 @@ function Adjourned({ gov, proposals, onContinue, onFloor, setGov }) {
                 <div className={`${P}-rc-body`}>
                   <div className={`${P}-ap-cat`}>{p.category_label}</div>
                   <div className={`${P}-rc-name`}>{p.title}</div>
+                  {p.summary ? <p className={`${P}-rc-sum`}>{p.summary}</p> : null}
                   <p className={`${P}-rc-you`}>
                     {club?.abbr || "You"} voted <b>{uv}</b>
                     {p.user_vote && p.user_vote !== "abstain" ? (sideWon ? ", on the winning side" : ", on the losing side") : ""}

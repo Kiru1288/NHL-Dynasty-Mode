@@ -310,6 +310,12 @@ def sync_governance_to_league(session: Any) -> Dict[str, float]:
     """Mirror modifiers onto the league so league-only code paths can read them."""
     gov = ensure_governance(session)
     mods = compute_modifiers(gov)
+    try:
+        from services.franchise_command import merge_overlay
+
+        mods = merge_overlay(session, mods, EFFECT_LIMITS)
+    except Exception:
+        _swallowed_log.debug("suppressed exception", exc_info=True)
     gov["modifiers"] = mods
     league = _league(session)
     if league is not None:
@@ -3097,8 +3103,13 @@ def user_fan_report(session: Any) -> Dict[str, Any]:
         try:
             from services.franchise_sim import compute_team_playoff_outlook
 
-            odds = int((compute_team_playoff_outlook(session, team) or {}).get("playoff_odds", 50) or 50)
-            baseline = _clamp(40 + odds * 0.35, 0.0, 100.0)
+            _out = compute_team_playoff_outlook(session, team) or {}
+            _po = _out.get("playoff_odds")
+            odds = int(50 if _po is None else _po)
+            _pace = float(_out.get("points_pace") or 0.0)
+            _pp = _pace / 2.0 if _pace > 0 else 0.5
+            # Same target as the weekly fan pull in franchise_sim._decay_fan_heat_for_team.
+            baseline = _clamp(30 + odds * 0.25 + _pp * 40.0, 0.0, 100.0)
         except Exception:
             baseline = 55.0
     baseline = float(baseline)

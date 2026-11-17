@@ -6,6 +6,7 @@ import { SCREENS } from "../game/constants";
 import { getTeamLogoSrc as getSharedTeamLogoSrc } from "../utils/teamLogos";
 import { formatFranchiseApiError } from "../services/api";
 import WorldJuniorsEvent from "../events/worldJuniors/WorldJuniorsEvent";
+import InternationalTournamentMenu from "../events/internationalTournament/InternationalTournamentMenu";
 import { resolveWorldJuniorsPayload } from "../events/worldJuniors/wjcPayload";
 import { BoxScoreModal } from "../components/dossier/ProspectVisuals";
 import {
@@ -638,6 +639,9 @@ function getSpecialEventDefaultTitle(type) {
 
   if (EVENT_TYPE_LABELS[key]) return EVENT_TYPE_LABELS[key];
 
+  if (key.includes("intl_olympics")) return "Winter Olympics";
+  if (key.includes("intl_four_nations")) return "4 Nations Face-Off";
+  if (key.includes("intl_worlds")) return "IIHF World Championship";
   if (key.includes("injury")) return "Injury Report";
   if (key.includes("trade_deadline")) return "Trade Deadline";
   if (key.includes("trade")) return "Trade Bulletin";
@@ -670,6 +674,7 @@ function getSpecialEventIcon(type) {
   if (key.includes("all_star") || key.includes("allstar")) return "★";
   if (key.includes("winter")) return "❄";
   if (key.includes("heritage") || key.includes("stadium")) return "▤";
+  if (key.includes("intl_")) return "◎";
   if (key.includes("wjc") || key.includes("world")) return "⊕";
   if (key.includes("playoff") || key.includes("stanley")) return "❖";
   if (key.includes("free_agency")) return "$";
@@ -743,7 +748,7 @@ function getSpecialEventTone(type, priority) {
   if (key.includes("playoff") || key.includes("stanley")) return "playoff";
   if (key.includes("all_star") || key.includes("allstar")) return "star";
   if (key.includes("winter") || key.includes("heritage") || key.includes("stadium")) return "showcase";
-  if (key.includes("wjc") || key.includes("world")) return "international";
+  if (key.includes("wjc") || key.includes("world") || key.includes("intl_")) return "international";
   if (key.includes("milestone")) return "milestone";
 
   return p === "HIGH" ? "important" : "league";
@@ -753,6 +758,13 @@ function getWorldJuniorsEventPayload(franchiseState) {
   const resolved = resolveWorldJuniorsPayload(franchiseState, null);
   if (resolved.hasData && resolved.raw) return resolved.raw;
   return EMPTY_OBJECT;
+}
+
+function isInternationalCalendarEvent(event) {
+  if (!event || typeof event !== "object") return false;
+  const type = normalizeKey(event.type || event.kind || event.event_type || event.eventType || "");
+  const id = normalizeKey(event.id || event.event_id || "");
+  return type.includes("intl_") || id.includes("olympics_") || id.includes("four_nations_") || id.includes("worlds_");
 }
 
 function isWorldJuniorsCalendarEvent(event) {
@@ -1069,7 +1081,7 @@ function CalendarSpecialEventTile({ event, compact, onOpen }) {
   );
 }
 
-function SpecialEventDetailsModal({ event, dateLabel, onClose, onOpenWorldJuniors, onOpenPlayoffs }) {
+function SpecialEventDetailsModal({ event, dateLabel, onClose, onOpenWorldJuniors, onOpenPlayoffs, onOpenInternational }) {
   if (!event) return null;
 
   const effects = event.effects && typeof event.effects === "object" ? Object.entries(event.effects) : [];
@@ -1147,6 +1159,14 @@ function SpecialEventDetailsModal({ event, dateLabel, onClose, onOpenWorldJunior
             <footer className="nhlcal-event-modal-actions">
               <button type="button" className="nhlcal-wjc-hub-button is-modal" onClick={onOpenWorldJuniors}>
                 Open World Juniors Hub
+              </button>
+            </footer>
+          ) : null}
+
+          {typeof onOpenInternational === "function" ? (
+            <footer className="nhlcal-event-modal-actions">
+              <button type="button" className="nhlcal-wjc-hub-button is-modal" onClick={onOpenInternational}>
+                Open International Hub
               </button>
             </footer>
           ) : null}
@@ -1379,6 +1399,7 @@ function CalendarScreen(props = {}) {
   const [simStopNotice, setSimStopNotice] = useState("");
   const [legendFilter, setLegendFilter] = useState(null);
   const [worldJuniorsMenuOpen, setWorldJuniorsMenuOpen] = useState(false);
+  const [intlMenuOpen, setIntlMenuOpen] = useState(false);
   const [wjcMenuSnapshot, setWjcMenuSnapshot] = useState(null);
 
   const calendarRootRef = useRef(null);
@@ -2521,6 +2542,15 @@ function CalendarScreen(props = {}) {
           </div>
           <div className="nhlcal-hero-actions">
             <div className="nhlcal-action-primary">
+              <button
+                className="nhlcal-wjc-hub-button nhlcal-intl-hub-button"
+                type="button"
+                onClick={() => setIntlMenuOpen(true)}
+                title="4 Nations, Olympics and World Championship: schedule, rosters and results"
+              >
+                <span aria-hidden="true">◎</span>
+                International
+              </button>
               {worldJuniorsWindowOpen ? (
                 <button
                   className="nhlcal-wjc-hub-button"
@@ -3062,6 +3092,14 @@ function CalendarScreen(props = {}) {
           onOpenWorldJuniors={
             isWorldJuniorsCalendarEvent(selectedEvent) ? openWorldJuniorsMenu : undefined
           }
+          onOpenInternational={
+            isInternationalCalendarEvent(selectedEvent)
+              ? () => {
+                  setSelectedEvent(null);
+                  setIntlMenuOpen(true);
+                }
+              : undefined
+          }
           onOpenPlayoffs={
             isPlayoffsStartCalendarEvent(selectedEvent) || isPlayoffReady(gameUI?.franchiseState || rootState)
               ? openFranchiseEventMenu
@@ -3069,6 +3107,8 @@ function CalendarScreen(props = {}) {
           }
         />
       ) : null}
+
+      {intlMenuOpen ? <InternationalTournamentMenu onClose={() => setIntlMenuOpen(false)} /> : null}
 
       {worldJuniorsMenuOpen ? (
         <div className="nhlcal-wjc-menu-host" role="presentation">

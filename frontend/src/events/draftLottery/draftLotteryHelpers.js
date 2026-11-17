@@ -166,7 +166,9 @@ export function enumerateLotteryOutcomes(oddsByRank) {
       [a, b].forEach((idx, k) => {
         const pickNo = k + 1;
         const rank = idx + 1;
-        assigned[rank - LOTTERY_MAX_JUMP <= pickNo ? pickNo : rank - LOTTERY_MAX_JUMP] = rank;
+        let slot = rank - LOTTERY_MAX_JUMP <= pickNo ? pickNo : rank - LOTTERY_MAX_JUMP;
+        while (assigned[slot] != null) slot += 1; // mirrors the engine: never overwrite draw 1
+        assigned[slot] = rank;
       });
       const used = new Set(Object.values(assigned));
       const remaining = [];

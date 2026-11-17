@@ -11,6 +11,11 @@ _swallowed_log = _logging_swallow.getLogger(__name__)
 # each new season from the league revenue model and stores it on the league
 # (league.cap_schedule_m), which every reader below honours.
 NHL_UPPER_LIMIT_BY_SEASON_START: Dict[int, float] = {
+    # Earlier seasons are listed so the Cap Report's history does not fall back to $88.0M
+    # (it showed 2023-24 at $88.0M and 2024-25 as +0.0%; the real 2023-24 cap was $83.5M).
+    2021: 81.5,
+    2022: 82.5,
+    2023: 83.5,
     2024: 88.0,
     2025: 95.5,
     2026: 104.0,
@@ -18,6 +23,9 @@ NHL_UPPER_LIMIT_BY_SEASON_START: Dict[int, float] = {
     2028: 127.5,  # league estimate (Sept 2026) — revisable
 }
 NHL_LOWER_LIMIT_BY_SEASON_START: Dict[int, float] = {
+    2021: 60.2,
+    2022: 61.0,
+    2023: 61.7,
     2024: 65.0,
     2025: 70.6,
     2026: 76.9,
@@ -78,7 +86,8 @@ def nhl_upper_limit_millions(season_start_year: Optional[int] = None, league: An
         known = {**NHL_UPPER_LIMIT_BY_SEASON_START, **{k: v for k, v in sched.items() if k < y}}
         base_y = max(k for k in known if k < y)
         return round(float(known[base_y]) * ((1.0 + NHL_CAP_DEFAULT_GROWTH) ** (y - base_y)) * 2.0) / 2.0
-    return 88.0
+    # Before the table: the earliest season we know (was a flat $88.0M).
+    return float(NHL_UPPER_LIMIT_BY_SEASON_START[min(NHL_UPPER_LIMIT_BY_SEASON_START)])
 
 
 def nhl_lower_limit_millions(season_start_year: Optional[int] = None, league: Any = None) -> float:

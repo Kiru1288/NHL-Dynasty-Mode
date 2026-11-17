@@ -150,6 +150,17 @@ class FranchiseSession:
     pending_ui_popups: List[Dict[str, Any]] = field(default_factory=list)
     shown_event_keys: Set[str] = field(default_factory=set)
     showcase_archive: List[Dict[str, Any]] = field(default_factory=list)
+    # 4 Nations / Olympics / IIHF Worlds bundles, history, Russia review (services.international_tournaments).
+    international: Dict[str, Any] = field(default_factory=dict)
+    # Player deaths: obituary, mourning arc, league memorials (services.player_mourning).
+    mourning: Dict[str, Any] = field(default_factory=dict)
+    # The cap-dump plot ledger (services.cap_plot). game_over ends the save.
+    cap_plot: Dict[str, Any] = field(default_factory=dict)
+    # Emergency Rehabilitation Plan: open user draft + history (services.disaster_draft).
+    disaster_draft: Optional[Dict[str, Any]] = None
+    disasters: List[Dict[str, Any]] = field(default_factory=list)
+    # Franchise Command sliders ({values, preset, history}); see services/franchise_command.py
+    franchise_command: Optional[Dict[str, Any]] = None
     # Master switch for the cartoony "goofy" layer (fluke goals, hat-trick rain, mascot
     # races, ON FIRE streaks, ...). Read everywhere via getattr(session, "goofy_events_enabled", True).
     goofy_events_enabled: bool = True

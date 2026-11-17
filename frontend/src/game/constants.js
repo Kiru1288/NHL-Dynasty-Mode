@@ -28,6 +28,7 @@ export const SCREENS = {
   LEAGUE_OPERATIONS: "league_operations",
   FRANCHISE_IDENTITY: "franchise_identity",
   LEGACY_HALL: "legacy_hall",
+  FRANCHISE_COMMAND: "franchise_command",
   SETTINGS: "settings",
   PLACEHOLDER: "placeholder",
   SIM_TRACKER: "sim_tracker",

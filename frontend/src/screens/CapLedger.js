@@ -2,6 +2,7 @@ import { gameConfirm } from "../components/common/gameConfirm";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useGameUI } from "../game/GameUIContext";
 import { SCREENS } from "../game/constants";
+import CapPlotRoom from "../components/contracts/CapPlotRoom";
 import { getContractOffice, qualifyRfa, releaseRfaRights, buyoutContract, waiveContract, buryContract, submitOfferSheet, matchOfferSheet, declineOfferSheet, fileArbitration, settleArbitration, getRosterMoves, moveRosterPlayer } from "../services/franchiseService";
 import { resolveFranchiseTeamLogo } from "../utils/teamLogos";
 import PlayerHeadshot from "../components/PlayerHeadshot";
@@ -524,6 +525,10 @@ function buildContractPanelActions(row) {
   if (row.can_buyout) actions.push({ id: "buyout", label: "Buyout" });
   if (row.can_waive) actions.push({ id: "waive", label: "Waive" });
   if (row.can_bury || row.can_waive) actions.push({ id: "bury", label: "Bury" });
+  // The dark option: only real contracts with term left.
+  if ((row.can_buyout || row.can_waive) && Number(row.aav_m || row.cap_hit_m || row.current_cap_hit || 0) >= 0.9) {
+    actions.push({ id: "cap-plot", label: "Make the cap hit disappear…" });
+  }
   return actions;
 }
 
@@ -771,7 +776,7 @@ function ContractActionPanel({
           <button
             key={a.id}
             type="button"
-            className={`cl-btn${a.id === "buyout" || a.id === "release-rights" ? " cl-btn--danger" : ""}`}
+            className={`cl-btn${a.id === "buyout" || a.id === "release-rights" ? " cl-btn--danger" : ""}${a.id === "cap-plot" ? " cl-btn--plot" : ""}`}
             disabled={busy}
             onClick={() => runAction(a)}
           >
@@ -894,6 +899,7 @@ function OfficeTopBar({ team, snap, slotSummary, teamLogo, onBack }) {
 }
 
 export default function CapLedger() {
+  const [plotPid, setPlotPid] = useState("");
   const {
     franchiseState,
     setScreen,
@@ -1003,6 +1009,10 @@ export default function CapLedger() {
 
     if (!pid) {
       setError("Missing player id");
+      return;
+    }
+    if (action === "cap-plot") {
+      setPlotPid(String(pid));
       return;
     }
 
@@ -1120,6 +1130,15 @@ export default function CapLedger() {
 
   return (
     <div className="game-screen cap-ledger-screen cap-office-screen cl-screen">
+      {plotPid ? (
+        <CapPlotRoom
+          playerId={plotPid}
+          onClose={() => setPlotPid("")}
+          onDone={() => {
+            if (typeof refreshFranchise === "function") refreshFranchise();
+          }}
+        />
+      ) : null}
       <OfficeTopBar
         team={team}
         snap={snap}

@@ -261,6 +261,14 @@ REASON_COPY = {
             "move even if it burns bridges and torpedoes his own value."
         ),
     },
+    "political_canada": {
+        "headline": "{name} wants to play in Canada",
+        "body": "After a bitter international tournament, {name} has asked his agent to get him traded to a Canadian club.",
+    },
+    "political_usa": {
+        "headline": "{name} wants out of Canada",
+        "body": "The political fallout from the international tournament has {name} asking for a trade to an American club.",
+    },
     "relocation": {
         "headline": "{name} wants out after the relocation",
         "body": "{name} doesn't want to uproot his family for the move and has asked for a trade through his agent.",
@@ -666,7 +674,8 @@ def _preferred_destinations(
     seed_mntc_destinations(player, league, list_size=list_size, rng=rng)
     teams = list(_get(league, "teams", None) or [])
     home = _team_abbr(team)
-    want_canada = reason == "canada"
+    want_canada = reason in ("canada", "political_canada")
+    want_usa = reason == "political_usa"
     want_small = reason == "small_market"
     try:
         from app.sim_engine.trades.trade_rules import _market_size, _team_strength_proxy
@@ -680,6 +689,8 @@ def _preferred_destinations(
         if not ab or ab == home:
             continue
         if want_canada and ab not in CANADA_ABBRS:
+            continue
+        if want_usa and ab in CANADA_ABBRS:
             continue
         if want_small and ab not in SMALL_MARKET_ABBRS:
             continue
